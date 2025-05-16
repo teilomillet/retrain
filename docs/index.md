@@ -73,64 +73,10 @@ Key sections in the configuration include:
 
 *   `model`: Specifies the base model to be trained, how to load it (e.g., from Hugging Face), and any PEFT (Parameter-Efficient Fine-Tuning) adaptations.
 *   `algorithm`: Defines the reinforcement learning algorithm to use (e.g., GRPO), the backend (e.g., TRL), and its specific `hyperparameters` (like learning rate, batch size, etc.).
-*   `environment`: Configures the environment in which the agent will learn (e.g., `smol_agent` for conversational tasks).
+*   `environment`: Configures the environment in which the agent will learn (e.g., `smolagent` for conversational tasks).
 *   `prompt_source`: Sets up where the initial prompts or tasks for the agent will come from (e.g., a list of strings, a Hugging Face dataset).
 *   `reward_setup`: Details how rewards are calculated, including which reward functions to use for step-level and rollout-level evaluations, their weights, and any associated verifiers.
 *   Optional top-level settings like `seed`, `experiment_name`, and `logging_level` are also available.
-
-**Example `config.yaml`:**
-
-```yaml
-experiment_name: "my_llm_retraining_experiment"
-seed: 42
-logging_level: "INFO"
-
-model:
-  name_or_path: "gpt2" # Or your specific model path
-  loader: "huggingface"
-  torch_dtype: "bfloat16" # Optional
-  # peft_config: # Optional PEFT settings
-  #   r: 8
-  #   lora_alpha: 16
-  #   task_type: "CAUSAL_LM"
-
-algorithm:
-  name: "grpo"      # Currently supports 'grpo'
-  backend: "trl"    # Currently supports 'trl' for GRPO
-  hyperparameters:    # These are passed to the TRL GRPOConfig
-    learning_rate: 1.0e-05
-    num_iterations: 5 # Renamed from grpo_n_iter to match GRPOConfig for TRL
-    beta: 0.01
-    max_prompt_length: 128
-    max_completion_length: 128
-    num_generations: 4
-    per_device_train_batch_size: 1
-    gradient_accumulation_steps: 4 # Effective batch size = 4 * num_gpus
-    # ... other TRL GRPOConfig parameters (see trl.GRPOConfig for all options)
-
-environment:
-  type: "smol_agent" # Type of environment
-  env_specific_config:
-    max_turns: 5
-    # ... other environment-specific settings
-
-prompt_source:
-  type: "list_provider" # Example: loads prompts from a list
-  source_config:
-    prompts:
-      - "Translate 'Hello, world!' to French."
-      - "What is the capital of France? And what is its currency?"
-      - "Write a short story about a robot who learns to paint."
-
-reward_setup:
-  step_reward_configs: # Applied at each step/turn within a rollout
-    # Example: (Register your reward functions in retrain/reward/__init__.py)
-    # "penalize_repetition": { "weight": -0.1, "params": {"max_ngram_size": 3}}
-  rollout_reward_configs: # Applied once to the entire rollout
-    # "final_answer_correctness": { "weight": 1.0, "params": {"ground_truth_key": "expected_answer"} }
-```
-
-_Note: Always refer to `retrain/config_models.py` for the most up-to-date and detailed field names and structures, including descriptions for each field._
 
 ### 2. Initiating a Training Run
 
