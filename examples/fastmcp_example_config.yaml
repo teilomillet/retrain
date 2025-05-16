@@ -1,0 +1,67 @@
+experiment_name: "fastmcp_example_run_via_retrain_run"
+seed: 42
+logging_level: "DEBUG"
+
+model: # Configuration for a REAL, small model for retrain.run()
+  name_or_path: "Qwen/Qwen3-0.6B" # Corrected: Was Qwen/Qwen3-0.6
+  loader: "huggingface"
+  # trust_remote_code: true # Might be needed for some models
+  torch_dtype: "bfloat16" # Optional, for efficiency if supported
+
+environment:
+  type: "fastmcp_env" # Key change: use the newly supported type
+  env_specific_config:
+    server_url: "http://127.0.0.1:8765/mcp" # Explicitly set /mcp endpoint
+    initial_prompt_template: "Hello FastMCP server! What can you do?"
+    max_steps: 3 # Max interaction turns for the environment during rollout (reduced from 5 for shorter rollouts)
+
+algorithm:
+  name: "grpo" # Using GRPO as an example, TRL is a common backend for it
+  backend: "trl"
+  hyperparameters:
+    # Minimal GRPOConfig (TRL) / TrainingArguments compatible params
+    max_completion_length: 50 # Max tokens for LLM generation during rollout by trainer
+    max_tokens_per_generation: 512 # Max tokens for LLM generation during GRPOTrainerAdapterTRL's rollout phase
+    temperature: 0.7
+    learning_rate: 1.41e-5 # A common starting point for PPO-like algos
+    # report_to: ["wandb"] # If W&B logging is desired
+    # wandb_project: "retrain_fastmcp_example"
+    # For local testing without full training, these might not be strictly necessary
+    # but GRPOConfig will expect some basic training args like output_dir if not overridden.
+    # output_dir: "./temp_training_output" # TRL trainers often require this
+    per_device_train_batch_size: 2 # Changed from 1 to 2, matching simple_grpo_config.yaml
+    # mini_batch_size: 1 # Removed, TRL GRPOConfig has ppo_mini_batch_size, often derived or specifically set.
+    gradient_accumulation_steps: 1
+    num_generations: 2 # Changed from 1 to 2, matching simple_grpo_config.yaml
+    # max_seq_length: 1024 # Removed: GRPOConfig does not directly take this. Max length is usually handled by tokenizer or generation params.
+
+prompt_source:
+  type: "list"
+  source_config:
+    prompts:
+      - "First, multiply 5 by 10. Then, take the result and add 15 to it. Finally, subtract 3 from that new result. You must use the 'perform_operation' tool for each step. What is the final number?"
+      - "What is 70 divided by 2, and then what is that result multiplied by 3? Use 'perform_operation' for each step."
+
+reward_setup: # GRPO requires at least one step_reward_config for TRL
+  step_reward_configs:
+    substring_match_reward:
+      weight: 1.0
+      params:
+        expected_substring: "Result: 62"
+        # This is just a conceptual reward. Real reward functions need to be registered.
+        # For now, this structure might be enough for config validation if not actually used by a simple run.
+        # Actual TRL GRPO reward functions require a specific signature and processing of observations/actions.
+        # The run.py _setup_trainer_instance currently dynamically creates these for TRL.
+        # For simplicity, let's assume retrain.reward.substring_match_reward is available and fits
+        # (as in examples/run_example.py, but we would need to ensure its params match).
+        # For now, we'll rely on GRPOTrainer's ability to work with what's given or if a dummy
+        # reward structure is enough for it to initialize.
+        # The main point is that GRPOConfig/Trainer expects something here.
+      verifiers: null
+      verifier_penalty: 0.0
+    tool_usage_reward:
+      weight: 0.5
+      params: {}
+      verifiers: null
+      verifier_penalty: 0.0
+  rollout_reward_configs: {} 

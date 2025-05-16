@@ -1,0 +1,74 @@
+experiment_name: "grpo_calculator_tool_example"
+seed: 42
+logging_level: "DEBUG" # Or "DEBUG" for more verbose output during testing
+
+model:
+  name_or_path: "Qwen/Qwen3-0.6B"
+  loader: "huggingface" # Can be "huggingface" or "unsloth"
+  # peft_config: null # Optional PEFT configuration for the model (e.g., LoRA)
+  trust_remote_code: null # Set to true if model requires it
+  torch_dtype: "auto" # e.g., "float16", "bfloat16", "auto"
+
+algorithm:
+  name: "grpo"
+  backend: "trl" # Can be "trl" or potentially others in the future
+  # Wandb specific configurations, parallel to hyperparameters
+  report_to: ["wandb"] # Enable wandb logging (as a list)
+  wandb_project: "retrain_grpo_calculator_example" # Specify your wandb project name
+  wandb_entity: null # Optional: specify your wandb entity (username or team)
+  wandb_run_name: null # Optional: specify a custom run name
+  peft_config: null # Optional: PEFT config for the model, if any
+  hyperparameters: # These are passed directly to the backend's config (e.g., TRL GRPOConfig)
+    # Training Hyperparameters
+    learning_rate: 0.00001
+    num_iterations: 2 # Number of times to iterate over the dataset (effectively epochs for the outer loop)
+    logging_steps: 1
+    beta: 0.01
+    # Generation Hyperparameters (used by GRPOTrainer during rollouts)
+    max_prompt_length: 128 # Increased to accommodate potentially longer tool descriptions/history
+    max_completion_length: 512 # Increased from 256 to match env's max_tokens_per_llm_turn
+    num_generations: 2 # Corresponds to N in GRPO paper (num_generations per input)
+    # Batching & Steps (Crucial for TRL GRPOConfig internal calculations)
+    per_device_train_batch_size: 2 # Corresponds to M in GRPO (batch size for policy updates)
+    gradient_accumulation_steps: 1
+    # generation_batch_size: 2    # Optional: If not set, TRL calculates it. 
+                                  # For GRPO, it's often (per_device_train_batch_size * world_size * gradient_accumulation_steps)
+                                  # and must be divisible by num_generations.
+                                  # Let's test with num_generations=2, per_device_train_batch_size=1, grad_acc_steps=1.
+                                  # Effective training batch size = 1. gen_batch_size becomes 2.
+    # Sampling parameters recommended for Qwen3 (thinking mode by default)
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    # loss_type: "bnpo" # Default in TRL GRPOConfig
+
+environment:
+  type: "smol_agent"
+  env_specific_config:
+    max_turns: 5 # Renamed from max_steps for clarity, though SmolAgentEnv uses max_steps internally based on this.
+    max_tokens_per_llm_turn: 512 # Increased from 256
+    # tools configuration for SmolAgentEnv
+    tools:
+      registry_keys: ["simple_calculator_tool"] 
+      # tool_configs: # Optional: if specific tools need instance-level config override
+      #   my_tool_from_registry:
+      #     param_x: value_y
+      # providers: [] # Optional: list of ToolProvider instances or their configurations
+
+prompt_source:
+  type: "list"
+  source_config:
+    prompts:
+      - "First, calculate 987 * 12. Then, subtract 345 from the result. Finally, add 67 to that. What is the final number? Show your work by calling the tool for each step."
+
+reward_setup:
+  step_reward_configs:
+    substring_match_reward:
+      weight: 1.0
+      params:
+        expected_substring: "11566"
+        case_sensitive: False
+        parsing_error_penalty: -0.5 # Or your desired penalty
+      verifiers: null
+      verifier_penalty: 0.0
+  rollout_reward_configs: {} 

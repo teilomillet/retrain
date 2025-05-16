@@ -1,0 +1,20 @@
+[project]
+name = "retrain"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.3.4",
+    "gymnasium>=1.1.1",
+    "loguru>=0.7.3",
+    "mcp>=1.8.1",
+    "peft>=0.15.2",
+    "pydantic>=2.11.4",
+    "pyyaml>=6.0.2",
+    "torch>=2.7.0",
+    "transformers>=4.51.3",
+    "trl>=0.17.0",
+    "unsloth>=2025.3.3",
+    "wandb>=0.19.11",
+]
