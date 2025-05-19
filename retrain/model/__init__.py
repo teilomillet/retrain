@@ -8,6 +8,9 @@ from .model import Model, ModelObject, TokenizerObject
 from .hf import HuggingFaceModel
 from .unsloth import UnslothModel
 
+# Import loguru for logging
+from loguru import logger
+
 # Added get_model factory function
 SUPPORTED_MODEL_TYPES = {
     "hf": HuggingFaceModel,
@@ -55,15 +58,19 @@ def get_model(
         effective_model_config.update(model_config_overrides)
 
     # Load the base model and tokenizer
-    print(f"[get_model] Loading model of type '{model_type}' with config: {effective_model_config}")
+    logger.debug(f"[get_model] Attempting to load model of type '{model_type}'. Name/Path: '{model_name_or_path}'")
+    logger.debug(f"[get_model] Effective model config for loader: {effective_model_config}")
     loaded_model, tokenizer = model_loader_instance.load(model_config=effective_model_config)
+    logger.debug(f"[get_model] Base model and tokenizer loaded successfully for '{model_name_or_path}'.")
 
     # Apply PEFT if a PEFT configuration is provided
     if peft_config:
-        print(f"[get_model] Applying PEFT config: {peft_config}")
+        logger.debug(f"[get_model] Attempting to apply PEFT config for '{model_name_or_path}'. PEFT Config: {peft_config}")
         final_model = model_loader_instance.peft(model=loaded_model, peft_config_dict=peft_config)
+        logger.debug(f"[get_model] PEFT applied successfully for '{model_name_or_path}'.")
     else:
         final_model = loaded_model
+        logger.debug(f"[get_model] No PEFT config provided for '{model_name_or_path}'. Returning base model.")
 
     return final_model, tokenizer
 
