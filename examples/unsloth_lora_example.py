@@ -1,6 +1,12 @@
 import os
-os.environ["UNSLOTH_ENABLE_LOGGING"] = "1" # Enable Unsloth's auto compiler logging
-os.environ["UNSLOTH_COMPILE_DISABLE"] = "1" # Attempt to disable Unsloth's JIT compilation
+# os.environ["UNSLOTH_ENABLE_LOGGING"] = "1" # Enable Unsloth's auto compiler logging
+# os.environ["UNSLOTH_COMPILE_DISABLE"] = "1" # Attempt to disable Unsloth's JIT compilation
+os.environ["UNSLOTH_COMPILE_DISABLE"] = "0" # ENABLE Unsloth's JIT compilation.
+                                           # With core QKV/O/MLP layers now patched (due to lora_dropout=0.0),
+                                           # the persistent 'attn_bias' error likely stems from these patched layers
+                                           # not executing correctly. Unsloth's JIT compiler provides optimized
+                                           # kernels essential for the proper functioning of its patched mechanisms,
+                                           # especially when FA2/Xformers are unavailable.
 
 import unsloth # Import unsloth first as per its recommendation
 import torch
@@ -22,34 +28,33 @@ def run_unsloth_lora_example():
 
     # 1. Define Model and PEFT Configuration
     model_loader_type = "unsloth"
-    # Using a publicly available Unsloth model.
-    # Replace with your desired model if needed.
-    # For this example, we use Phi-3-mini, which is relatively small.
-    model_identifier = "unsloth/Phi-3-mini-4k-instruct" 
+    # Using a smaller Qwen model based on user request and Qwen3 GRPO notebook example.
+    # model_identifier = "unsloth/Qwen3-0.5B-Base" # Changed from Phi-3 to Qwen3-0.5B
+    model_identifier = "unsloth/Qwen3-0.6B-Base" # Corrected to 0.6B based on HF model card.
 
     model_config_for_loader = {
-        "load_in_4bit": True,
+        "load_in_4bit": False, # Kept False, similar to Qwen3 GRPO notebook for LoRA stability.
+                               # A 0.5B model in 16-bit is small (approx 1GB weights).
         "max_seq_length": 2048,
-        "dtype": None,  # Let Unsloth choose the optimal dtype (e.g., torch.bfloat16 if available)
-        # "token": "YOUR_HF_TOKEN" # Add Hugging Face token if needed for gated models
+        "dtype": None,  # Let Unsloth choose the optimal dtype
+        # Consider adding fast_inference = True and max_lora_rank if using advanced Unsloth features like the notebook.
     }
 
-    # LoRA configuration for PEFT
-    # Unsloth's get_peft_model can often auto-detect target_modules.
-    # If you need to specify them, you can add a 'target_modules' key, e.g.:
-    # target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"] # Example for Llama
-    # For Phi-3, common targets are ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"]
-    # If left unspecified, Unsloth will attempt to find them.
+    # LoRA configuration for PEFT, adapted from Qwen3 GRPO notebook
+    lora_rank = 32 # From Qwen3 notebook, can be adjusted
     active_peft_config = {
-        "r": 16,                             # Rank of the LoRA matrices
-        "lora_alpha": 32,                    # Alpha scaling factor for LoRA
-        "lora_dropout": 0.05,                # Dropout probability for LoRA layers
-        "bias": "none",                      # Whether to use bias in LoRA layers ("none", "all", or "lora_only")
-        "use_gradient_checkpointing": "unsloth", # Recommended by Unsloth for memory saving
+        "r": lora_rank,
+        "lora_alpha": lora_rank * 2, # Qwen3 notebook suggests lora_rank * 2
+        "lora_dropout": 0.0,         # Kept 0.0 for Unsloth fast patching
+        "bias": "none",
+        "use_gradient_checkpointing": "unsloth", # Recommended by Unsloth
         "random_state": 3407,
-        "target_modules": ["qkv_proj", "o_proj", "gate_up_proj", "down_proj"], # Explicit for Phi-3
-        # "use_rslora": False,               # Rank Stabilized LoRA
-        # "loftq_config": None,              # LoFTQ configuration
+        "target_modules": [ # From Qwen3 GRPO notebook
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        # "use_rslora": False,
+        # "loftq_config": None,
     }
     logger.info(f"Attempting to load model: {model_identifier} using {model_loader_type}")
     logger.info(f"Model config for loader: {model_config_for_loader}")
@@ -100,6 +105,15 @@ def run_unsloth_lora_example():
             # Unsloth models might have specific generation kwargs or prefer `generate_unsloth`
             # For simplicity, using standard generate.
             # Add generation config for better outputs if needed (e.g., max_new_tokens)
+            #
+            # Changed `use_cache=False` back to `use_cache=True`.
+            # Previous attempts with use_cache=True failed when Unsloth's core patching
+            # (QKV/O/MLP layers) was incomplete (due to lora_dropout != 0) or its
+            # JIT compiler was disabled.
+            # Now that Unsloth core patching is confirmed active and JIT is enabled,
+            # we revisit use_cache=True. The model's "dynamic cache_implementation" warning
+            # suggests it might internally expect cache-related logic to be active.
+            # This change tests if a fully Unsloth-optimized model works correctly with KV caching enabled.
             outputs = model.generate(**inputs, max_new_tokens=50, use_cache=True)
         
         generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
