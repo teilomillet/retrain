@@ -93,9 +93,27 @@ def _get_or_create_trl_grpo_config(
         logger_run.debug("Removing 'peft_config: None' from hyperparameters for TrlGRPOConfig construction.")
         del effective_hyperparameters["peft_config"]
 
+    # Handle num_iterations:
+    # TRL's GRPOConfig might not always accept 'num_iterations' in its __init__
+    # depending on the TRL version. However, our GRPOTrainerAdapter expects it
+    # as an attribute on the config object.
+    # We'll remove it before __init__ and add it back as an attribute.
+    num_iterations_val = None
+    if "num_iterations" in effective_hyperparameters:
+        num_iterations_val = effective_hyperparameters.pop("num_iterations")
+        logger_run.debug(f"Temporarily removed 'num_iterations': {num_iterations_val} from TrlGRPOConfig constructor arguments.")
+
     logger_run.debug(f"Attempting to create TrlGRPOConfig with effective hyperparameters: {effective_hyperparameters}")
     try:
-        return TrlGRPOConfigActual(**effective_hyperparameters)
+        config_instance = TrlGRPOConfigActual(**effective_hyperparameters)
+        
+        # If num_iterations was extracted, set it as an attribute on the config instance.
+        # This ensures it's available for the GRPOTrainerAdapter, which relies on this attribute.
+        if num_iterations_val is not None:
+            setattr(config_instance, "num_iterations", num_iterations_val)
+            logger_run.debug(f"Set 'num_iterations': {num_iterations_val} as an attribute on the TrlGRPOConfig instance.")
+            
+        return config_instance
     except Exception as e:
         logger_run.error(f"Error creating TrlGRPOConfig with hyperparameters: {effective_hyperparameters}. Error: {e}", exc_info=True)
         raise
@@ -177,11 +195,40 @@ def _setup_trainer_instance(
         logger_run.debug(f"[RUN.PY _setup_trainer_instance] Copied trl_config_hyperparams (before adapter specific extraction): {trl_config_hyperparams}")
 
         # Known adapter-specific params that should not go into TrlGRPOConfig
-        known_adapter_params = ["sampling_params", "max_tokens_per_generation", "temperature_for_logprobs", "max_steps_this_trainer_train_call"]
+        # These include both adapter-specific parameters and generation parameters
+        # that TRL's GRPOConfig doesn't accept in its constructor
+        known_adapter_params = [
+            "sampling_params", 
+            "max_tokens_per_generation", 
+            "temperature_for_logprobs", 
+            "max_steps_this_trainer_train_call",
+            # Generation parameters that should be handled by the adapter, not TRL config
+            "temperature",  # Used for generation during rollouts
+            "top_p",        # Used for generation during rollouts  
+            "top_k",        # Used for generation during rollouts
+        ]
+        
+        # Extract generation parameters to build sampling_params for the adapter
+        generation_params = {}
         for param_name in known_adapter_params:
             if param_name in trl_config_hyperparams:
-                adapter_specific_kwargs[param_name] = trl_config_hyperparams.pop(param_name)
-                logger_run.debug(f"Extracted '{param_name}': {adapter_specific_kwargs[param_name]} for GRPOTrainerAdapterTRL specific kwargs.")
+                param_value = trl_config_hyperparams.pop(param_name)
+                
+                # Handle generation parameters specially - add them to sampling_params
+                if param_name in ["temperature", "top_p", "top_k"]:
+                    generation_params[param_name] = param_value
+                    logger_run.debug(f"Extracted generation parameter '{param_name}': {param_value} for adapter's sampling_params.")
+                else:
+                    # Regular adapter-specific parameters
+                    adapter_specific_kwargs[param_name] = param_value
+                    logger_run.debug(f"Extracted '{param_name}': {param_value} for GRPOTrainerAdapterTRL specific kwargs.")
+        
+        # If we extracted generation parameters, merge them into sampling_params for the adapter
+        if generation_params:
+            if "sampling_params" not in adapter_specific_kwargs:
+                adapter_specific_kwargs["sampling_params"] = {}
+            adapter_specific_kwargs["sampling_params"].update(generation_params)
+            logger_run.debug(f"Merged generation parameters into adapter's sampling_params: {generation_params}")
         
         # ADDED: Align TrlGRPOConfig's max_completion_length with the adapter's generation limit
         if "max_tokens_per_generation" in adapter_specific_kwargs:
