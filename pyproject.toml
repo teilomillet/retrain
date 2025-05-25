@@ -5,7 +5,6 @@ description = "retrain is a Python library that uses Reinforcement Learning (RL)
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "bitsandbytes>=0.45.5",
     "fastmcp>=2.3.4",
     "gymnasium>=1.1.1",
     "loguru>=0.7.3",
@@ -16,9 +15,16 @@ dependencies = [
     "torch>=2.7.0",
     "transformers>=4.51.3",
     "trl>=0.15.2",
+    "wandb>=0.19.11",
+]
+
+[project.optional-dependencies]
+unsloth = [
     "unsloth @ git+https://github.com/unslothai/unsloth.git",
     "unsloth-zoo @ git+https://github.com/unslothai/unsloth-zoo.git",
-    "wandb>=0.19.11",
+    "bitsandbytes>=0.45.5", # A key dependency for unsloth for quantization
+    "triton; sys_platform == 'linux'", # Required by unsloth-zoo on Linux for performance
+    "triton-windows; sys_platform == 'win32'", # Required by unsloth-zoo on Windows for performance
 ]
 
 [tool.setuptools]
