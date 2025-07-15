@@ -1,0 +1,117 @@
+experiment_name: "qwen3_mcp_tool_training"
+seed: 42
+logging_level: "INFO"
+
+model:
+  name_or_path: "Qwen/Qwen3-0.6B"
+  loader: "huggingface"
+  trust_remote_code: true
+  torch_dtype: "bfloat16"
+
+environment:
+  type: "fastmcp_env"
+  env_specific_config:
+    server_url: "http://127.0.0.1:8765/mcp"
+    initial_prompt_template: "Hello! I'm here to help you with various tasks. What can you do?"
+    max_steps: 5
+
+algorithm:
+  name: "grpo"
+  backend: "trl"
+  report_to: ["wandb"]
+  wandb_project: "qwen3_mcp_training"
+  wandb_entity: null
+  wandb_run_name: "mcp_tool_mastery"
+  hyperparameters:
+    learning_rate: 1.41e-5
+    num_iterations: 5
+    logging_steps: 1
+    beta: 0.01
+    max_completion_length: 100
+    max_tokens_per_generation: 512
+    num_generations: 2
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 1
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 50
+
+prompt_source:
+  type: "list"
+  source_config:
+    prompts:
+      # Tool Discovery
+      - "What tools are available on this server? Please explore the server capabilities."
+      - "Can you tell me what this server can do? List all available functions."
+      
+      # Tool Usage
+      - "What time is it right now? Please get the current server time."
+      - "Calculate 15 * 23 for me using the available tools."
+      - "I need to perform some math: what is 100 divided by 4?"
+      
+      # Complex Tasks
+      - "First, get the current server time, then calculate 10 * 5, and finally subtract 20 from that result."
+      - "Check the server capabilities first, then calculate 50 divided by 2."
+      
+      # Tool Exploration
+      - "Explore what this server can do and then perform a calculation of your choice."
+      - "List the server capabilities and then use one of the tools to demonstrate its functionality."
+
+reward_setup:
+  step_reward_configs:
+    tool_discovery_reward:
+      weight: 2.0
+      params:
+        discovery_keywords: ["capabilities", "tools", "available", "functions", "list"]
+        tool_names: ["get_server_time", "perform_operation", "list_server_capabilities"]
+        discovery_bonus: 0.5
+      verifiers: null
+      verifier_penalty: 0.0
+    
+    tool_usage_reward:
+      weight: 3.0
+      params:
+        tool_call_reward: 0.3
+        no_tool_penalty: -0.2
+        prompt_keywords_for_tool: ["calculate", "time", "operation", "math", "add", "subtract", "multiply", "divide"]
+      verifiers: null
+      verifier_penalty: 0.0
+    
+    correct_tool_reward:
+      weight: 2.5
+      params:
+        tool_mapping:
+          "time": ["get_server_time"]
+          "calculate": ["perform_operation"]
+          "math": ["perform_operation"]
+          "capabilities": ["list_server_capabilities"]
+        correct_tool_bonus: 0.4
+        wrong_tool_penalty: -0.3
+      verifiers: null
+      verifier_penalty: 0.0
+    
+    tool_parameter_reward:
+      weight: 1.5
+      params:
+        valid_operations: ["add", "subtract", "multiply", "divide"]
+        parameter_quality_bonus: 0.2
+        invalid_parameter_penalty: -0.2
+      verifiers: null
+      verifier_penalty: 0.0
+    
+    multi_step_reward:
+      weight: 2.0
+      params:
+        step_completion_bonus: 0.3
+      verifiers: null
+      verifier_penalty: 0.0
+      
+  rollout_reward_configs:
+    task_completion_reward:
+      weight: 1.0
+      params:
+        completion_threshold: 0.7
+        completion_bonus: 0.5
+        exploration_bonus: 0.3
+      verifiers: null
+      verifier_penalty: 0.0 

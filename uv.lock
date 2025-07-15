@@ -1383,7 +1383,6 @@ name = "retrain"
 version = "0.1.1"
 source = { virtual = "." }
 dependencies = [
-    { name = "bitsandbytes" },
     { name = "fastmcp" },
     { name = "gymnasium" },
     { name = "loguru" },
@@ -1394,14 +1393,21 @@ dependencies = [
     { name = "torch" },
     { name = "transformers" },
     { name = "trl" },
+    { name = "wandb" },
+]
+
+[package.optional-dependencies]
+unsloth = [
+    { name = "bitsandbytes" },
+    { name = "triton", marker = "sys_platform == 'linux'" },
+    { name = "triton-windows", marker = "sys_platform == 'win32'" },
     { name = "unsloth" },
     { name = "unsloth-zoo" },
-    { name = "wandb" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "bitsandbytes", specifier = ">=0.45.5" },
+    { name = "bitsandbytes", marker = "extra == 'unsloth'", specifier = ">=0.45.5" },
     { name = "fastmcp", specifier = ">=2.3.4" },
     { name = "gymnasium", specifier = ">=1.1.1" },
     { name = "loguru", specifier = ">=0.7.3" },
@@ -1411,11 +1417,14 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "transformers", specifier = ">=4.51.3" },
+    { name = "triton", marker = "sys_platform == 'linux' and extra == 'unsloth'" },
+    { name = "triton-windows", marker = "sys_platform == 'win32' and extra == 'unsloth'" },
     { name = "trl", specifier = ">=0.15.2" },
-    { name = "unsloth", git = "https://github.com/unslothai/unsloth.git" },
-    { name = "unsloth-zoo", git = "https://github.com/unslothai/unsloth-zoo.git" },
+    { name = "unsloth", marker = "extra == 'unsloth'", git = "https://github.com/unslothai/unsloth.git" },
+    { name = "unsloth-zoo", marker = "extra == 'unsloth'", git = "https://github.com/unslothai/unsloth-zoo.git" },
     { name = "wandb", specifier = ">=0.19.11" },
 ]
+provides-extras = ["unsloth"]
 
 [[package]]
 name = "rich"
