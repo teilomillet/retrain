@@ -1,0 +1,6 @@
+[submodule "mcp-alchemy"]
+	path = mcp-alchemy
+	url = https://github.com/runekaagaard/mcp-alchemy.git
+[submodule "Spider2"]
+	path = Spider2
+	url = https://github.com/xlang-ai/Spider2
