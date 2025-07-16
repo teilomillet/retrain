@@ -2,7 +2,9 @@
 # the @reward_function decorator and populates the registry in base.py.
 
 from . import exact_match
-from . import arithmetic
+from . import arithmetic, calculator
+from . import sql
+from . import format_compliance
 
 # Import the core reward components and the new batch reward function creator
 from .reward import (
@@ -23,7 +25,10 @@ __all__ = [
     "reward",
     "calculate_total_reward",
     "create_grpo_batch_reward_func",
-    "BatchRewardFunction"
+    "BatchRewardFunction",
+    "arithmetic",
+    "calculator",
+    "sql"
 ]
 
 # You can optionally expose the registry or lookup function here if desired

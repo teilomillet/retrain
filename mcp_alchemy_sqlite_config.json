@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "spider2_sqlite": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mcp-alchemy==2025.7.9.172934",
+        "--refresh-package",
+        "mcp-alchemy",
+        "mcp-alchemy"
+      ],
+      "env": {
+        "DB_URL": "sqlite:///spider2_lite.db"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "spider2_postgres": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mcp-alchemy==2025.7.9.172934",
+        "--with",
+        "psycopg2-binary",
+        "--refresh-package",
+        "mcp-alchemy",
+        "mcp-alchemy"
+      ],
+      "env": {
+        "DB_URL": "postgresql://user:password@localhost/spider2_db"
+      }
+    }
+  }
+}

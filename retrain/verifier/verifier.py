@@ -11,14 +11,13 @@ VERIFIER_REGISTRY: Dict[str, VerifierFunction] = {}
 
 logger = get_logger(__name__)
 
-# Updated decorator implementation to handle both @verifier and @verifier(name=...)
-def verifier(_func: Optional[VerifierFunction] = None, *, name: Optional[str] = None) -> Union[Callable[[VerifierFunction], VerifierFunction], VerifierFunction]:
+def verifier(name: Optional[str] = None) -> Callable[[VerifierFunction], VerifierFunction]:
     """
-    Decorator to register a new verifier function (a simple boolean check).
+    Decorator to register a new verifier function. Must be used with parentheses.
 
-    Can be used in two ways:
-    - `@verifier`: Registers the function using its own `__name__`.
-    - `@verifier(name="custom_name")`: Registers the function using the specified name.
+    Usage:
+    - `@verifier()`: Registers the function using its own `__name__`.
+    - `@verifier(name="custom_name")`: Registers the function using a specific name.
     """
     def decorator_verifier(func: VerifierFunction) -> VerifierFunction:
         if not callable(func):
@@ -36,25 +35,9 @@ def verifier(_func: Optional[VerifierFunction] = None, *, name: Optional[str] = 
         VERIFIER_REGISTRY[registration_name] = func
         logger.info(f"Registered verifier function: '{registration_name}' -> {func.__name__}")
         
-        # Return the original function (decorators typically return the decorated function)
         return func
 
-    if _func is None:
-        # Decorator was called with parentheses: @verifier() or @verifier(name=...)
-        # Return the actual decorator function that waits for the function to decorate.
-        return decorator_verifier
-    elif callable(_func):
-        # Decorator was called without parentheses: @verifier
-        # The decorated function (_func) was passed directly.
-        if name is not None:
-             # This case should ideally be caught by static analysis or raise an error earlier,
-             # but this runtime check ensures correct usage.
-             raise TypeError("Cannot specify 'name' when using @verifier without parentheses. Use @verifier(name='...') instead.")
-        # Apply the registration logic immediately to _func
-        return decorator_verifier(_func)
-    else:
-        # Should not happen with standard decorator usage
-        raise TypeError("Invalid arguments supplied to @verifier decorator.")
+    return decorator_verifier
 
 def get_boolean_verifier(name: str) -> VerifierFunction:
     """Retrieves a registered boolean verifier function by name."""

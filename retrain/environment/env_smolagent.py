@@ -454,7 +454,7 @@ class SmolAgentEnv(Environment):
                 
                 # System prompt defining tool usage and output format expectations for the LLM.
                 system_prompt_content = (
-                    "You are a helpful assistant. Your response MUST ALWAYS START with <reasoning>, <tool>, or <answer>. NO other text is allowed before these starting tags."
+                    "You are a helpful assistant. Your response MUST ALWAYS START with <think>, <tool>, or <answer>. NO other text is allowed before these starting tags."
                     + " To use a tool, you MUST output the tool name and arguments as a JSON string enclosed \n"
                     + "EXACTLY within <tool> and </tool> tags. For example:\n"
                     + "<tool>{{\"name\": \"tool_name_here\", \"args\": {{\"param1\": \"value1\", \"param2\": 123}}}}</tool>\n"
@@ -463,7 +463,7 @@ class SmolAgentEnv(Environment):
                     + "Available tools are listed below. Only use these exact tool names.\n"
                     + f"{formatted_tools_string}\n\n"
                     + "If you are providing a final answer, use the <answer>YOUR_FINAL_ANSWER_HERE</answer> tag. Your response MUST start with this tag if it's a final answer.\n"
-                    + "For intermediate reasoning or thoughts BEFORE deciding on a tool or an answer, use <reasoning>YOUR_THOUGHTS_HERE</reasoning>. Your response MUST start with this tag if you are just thinking. Any thinking or deliberation MUST be enclosed in <reasoning> tags if it is not part of a direct tool call or final answer structure.\n"
+                    + "For intermediate reasoning or thoughts BEFORE deciding on a tool or an answer, use <think>YOUR_THOUGHTS_HERE</think>. Your response MUST start with this tag if you are just thinking. Any thinking or deliberation MUST be enclosed in <think> tags if it is not part of a direct tool call or final answer structure.\n"
                     + "Tool results provided by the system will be in <result>...</result> tags.\n"
                 )
 
@@ -546,7 +546,7 @@ class SmolAgentEnv(Environment):
                         processed_llm_output = processed_llm_output[len("<think>"):].strip()
                         logger.warning(f"[SmolAgentEnv.rollout] Found starting <think> tag but no closing </think> tag. Stripped only the opening <think> tag. Output for parsing: '{processed_llm_output[:200]}...'")
 
-                # 2. Strip any text before the first primary XML tag (<tool>, <reasoning>, <answer>)
+                # 2. Strip any text before the first primary XML tag (<tool>, <think>, <answer>)
                 #    This helps if the LLM adds conversational prefixes before the structured output.
                 primary_tags = ["<tool", "<reasoning", "<answer"]
                 first_tag_index = -1

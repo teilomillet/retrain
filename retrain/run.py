@@ -115,7 +115,7 @@ def _get_or_create_trl_grpo_config(
             
         return config_instance
     except Exception as e:
-        logger_run.error(f"Error creating TrlGRPOConfig with hyperparameters: {effective_hyperparameters}. Error: {e}", exc_info=True)
+        logger_run.error("Error creating TrlGRPOConfig with hyperparameters: %s. Error: %s", effective_hyperparameters, repr(e), exc_info=True)
         raise
 
 # Main Trainer Setup
@@ -132,7 +132,7 @@ def _setup_trainer_instance(
     algo_cfg = cfg.algorithm
     
     # These will be kwargs for our GRPOTrainerAdapterTRL, not for TrlGRPOConfig directly
-    adapter_specific_kwargs = {} 
+    adapter_specific_params = {} 
 
     if algo_cfg.name == "grpo" and algo_cfg.backend == "trl":
         logger_run.info(f"Setting up GRPOTrainer (TRL backend) with algorithm config: {algo_cfg}")
@@ -206,10 +206,20 @@ def _setup_trainer_instance(
             "temperature",  # Used for generation during rollouts
             "top_p",        # Used for generation during rollouts  
             "top_k",        # Used for generation during rollouts
+            # Parameters that don't exist in TRL GRPOConfig but need mapping
+            "batch_size",   # Maps to per_device_train_batch_size
+            "max_length",   # Maps to max_completion_length
+            "num_iterations", # Handled separately as attribute
+            "evaluation_strategy", # Maps to eval_strategy
+            # WandB logging parameters that should be handled by the adapter
+            "num_completions_to_print",
+            "wandb_log_unique_prompts",
         ]
         
         # Extract generation parameters to build sampling_params for the adapter
         generation_params = {}
+        adapter_specific_params = {}
+        
         for param_name in known_adapter_params:
             if param_name in trl_config_hyperparams:
                 param_value = trl_config_hyperparams.pop(param_name)
@@ -218,21 +228,31 @@ def _setup_trainer_instance(
                 if param_name in ["temperature", "top_p", "top_k"]:
                     generation_params[param_name] = param_value
                     logger_run.debug(f"Extracted generation parameter '{param_name}': {param_value} for adapter's sampling_params.")
+                # Handle parameter mapping to TRL equivalents
+                elif param_name == "batch_size":
+                    trl_config_hyperparams["per_device_train_batch_size"] = param_value
+                    logger_run.debug(f"Mapped 'batch_size': {param_value} to 'per_device_train_batch_size' for TRL config.")
+                elif param_name == "max_length":
+                    trl_config_hyperparams["max_completion_length"] = param_value
+                    logger_run.debug(f"Mapped 'max_length': {param_value} to 'max_completion_length' for TRL config.")
+                elif param_name == "evaluation_strategy":
+                    trl_config_hyperparams["eval_strategy"] = param_value
+                    logger_run.debug(f"Mapped 'evaluation_strategy': {param_value} to 'eval_strategy' for TRL config.")
                 else:
-                    # Regular adapter-specific parameters
-                    adapter_specific_kwargs[param_name] = param_value
-                    logger_run.debug(f"Extracted '{param_name}': {param_value} for GRPOTrainerAdapterTRL specific kwargs.")
+                    # Store other adapter-specific parameters
+                    adapter_specific_params[param_name] = param_value
+                    logger_run.debug(f"Extracted adapter parameter '{param_name}': {param_value}.")
         
         # If we extracted generation parameters, merge them into sampling_params for the adapter
         if generation_params:
-            if "sampling_params" not in adapter_specific_kwargs:
-                adapter_specific_kwargs["sampling_params"] = {}
-            adapter_specific_kwargs["sampling_params"].update(generation_params)
+            if "sampling_params" not in adapter_specific_params:
+                adapter_specific_params["sampling_params"] = {}
+            adapter_specific_params["sampling_params"].update(generation_params)
             logger_run.debug(f"Merged generation parameters into adapter's sampling_params: {generation_params}")
         
         # ADDED: Align TrlGRPOConfig's max_completion_length with the adapter's generation limit
-        if "max_tokens_per_generation" in adapter_specific_kwargs:
-            intended_max_length = adapter_specific_kwargs["max_tokens_per_generation"]
+        if "max_tokens_per_generation" in adapter_specific_params:
+            intended_max_length = adapter_specific_params["max_tokens_per_generation"]
             # If max_completion_length is also in trl_config_hyperparams and differs, log that we are overriding it.
             if "max_completion_length" in trl_config_hyperparams and trl_config_hyperparams["max_completion_length"] != intended_max_length:
                 logger_run.info(f"Overriding 'max_completion_length' (was {trl_config_hyperparams['max_completion_length']}) "
@@ -251,6 +271,21 @@ def _setup_trainer_instance(
                                "was found. TrlGRPOConfig will use its default for 'max_completion_length'. "
                                "Ensure this aligns with environment's generation length.")
         
+        # Ensure num_generations is compatible with batch size for GRPO
+        # GRPO requires: global_batch_size % num_generations == 0
+        # Our batch size is set via per_device_train_batch_size
+        if "per_device_train_batch_size" in trl_config_hyperparams:
+            batch_size = trl_config_hyperparams["per_device_train_batch_size"]
+            # Set num_generations to be a divisor of batch_size, defaulting to 4
+            if "num_generations" not in trl_config_hyperparams:
+                if batch_size >= 4:
+                    trl_config_hyperparams["num_generations"] = 4
+                elif batch_size >= 2:
+                    trl_config_hyperparams["num_generations"] = 2
+                else:
+                    trl_config_hyperparams["num_generations"] = 1
+                logger_run.info(f"Set num_generations to {trl_config_hyperparams['num_generations']} to be compatible with batch_size {batch_size}")
+
         # Now, trl_config_hyperparams contains only what's intended for TrlGRPOConfig
         # AND max_completion_length should be aligned if max_tokens_per_generation was provided for the adapter.
         trl_grpo_config = _get_or_create_trl_grpo_config(
@@ -275,7 +310,7 @@ def _setup_trainer_instance(
 
         logger_run.debug(f"Num actual TRL reward functions: {len(actual_trl_reward_functions)}")
         # logger_run.debug(f"TRL reward weights in config: {getattr(trl_grpo_config, 'reward_weights', 'Not Set')}")
-        logger_run.debug(f"Adapter specific kwargs for GRPOTrainerAdapterTRL: {adapter_specific_kwargs}")
+        logger_run.debug(f"Adapter specific kwargs for GRPOTrainerAdapterTRL: {adapter_specific_params}")
 
         try:
             trainer_instance = GRPOTrainerAdapterTRL(
@@ -287,7 +322,7 @@ def _setup_trainer_instance(
                 prompt_source=prompt_source,
                 reward_functions=actual_trl_reward_functions, 
                 reference_model=reference_model,
-                **adapter_specific_kwargs # Pass adapter-specific params here
+                **adapter_specific_params # Pass adapter-specific params here
             )
             logger_run.info("GRPOTrainerAdapterTRL instantiated successfully with actual reward functions.")
         except Exception as e:

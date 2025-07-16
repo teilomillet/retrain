@@ -1,7 +1,6 @@
-from typing import Any, List, Optional, Dict, Iterable, Callable, Tuple
+from typing import Any, List, Optional, Dict, Callable, Tuple
 from collections import defaultdict
 import torch
-import asyncio
 import inspect
 from loguru import logger
 
@@ -72,14 +71,12 @@ except ImportError:
 
     _datasets_available = False
 
-from ..trainer import (
-    BaseTrainer,
-    AlgorithmConfig,
-    ModelObject,
-    ExperienceBatch,
-    TrainingMetrics,
-    PromptSource,
-    RewardFunction
+from retrain.reward.calculator import RewardCalculator
+from retrain.reward.types import ProcessedTrajectory, SingleTurnDataForTrainer, RawRolloutData
+from retrain.utils.metrics import MetricsTracker, GenerationMetrics, TrainingBatchMetrics
+from retrain.trainer.trainer import (
+    BaseTrainer, AlgorithmConfig, ModelObject, ExperienceBatch, 
+    TrainingMetrics, PromptSource, RewardFunction
 )
 # Factory for creating TRL-compatible batch reward functions
 from ...reward import create_grpo_batch_reward_func, REWARD_REGISTRY
@@ -119,12 +116,13 @@ class GRPOTrainerAdapter(BaseTrainer):
     environment: Environment
     reward_calculator: RewardCalculator # Primary source of rewards for TRL processing.
     actual_trl_reward_functions: List[Callable] # Stores TRL-compatible reward functions from run.py.
+    metrics_tracker: MetricsTracker  # Track environment-specific metrics
 
     # Adapter-specific parameters (not part of ActualTrlGRPOConfig)
     _sampling_params: Dict[str, Any]
     _max_tokens_per_generation: int
     _temperature_for_logprobs: float
-    _max_steps_this_trainer_train_call: int # Controls adapter's own train loop iterations.
+    _max_steps_this_trainer_train_call: int
 
     def __init__(self,
                  model: ModelObject,
@@ -139,6 +137,7 @@ class GRPOTrainerAdapter(BaseTrainer):
                  max_tokens_per_generation: Optional[int] = None,
                  temperature_for_logprobs: Optional[float] = None,
                  max_steps_this_trainer_train_call: Optional[int] = None,
+                 metrics_window_size: Optional[int] = None,  # For MetricsTracker
                  **trainer_specific_kwargs: Any): # For TRL GRPOTrainer constructor
         """
         Initializes the TRL GRPO adapter.
@@ -147,7 +146,12 @@ class GRPOTrainerAdapter(BaseTrainer):
         self.reward_calculator = reward_calculator
         # These TRL-compatible reward functions will be used to initialize the underlying TRL GRPOTrainer.
         self.actual_trl_reward_functions = reward_functions
+        
+        # Initialize metrics tracker
+        self.metrics_tracker = MetricsTracker(window_size=metrics_window_size or 100)
+        
         logger.debug(f"[GRPOTrainerAdapter.__init__] Received {len(reward_functions)} actual TRL reward functions.")
+        logger.debug(f"[GRPOTrainerAdapter.__init__] Initialized MetricsTracker with window size {self.metrics_tracker.window_size}")
 
         if _trl_available and isinstance(algorithm_config, ActualTrlGRPOConfig):
             logger.debug(f"    TRL algorithm_config.loss_type: {getattr(algorithm_config, 'loss_type', 'N/A')}")
@@ -258,7 +262,7 @@ class GRPOTrainerAdapter(BaseTrainer):
                  hf_train_dataset = Dataset.from_list([]) # type: ignore[assignment]
 
 
-            logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] Initializing TRL_GRPOTrainer with:")
+            logger.debug("[GRPOTrainerAdapter._initialize_underlying_trainer] Initializing TRL_GRPOTrainer with:")
             logger.debug(f"  model: {'Provided' if self.model else 'None'}")
             logger.debug(f"  tokenizer: {'Provided' if self.tokenizer else 'None'} (type: {type(self.tokenizer) if self.tokenizer else 'N/A'})")
             logger.debug(f"  train_dataset (for TRL init): {'Provided and has length' if hf_train_dataset and len(hf_train_dataset) > 0 else ('Provided but empty' if hf_train_dataset is not None else 'None')}")
@@ -267,22 +271,22 @@ class GRPOTrainerAdapter(BaseTrainer):
             logger.debug(f"  reward_funcs (for TRL GRPOTrainer constructor): {len(self.actual_trl_reward_functions)} functions provided.")
             logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] Additional **kwargs for TrlGRPOTrainer (from self.trainer_specific_kwargs): {self.trainer_specific_kwargs}")
 
+            # TRL's GRPOTrainer constructor expects the `model` to be the raw unwrapped model.
             self.trl_trainer = ActualTrlGRPOTrainer(
-                model=self.model,
-                args=self.algorithm_config, # ActualTrlGRPOConfig instance
+                model=self.model.model, # Pass the underlying model object
+                args=self.algorithm_config,
+                processing_class=self.tokenizer,
                 train_dataset=hf_train_dataset,
-                reward_funcs=self.actual_trl_reward_functions, # Pass actual functions
-                # tokenizer is typically handled by the model or TRL internally if needed by GRPOTrainer constructor.
-                **self.trainer_specific_kwargs # Pass kwargs from BaseTrainer
+                reward_funcs=self.actual_trl_reward_functions,
             )
-            logger.info("GRPOTrainerAdapter (TRL backend): Underlying TRL GRPOTrainer initialized successfully with actual reward functions.")
+            logger.info("TRL GRPOTrainer instantiated successfully.")
         except Exception as e:
-            logger.error(f"GRPOTrainerAdapter (TRL backend): Critical error during TRL GRPOTrainer initialization - {e}", exc_info=True)
+            logger.error(f"Error instantiating TRL GRPOTrainer: {e}", exc_info=True)
             raise RuntimeError(f"Failed to initialize TRL GRPOTrainer instance: {e}") from e
 
     # Core Training Methods
 
-    async def _generate_and_process_rollout(self, initial_prompt: str) -> List[SingleTurnDataForTrainer]:
+    async def _generate_and_process_rollout(self, initial_prompt: str) -> Tuple[List[SingleTurnDataForTrainer], GenerationMetrics]:
         """Helper to perform one rollout and process it with the reward calculator."""
         current_sampling_params = self._sampling_params.copy()
 
@@ -326,6 +330,27 @@ class GRPOTrainerAdapter(BaseTrainer):
         
         logger.debug(f"[GRPOTrainerAdapter._generate_and_process_rollout] RawRolloutData type from env.rollout: {type(raw_rollout_data)}")
 
+        # Extract generation metrics from rollout metadata
+        generation_metrics = raw_rollout_data.get("rollout_metadata", {}).get("generation_metrics")
+        if generation_metrics is None:
+            # Fallback: create basic metrics if environment doesn't provide them
+            logger.warning("[GRPOTrainerAdapter._generate_and_process_rollout] No generation_metrics found in rollout_metadata, creating fallback metrics")
+            generation_metrics = GenerationMetrics(
+                parsing_success=True,  # Assume success if no data
+                tool_calls_attempted=0,
+                tool_calls_successful=0,
+                final_answer_provided=False,
+                total_reward=sum(raw_rollout_data.get("intrinsic_rewards_per_turn", [])),
+                reward_per_step=raw_rollout_data.get("intrinsic_rewards_per_turn", []),
+                num_turns=len(raw_rollout_data.get("executed_llm_actions", [])),
+                completion_reason="unknown"
+            )
+
+        # Track tools used
+        tools_used = raw_rollout_data.get("rollout_metadata", {}).get("tools_used", [])
+        for tool_name in tools_used:
+            self.metrics_tracker.track_tool_usage(tool_name)
+
         # RewardCalculator.process_rollouts structures data into SingleTurnDataForTrainer.
         # The `final_combined_reward` from this step is NOT used by TRL directly;
         # TRL uses its configured reward_funcs with "infos" from the processed data.
@@ -333,10 +358,10 @@ class GRPOTrainerAdapter(BaseTrainer):
 
         if not results_batch:
             logger.warning(f"RewardCalculator.process_rollouts returned no data for prompt: '{initial_prompt[:100]}'.")
-            return []
+            return [], generation_metrics
         
         processed_trajectory: List[SingleTurnDataForTrainer] = results_batch[0]
-        return processed_trajectory
+        return processed_trajectory, generation_metrics
 
     async def train(self, total_training_iterations: Optional[int] = None) -> TrainingMetrics:
         """
@@ -356,7 +381,11 @@ class GRPOTrainerAdapter(BaseTrainer):
             raise TypeError(f"prompt_source must be a non-None async iterator, got {type(self.prompt_source)}")
 
         overall_metrics_accumulator: Dict[str, List[float]] = defaultdict(list)
+        batch_generation_metrics: List[GenerationMetrics] = []  # Collect metrics for this training run
 
+        # Start metrics tracking
+        self.metrics_tracker.start_training()
+        
         logger.info(f"GRPOTrainerAdapter: Starting training for {total_training_iterations} iterations (rollout batches).")
 
         for iteration in range(total_training_iterations):
@@ -373,7 +402,12 @@ class GRPOTrainerAdapter(BaseTrainer):
                     raise ValueError("Prompt source is empty or not re-iterable after reset and exhaustion.")
 
             try:
-                processed_trajectory: List[SingleTurnDataForTrainer] = await self._generate_and_process_rollout(initial_prompt)
+                processed_trajectory, generation_metrics = await self._generate_and_process_rollout(initial_prompt)
+                
+                # Track the generation metrics
+                self.metrics_tracker.track_generation(generation_metrics)
+                batch_generation_metrics.append(generation_metrics)
+                
             except RuntimeError as e:
                 logger.error(f"ERROR during async rollout/processing: {e}. Iteration {iteration + 1} will be skipped.", exc_info=True)
                 continue # Skip to next iteration if this specific rollout fails critically
@@ -466,12 +500,12 @@ class GRPOTrainerAdapter(BaseTrainer):
                 if train_output:
                     logger.debug(f"  GRPOTrainerAdapter: TRL train_output.training_loss: {getattr(train_output, 'training_loss', 'N/A')}, train_output.metrics: {getattr(train_output, 'metrics', 'N/A')}")
 
-                batch_metrics: Optional[Dict[str, float]] = None
+                trl_batch_metrics: Optional[Dict[str, float]] = None
                 training_loss_val: Optional[float] = None
 
                 if train_output is not None:
                     if hasattr(train_output, 'metrics') and train_output.metrics:
-                        batch_metrics = train_output.metrics
+                        trl_batch_metrics = train_output.metrics
                     elif hasattr(train_output, 'training_loss'):
                         loss_attr = getattr(train_output, 'training_loss')
                         if isinstance(loss_attr, (float, int)): # Ensure training_loss is float or convertible
@@ -479,9 +513,9 @@ class GRPOTrainerAdapter(BaseTrainer):
                         else:
                             logger.warning(f"train_output.training_loss was not a number: {loss_attr}")
                 
-                if batch_metrics:
-                    logger.info(f"  TRL Batch Training Metrics: {batch_metrics}")
-                    for key, value in batch_metrics.items():
+                if trl_batch_metrics:
+                    logger.info(f"  TRL Batch Training Metrics: {trl_batch_metrics}")
+                    for key, value in trl_batch_metrics.items():
                         overall_metrics_accumulator[key].append(value)
                 elif training_loss_val is not None:
                      overall_metrics_accumulator["training_loss"].append(training_loss_val)
@@ -495,27 +529,53 @@ class GRPOTrainerAdapter(BaseTrainer):
                 raise
             finally:
                 self.trl_trainer.train_dataset = original_trl_train_dataset # Restore TRL's original dataset
-                logger.debug(f"  Restored trl_trainer.train_dataset.")
+                logger.debug("  Restored trl_trainer.train_dataset.")
                 current_algo_config.num_train_epochs = original_num_train_epochs
                 current_algo_config.logging_steps = original_logging_steps
                 current_algo_config.save_steps = original_save_steps
 
         logger.info("GRPOTrainerAdapter: Main training loop finished.")
+        
+        # Compute final metrics including environment-specific ones
         final_metrics = {
             key: sum(values) / len(values) if values else 0
             for key, values in overall_metrics_accumulator.items()
         }
+        
+        # Add environment-specific metrics
+        env_metrics = self.metrics_tracker.get_current_metrics()
+        final_metrics.update(env_metrics)
+        
+        # Add training progress summary
+        progress_metrics = self.metrics_tracker.get_training_progress_summary()
+        final_metrics.update(progress_metrics)
+        
+        # Log batch summary if we have generation metrics
+        if batch_generation_metrics:
+            batch_metrics: TrainingBatchMetrics = self.metrics_tracker.compute_batch_metrics(batch_generation_metrics)
+            self.metrics_tracker.log_batch_summary(total_training_iterations, batch_metrics)
+            
+            # Add batch metrics to final metrics
+            final_metrics.update({
+                "batch/parsing_success_rate": batch_metrics.parsing_success_rate,
+                "batch/tool_success_rate": batch_metrics.tool_success_rate,
+                "batch/final_answer_rate": batch_metrics.final_answer_rate,
+                "batch/mean_total_reward": batch_metrics.mean_total_reward,
+                "batch/mean_turns_per_rollout": batch_metrics.mean_turns_per_rollout,
+            })
+        
         # Fallback: Try to get metrics from TRL state if no direct metrics were captured
         # and trl_trainer and its state are available.
-        if not final_metrics and self.trl_trainer and hasattr(self.trl_trainer, 'state') and self.trl_trainer.state and hasattr(self.trl_trainer.state, 'log_history'):
+        if not overall_metrics_accumulator and self.trl_trainer and hasattr(self.trl_trainer, 'state') and self.trl_trainer.state and hasattr(self.trl_trainer.state, 'log_history'):
             for log_entry in self.trl_trainer.state.log_history:
                 for key, value in log_entry.items():
                     if isinstance(value, (int, float)): # Only numeric values
                         overall_metrics_accumulator[f"avg_{key}"].append(value)
-            final_metrics = {
+            trl_metrics = {
                 key: sum(values) / len(values) if values else 0
                 for key, values in overall_metrics_accumulator.items()
             }
+            final_metrics.update(trl_metrics)
 
         logger.info(f"Final aggregated metrics: {final_metrics}")
         return final_metrics

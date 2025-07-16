@@ -5,6 +5,10 @@ from ..tool_provider import ToolProvider # Up one level to retrain.environment.t
 from ...tool import Tool # Up three levels to retrain.environment.tool.base
 from .wrapper import GenericFastMCPWrapper
 
+class ToolExecutionError(Exception):
+    """Exception raised when tool execution fails."""
+    pass
+
 if TYPE_CHECKING:
     # As in wrapper.py, placeholder for actual FastMCPClient type
     # from fastmcp.client import Client as FastMCPClientType
@@ -52,12 +56,15 @@ class FastMCPToolProvider(ToolProvider):
 
                     prefixed_tool_name = f"{self.prefix}{tool_name}"
                     
+                    # Improved schema extraction with better error handling and logging
                     tool_parameters_schema = None
                     schema_source_log_message = "unknown (defaulted to empty)" 
                     schema_obtained_via_primary_method = False
+                    schema_extraction_errors = []  # Track errors for better debugging
 
                     raw_input_schema_object = getattr(tool_info, 'inputSchema', None)
 
+                    # Primary method: Check if inputSchema is already a dict
                     if isinstance(raw_input_schema_object, dict):
                         if raw_input_schema_object.get('type') or raw_input_schema_object.get('properties') or raw_input_schema_object.get('anyOf'):
                             tool_parameters_schema = raw_input_schema_object
@@ -65,6 +72,10 @@ class FastMCPToolProvider(ToolProvider):
                             schema_obtained_via_primary_method = True
                             if tool_parameters_schema.get('title') == 'Inputschema': 
                                 tool_parameters_schema.pop('title')
+                        else:
+                            schema_extraction_errors.append("inputSchema dict exists but appears empty or invalid")
+                    
+                    # Alternative method: Check if inputSchema is a Pydantic model
                     elif raw_input_schema_object is not None: 
                         has_model_json_schema_attr = hasattr(raw_input_schema_object, 'model_json_schema')
                         if has_model_json_schema_attr:
@@ -75,13 +86,15 @@ class FastMCPToolProvider(ToolProvider):
                                     if isinstance(tool_parameters_schema, dict) and tool_parameters_schema.get('title') == 'Inputschema':
                                         tool_parameters_schema.pop('title')
                                     schema_source_log_message = "via tool_info.inputSchema.model_json_schema()"
-                                    # This is a primary path if inputSchema is a Pydantic model.
                                     schema_obtained_via_primary_method = True 
                                 except Exception as e_is_model:
-                                    logger.warning(f"[FastMCPToolProvider] Tool '{tool_name}': Error calling model_json_schema() on inputSchema (type: {type(raw_input_schema_object)}): {e_is_model}. Will attempt other schema sources.")
+                                    error_msg = f"Error calling model_json_schema() on inputSchema: {e_is_model}"
+                                    schema_extraction_errors.append(error_msg)
+                                    logger.warning(f"[FastMCPToolProvider] Tool '{tool_name}': {error_msg}")
 
-                    if tool_parameters_schema is None: # Indicates primary methods above didn't yield a schema or raw_input_schema_object was None
-                        schema_obtained_via_primary_method = False # Explicitly mark as not primary path if we reach here
+                    # Fallback method: Try to extract from full tool model
+                    if tool_parameters_schema is None:
+                        schema_obtained_via_primary_method = False
                         if hasattr(tool_info, 'model_json_schema') and callable(getattr(tool_info, 'model_json_schema')):
                             try:
                                 full_tool_definition_schema = tool_info.model_json_schema()
@@ -92,21 +105,43 @@ class FastMCPToolProvider(ToolProvider):
                                        (potential_schema.get("properties") or potential_schema.get("anyOf") or potential_schema.get("allOf") or potential_schema.get("oneOf")):
                                         tool_parameters_schema = potential_schema
                                         schema_source_log_message = "via tool_info.model_json_schema()['properties']['inputSchema'] (fallback)"
+                                    else:
+                                        schema_extraction_errors.append("Fallback method found inputSchema but it appears invalid")
+                                else:
+                                    schema_extraction_errors.append("Fallback method: tool model_json_schema() invalid structure")
                             except Exception as e_pyd_fallback:
-                                logger.warning(f"[FastMCPToolProvider] Tool '{tool_name}': Error processing tool_info.model_json_schema() for secondary fallback: {e_pyd_fallback}. Will attempt other schema sources.")
+                                error_msg = f"Error in fallback model_json_schema(): {e_pyd_fallback}"
+                                schema_extraction_errors.append(error_msg)
+                                logger.warning(f"[FastMCPToolProvider] Tool '{tool_name}': {error_msg}")
 
-                    log_level_for_schema_source = logger.debug # Default to DEBUG for primary methods
+                    # Final handling of schema extraction results
+                    log_level_for_schema_source = logger.debug
                     if tool_parameters_schema is None:
                         tool_parameters_schema = {"type": "object", "properties": {}}
                         schema_source_log_message = "default empty schema (no valid source found)"
-                        logger.warning(f"[FastMCPToolProvider] Tool '{tool_name}': No input schema found or derived; using default empty schema. Tool may not function as expected if parameters are required.")
-                        log_level_for_schema_source = logger.info # INFO because a warning was issued
+                        
+                        # Enhanced warning with extraction error details
+                        warning_msg = (
+                            f"[FastMCPToolProvider] Tool '{tool_name}': No input schema found or derived; "
+                            f"using default empty schema. Tool may not function as expected if parameters are required."
+                        )
+                        if schema_extraction_errors:
+                            warning_msg += f" Extraction errors: {'; '.join(schema_extraction_errors)}"
+                        
+                        logger.warning(warning_msg)
+                        log_level_for_schema_source = logger.info
                     elif not schema_obtained_via_primary_method and "fallback" in schema_source_log_message:
-                        # If schema was obtained via a fallback, log it as INFO as it's a deviation.
                         log_level_for_schema_source = logger.info 
                     
-                    # Use the determined log level for schema source announcement.
-                    log_level_for_schema_source(f"[FastMCPToolProvider] Tool '{tool_name}': Input schema resolution: {schema_source_log_message}.")
+                    # Enhanced logging with schema validation
+                    schema_info_msg = f"[FastMCPToolProvider] Tool '{tool_name}': Input schema resolution: {schema_source_log_message}."
+                    if tool_parameters_schema and tool_parameters_schema.get("properties"):
+                        param_names = list(tool_parameters_schema["properties"].keys())
+                        schema_info_msg += f" Parameters: {param_names}"
+                    else:
+                        schema_info_msg += " No parameters defined."
+                    
+                    log_level_for_schema_source(schema_info_msg)
                         
                     wrapper = GenericFastMCPWrapper(
                         mcp_tool_name=tool_name,
@@ -116,7 +151,6 @@ class FastMCPToolProvider(ToolProvider):
                         parameters_schema=tool_parameters_schema
                     )
                     discovered_tools_dict[prefixed_tool_name] = wrapper
-                    # Downgraded from INFO: Routine successful wrapping of a tool.
                     logger.debug(f"[FastMCPToolProvider] Successfully wrapped tool '{tool_name}' (ID: '{prefixed_tool_name}').")
 
         except Exception as e:
@@ -153,5 +187,24 @@ class FastMCPToolProvider(ToolProvider):
             # The wrapper's execute method needs to manage the client context for the call
             return await tool_wrapper.execute(arguments)
         except Exception as e:
-            logger.error(f"[FastMCPToolProvider] Error executing tool '{tool_wrapper._mcp_tool_name_actual}': {e}. Ensure the tool server is operational and arguments are valid.")
-            raise # Re-raise to allow higher-level error handling 
+            # Fix: Use safer string formatting to avoid issues with quotes in exception messages
+            # The original f-string failed when exception message contained {'param': 'CRYPTO'} 
+            # because single quotes were interpreted as format string delimiters
+            # This happens when MCP server returns validation errors with quoted parameter names
+            error_msg = "Error executing FastMCP tool '%s' (MCP tool: '%s'): %s" % (
+                tool_wrapper.name, 
+                tool_wrapper._mcp_tool_name_actual, 
+                str(e)
+            )
+            logger.error(error_msg, exc_info=True)
+            
+            # Also use safer formatting for the ToolExecutionError message
+            # to ensure consistency and avoid similar issues downstream
+            safe_error_message = "Error executing FastMCP tool '%s' (MCP tool: '%s'): %s" % (
+                tool_wrapper.name, 
+                tool_wrapper._mcp_tool_name_actual, 
+                str(e)
+            )
+            raise ToolExecutionError(safe_error_message) from e 
+
+ 

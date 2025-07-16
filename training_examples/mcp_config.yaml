@@ -7,6 +7,8 @@ model:
   loader: "huggingface"
   trust_remote_code: true
   torch_dtype: "bfloat16"
+  # macOS memory optimizations:
+  low_cpu_mem_usage: true
 
 environment:
   type: "fastmcp_env"
@@ -27,14 +29,20 @@ algorithm:
     num_iterations: 5
     logging_steps: 1
     beta: 0.01
-    max_completion_length: 100
-    max_tokens_per_generation: 512
-    num_generations: 2
-    per_device_train_batch_size: 2
-    gradient_accumulation_steps: 1
+    max_completion_length: 50
+    max_tokens_per_generation: 256
+    num_generations: 1
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 2
     temperature: 0.7
     top_p: 0.9
     top_k: 50
+    # macOS memory optimizations:
+    gradient_checkpointing: true  # Trades compute for memory (~50% memory reduction)
+    dataloader_pin_memory: false  # Reduces memory usage on macOS
+    dataloader_num_workers: 0     # Reduces memory overhead on macOS
+    # Use standard AdamW instead of 8-bit (not available on macOS)
+    optim: "adamw_torch"
 
 prompt_source:
   type: "list"

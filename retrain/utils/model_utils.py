@@ -1,11 +1,15 @@
+from __future__ import annotations
 import torch
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
 
 # Assuming selective_log_softmax will be a local or imported utility.
 # For now, let's define a placeholder if not readily available from TRL utils.
 # Ideally: from trl.trainer.utils import selective_log_softmax
 # Placeholder:
-def selective_log_softmax(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def selective_log_softmax(logits: "torch.Tensor", labels: "torch.Tensor") -> "torch.Tensor":
     """
     Computes log softmax only for the logits corresponding to the labels.
     Args:
@@ -19,13 +23,13 @@ def selective_log_softmax(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
 
 
 def calculate_completion_logprobs(
-    model: torch.nn.Module,
-    input_ids: torch.Tensor, # Shape: (batch_size, full_sequence_length) prompt + completion
-    attention_mask: torch.Tensor, # Shape: (batch_size, full_sequence_length)
-    completion_ids: torch.Tensor, # Shape: (batch_size, completion_length) - just the completion part
+    model: "torch.nn.Module",
+    input_ids: "torch.Tensor", # Shape: (batch_size, full_sequence_length) prompt + completion
+    attention_mask: "torch.Tensor", # Shape: (batch_size, full_sequence_length)
+    completion_ids: "torch.Tensor", # Shape: (batch_size, completion_length) - just the completion part
     temperature: float,
     logits_processing_batch_size: Optional[int] = None # For chunking if full sequence is too large for one pass
-) -> torch.Tensor:
+) -> "torch.Tensor":
     """
     Calculates the log probabilities of the completion tokens given the full input sequence.
 

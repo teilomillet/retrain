@@ -99,18 +99,54 @@ class GenericFastMCPWrapper(Tool):
             return final_result
         
         except Exception as e:
-            logger.error(f"Error executing FastMCP tool '{self.name}' (MCP tool: '{self._mcp_tool_name_actual}'): {e}", exc_info=True)
-            raise ToolExecutionError(
-                f"Error executing FastMCP tool '{self.name}' (MCP tool: '{self._mcp_tool_name_actual}'): {e}"
-            ) from e 
+            # Fix: Use safer string formatting to avoid issues with quotes in exception messages
+            # The original f-string failed when exception message contained {'param': 'CRYPTO'} 
+            # because single quotes were interpreted as format string delimiters
+            # This happens when MCP server returns validation errors with quoted parameter names
+            error_msg = "Error executing FastMCP tool '%s' (MCP tool: '%s'): %s" % (
+                self.name, 
+                self._mcp_tool_name_actual, 
+                str(e)
+            )
+            logger.error(error_msg, exc_info=True)
+            
+            # Also use safer formatting for the ToolExecutionError message
+            # to ensure consistency and avoid similar issues downstream
+            safe_error_message = "Error executing FastMCP tool '%s' (MCP tool: '%s'): %s" % (
+                self.name, 
+                self._mcp_tool_name_actual, 
+                str(e)
+            )
+            raise ToolExecutionError(safe_error_message) from e 
 
     async def get_schema(self) -> Dict[str, Any]:
         """
         Returns a schema describing the tool, its purpose, and its input parameters,
         based on information from the FastMCP server.
+        
+        Improved to provide better debugging information when schemas are empty.
         """
-        return {
+        schema = {
             "name": self.name,
             "description": self.description,
             "parameters": self._parameters_schema
-        } 
+        }
+        
+        # Add diagnostic information if schema seems incomplete
+        # This helps debug why LLMs might call tools incorrectly
+        if (not self._parameters_schema or 
+            self._parameters_schema == {"type": "object", "properties": {}} or
+            not self._parameters_schema.get("properties")):
+            
+            logger.warning(
+                "Tool '%s' (MCP: '%s') has empty or minimal parameter schema. "
+                "This may cause LLM to call it incorrectly. Schema: %s", 
+                self.name, 
+                self._mcp_tool_name_actual, 
+                self._parameters_schema
+            )
+            
+            # Add a note to the schema to help with debugging
+            schema["_schema_warning"] = "Empty or minimal parameter schema detected"
+        
+        return schema 

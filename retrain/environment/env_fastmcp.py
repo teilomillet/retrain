@@ -1,5 +1,6 @@
 # Standard library imports
 import asyncio
+import time
 from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Literal
 
 # Retrain library imports
@@ -16,13 +17,15 @@ from .tool.provider import ToolProvider
 from .tool.provider import FastMCPToolProvider, ManualToolProvider 
 from retrain.reward.types import RawRolloutData # For rollout return type
 from retrain.utils.parser.smol_agent_parser import SmolAgentParser, ParsedSmolLLMOutput # For parsing LLM output
+from retrain.utils.metrics import GenerationMetrics # For metrics tracking
 import torch # For Optional[torch.Tensor] in RawRolloutData and logprobs
 from loguru import logger # For logging within rollout
 import json # For formatting tool descriptions
 
 # Try to import FastMCPClient for dynamic provider setup
 try:
-    from fastmcp.client import Client as FastMCPClientTypeInternal
+    import fastmcp.client
+    FastMCPClientTypeInternal = fastmcp.client.Client
 except ImportError:
     FastMCPClientTypeInternal = None
     logger.warning("fastmcp.client.Client could not be imported. FastMCPToolProvider cannot be auto-initialized by FastMCPEnv if server_url is given without an explicit provider instance.")
@@ -77,7 +80,8 @@ class FastMCPEnv(Environment):
         # Add any other environment-specific parameters here
         initial_prompt_template: str = "Welcome! What would you like to do?",
         max_steps: int = 10, # Added max_steps for rollout termination
-        server_url: Optional[str] = None # Added server_url
+        server_url: Optional[str] = None, # Added server_url for HTTP transport
+        mcp_server_config: Optional[Dict[str, Any]] = None # Added mcp_server_config for stdio transport
     ):
         super().__init__() # BaseEnvironment __init__ currently does nothing with kwargs
         
@@ -93,11 +97,9 @@ class FastMCPEnv(Environment):
         self._conversation_history: List[Dict[str, str]] = [] # For storing conversation
         self.parser = SmolAgentParser() # Initialize parser
         self.server_url = server_url # Store server_url
+        self.mcp_server_config = mcp_server_config # Store mcp_server_config
 
-        # If server_url is provided and no FastMCPToolProvider is in the list, try to add one.
-        # This part is moved to setup() to allow async client instantiation if needed,
-        # and to keep __init__ synchronous.
-        # For now, we'll prepare it here if the client import was successful.
+        # Server connection will be set up in setup() method
 
     async def setup(self):
         """
@@ -108,21 +110,45 @@ class FastMCPEnv(Environment):
         self.active_tools = {}
         self.tool_schemas_for_prompt = []
 
-        if self.server_url and FastMCPClientTypeInternal:
-            has_fmp_provider = any(isinstance(p, FastMCPToolProvider) for p in self._tool_providers)
-            if not has_fmp_provider:
-                logger.info(f"[FastMCPEnv] server_url '{self.server_url}' provided and no FastMCPToolProvider found. Attempting to auto-initialize one.")
+        # Handle both HTTP (server_url) and stdio (mcp_server_config) configurations
+        has_fmp_provider = any(isinstance(p, FastMCPToolProvider) for p in self._tool_providers)
+        
+        if not has_fmp_provider and FastMCPClientTypeInternal:
+            if self.server_url:
+                # HTTP transport
+                logger.info(f"[FastMCPEnv] server_url '{self.server_url}' provided. Attempting to auto-initialize HTTP FastMCPToolProvider.")
                 try:
                     mcp_client = FastMCPClientTypeInternal(transport=self.server_url)
                     auto_provider = FastMCPToolProvider(client=mcp_client)
                     self._tool_providers.append(auto_provider)
-                    logger.info(f"[FastMCPEnv] Auto-initialized FastMCPToolProvider for server: {self.server_url}")
+                    logger.info(f"[FastMCPEnv] Auto-initialized HTTP FastMCPToolProvider for server: {self.server_url}")
                 except Exception as e_client:
-                    logger.error(f"[FastMCPEnv] Failed to auto-initialize FastMCPToolProvider with server_url '{self.server_url}': {e_client}")
-            elif has_fmp_provider:
-                 logger.debug(f"[FastMCPEnv] FastMCPToolProvider already present. Skipping auto-initialization for server_url: {self.server_url}")
-        elif self.server_url and not FastMCPClientTypeInternal:
-            logger.warning(f"[FastMCPEnv] server_url '{self.server_url}' was provided, but FastMCPClient could not be imported. Cannot auto-initialize FastMCPToolProvider.")
+                    logger.error(f"[FastMCPEnv] Failed to auto-initialize HTTP FastMCPToolProvider with server_url '{self.server_url}': {e_client}")
+            elif self.mcp_server_config:
+                # Stdio transport
+                logger.info(f"[FastMCPEnv] mcp_server_config provided. Attempting to auto-initialize stdio FastMCPToolProvider.")
+                try:
+                    from fastmcp.client.transports import StdioTransport
+                    
+                    command = self.mcp_server_config.get("command", "uvx")
+                    args = self.mcp_server_config.get("args", [])
+                    env = self.mcp_server_config.get("env", {})
+                    
+                    stdio_transport = StdioTransport(
+                        command=command,
+                        args=args,
+                        env=env
+                    )
+                    mcp_client = FastMCPClientTypeInternal(transport=stdio_transport)
+                    auto_provider = FastMCPToolProvider(client=mcp_client)
+                    self._tool_providers.append(auto_provider)
+                    logger.info(f"[FastMCPEnv] Auto-initialized stdio FastMCPToolProvider with command: {command} {args}")
+                except Exception as e_client:
+                    logger.error(f"[FastMCPEnv] Failed to auto-initialize stdio FastMCPToolProvider with config '{self.mcp_server_config}': {e_client}")
+        elif has_fmp_provider:
+            logger.debug(f"[FastMCPEnv] FastMCPToolProvider already present. Skipping auto-initialization.")
+        elif not FastMCPClientTypeInternal:
+            logger.warning(f"[FastMCPEnv] FastMCPClient could not be imported. Cannot auto-initialize FastMCPToolProvider.")
 
         for tool_key in self._tool_registry_keys:
             try:
@@ -164,6 +190,17 @@ class FastMCPEnv(Environment):
                         schema = await tool_instance.get_schema()
                         self.tool_schemas_for_prompt.append(schema)
                         logger.debug(f"[FastMCPEnv] Loaded tool from provider {type(provider).__name__}: {tool_name}")
+                        
+                        # Add validation and warning for potentially problematic schemas
+                        # This helps diagnose why LLMs might call tools incorrectly
+                        if (not schema.get("parameters") or 
+                            schema.get("parameters") == {"type": "object", "properties": {}} or
+                            not schema.get("parameters", {}).get("properties")):
+                            logger.warning(
+                                f"[FastMCPEnv] Tool '{tool_name}' from {type(provider).__name__} has empty parameter schema. "
+                                f"LLM may not know how to call this tool correctly."
+                            )
+                        
                     except Exception as e_schema:
                         logger.error(f"[FastMCPEnv] Failed to get schema for tool '{tool_name}' from provider {type(provider).__name__}: {e_schema}. Using basic info.")
                         self.tool_schemas_for_prompt.append({"name": tool_name, "description": tool_instance.description, "error_getting_schema": str(e_schema)})
@@ -339,8 +376,23 @@ class FastMCPEnv(Environment):
         sampling_params: 'SamplingParams',
         max_tokens_to_generate: int = 256,
     ) -> RawRolloutData:
+        rollout_start_time = time.time()
         logger.debug(f"[FastMCPEnv.rollout] Starting rollout. Initial prompt snippet: '{initial_prompt[:100]}...'")
         logger.trace(f"[FastMCPEnv.rollout] Sampling_params: {sampling_params}")
+
+        # Initialize metrics tracking for this rollout
+        generation_metrics = GenerationMetrics(
+            parsing_success=True,  # Will be updated if parsing fails
+            tool_calls_attempted=0,
+            tool_calls_successful=0,
+            final_answer_provided=False,
+            total_reward=0.0,
+            reward_per_step=[],
+            num_turns=0,
+            completion_reason="unknown",
+            generation_time_seconds=None
+        )
+        tools_used = []  # Track which tools were used
 
         default_for_max_tokens = max_tokens_to_generate
         actual_max_tokens_for_generation: int = default_for_max_tokens
@@ -385,7 +437,7 @@ class FastMCPEnv(Environment):
         terminated = False
         truncated = False
         turn_number = 0
-        info: Dict[str, Any] = {} # Initialize info dict to be available after the loop
+        info: Dict[str, Any] = {}
 
         while not (terminated or truncated):
             turn_number += 1
@@ -402,8 +454,8 @@ class FastMCPEnv(Environment):
                     "Available tools are listed below. Only use these exact tool names.\n"
                     f"{formatted_tools_string}\n\n"
                     "If you are providing a final answer, use the <answer>YOUR_FINAL_ANSWER_HERE</answer> tag.\n"
-                    "For intermediate reasoning or thoughts, use <reasoning>YOUR_THOUGHTS_HERE</reasoning>.\n"
-                    "Tool results provided by the system will be in <result>...</result> tags."
+                    "For intermediate reasoning or thoughts, use <think>YOUR_THOUGHTS_HERE</think>.\n"
+                    "Tool results provided by the system will be in <r>...</r> tags."
                 )
                 
                 prompting_conversation = [{"role": "system", "content": system_prompt_content}]
@@ -533,6 +585,10 @@ class FastMCPEnv(Environment):
                         if not isinstance(tool_name, str) or not tool_name:
                             raise ValueError("Tool name missing or not a string in parsed command.")
                         
+                        # Update metrics for tool call attempt
+                        generation_metrics.tool_calls_attempted += 1
+                        tools_used.append(tool_name)
+                        
                         tool_call_payload = ToolCallAction(tool_name=tool_name, tool_input=tool_args)
                         text_content = parsed_output_after_stripping.reasoning
                         logger.debug(f"[FastMCPEnv.rollout] Successfully parsed tool call: {tool_name} with args: {tool_args}")
@@ -542,29 +598,34 @@ class FastMCPEnv(Environment):
                         tool_call_payload = None
                         error_detail = f"Invalid JSON in <tool> command: {e_json}. Command content: '{parsed_output_after_stripping.tool_command}'"
                         text_content = f"ERROR: Your instruction to use a tool was malformed. {error_detail}"
+                        generation_metrics.parsing_success = False  # Mark parsing failure
                         logger.warning(f"[FastMCPEnv.rollout] {error_detail}")
                     except ValueError as e_val:
                         action_type_str = "text_response"
                         tool_call_payload = None
                         error_detail = f"Invalid tool command structure: {e_val}. Command content: '{parsed_output_after_stripping.tool_command}'"
                         text_content = f"ERROR: Your instruction to use a tool had an invalid structure. {error_detail}"
+                        generation_metrics.parsing_success = False  # Mark parsing failure
                         logger.warning(f"[FastMCPEnv.rollout] {error_detail}")
                     except Exception as e_tool_parse: 
                         action_type_str = "text_response" 
                         tool_call_payload = None
                         error_detail = f"Unexpected error parsing tool command: {e_tool_parse}. Command: '{parsed_output_after_stripping.tool_command}'"
                         text_content = f"ERROR: An unexpected error occurred while processing your tool command. {error_detail}"
+                        generation_metrics.parsing_success = False  # Mark parsing failure
                         logger.error(f"[FastMCPEnv.rollout] {error_detail}", exc_info=True)
 
                 elif parsed_output_after_stripping.final_answer is not None:
                     action_type_str = "text_response"
                     text_content = parsed_output_after_stripping.final_answer
+                    generation_metrics.final_answer_provided = True  # Mark final answer provided
                 elif parsed_output_after_stripping.reasoning is not None: 
                     action_type_str = "text_response"
                     text_content = parsed_output_after_stripping.reasoning
                 elif parsed_output_after_stripping.parsing_error:
                     action_type_str = "text_response"
                     text_content = f"ERROR: Could not parse your response due to: {parsed_output_after_stripping.parsing_error}. Original response: {raw_llm_text_output_for_parse}"
+                    generation_metrics.parsing_success = False  # Mark parsing failure
                     # Using f"""...""" for robustness if error messages or output contain quotes
                     logger.warning(f"""[FastMCPEnv.rollout] SmolAgentParser indicated parsing error: '{parsed_output_after_stripping.parsing_error}'. Raw LLM output snippet: '{raw_llm_text_output_for_parse[:200]}...'""")
                 else: 
@@ -585,6 +646,7 @@ class FastMCPEnv(Environment):
                     logger.error(f"[FastMCPEnv.rollout] CRITICAL: action_type_str has unexpected value '{action_type_str}'. Defaulting to error text_response.")
                     final_action_type = "text_response"
                     text_content = "INTERNAL ERROR: Could not determine action type due to unexpected state."
+                    generation_metrics.parsing_success = False  # Mark parsing failure
                 
                 llm_action_to_step = LLMAction(
                     action_type=final_action_type,
@@ -598,6 +660,14 @@ class FastMCPEnv(Environment):
                 action_list.append(llm_action_to_step)
                 next_observation, reward, terminated, truncated, info = await self.step(llm_action_to_step)
                 
+                # Update metrics with step results
+                generation_metrics.reward_per_step.append(reward)
+                generation_metrics.total_reward += reward
+                
+                # Track tool success if it was a tool call
+                if final_action_type == "tool_call" and info.get("tool_result_status") == "success":
+                    generation_metrics.tool_calls_successful += 1
+                
                 obs_list.append(next_observation)
                 reward_list.append(reward)
                 info_dicts_per_step.append(info)
@@ -606,6 +676,18 @@ class FastMCPEnv(Environment):
                 logger.debug("[FastMCPEnv.rollout] Loop condition met: current_observation does not require LLM action. Terminating rollout.")
                 break 
         
+        # Update final metrics
+        generation_metrics.num_turns = turn_number
+        generation_metrics.generation_time_seconds = time.time() - rollout_start_time
+        
+        # Set completion reason
+        if terminated:
+            generation_metrics.completion_reason = "terminated"
+        elif truncated:
+            generation_metrics.completion_reason = "truncated"
+        else:
+            generation_metrics.completion_reason = "max_steps"
+
         # Ensure final_observation_for_rollout_data is defined using the last state of current_observation
         final_observation_for_rollout_data = current_observation 
         
@@ -633,9 +715,14 @@ class FastMCPEnv(Environment):
             intrinsic_rewards_per_turn=reward_list,
             final_environment_observation=final_observation_for_rollout_data,
             step_info_dicts_per_turn=info_dicts_per_step,
-            rollout_metadata=rollout_completion_info
+            rollout_metadata={
+                **rollout_completion_info,
+                "generation_metrics": generation_metrics,  # Add metrics to metadata
+                "tools_used": tools_used  # Track tools used in this rollout
+            }
         )
         logger.info(f"[FastMCPEnv.rollout] Completed. Actions: {len(action_list)}, History msgs: {len(final_observation_for_rollout_data['current_conversation'])}. Status: {rollout_completion_info.get('rollout_status', 'unknown')}")
+        logger.debug(f"[FastMCPEnv.rollout] Metrics: Parsing={'✓' if generation_metrics.parsing_success else '✗'}, Tools={generation_metrics.tool_calls_successful}/{generation_metrics.tool_calls_attempted}, FinalAnswer={'✓' if generation_metrics.final_answer_provided else '✗'}, Reward={generation_metrics.total_reward:.3f}")
 
         return raw_rollout_data
 

@@ -59,8 +59,9 @@ class EnvironmentConfig(BaseModel):
 
     @validator('type')
     def type_must_be_supported(cls, v):
-        # This could also integrate with an environment registry
-        supported_envs = ["smol_agent", "fastmcp_env"] # Added "fastmcp_env"
+        # This validator ensures that the framework only attempts to create
+        # environments that it knows how to instantiate.
+        supported_envs = ["smol_agent", "fastmcp_env", "spider2"]
         if v.lower() not in supported_envs:
             raise ValueError(f"Unsupported environment type: '{v}'. Supported: {supported_envs}")
         return v.lower()
@@ -103,20 +104,28 @@ class RewardSetupConfig(BaseModel):
 print("[config_models.py] After RewardSetupConfig") # DEBUG
 
 class TrainingConfig(BaseModel):
-    """Root configuration model for a training run."""
-    model: ModelConfig
-    environment: EnvironmentConfig
-    algorithm: AlgorithmConfig
-    prompt_source: PromptSourceConfig
-    reward_setup: RewardSetupConfig = Field(default_factory=RewardSetupConfig, description="Setup for reward calculation, including step and rollout rewards.")
-
-    # Optional top-level configurations for managing the training run
-    experiment_name: Optional[str] = Field(None, description="Optional name for the experiment run, useful for tracking.")
+    """Defines the complete configuration for a training run."""
+    algorithm: AlgorithmConfig = Field(..., description="Configuration for the training algorithm (e.g., PPO, DPO).")
+    environment: EnvironmentConfig = Field(..., description="Configuration for the training environment.")
+    model: ModelConfig = Field(..., description="Configuration for the language model being trained.")
+    prompt_source: PromptSourceConfig = Field(..., description="Configuration for the prompt source.")
+    reward_setup: RewardSetupConfig = Field(..., description="Configuration for the reward function and its parameters.")
+    
+    # General training parameters
+    num_episodes: int = Field(100, description="Total number of episodes to run during training.")
+    batch_size: int = Field(8, description="Number of episodes to process in a single batch.")
     seed: Optional[int] = Field(None, description="Optional random seed for improving reproducibility across runs.")
     logging_level: str = Field("INFO", description="Logging level for the training run (e.g., DEBUG, INFO, WARNING, ERROR).")
+    output_dir: str = Field("trainer_output", description="Directory to save training outputs, such as models and checkpoints.")
+    logging_dir: Optional[str] = Field(None, description="Directory to save logs. If None, defaults to a 'logs' subdirectory within output_dir.")
+    experiment_name: Optional[str] = Field(None, description="Optional name for the experiment, used for grouping runs (e.g., in W&B).")
+    run_name: Optional[str] = Field(None, description="Optional name for the specific run, used for logging and tracking.")
+
+    class Config:
+        extra = "allow"
 
     @classmethod
-    def from_yaml(cls, file_path: str) -> 'TrainingConfig':
+    def from_yaml(cls, file_path: str) -> "TrainingConfig":
         """Loads training configuration from a YAML file."""
         try:
             import yaml

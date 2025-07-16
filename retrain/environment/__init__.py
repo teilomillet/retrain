@@ -4,6 +4,7 @@ from .environment import Environment
 from .types import LLMAction, EnvironmentObservation, ToolCallAction, ToolResultObservation
 from .env_fastmcp import FastMCPEnv
 from .env_smolagent import SmolAgentEnv
+from .env_spider2 import Spider2Env
 
 __all__ = [
     "Environment",
@@ -13,12 +14,14 @@ __all__ = [
     "ToolResultObservation",
     "FastMCPEnv",
     "SmolAgentEnv",
+    "Spider2Env",
     "get_environment",
 ]
 
 SUPPORTED_ENV_TYPES = {
     "fastmcp_env": FastMCPEnv,
     "smol_agent": SmolAgentEnv,
+    "spider2": Spider2Env,
 }
 
 async def get_environment(

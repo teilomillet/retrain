@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "spider2_snowflake": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "mcp-alchemy==2025.7.9.172934",
+        "--with",
+        "snowflake-connector-python",
+        "--refresh-package",
+        "mcp-alchemy",
+        "mcp-alchemy"
+      ],
+      "env": {
+        "DB_URL": "snowflake://user:password@account/database/schema"
+      }
+    }
+  }
+}

@@ -45,6 +45,39 @@ class PromptSource(abc.ABC):
         return prompt
 
 
+class EnvironmentPromptSource(PromptSource):
+    """
+    A special-case PromptSource that indicates the prompt is provided by the
+    environment itself, typically via the initial observation from `env.reset()`.
+    This source does not generate or hold prompts. Its `get_prompt` method
+    returns a placeholder, as the actual prompt is sourced elsewhere in the
+    training loop.
+    """
+    async def get_prompt(self) -> Optional[str]:
+        """
+        Returns a placeholder or None. The actual prompt is sourced from the environment.
+        """
+        logger.debug("EnvironmentPromptSource.get_prompt() called. This source is a placeholder.")
+        # Returning a dummy prompt to satisfy iteration, but it won't be the one used
+        # in the part of the training loop that matters (the one that calls env.reset()).
+        # In our GRPOTrainerAdapter, the prompt_source is used to create a dataset for TRL,
+        # but the actual initial prompt for rollouts will come from the environment.
+        return "env_provided"
+
+    async def reset(self) -> None:
+        """No-op reset for the environment prompt source."""
+        logger.debug("EnvironmentPromptSource.reset() called. No action taken.")
+        pass
+
+    def get_all_prompts_sync(self) -> List[str]:
+        """
+        Returns an empty list since the environment provides prompts dynamically.
+        This method exists for compatibility with TRL's dataset initialization.
+        """
+        logger.debug("EnvironmentPromptSource.get_all_prompts_sync() called. Returning empty list as prompts come from environment.")
+        return []
+
+
 class CfgPromptSource(PromptSource):
     """
     A PromptSource implementation that is configured via a dictionary.
@@ -328,31 +361,24 @@ class CfgPromptSource(PromptSource):
 def get_prompt_source(config: Dict[str, Any]) -> PromptSource:
     """Factory function to create a PromptSource instance from a configuration.
 
-    Currently, this factory specifically returns a CfgPromptSource instance,
-    as CfgPromptSource is designed to handle various underlying source types
-    (list, file, hf_dataset) based on its own internal configuration.
-
-    Args:
-        config: A dictionary compatible with CfgPromptSource initialization.
-                It should contain a "type" key (e.g., "list", "file", "hf_dataset")
-                and other necessary keys based on that type (e.g., "prompts" for "list",
-                "file_path" for "file", etc.)
-
-    Returns:
-        An instance of a PromptSource (specifically CfgPromptSource).
-
-    Raises:
-        ValueError: If the configuration is invalid for CfgPromptSource.
-        FileNotFoundError: If a configured prompt file is not found.
-        ImportError: If 'datasets' library is needed but not installed.
+    This factory checks the 'type' field in the config and returns the
+    appropriate PromptSource instance.
     """
-    # CfgPromptSource's __init__ already handles the logic of parsing 'type'
-    # and other config details. We just pass the config through.
-    logger.info(f"[get_prompt_source] Creating CfgPromptSource with config: {config}")
-    return CfgPromptSource(config=config)
+    prompt_source_type = config.get("type")
+    logger.info(f"[get_prompt_source] Creating prompt source of type '{prompt_source_type}' with config: {config}")
+
+    if prompt_source_type == "environment":
+        return EnvironmentPromptSource()
+    elif prompt_source_type in ["list", "file", "hf_dataset"]:
+        # CfgPromptSource handles these types internally
+        return CfgPromptSource(config=config)
+    else:
+        supported_types = ["environment", "list", "file", "hf_dataset"]
+        raise ValueError(f"Unsupported prompt_source type: '{prompt_source_type}'. Choose from {supported_types}.")
 
 __all__ = [
     "PromptSource",
+    "EnvironmentPromptSource",
     "CfgPromptSource",
     "get_prompt_source",
 ]
