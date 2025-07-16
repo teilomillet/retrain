@@ -28,6 +28,56 @@ class FastMCPToolProvider(ToolProvider):
             raise ValueError("FastMCPToolProvider requires a valid FastMCP client instance.")
         self._fastmcp_client = client
         self.prefix = prefix # Initialize prefix attribute
+        
+        # Manual schema definitions for common MCP tools that don't provide proper schemas.
+        # This fixes the issue where MCP servers (like mcp-alchemy) don't provide input schemas,
+        # causing LLMs to not know how to call the tools correctly.
+        self._manual_schemas = {
+            "all_table_names": {
+                "type": "object",
+                "properties": {},
+                "description": "Returns all table names in the database. No parameters required."
+            },
+            "filter_table_names": {
+                "type": "object", 
+                "properties": {
+                    "q": {
+                        "type": "string",
+                        "description": "Substring to search for in table names"
+                    }
+                },
+                "required": ["q"],
+                "description": "Find tables matching a substring pattern"
+            },
+            "schema_definitions": {
+                "type": "object",
+                "properties": {
+                    "table_names": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of table names to get schema definitions for"
+                    }
+                },
+                "required": ["table_names"],
+                "description": "Get detailed schema information for specified tables including columns, types, and relationships"
+            },
+            "execute_query": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string", 
+                        "description": "SQL query to execute"
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Optional parameters for parameterized queries",
+                        "additionalProperties": True
+                    }
+                },
+                "required": ["query"],
+                "description": "Execute SQL query and return results in vertical format"
+            }
+        }
 
     async def discover_tools(self) -> List[Tool]:
         """
@@ -117,19 +167,27 @@ class FastMCPToolProvider(ToolProvider):
                     # Final handling of schema extraction results
                     log_level_for_schema_source = logger.debug
                     if tool_parameters_schema is None:
-                        tool_parameters_schema = {"type": "object", "properties": {}}
-                        schema_source_log_message = "default empty schema (no valid source found)"
-                        
-                        # Enhanced warning with extraction error details
-                        warning_msg = (
-                            f"[FastMCPToolProvider] Tool '{tool_name}': No input schema found or derived; "
-                            f"using default empty schema. Tool may not function as expected if parameters are required."
-                        )
-                        if schema_extraction_errors:
-                            warning_msg += f" Extraction errors: {'; '.join(schema_extraction_errors)}"
-                        
-                        logger.warning(warning_msg)
-                        log_level_for_schema_source = logger.info
+                        # Check if we have a manual schema definition for this tool
+                        # This addresses the common issue where MCP servers don't provide proper schemas
+                        if tool_name in self._manual_schemas:
+                            tool_parameters_schema = self._manual_schemas[tool_name].copy()
+                            schema_source_log_message = "manual schema definition (MCP server provided no schema)"
+                            log_level_for_schema_source = logger.info
+                            logger.info(f"[FastMCPToolProvider] Tool '{tool_name}': Using manual schema definition to fix missing MCP server schema.")
+                        else:
+                            tool_parameters_schema = {"type": "object", "properties": {}}
+                            schema_source_log_message = "default empty schema (no valid source found)"
+                            
+                            # Enhanced warning with extraction error details
+                            warning_msg = (
+                                f"[FastMCPToolProvider] Tool '{tool_name}': No input schema found or derived; "
+                                f"using default empty schema. Tool may not function as expected if parameters are required."
+                            )
+                            if schema_extraction_errors:
+                                warning_msg += f" Extraction errors: {'; '.join(schema_extraction_errors)}"
+                            
+                            logger.warning(warning_msg)
+                            log_level_for_schema_source = logger.info
                     elif not schema_obtained_via_primary_method and "fallback" in schema_source_log_message:
                         log_level_for_schema_source = logger.info 
                     

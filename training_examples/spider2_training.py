@@ -30,8 +30,8 @@ def create_spider2_training_config(
     spider2_type: str = "lite",
     mcp_server_config: Optional[Dict[str, Any]] = None,
     max_steps: int = 20,
-    num_iterations: int = 100,
-    batch_size: int = 4,  # Back to 4 to be divisible by num_generations=2
+    num_generations: int = 100,
+    batch_size: int = 2,  # Smaller batch for faster iterations
     learning_rate: float = 1e-5,
     max_length: int = 512,
     output_dir: str = "trainer_output",
@@ -97,9 +97,10 @@ def create_spider2_training_config(
                 verifiers=[],
                 verifier_penalty=0.0,
                 distribution_strategy="last_step"
-            )
-        },
-        rollout_reward_configs={
+            ),
+            # Fixed: Moved final_answer_quality from rollout_reward_configs to step_reward_configs
+            # because it's a step-level function that analyzes individual (prompt, completion) pairs,
+            # not a rollout-level function that analyzes entire RawRolloutData objects.
             "final_answer_quality": RewardFunctionConfig(
                 weight=2.0,
                 params={"accuracy_threshold": 0.8, "completeness_check": True},
@@ -107,6 +108,9 @@ def create_spider2_training_config(
                 verifier_penalty=1.0,
                 distribution_strategy="last_step"
             )
+        },
+        rollout_reward_configs={
+            # Removed final_answer_quality from here - it should be step-level, not rollout-level
         }
     )
     
@@ -118,12 +122,12 @@ def create_spider2_training_config(
             "learning_rate": learning_rate,
             "batch_size": batch_size,
             "max_length": max_length,
-            "num_iterations": num_iterations,
-            "gradient_accumulation_steps": 4,  # Back to 4 for better gradient stability
-            "warmup_steps": 5,  # Reduced warmup for faster convergence
-            "logging_steps": 2,  # More frequent logging
-            "save_steps": 25,  # More frequent saves
-            "eval_steps": 15,  # More frequent evaluation
+            "num_iterations": num_generations,  # TRL GRPOConfig uses num_iterations, not num_generations
+            "gradient_accumulation_steps": 1,  # Update weights every step for fast feedback
+            "warmup_steps": 1,  # Minimal warmup for 10 total iterations
+            "logging_steps": 1,  # Log every step for debugging
+            "save_steps": 5,   # Save every 5 steps  
+            "eval_steps": 5,   # Evaluate every 5 steps
             "evaluation_strategy": "no",
             "save_strategy": "steps",
             "load_best_model_at_end": False,
@@ -134,6 +138,10 @@ def create_spider2_training_config(
             "bf16": True,
             "tf32": False,
             "gradient_checkpointing": True,
+            # Fix PyTorch gradient checkpointing warning by using non-reentrant checkpointing.
+            # The default reentrant checkpointing requires enable_input_require_grads() hook
+            # which causes "None of the inputs have requires_grad=True" warnings.
+            "gradient_checkpointing_kwargs": {"use_reentrant": False},
             "optim": "adamw_torch",
             "lr_scheduler_type": "cosine",
             "weight_decay": 0.01,
@@ -144,7 +152,7 @@ def create_spider2_training_config(
             "max_prompt_length": 256,  # Reduce prompt length
             "max_completion_length": 256,  # Reduce completion length
             # GRPO-specific settings
-            "num_generations": 2,  # Minimum required for GRPO (must divide effective batch size)
+            "num_generations": 2,  # Number of completions per prompt (must divide batch_size)
             "temperature": 0.8,  # Generation temperature
             "top_p": 0.9,  # Top-p sampling
             # Enable completion logging to WandB
@@ -166,7 +174,7 @@ def create_spider2_training_config(
         model=model_config,
         prompt_source=prompt_source_config,
         reward_setup=reward_setup_config,
-        num_episodes=num_iterations,
+        num_episodes=num_generations,
         batch_size=batch_size,
         seed=42,
         logging_level="DEBUG",
@@ -205,6 +213,12 @@ async def setup_mcp_alchemy_server():
 
 async def main():
     """Main training function."""
+    # Fix HuggingFace tokenizers parallelism warning that occurs when process forks
+    # after tokenizers have been used. Setting this prevents the warning:
+    # "The current process just got forked, after parallelism has already been used"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    logger.info("Set TOKENIZERS_PARALLELISM=false to avoid tokenizer fork warnings")
+    
     logger.info("Starting Spider2 training with MCP Alchemy integration")
     
     # Setup MCP configurations
@@ -228,9 +242,9 @@ async def main():
             model_name="Qwen/Qwen3-0.6B",
             spider2_type="lite",
             mcp_server_config=lite_mcp_config,  # Use stdio transport config
-            max_steps=20,
-            num_iterations=100,  # Reduced back since we're using larger batches
-            batch_size=4,  # Back to 4 for GRPO compatibility
+            max_steps=5,  # Much shorter episodes to prevent getting stuck
+            num_generations=10,  # Much smaller for initial testing
+            batch_size=2,  # Smaller for faster training
             learning_rate=1e-5,  # Back to original LR
             output_dir="trainer_output/spider2-lite",
             logging_dir="trainer_output/spider2-lite/logs"
@@ -254,9 +268,9 @@ async def main():
             model_name="Qwen/Qwen3-0.6B",
             spider2_type="dbt",
             mcp_server_config=dbt_mcp_config,  # Use stdio transport config
-            max_steps=30,
-            num_iterations=150,  # Adjusted for larger batches
-            batch_size=4,  # Back to 4 for GRPO compatibility
+            max_steps=5,  # Much shorter episodes to prevent getting stuck
+            num_generations=10,  # Much smaller for initial testing
+            batch_size=2,  # Smaller for faster training
             learning_rate=2e-5,  # Adjusted LR
             output_dir="trainer_output/spider2-dbt",
             logging_dir="trainer_output/spider2-dbt/logs"

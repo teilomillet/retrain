@@ -58,6 +58,12 @@ class HuggingFaceModel(Model):
         logger.debug(f"[HuggingFaceModel.load] Loading model: {model_name} with args: {model_kwargs}")
         model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
 
+        # Ensure model is in training mode and parameters are set for training
+        model.train()
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.debug(f"[HuggingFaceModel.load] Model parameters: {trainable_params:,} trainable out of {total_params:,} total")
+
         # You might need to handle device placement here or later, e.g.:
         # model = model.to(model_config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
 
@@ -90,6 +96,13 @@ class HuggingFaceModel(Model):
             logger.info("[HuggingFaceModel.peft] PEFT model created successfully.")
             logger.debug("[HuggingFaceModel.peft] Printing trainable parameters (output to stdout)...")
             peft_model.print_trainable_parameters() # Useful helper from peft
+            
+            # Ensure PEFT model is in training mode and has trainable parameters
+            peft_model.train()
+            trainable_params = sum(p.numel() for p in peft_model.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in peft_model.parameters())
+            logger.debug(f"[HuggingFaceModel.peft] PEFT Model parameters: {trainable_params:,} trainable out of {total_params:,} total")
+            
             return peft_model
         except Exception as e:
             logger.error(f"[HuggingFaceModel.peft] Error applying PEFT config {peft_config_dict}: {e}", exc_info=True)

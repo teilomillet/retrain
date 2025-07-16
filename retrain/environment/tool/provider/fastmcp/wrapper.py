@@ -132,21 +132,45 @@ class GenericFastMCPWrapper(Tool):
             "parameters": self._parameters_schema
         }
         
-        # Add diagnostic information if schema seems incomplete
+        # Add diagnostic information if schema seems incomplete or malformed
         # This helps debug why LLMs might call tools incorrectly
-        if (not self._parameters_schema or 
-            self._parameters_schema == {"type": "object", "properties": {}} or
-            not self._parameters_schema.get("properties")):
-            
+        # Only warn for truly problematic schemas, not for tools that legitimately have no parameters
+        schema_is_problematic = False
+        warning_reason = ""
+        
+        if not self._parameters_schema:
+            # Schema is completely missing
+            schema_is_problematic = True
+            warning_reason = "schema is completely missing"
+        elif not isinstance(self._parameters_schema, dict):
+            # Schema is not a dictionary
+            schema_is_problematic = True  
+            warning_reason = "schema is not a dictionary"
+        elif self._parameters_schema.get("type") != "object":
+            # Schema doesn't specify object type (required for tool parameters)
+            schema_is_problematic = True
+            warning_reason = "schema type is not 'object'"
+        elif ("properties" not in self._parameters_schema and 
+              "anyOf" not in self._parameters_schema and 
+              "allOf" not in self._parameters_schema and 
+              "oneOf" not in self._parameters_schema):
+            # Schema has no way to define parameters (missing properties and no schema composition)
+            schema_is_problematic = True
+            warning_reason = "schema has no properties or composition keywords"
+        
+        # Only issue warning for truly problematic schemas
+        # Tools with empty properties={} are valid and represent parameter-less tools
+        if schema_is_problematic:
             logger.warning(
-                "Tool '%s' (MCP: '%s') has empty or minimal parameter schema. "
+                "Tool '%s' (MCP: '%s') has problematic parameter schema (%s). "
                 "This may cause LLM to call it incorrectly. Schema: %s", 
                 self.name, 
                 self._mcp_tool_name_actual, 
+                warning_reason,
                 self._parameters_schema
             )
             
             # Add a note to the schema to help with debugging
-            schema["_schema_warning"] = "Empty or minimal parameter schema detected"
+            schema["_schema_warning"] = f"Problematic parameter schema detected: {warning_reason}"
         
         return schema 

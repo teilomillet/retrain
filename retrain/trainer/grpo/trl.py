@@ -271,14 +271,59 @@ class GRPOTrainerAdapter(BaseTrainer):
             logger.debug(f"  reward_funcs (for TRL GRPOTrainer constructor): {len(self.actual_trl_reward_functions)} functions provided.")
             logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] Additional **kwargs for TrlGRPOTrainer (from self.trainer_specific_kwargs): {self.trainer_specific_kwargs}")
 
+            # Ensure the model is properly set up for training
+            logger.debug("[GRPOTrainerAdapter._initialize_underlying_trainer] Preparing model for training...")
+            self.model.train()  # Set model to training mode
+            
+            # Ensure model parameters require gradients (should be default, but explicit is better)
+            trainable_params = 0
+            total_params = 0
+            for param in self.model.parameters():
+                total_params += param.numel()
+                if param.requires_grad:
+                    trainable_params += param.numel()
+            
+            logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] Model parameters: {trainable_params:,} trainable out of {total_params:,} total")
+            
+            if trainable_params == 0:
+                logger.warning("[GRPOTrainerAdapter._initialize_underlying_trainer] No trainable parameters found! Enabling gradients for all parameters.")
+                for param in self.model.parameters():
+                    param.requires_grad = True
+                trainable_params = total_params
+                logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] After enabling gradients: {trainable_params:,} trainable parameters")
+
             # TRL's GRPOTrainer constructor expects the `model` to be the raw unwrapped model.
             self.trl_trainer = ActualTrlGRPOTrainer(
-                model=self.model.model, # Pass the underlying model object
+                model=self.model, # Pass the model object directly
                 args=self.algorithm_config,
                 processing_class=self.tokenizer,
                 train_dataset=hf_train_dataset,
                 reward_funcs=self.actual_trl_reward_functions,
             )
+            
+            # Verify TRL trainer's model setup
+            try:
+                if hasattr(self.trl_trainer, 'model'):
+                    trl_model = getattr(self.trl_trainer, 'model', None)
+                    if trl_model is not None:
+                        trl_trainable = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+                        trl_total = sum(p.numel() for p in trl_model.parameters())
+                        logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] TRL model parameters: {trl_trainable:,} trainable out of {trl_total:,} total")
+                        
+                        # Ensure TRL's model is also in training mode and has gradients enabled
+                        trl_model.train()
+                        if trl_trainable == 0:
+                            logger.warning("[GRPOTrainerAdapter._initialize_underlying_trainer] TRL model has no trainable parameters! Enabling gradients.")
+                            for param in trl_model.parameters():
+                                param.requires_grad = True
+                            trl_trainable_after = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+                            logger.debug(f"[GRPOTrainerAdapter._initialize_underlying_trainer] TRL model after fix: {trl_trainable_after:,} trainable parameters")
+                    else:
+                        logger.warning("[GRPOTrainerAdapter._initialize_underlying_trainer] TRL trainer model attribute is None")
+                else:
+                    logger.warning("[GRPOTrainerAdapter._initialize_underlying_trainer] TRL trainer has no model attribute")
+            except Exception as e:
+                logger.warning(f"[GRPOTrainerAdapter._initialize_underlying_trainer] Could not verify TRL trainer's model setup: {e}")
             logger.info("TRL GRPOTrainer instantiated successfully.")
         except Exception as e:
             logger.error(f"Error instantiating TRL GRPOTrainer: {e}", exc_info=True)
@@ -481,12 +526,23 @@ class GRPOTrainerAdapter(BaseTrainer):
             original_logging_steps = current_algo_config.logging_steps
             original_save_steps = current_algo_config.save_steps
             
-            current_algo_config.num_train_epochs = float(current_algo_config.num_iterations)
-            current_algo_config.logging_steps = 1 # Ensure TRL logs at every step for this batch.
-            if current_algo_config.num_iterations <= 5: # Configure save_steps for less frequent saving during inner loops.
-                 current_algo_config.save_steps = current_algo_config.num_iterations + 1
+            # Safely pick the iterations value (handles TRL versions using num_iterations or num_generations)
+            _iters_val_any = getattr(current_algo_config, "num_iterations", None)
+            if _iters_val_any is None:
+                _iters_val_any = getattr(current_algo_config, "num_generations", 1)
 
-            logger.debug(f"  GRPOTrainerAdapter: TRL Config before train call: logging_steps={current_algo_config.logging_steps}, num_train_epochs={current_algo_config.num_train_epochs}, num_iterations={current_algo_config.num_iterations}")
+            _iters_val: int = int(_iters_val_any)
+
+            current_algo_config.num_train_epochs = float(_iters_val)
+            current_algo_config.logging_steps = 1  # Ensure TRL logs at every step for this batch.
+            if _iters_val <= 5:  # Configure save_steps for less frequent saving during inner loops.
+                current_algo_config.save_steps = _iters_val + 1
+
+            logger.debug(
+                "  GRPOTrainerAdapter: TRL Config before train call: "
+                f"logging_steps={current_algo_config.logging_steps}, "
+                f"num_train_epochs={current_algo_config.num_train_epochs}, iterations_val={_iters_val}"
+            )
             logger.info(f"  Calling TRL trainer.train() for {current_algo_config.num_train_epochs} epochs over current batch of {len(hf_dataset)} items.")
             
             original_trl_train_dataset = self.trl_trainer.train_dataset
@@ -495,10 +551,26 @@ class GRPOTrainerAdapter(BaseTrainer):
 
 
             try:
+                # Check model state before training
+                if hasattr(self.trl_trainer, 'model'):
+                    trl_model = getattr(self.trl_trainer, 'model', None)
+                    if trl_model is not None:
+                        pre_train_mode = trl_model.training
+                        pre_trainable = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
+                        logger.debug(f"  Pre-train TRL model state: training={pre_train_mode}, trainable_params={pre_trainable:,}")
+                
                 train_output = self.trl_trainer.train() # train_output could be None from dummy TRL trainer
                 logger.debug(f"  GRPOTrainerAdapter: TRL train_output: {train_output}")
                 if train_output:
                     logger.debug(f"  GRPOTrainerAdapter: TRL train_output.training_loss: {getattr(train_output, 'training_loss', 'N/A')}, train_output.metrics: {getattr(train_output, 'metrics', 'N/A')}")
+                    
+                    # Log additional training state information
+                    if hasattr(self.trl_trainer, 'state') and self.trl_trainer.state:
+                        state = self.trl_trainer.state
+                        logger.debug(f"  TRL trainer state - global_step: {getattr(state, 'global_step', 'N/A')}, learning_rate: {getattr(state, 'learning_rate', 'N/A')}")
+                        if hasattr(state, 'log_history') and state.log_history:
+                            latest_log = state.log_history[-1] if state.log_history else {}
+                            logger.debug(f"  Latest training log: {latest_log}")
 
                 trl_batch_metrics: Optional[Dict[str, float]] = None
                 training_loss_val: Optional[float] = None
@@ -640,12 +712,21 @@ class GRPOTrainerAdapter(BaseTrainer):
         original_logging_steps = current_algo_config.logging_steps
         original_save_steps = current_algo_config.save_steps
         
-        current_algo_config.num_train_epochs = float(current_algo_config.num_iterations)
-        current_algo_config.logging_steps = 1 # Log at every step for this batch.
-        if current_algo_config.num_iterations <= 5:
-            current_algo_config.save_steps = current_algo_config.num_iterations + 1
-        
-        logger.debug(f"  GRPOTrainerAdapter (step): TRL Config before train call: logging_steps={current_algo_config.logging_steps}, num_train_epochs={current_algo_config.num_train_epochs}, num_iterations={current_algo_config.num_iterations}")
+        _iters_val_any = getattr(current_algo_config, "num_iterations", None)
+        if _iters_val_any is None:
+            _iters_val_any = getattr(current_algo_config, "num_generations", 1)
+
+        _iters_val: int = int(_iters_val_any)
+
+        current_algo_config.num_train_epochs = float(_iters_val)
+        current_algo_config.logging_steps = 1  # Log at every step for this batch.
+        if _iters_val <= 5:
+            current_algo_config.save_steps = _iters_val + 1
+
+        logger.debug(
+            "  GRPOTrainerAdapter (step): TRL Config before train call: "
+            f"logging_steps={current_algo_config.logging_steps}, num_train_epochs={current_algo_config.num_train_epochs}, iterations_val={_iters_val}"
+        )
         step_metrics: TrainingMetrics = {}
         try:
             logger.info(f"  Calling TRL trainer.train() for {current_algo_config.num_train_epochs} epochs over current batch of {len(hf_dataset)} items (via step method).")

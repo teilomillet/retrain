@@ -336,6 +336,10 @@ def _setup_trainer_instance(
 # Main Orchestration Function
 async def run_async_training(cfg: TrainingConfig):
     """Asynchronous main training loop orchestration."""
+    # Fix HuggingFace tokenizers parallelism warning that occurs when process forks
+    # after tokenizers have been used. This is common in training environments.
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     # DIAGNOSTIC: Manual WANDB INIT
     if cfg.algorithm.report_to and "wandb" in cfg.algorithm.report_to:
         try:
