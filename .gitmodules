@@ -1,3 +1,6 @@
 [submodule "mbridge"]
 	path = mbridge
 	url = https://github.com/ISEEKYAN/mbridge
+[submodule "slime"]
+	path = slime
+	url = https://github.com/THUDM/slime.git
