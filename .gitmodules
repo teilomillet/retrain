@@ -4,3 +4,6 @@
 [submodule "Spider2"]
 	path = Spider2
 	url = https://github.com/xlang-ai/Spider2
+[submodule "slime"]
+	path = slime
+	url = https://github.com/THUDM/slime.git
