@@ -181,6 +181,7 @@ class ReTrainer:
     async def initialize(self) -> None:
         """
         Initialize the trainer and spawn algorithm-specific actors.
+        Enhanced to use new clean GRPO architecture with auto hardware detection.
         """
         logger.info("Initializing ReTrainer...")
         
@@ -188,9 +189,14 @@ class ReTrainer:
         algorithm_name = self.config.algorithm.name.lower()
         
         if algorithm_name == "grpo":
-            # Import and create hardware-appropriate GRPO actor
-            from .grpo.grpo import create_grpo_actor
-            self.algorithm_actor = create_grpo_actor(self.config, self.databuffer)
+            # Import and create new unified GRPO actor (no databuffer)
+            from .grpo.grpo import GRPO
+            self.algorithm_actor = GRPO.remote(self.config)  # type: ignore
+            
+        elif algorithm_name == "drgrpo":
+            # Import and create DRGRPO actor (extends GRPO)
+            from .grpo.drgrpo import DRGRPO
+            self.algorithm_actor = DRGRPO.remote(self.config)  # type: ignore
             
         elif algorithm_name == "rloo":
             # Import and create RLOO actor
@@ -198,10 +204,7 @@ class ReTrainer:
             self.algorithm_actor = RLOOActor.options(
                 num_gpus=1,
                 num_cpus=2
-            ).remote(
-                self.config,
-                self.databuffer
-            )
+            ).remote(self.config)  # No databuffer parameter
             
         elif algorithm_name == "ppo":
             # Import and create PPO actor (future implementation)
@@ -209,10 +212,7 @@ class ReTrainer:
             self.algorithm_actor = PPOActor.options(
                 num_gpus=1,
                 num_cpus=2
-            ).remote(
-                self.config,
-                self.databuffer
-            )
+            ).remote(self.config)  # No databuffer parameter
             
         else:
             raise ValueError(f"Unsupported algorithm: {algorithm_name}")
@@ -226,12 +226,14 @@ class ReTrainer:
         self.is_initialized = True
         logger.info(f"ReTrainer initialization complete for {algorithm_name}")
         
-    async def train_step(self, training_batch: Dict[str, Any], episode_id: int) -> TrainingMetrics:
+    async def train_step(self, rollout_data: List[Dict[str, Any]], episode_id: int) -> TrainingMetrics:
         """
-        Execute a single training step using the algorithm-specific actor.
+        Execute a single training step with enhanced atomic databuffer operations.
+        
+        ReTrainer handles ALL databuffer operations while algorithm actors focus on pure computation.
         
         Args:
-            training_batch: Processed training data from DataBuffer
+            rollout_data: Raw rollout data from environment interactions
             episode_id: Current episode identifier
             
         Returns:
@@ -244,11 +246,35 @@ class ReTrainer:
         
         logger.info(f"Executing training step for episode {episode_id}")
         
-        # Execute training step through algorithm actor
-        step_metrics = await self.algorithm_actor.train_step.remote(  # type: ignore
-            training_batch=training_batch,
-            episode_id=episode_id
+        # 1. Store rollout data atomically via DataBuffer
+        storage_id = await self.databuffer.store_rollout_data.remote(rollout_data, episode_id)  # type: ignore
+        logger.debug(f"Stored rollout data with ID: {storage_id}")
+        
+        # 2. Prepare optimized training batch via DataBuffer
+        # This handles algorithm-specific preprocessing, batching, and optimization
+        training_batch = await self.databuffer.prepare_training_batch.remote(  # type: ignore
+            rollout_data=rollout_data,
+            episode_id=episode_id,
+            algorithm_type=self.config.algorithm.name.lower(),
+            batch_size=getattr(self.config.algorithm, 'batch_size', 32)
         )
+        logger.debug(f"Prepared training batch with {len(training_batch.get('input_ids', []))} samples")
+        
+        # 3. Execute pure algorithm computation (no infrastructure concerns)
+        step_metrics = await self.algorithm_actor.train_step.remote(  # type: ignore
+            training_batch=training_batch
+        )
+        logger.debug(f"Algorithm step completed with metrics: {list(step_metrics.keys())}")
+        
+        # 4. Store evaluation results atomically via DataBuffer
+        evaluation_data = {
+            'metrics': step_metrics,
+            'training_batch_size': len(training_batch.get('input_ids', [])),
+            'rollout_size': len(rollout_data),
+            'algorithm': self.config.algorithm.name,
+            'timestamp': time.time()
+        }
+        await self.databuffer.store_evaluation_data.remote(evaluation_data, episode_id)  # type: ignore
         
         # Update training state
         self.training_step_count += 1
@@ -258,13 +284,24 @@ class ReTrainer:
         # Get updated model weights
         self.current_weights = await self.algorithm_actor.get_model_weights.remote()  # type: ignore
         
-        # Enhance metrics with trainer-level information
+        # 5. Enhanced metrics with databuffer coordination info
         enhanced_metrics = {
             **step_metrics,
             'trainer_step_count': self.training_step_count,
             'step_time': step_time,
             'episode_id': episode_id,
             'algorithm': self.config.algorithm.name,
+            'storage_id': storage_id,
+            'databuffer_operations': {
+                'store_rollout': True,
+                'prepare_batch': True,
+                'store_evaluation': True
+            },
+            'data_flow': {
+                'rollout_samples': len(rollout_data),
+                'training_samples': len(training_batch.get('input_ids', [])),
+                'batch_utilization': len(training_batch.get('input_ids', [])) / max(len(rollout_data), 1)
+            },
             'timestamp': time.time()
         }
         
@@ -276,7 +313,7 @@ class ReTrainer:
             oldest_key = min(self.training_metrics.keys())
             del self.training_metrics[oldest_key]
             
-        logger.info(f"Training step {self.training_step_count} completed in {step_time:.2f}s")
+        logger.info(f"Training step {self.training_step_count} completed in {step_time:.2f}s with atomic databuffer ops")
         return enhanced_metrics
         
     async def get_model_weights(self) -> Dict[str, torch.Tensor]:

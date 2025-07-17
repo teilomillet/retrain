@@ -8,7 +8,7 @@ configurations for Ray actors and model backends.
 import logging
 import platform
 import psutil
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 import torch
 
 logger = logging.getLogger(__name__)
@@ -24,23 +24,35 @@ class HardwareDetector:
     
     def __init__(self):
         """Initialize hardware detector and analyze system capabilities."""
-        self.capabilities = self._detect_all_capabilities()
+        # Detect components in order, avoiding circular dependencies
+        platform_info = self._detect_platform()
+        device_info = self._detect_device_info()
+        memory_info = self._detect_memory_info()
+        cpu_info = self._detect_cpu_info()
+        distributed_info = self._detect_distributed_capabilities()
+        ml_frameworks_info = self._detect_ml_frameworks()
+        
+        # Build capabilities dict
+        self.capabilities: Dict[str, Any] = {
+            'platform': platform_info,
+            'device': device_info,
+            'memory': memory_info,
+            'cpu': cpu_info, 
+            'distributed': distributed_info,
+            'ml_frameworks': ml_frameworks_info,
+        }
+        
+        # Now that capabilities is set, detect ray capabilities and generate summary
+        self.capabilities['ray'] = self._detect_ray_capabilities()
+        self.capabilities['summary'] = self._generate_summary()
+        
         self.recommendations = self._generate_recommendations()
         
         logger.info(f"Hardware detected: {self.capabilities['summary']}")
         
     def _detect_all_capabilities(self) -> Dict[str, Any]:
-        """Comprehensive hardware capability detection."""
-        return {
-            'platform': self._detect_platform(),
-            'device': self._detect_device_info(),
-            'memory': self._detect_memory_info(),
-            'cpu': self._detect_cpu_info(), 
-            'distributed': self._detect_distributed_capabilities(),
-            'ray': self._detect_ray_capabilities(),
-            'ml_frameworks': self._detect_ml_frameworks(),
-            'summary': self._generate_summary()
-        }
+        """Return current capabilities (used by external callers)."""
+        return self.capabilities
         
     def _detect_platform(self) -> Dict[str, Any]:
         """Detect platform and OS information."""
@@ -129,9 +141,18 @@ class HardwareDetector:
             'recommended_memory_limit_gb': memory.total / 1e9 * 0.7,  # Reserve 30%
         }
         
-        # Add GPU memory if available
-        if self.capabilities.get('device', {}).get('cuda_available', False):
-            memory_info['gpu_memory_gb'] = self.capabilities['device']['gpu_memory_gb']
+        # Add GPU memory if available (check capabilities safely)
+        if hasattr(self, 'capabilities') and self.capabilities:
+            if self.capabilities.get('device', {}).get('cuda_available', False):
+                memory_info['gpu_memory_gb'] = self.capabilities['device']['gpu_memory_gb']
+        else:
+            # During initialization, detect GPU memory directly
+            if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                try:
+                    gpu_memory_bytes = torch.cuda.get_device_properties(0).total_memory
+                    memory_info['gpu_memory_gb'] = gpu_memory_bytes / 1e9
+                except Exception:
+                    memory_info['gpu_memory_gb'] = 0.0
             
         return memory_info
         

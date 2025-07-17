@@ -58,13 +58,13 @@ class TrainerGroup:
         self.platform_optimized = False
         self.is_initialized = False
         
-        # Async coordination (following Slime pattern)
+        # Async coordination 
         self.pending_operations: Dict[str, List[ray.ObjectRef]] = {}
         
         logger.info(f"TrainerGroup initialized with {num_workers} workers")
         
     async def initialize(self) -> None:
-        """Initialize training workers with resilience following Slime async pattern."""
+        """Initialize training workers with async pattern."""
         logger.info("Initializing TrainerGroup workers...")
         
         try:
@@ -74,7 +74,7 @@ class TrainerGroup:
             # Create worker pool using placement groups
             await self._create_worker_pool()
             
-            # Initialize all workers in parallel (Slime async pattern)
+            # Initialize all workers in parallel ( async pattern)
             init_refs = await self._async_init_workers()
             await asyncio.gather(*[ref for ref in init_refs])
             
@@ -115,7 +115,7 @@ class TrainerGroup:
             try:
                 worker_name = f"trainer_worker_{worker_id}"
                 
-                # Create worker with placement group if available (following Slime pattern)
+                # Create worker with placement group if available (following  pattern)
                 if self.placement_group and not self.platform_optimized:
                     # Multi-GPU training with placement group
                     worker = ReTrainer.options(  # type: ignore
@@ -147,7 +147,7 @@ class TrainerGroup:
             raise RuntimeError("Failed to create any trainer workers")
             
     async def _async_init_workers(self) -> List[ray.ObjectRef]:
-        """Initialize all workers in parallel using Slime async pattern."""
+        """Initialize all workers in parallel using  async pattern."""
         init_refs = []
         for worker in self.trainer_workers:
             init_refs.append(worker.initialize.remote())  # type: ignore
@@ -241,10 +241,10 @@ class TrainerGroup:
             'restart_count': self.restart_counts.get(worker_name, 0)
         }
         
-    # Slime-style async training methods
+    # Async training methods
     async def async_train_step(self, training_batch: Dict[str, Any], episode_id: int) -> List[ray.ObjectRef]:
         """
-        Execute training step across all workers using Slime async pattern.
+        Execute training step across all workers using async pattern.
         
         Args:
             training_batch: Processed training data from DataBuffer
@@ -256,7 +256,7 @@ class TrainerGroup:
         if not self.is_initialized:
             raise RuntimeError("TrainerGroup not initialized")
             
-        # Execute training on all healthy workers in parallel (Slime pattern)
+        # Execute training on all healthy workers in parallel
         train_refs = []
         for i, worker in enumerate(self.trainer_workers):
             worker_name = f"trainer_worker_{i}"
@@ -277,14 +277,14 @@ class TrainerGroup:
         return train_refs
         
     async def async_get_model_weights(self) -> List[ray.ObjectRef]:
-        """Get model weights from all workers using Slime async pattern."""
+        """Get model weights from all workers using async pattern."""
         weight_refs = []
         for worker in self.trainer_workers:
             weight_refs.append(worker.get_model_weights.remote())  # type: ignore
         return weight_refs
         
     async def async_update_weights(self, weights: Dict[str, Any]) -> List[ray.ObjectRef]:
-        """Update weights across all workers using Slime async pattern."""
+        """Update weights across all workers using async pattern."""
         update_refs = []
         for worker in self.trainer_workers:
             update_refs.append(worker.update_model_weights.remote(weights))  # type: ignore

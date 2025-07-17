@@ -86,7 +86,7 @@ class ActorFactory:
         return ReVerifier.options(**actor_config).remote(config, databuffer)  # type: ignore
         
     def create_reward_group(self, config: Any, databuffer: ray.ObjectRef, num_workers: Optional[int] = None) -> ray.ObjectRef:
-        """Create resilient reward group with multiple workers."""
+        """Create  reward group with multiple workers."""
         if num_workers is None:
             # Auto-determine number of workers based on hardware
             ray_caps = self.detector.capabilities['ray']
@@ -102,7 +102,7 @@ class ActorFactory:
         return RewardGroup.remote(config, databuffer, num_workers)  # type: ignore
         
     def create_verifier_group(self, config: Any, databuffer: ray.ObjectRef, num_workers: Optional[int] = None) -> ray.ObjectRef:
-        """Create resilient verifier group with multiple workers."""
+        """Create  verifier group with multiple workers."""
         if num_workers is None:
             # Auto-determine number of workers based on hardware
             ray_caps = self.detector.capabilities['ray']
@@ -119,7 +119,7 @@ class ActorFactory:
         
     def create_trainer_group(self, config: Any, databuffer: ray.ObjectRef, num_workers: Optional[int] = None, 
                            placement_group: Any = None) -> ray.ObjectRef:
-        """Create resilient trainer group with multiple workers."""
+        """Create  trainer group with multiple workers."""
         if num_workers is None:
             # Auto-determine number of workers based on hardware
             gpu_count = self.detector.capabilities['device']['gpu_count']
@@ -136,7 +136,7 @@ class ActorFactory:
         
     def create_inference_group(self, config: Any, databuffer: ray.ObjectRef, num_workers: Optional[int] = None,
                              placement_group: Any = None) -> ray.ObjectRef:
-        """Create resilient inference group with multiple workers and mixed hardware."""
+        """Create  inference group with multiple workers and mixed hardware."""
         if num_workers is None:
             # Auto-determine number of workers based on hardware
             if self.recommendations['deployment_type'] == 'development':

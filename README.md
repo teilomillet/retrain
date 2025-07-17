@@ -119,10 +119,10 @@ This `retrain` library was initially developed over a focused 5-day period, prim
 The development of `retrain` has been significantly influenced by and builds upon the great work of others in the open-source community:
 
 *   **[willccbb/verifiers](https://github.com/willccbb/verifiers):** This project was a key inspiration. `retrain` initially started as an exploration (and even an early PR attempt) related to the concepts found in `willccbb/verifiers`, particularly around ensuring reliability in LLM interactions within environments. `retrain` represents my own path in exploring this approach to RL with LLMs.
-*   **TRL (Transformer Reinforcement Learning):** The core RL algorithms, particularly GRPO, are often powered by TRL. `retrain` aims to provide a higher-level framework that can leverage robust backends like TRL and upgrade it with additional features like environment, reward, and verifier.
+*   **[slime](https://github.com/THUDM/slime):** As been of great value in understanding the infrastructure and build a mental model of what I wanted retrain to be. A lot of the code is highly inspired from there.
 *   **Unsloth & their Blog:** The blog posts from the Unsloth team were of big value in quickly understanding part of the algorithm (the verifier + reward come from there). For users seeking maximum performance, `retrain` is designed to be compatible with Unsloth, allowing for significantly faster training and reduced memory usage. I will explore even more of their features in the future.
 
 Thank you for trying out `retrain`! If you find it helpful, have ideas for improvement, or would like to contribute, your input is warmly welcomed. Community contributions are key to making this tool even better.
 
 ---
-Contributions welcome! (TODO: Add CONTRIBUTING.md link)
+Contributions welcome! 

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 @ray.remote(num_cpus=1, num_gpus=0)
 class InferenceGroup:
     """
-    Resilient Inference Actor Group Manager.
+     Inference Actor Group Manager.
     
     Manages multiple inference actor instances with:
     1. Load balancing across multiple inference workers
@@ -46,7 +46,7 @@ class InferenceGroup:
         self.worker_health: Dict[str, Dict[str, Any]] = {}
         self.worker_stats: Dict[str, Dict[str, Any]] = {}
         
-        # Load balancing (following Slime pattern)
+        # Load balancing
         self.current_worker_index = 0
         self.pending_rollouts: Dict[str, ray.ObjectRef] = {}
         self.worker_load: Dict[str, int] = {}  # Track load per worker
@@ -61,13 +61,13 @@ class InferenceGroup:
         self.mixed_hardware = False
         self.is_initialized = False
         
-        # Async coordination (following Slime pattern)
+        # Async coordination 
         self.pending_operations: Dict[str, List[ray.ObjectRef]] = {}
         
         logger.info(f"InferenceGroup initialized with {num_workers} workers")
         
     async def initialize(self) -> None:
-        """Initialize inference workers with resilience following Slime async pattern."""
+        """Initialize inference workers with async pattern."""
         logger.info("Initializing InferenceGroup workers...")
         
         try:
@@ -77,7 +77,7 @@ class InferenceGroup:
             # Create mixed worker pool based on available hardware
             await self._create_mixed_worker_pool()
             
-            # Initialize all workers in parallel (Slime async pattern)
+            # Initialize all workers in parallel (Async pattern)
             init_refs = await self._async_init_workers()
             await asyncio.gather(*[ref for ref in init_refs])
             
@@ -173,7 +173,7 @@ class InferenceGroup:
                    f"{self.worker_types.count('macos')} macOS)")
             
     async def _async_init_workers(self) -> List[ray.ObjectRef]:
-        """Initialize all workers in parallel using Slime async pattern."""
+        """Initialize all workers in parallel using async pattern."""
         init_refs = []
         for worker in self.inference_workers:
             init_refs.append(worker.initialize.remote())  # type: ignore
@@ -278,10 +278,10 @@ class InferenceGroup:
         }
         self.worker_load[worker_name] = 0
         
-    # Slime-style async rollout generation methods
+    # Async rollout generation methods
     async def async_generate_rollouts(self, episode_id: int, num_rollouts: int) -> List[ray.ObjectRef]:
         """
-        Generate rollouts across multiple workers using Slime async pattern.
+        Generate rollouts across multiple workers using async pattern.
         
         Args:
             episode_id: Current episode identifier
@@ -348,7 +348,7 @@ class InferenceGroup:
         return selected_worker
         
     async def async_update_weights(self, weights: Dict[str, Any]) -> List[ray.ObjectRef]:
-        """Update model weights across all workers using Slime async pattern."""
+        """Update model weights across all workers using async pattern."""
         update_refs = []
         for worker in self.inference_workers:
             update_refs.append(worker.update_model_weights.remote(weights))  # type: ignore
@@ -358,7 +358,7 @@ class InferenceGroup:
         """
         Coordinated rollout generation with load balancing and fault tolerance.
         
-        This follows Slime's distributed rollout pattern:
+        This follows distributed rollout pattern:
         1. Distribute rollouts across healthy workers
         2. Load balance based on worker capacity
         3. Handle failures gracefully with retries

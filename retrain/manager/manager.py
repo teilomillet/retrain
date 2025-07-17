@@ -189,16 +189,16 @@ class ReManager:
             logger.info("DataBuffer actor ready (fallback mode)")
         
     async def _initialize_actor_groups(self) -> None:
-        """Initialize all 4 resilient actor groups using the smart actor factory."""
-        logger.info("Initializing all 4 resilient actor groups...")
+        """Initialize all 4  actor groups using the smart actor factory."""
+        logger.info("Initializing all 4  actor groups...")
         
         try:
             # Create databuffer first (required by all groups)
             self.databuffer = self.actor_factory.create_databuffer_actor(self.config)
             
-            # Create ALL 4 RESILIENT GROUPS with smart hardware allocation
+            # Create ALL 4  GROUPS with smart hardware allocation
             
-            # 1. Create RESILIENT trainer group (distributed training across multiple GPUs)
+            # 1. Create  trainer group (distributed training across multiple GPUs)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
                     num_trainer_workers = 1  # Single worker for macOS
@@ -209,7 +209,7 @@ class ReManager:
                 self.actor_groups['trainer_group'] = self.actor_factory.create_trainer_group(
                     self.config, self.databuffer, num_trainer_workers
                 )
-                logger.info(f"Created resilient trainer group with {num_trainer_workers} workers")
+                logger.info(f"Created  trainer group with {num_trainer_workers} workers")
                 
             except Exception as e:
                 logger.error(f"Failed to create trainer group: {e}")
@@ -220,7 +220,7 @@ class ReManager:
                 except Exception as fallback_error:
                     logger.warning(f"Trainer actor creation failed: {fallback_error}")
 
-            # 2. Create RESILIENT inference group (mixed CPU/GPU workers with load balancing)
+            # 2. Create  inference group (mixed CPU/GPU workers with load balancing)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
                     num_inference_workers = 2  # macOS: 2 workers for load balancing
@@ -233,7 +233,7 @@ class ReManager:
                 self.actor_groups['inference_group'] = self.actor_factory.create_inference_group(
                     self.config, self.databuffer, num_inference_workers
                 )
-                logger.info(f"Created resilient inference group with {num_inference_workers} workers")
+                logger.info(f"Created  inference group with {num_inference_workers} workers")
                 
             except Exception as e:
                 logger.error(f"Failed to create inference group: {e}")
@@ -246,7 +246,7 @@ class ReManager:
                 except Exception as fallback_error:
                     logger.warning(f"Inference actor creation failed: {fallback_error}")
             
-            # 3. Create RESILIENT reward group (multiple workers with auto-restart)
+            # 3. Create  reward group (multiple workers with auto-restart)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
                     num_reward_workers = 2  # Conservative for macOS
@@ -256,7 +256,7 @@ class ReManager:
                 self.actor_groups['reward_group'] = self.actor_factory.create_reward_group(
                     self.config, self.databuffer, num_reward_workers
                 )
-                logger.info(f"Created resilient reward group with {num_reward_workers} workers")
+                logger.info(f"Created  reward group with {num_reward_workers} workers")
                 
             except Exception as e:
                 logger.error(f"Failed to create reward group: {e}")
@@ -269,7 +269,7 @@ class ReManager:
                 except Exception as fallback_error:
                     logger.warning(f"Reward actor creation failed: {fallback_error}")
                     
-            # 4. Create RESILIENT verifier group (multiple workers with auto-restart)
+            # 4. Create  verifier group (multiple workers with auto-restart)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
                     num_verifier_workers = 2  # Conservative for macOS
@@ -279,7 +279,7 @@ class ReManager:
                 self.actor_groups['verifier_group'] = self.actor_factory.create_verifier_group(
                     self.config, self.databuffer, num_verifier_workers
                 )
-                logger.info(f"Created resilient verifier group with {num_verifier_workers} workers")
+                logger.info(f"Created  verifier group with {num_verifier_workers} workers")
                 
             except Exception as e:
                 logger.error(f"Failed to create verifier group: {e}")
@@ -292,7 +292,7 @@ class ReManager:
                 except Exception as fallback_error:
                     logger.warning(f"Verifier actor creation failed: {fallback_error}")
                     
-            # Create environment actor (not resilient yet, but connected to all groups)
+            # Create environment actor (not  yet, but connected to all groups)
             try:
                 self.actor_groups['environment'] = self.actor_factory.create_environment_actor(
                     self.config, self.databuffer
@@ -300,7 +300,7 @@ class ReManager:
             except ImportError:
                 logger.warning("Environment actor creation failed, using placeholder")
           
-            # Initialize ALL RESILIENT GROUPS in parallel
+            # Initialize ALL  GROUPS in parallel
             init_futures = []
             
             # Core actors that need initialization
@@ -309,19 +309,19 @@ class ReManager:
                 if name in self.actor_groups and hasattr(self.actor_groups[name], 'initialize'):
                     init_futures.append(self.actor_groups[name].initialize.remote())
                      
-            # Resilient groups that need initialization
-            resilient_groups = ['trainer_group', 'inference_group', 'reward_group', 'verifier_group']
-            for group_name in resilient_groups:
+            #  groups that need initialization
+            _groups = ['trainer_group', 'inference_group', 'reward_group', 'verifier_group']
+            for group_name in _groups:
                 if group_name in self.actor_groups:
                     init_futures.append(self.actor_groups[group_name].initialize.remote())
                      
             if init_futures:
                 await asyncio.gather(*init_futures)
                  
-            logger.info("All 4 resilient actor groups initialized successfully")
+            logger.info("All 4  actor groups initialized successfully")
              
         except Exception as e:
-            logger.error(f"Failed to initialize resilient actor groups: {e}")
+            logger.error(f"Failed to initialize  actor groups: {e}")
             raise
         
     async def _setup_actor_connections(self) -> None:
@@ -398,7 +398,7 @@ class ReManager:
             
     async def _execute_episode(self, episode: int) -> Dict[str, Any]:
         """
-        Execute a single training episode with resilient actor groups.
+        Execute a single training episode with  actor groups.
         
         Args:
             episode: Current episode number
@@ -425,7 +425,7 @@ class ReManager:
             if env_future:
                 await env_future
             
-            # Step 3: Run verifiers using RESILIENT verifier group
+            # Step 3: Run verifiers using  verifier group
             verification_results = None
             if 'verifier_group' in self.actor_groups:
                 try:
@@ -434,9 +434,9 @@ class ReManager:
                         episode_id=episode
                     )
                     verification_results = await verification_future
-                    logger.info("Verification completed using resilient verifier group")
+                    logger.info("Verification completed using  verifier group")
                 except Exception as e:
-                    logger.warning(f"Resilient verifier group failed: {e}")
+                    logger.warning(f" verifier group failed: {e}")
                     # Fallback to single verifier if available
                     if 'verifier' in self.actor_groups:
                         verification_results = await self.actor_groups['verifier'].verify_rollouts.remote(
@@ -450,7 +450,7 @@ class ReManager:
                 )
                 verification_results = await verification_future
             
-            # Step 4: Compute rewards using RESILIENT reward group
+            # Step 4: Compute rewards using  reward group
             rewards = None
             if 'reward_group' in self.actor_groups:
                 try:
@@ -459,9 +459,9 @@ class ReManager:
                         episode_id=episode
                     )
                     rewards = await reward_future
-                    logger.info("Rewards computed using resilient reward group")
+                    logger.info("Rewards computed using  reward group")
                 except Exception as e:
-                    logger.warning(f"Resilient reward group failed: {e}")
+                    logger.warning(f" reward group failed: {e}")
                     # Fallback to single reward actor if available
                     if 'reward' in self.actor_groups:
                         rewards = await self.actor_groups['reward'].compute_rewards.remote(
@@ -513,14 +513,14 @@ class ReManager:
                 'rollout_count': len(rollout_data) if rollout_data else 0,
                 'verification_results': verification_results,
                 'rewards_computed': len(rewards) if rewards else 0,
-                'using_resilient_groups': {
+                'using__groups': {
                     'verifier_group': 'verifier_group' in self.actor_groups,
                     'reward_group': 'reward_group' in self.actor_groups
                 },
                 'timestamp': time.time()
             }
             
-            logger.info(f"Episode {episode} completed in {episode_time:.2f}s with resilient groups")
+            logger.info(f"Episode {episode} completed in {episode_time:.2f}s with  groups")
             return episode_metrics
             
         except Exception as e:
@@ -531,14 +531,14 @@ class ReManager:
                 'error': str(e),
                 'rollout_count': 0,
                 'timestamp': time.time(),
-                'using_resilient_groups': {
+                'using__groups': {
                     'verifier_group': 'verifier_group' in self.actor_groups,
                     'reward_group': 'reward_group' in self.actor_groups
                 }
             }
         
     async def _health_check(self) -> None:
-        """Monitor health of all actor groups including resilient groups."""
+        """Monitor health of all actor groups including  groups."""
         try:
             health_futures = {}
             
@@ -547,7 +547,7 @@ class ReManager:
                 if hasattr(actor, 'health_check'):
                     health_futures[name] = actor.health_check.remote()
                     
-            # Check resilient group status
+            # Check  group status
             if 'reward_group' in self.actor_groups:
                 health_futures['reward_group_status'] = self.actor_groups['reward_group'].get_group_status.remote()
                 
@@ -571,7 +571,7 @@ class ReManager:
                     logger.warning(f"Health check failed for {name}: {e}")
                     health_results[name] = {'status': 'error', 'error': str(e), 'timestamp': time.time()}
             
-            # Log resilient group status
+            # Log  group status
             for group_name in ['reward_group_status', 'verifier_group_status']:
                 if group_name in health_results:
                     status = health_results[group_name]
@@ -711,34 +711,34 @@ class ReManager:
         self.actor_factory.print_actor_plan()
 
 async def get_comprehensive_status(self) -> Dict[str, Any]:
-    """Get comprehensive training status including resilient groups."""
+    """Get comprehensive training status including  groups."""
     base_status = self.get_training_status()
     
-    # Add resilient group status
-    resilient_status = {}
+    # Add  group status
+    _status = {}
     
     if 'reward_group' in self.actor_groups:
         try:
             reward_status = await self.actor_groups['reward_group'].get_group_status.remote()
-            resilient_status['reward_group'] = reward_status
+            _status['reward_group'] = reward_status
         except Exception as e:
-            resilient_status['reward_group'] = {'error': str(e)}
+            _status['reward_group'] = {'error': str(e)}
             
     if 'verifier_group' in self.actor_groups:
         try:
             verifier_status = await self.actor_groups['verifier_group'].get_group_status.remote()
-            resilient_status['verifier_group'] = verifier_status
+            _status['verifier_group'] = verifier_status
         except Exception as e:
-            resilient_status['verifier_group'] = {'error': str(e)}
+            _status['verifier_group'] = {'error': str(e)}
     
-    base_status['resilient_groups'] = resilient_status
+    base_status['_groups'] = _status
     base_status['macOS_optimized'] = self.hardware_detector.capabilities['platform']['is_macos']
     
     return base_status
 
-async def scale_resilient_groups(self, reward_workers: Optional[int] = None, verifier_workers: Optional[int] = None) -> None:
-    """Dynamically scale resilient actor groups."""
-    logger.info("Scaling resilient actor groups...")
+async def scale__groups(self, reward_workers: Optional[int] = None, verifier_workers: Optional[int] = None) -> None:
+    """Dynamically scale  actor groups."""
+    logger.info("Scaling  actor groups...")
     
     if reward_workers and 'reward_group' in self.actor_groups:
         try:

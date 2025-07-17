@@ -1,7 +1,7 @@
 from .manager import ReManager
 from .databuffer import ReDataBuffer
 
-# Resilient Actor Groups 
+#  Actor Groups 
 from .trainer_group import TrainerGroup
 from .inference_group import InferenceGroup
 from .reward_group import RewardGroup

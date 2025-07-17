@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @ray.remote(num_cpus=1, num_gpus=0)
 class RewardGroup:
     """
-    Resilient Reward Actor Group Manager.
+     Reward Actor Group Manager.
     
     Manages multiple reward actor instances with:
     1. Automatic health monitoring and restart

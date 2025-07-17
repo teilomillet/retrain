@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 @ray.remote(num_cpus=1, num_gpus=0)
 class VerifierGroup:
     """
-    Resilient Verifier Actor Group Manager.
+     Verifier Actor Group Manager.
     
     Manages multiple verifier actor instances with:
     1. Automatic health monitoring and restart
