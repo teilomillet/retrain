@@ -1,0 +1,48 @@
+algorithm:
+  backend: slime
+  hyperparameters:
+    global_batch_size: 4
+    learning_rate: 1.0e-05
+    num_iterations: 3
+    rollout_batch_size: 2
+    slime_actor_num_gpus_per_node: 2
+    slime_actor_num_nodes: 1
+    slime_bf16: true
+    slime_colocate: true
+    slime_rollout_max_response_len: 256
+    slime_rollout_num_gpus: 2
+    slime_rollout_temperature: 0.8
+    slime_rollout_top_p: 0.9
+    slime_save_interval: 2
+    slime_use_retrain_environment: true
+    slime_use_retrain_rewards: true
+  name: grpo
+batch_size: 2
+environment:
+  env_specific_config:
+    initial_prompt_template: 'Hello! I need help with this task:'
+    max_steps: 5
+    server_url: http://127.0.0.1:8765/mcp
+  type: fastmcp_env
+experiment_name: slime_bridge_example
+logging_dir: slime_bridge_output/logs
+logging_level: INFO
+model:
+  loader: huggingface
+  name_or_path: Qwen/Qwen3-0.6B
+  torch_dtype: bfloat16
+  trust_remote_code: true
+num_episodes: 10
+output_dir: slime_bridge_output
+prompt_source:
+  source_config: {}
+  type: environment
+reward_setup:
+  rollout_reward_configs: {}
+  step_reward_configs:
+    task_completion:
+      params:
+        failure_penalty: -2.0
+        success_bonus: 10.0
+      weight: 1.0
+seed: 42

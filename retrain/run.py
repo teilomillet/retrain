@@ -328,6 +328,37 @@ def _setup_trainer_instance(
         except Exception as e:
             logger_run.error(f"Error instantiating GRPOTrainerAdapterTRL: {e}", exc_info=True)
             raise
+    
+    elif algo_cfg.name == "grpo" and algo_cfg.backend == "slime":
+        logger_run.info(f"Setting up GRPOTrainer (Slime backend) with algorithm config: {algo_cfg}")
+        
+        # Import Slime adapter with error handling
+        try:
+            from .trainer.grpo.slime import SlimeTrainerAdapter
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import Slime backend. Please ensure Slime is installed:\n"
+                f"pip install -e ./slime\n"
+                f"Original error: {e}"
+            ) from e
+        
+        try:
+            trainer_instance = SlimeTrainerAdapter(
+                model=model,
+                algorithm_config=algo_cfg,  # Pass the original AlgorithmConfig, not a converted one
+                reward_functions=[],  # Slime handles rewards through its own internal system
+                prompt_source=prompt_source,
+                tokenizer=tokenizer,
+                reference_model=reference_model,
+                environment=environment,  # Slime adapter will bridge this to its rollout system
+                reward_calculator=reward_calculator,  # Slime adapter will bridge this to its reward system
+                **adapter_specific_params
+            )
+            logger_run.info("SlimeTrainerAdapter instantiated successfully.")
+        except Exception as e:
+            logger_run.error(f"Error instantiating SlimeTrainerAdapter: {e}", exc_info=True)
+            raise
+    
     else:
         raise ValueError(f"Unsupported algorithm/backend: {algo_cfg.name}/{algo_cfg.backend}")
     

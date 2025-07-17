@@ -16,6 +16,7 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "pydantic>=2.11.4",
     "pyyaml>=6.0.2",
+    "ray>=2.47.1",
     "snowflake-connector-python>=3.16.0",
     "sqlalchemy>=2.0.41",
     "sqlparse>=0.5.3",
@@ -32,6 +33,15 @@ unsloth = [
     "bitsandbytes>=0.45.5", # A key dependency for unsloth for quantization
     "triton; sys_platform == 'linux'", # Required by unsloth-zoo on Linux for performance
     "triton-windows; sys_platform == 'win32'", # Required by unsloth-zoo on Windows for performance
+]
+slime = [
+    "ray[default]>=2.0.0",  # Distributed computing framework used by Slime
+    "sglang>=0.4.7",        # High-performance LLM serving for rollout generation  
+    "accelerate",           # HuggingFace acceleration utilities
+    "httpx[http2]",         # HTTP client for Slime's router communication
+    "wandb",                # Weights & Biases for training metrics (optional but recommended)
+    "pylatexenc",           # Text encoding utilities used by Slime
+    "blobfile",             # File I/O utilities for distributed systems
 ]
 
 [tool.setuptools]

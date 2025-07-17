@@ -1,0 +1,66 @@
+experiment_name: "slime_grpo_example"
+seed: 42
+logging_level: "INFO"
+
+model:
+  name_or_path: "Qwen/Qwen3-0.6B"
+  loader: "huggingface"
+  trust_remote_code: true
+  torch_dtype: "bfloat16"
+
+environment:
+  type: "fastmcp_env"
+  env_specific_config:
+    server_url: "http://127.0.0.1:8765/mcp"
+    initial_prompt_template: "Hello! Please help me solve this task:"
+    max_steps: 10
+
+algorithm:
+  name: "grpo"
+  backend: "slime"  # NEW: Use Slime backend instead of TRL
+  hyperparameters:
+    # Core RL parameters
+    learning_rate: 1e-5
+    num_iterations: 20
+    rollout_batch_size: 4
+    global_batch_size: 16
+    
+    # Slime-specific distributed parameters (optional - smart defaults will be used)
+    slime_actor_num_nodes: 1           # Number of nodes for training
+    slime_actor_num_gpus_per_node: 4   # GPUs per node for training  
+    slime_rollout_num_gpus: 4          # Total GPUs for rollout/inference
+    slime_colocate: true               # Enable co-located training and inference for small setups
+    
+    # Advanced Slime parameters (optional)
+    slime_rollout_temperature: 0.8     # Generation temperature
+    slime_rollout_top_p: 0.9          # Top-p sampling
+    slime_rollout_max_response_len: 512 # Max response length
+    
+    # Optimization parameters
+    slime_lr_decay_style: "cosine"     # Learning rate schedule
+    slime_lr_warmup_fraction: 0.1      # Warmup fraction
+    slime_weight_decay: 0.01           # Weight decay
+    
+    # System parameters
+    slime_bf16: true                   # Use bfloat16 precision
+    slime_save_interval: 5             # Save checkpoint every N rollouts
+
+# Standard retrain configuration continues below
+prompt_source:
+  type: "environment"
+  source_config: {}
+
+reward_setup:
+  step_reward_configs:
+    task_completion:
+      weight: 1.0
+      params:
+        success_bonus: 10.0
+        failure_penalty: -5.0
+  rollout_reward_configs: {}
+
+# Training parameters
+num_episodes: 100
+batch_size: 4
+output_dir: "slime_trainer_output"
+logging_dir: "slime_trainer_output/logs" 

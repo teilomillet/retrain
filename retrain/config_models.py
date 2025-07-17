@@ -43,10 +43,22 @@ class AlgorithmConfig(BaseModel):
     @validator('backend')
     def backend_must_be_supported(cls, v, values):
         algo_name = values.get('name')
-        # Example: TRL is currently the main backend for GRPO
-        if algo_name == "grpo" and v.lower() != "trl":
-            raise ValueError(f"Unsupported backend '{v}' for algorithm '{algo_name}'. Expected 'trl'.")
-        # Add more backend checks as needed
+        # Define supported backends for each algorithm
+        supported_backends = {
+            "grpo": ["trl", "slime"],  # GRPO supports both TRL and Slime backends
+            "rloo": ["trl"],           # RLOO currently only supports TRL backend
+        }
+        
+        if algo_name in supported_backends:
+            if v.lower() not in supported_backends[algo_name]:
+                raise ValueError(
+                    f"Unsupported backend '{v}' for algorithm '{algo_name}'. "
+                    f"Supported backends: {supported_backends[algo_name]}"
+                )
+        else:
+            # For unknown algorithms, we can't validate the backend
+            pass
+            
         return v.lower()
 
 print("[config_models.py] After AlgorithmConfig") # DEBUG
