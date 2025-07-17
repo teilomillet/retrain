@@ -38,7 +38,6 @@ def test_full_grpo_integration():
     print("\n1. Testing class hierarchy and imports...")
     
     try:
-        from retrain.trainer.grpo import GRPO, DRGRPO
         from retrain.trainer.grpo.grpo import BaseGRPO
         from retrain.trainer.grpo.drgrpo import BaseDRGRPO
         from retrain.hardware import HardwareDetector

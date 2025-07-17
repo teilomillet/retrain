@@ -274,10 +274,13 @@ class CPUInferenceActor(BaseInferenceActor):
         try:
             import psutil
             
+            # Safely access cpu_freq since it might be unavailable on some platforms (e.g. certain macOS builds)
+            freq = psutil.cpu_freq() if hasattr(psutil, "cpu_freq") else None
+
             return {
                 'platform': 'CPU',
                 'cpu_count': psutil.cpu_count(),
-                'cpu_freq': psutil.cpu_freq()._asdict() if psutil.cpu_freq() else None,
+                'cpu_freq': freq._asdict() if freq else None,
                 'available_memory_gb': round(psutil.virtual_memory().available / (1024**3), 2),
                 'total_memory_gb': round(psutil.virtual_memory().total / (1024**3), 2)
             }

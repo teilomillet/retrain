@@ -29,8 +29,8 @@ def test_grpo_core_algorithm():
     print("\n1. Testing GRPO advantages computation...")
     
     # Test the core GRPO advantages logic (from the actual implementation)
-    rewards = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
-    values = torch.tensor([0.8, 1.8, 2.8, 3.8, 4.8])
+    rewards = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]) # type: ignore
+    values = torch.tensor([0.8, 1.8, 2.8, 3.8, 4.8]) # type: ignore
     
     # GRPO group baseline computation
     group_baseline = rewards.mean()  # Key insight of GRPO

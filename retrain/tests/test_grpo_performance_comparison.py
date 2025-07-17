@@ -225,7 +225,7 @@ class PerformanceComparison:
             # Warm-up once so imports / lazy inits are paid before timing
             _ = asyncio.run(base_grpo.health_check())
             _ = asyncio.run(base_drgrpo.health_check())
-            ray.get([ray_grpo.health_check.remote(), ray_drgrpo.health_check.remote()])
+            ray.get([ray_grpo.health_check.remote(), ray_drgrpo.health_check.remote()]) # type: ignore
 
             # Base GRPO health checks (1000 calls)
             start = time.perf_counter()
@@ -236,8 +236,8 @@ class PerformanceComparison:
 
             # Ray GRPO health checks (1000 calls on one actor)
             start = time.perf_counter()
-            futs = [ray_grpo.health_check.remote() for _ in range(1000)]
-            ray.get(futs)
+            futs = [ray_grpo.health_check.remote() for _ in range(1000)] # type: ignore
+            ray.get(futs) # type: ignore
             ray_health_time = (time.perf_counter() - start) / 1000
             print(f"✓ Ray GRPO  health check: {ray_health_time*1000:.2f}ms")
 
@@ -250,7 +250,7 @@ class PerformanceComparison:
 
             # Ray Dr. GRPO health checks (1000 calls on one actor)
             start = time.perf_counter()
-            futs = [ray_drgrpo.health_check.remote() for _ in range(1000)]
+            futs = [ray_drgrpo.health_check.remote() for _ in range(1000)] # type: ignore
             ray.get(futs)
             ray_drgrpo_health_time = (time.perf_counter() - start) / 1000
             print(f"✓ Ray Dr. GRPO health check: {ray_drgrpo_health_time*1000:.2f}ms")

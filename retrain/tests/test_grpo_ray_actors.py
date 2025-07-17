@@ -90,7 +90,7 @@ class TestGRPORayActor:
         yield
         # Don't shutdown Ray here as other tests might need it
         
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def test_config(self):
         """Create test configuration for GRPO."""
         return create_test_config()
@@ -124,7 +124,7 @@ class TestGRPORayActor:
             
             # Check initialization status
             health = await grpo_actor.health_check.remote() # type: ignore
-            assert health['is_initialized'] == True
+            assert health['is_initialized'] == True # type: ignore
             assert 'device' in health
             assert 'backend' in health
             assert health['training_step'] == 0
@@ -164,7 +164,7 @@ class TestGRPORayActor:
                 
             # Check that only actor1's state changed
             health1 = await grpo_actor1.health_check.remote() # type: ignore
-            health2 = await grpo_actor2.health_check.remote()
+            health2 = await grpo_actor2.health_check.remote() # type: ignore
             
             assert health1['training_step'] == 1
             assert health2['training_step'] == 0  # Should remain unchanged
@@ -242,7 +242,7 @@ class TestDRGRPORayActor:
             ray.init(local_mode=True, ignore_reinit_error=True)  # type: ignore
         yield
         
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def test_config(self):
         """Create test configuration for Dr. GRPO."""
         return create_test_config()
@@ -300,8 +300,8 @@ class TestDRGRPORayActor:
             # For testing normalization, we need to create a method to test this
             # Since the normalization is internal, we'll test via health check
             
-            grpo_health = await grpo_actor.health_check.remote()
-            drgrpo_health = await drgrpo_actor.health_check.remote()
+            grpo_health = await grpo_actor.health_check.remote() # type: ignore
+            drgrpo_health = await drgrpo_actor.health_check.remote() # type: ignore
             
             # Verify they're different algorithms
             assert grpo_health.get('algorithm') != 'dr_grpo'
@@ -330,7 +330,7 @@ class TestRayActorIntegration:
             ray.init(local_mode=True, ignore_reinit_error=True)  # type: ignore
         yield
         
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def test_config(self):
         """Create test configuration."""
         return create_test_config()
@@ -340,23 +340,23 @@ class TestRayActorIntegration:
         try:
             # Create multiple actors (simulating distributed training)
             actors = [
-                GRPO.remote(test_config) for _ in range(3)
+                GRPO.remote(test_config) for _ in range(3) # type: ignore
             ]
             
             # Initialize all actors
             await asyncio.gather(*[
-                actor.initialize.remote() for actor in actors
+                actor.initialize.remote() for actor in actors # type: ignore
             ])
             
             # Check all actors are healthy
             health_checks = await asyncio.gather(*[
-                actor.health_check.remote() for actor in actors
+                actor.health_check.remote() for actor in actors # type: ignore
             ])
             
             # Verify all are initialized
             for health in health_checks:
-                assert health['is_initialized'] == True
-                assert health['training_step'] == 0
+                assert health['is_initialized'] == True # type: ignore
+                assert health['training_step'] == 0 # type: ignore
                 
             # Verify actors maintain separate state
             for i, health in enumerate(health_checks):
@@ -390,13 +390,13 @@ class TestRayActorIntegration:
             # Verify GRPO actors
             for i in range(2):
                 health = health_results[i]
-                assert health['is_initialized'] == True
+                assert health['is_initialized'] == True # type: ignore
                 assert health.get('algorithm') != 'dr_grpo'
                 
             # Verify Dr. GRPO actors  
             for i in range(2, 4):
                 health = health_results[i]
-                assert health['is_initialized'] == True
+                assert health['is_initialized'] == True # type: ignore
                 assert health['algorithm'] == 'dr_grpo'
                 assert 'bias_fixes' in health
                 
@@ -433,11 +433,11 @@ class TestRayActorPerformance:
     @pytest.fixture(autouse=True) 
     def setup_ray(self):
         """Setup Ray for testing."""
-        if not ray.is_initialized():
-            ray.init(local_mode=True, ignore_reinit_error=True)
+        if not ray.is_initialized(): # type: ignore
+            ray.init(local_mode=True, ignore_reinit_error=True) # type: ignore
         yield
         
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def test_config(self):
         """Create test configuration."""
         return create_test_config()
@@ -460,7 +460,7 @@ class TestRayActorPerformance:
             startup_time = end_time - start_time
             
             # Verify successful initialization
-            assert health['is_initialized'] == True
+            assert health['is_initialized'] == True # type: ignore
             
             # Startup should be reasonable (less than 30 seconds)
             assert startup_time < 30.0
@@ -520,8 +520,8 @@ if __name__ == "__main__":
             # Try to initialize Ray with proper settings for testing
             try:
                 # Try cluster mode first (supports async actors)
-                if not ray.is_initialized():
-                    ray.init(
+                if not ray.is_initialized(): # type: ignore
+                    ray.init( # type: ignore
                         num_cpus=4,
                         num_gpus=0,
                         ignore_reinit_error=True,
@@ -558,7 +558,7 @@ if __name__ == "__main__":
                 # Note: This might fail if Ray doesn't support async in current mode
                 try:
                     health_future = grpo_actor.health_check.remote()  # type: ignore
-                    health = ray.get(health_future)
+                    health = ray.get(health_future) # type: ignore
                     print(f"✅ GRPO Actor Health: {health}")
                 except Exception as async_error:
                     print(f"⚠️  Async health check failed (expected in local mode): {async_error}")
@@ -579,8 +579,8 @@ if __name__ == "__main__":
             print(f"❌ Ray actor test failed: {e}")
             sys.exit(1)
         finally:
-            if ray.is_initialized():
-                ray.shutdown()
+            if ray.is_initialized(): # type: ignore
+                ray.shutdown() # type: ignore
                 
     if len(sys.argv) > 1 and sys.argv[1] == "--run-basic":
         run_basic_tests() 
