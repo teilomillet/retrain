@@ -2,6 +2,8 @@ from typing import Dict, Callable, Optional, List, Any, Tuple, Union
 import inspect
 from loguru import logger
 import torch
+import time
+import ray
 
 # Import verifier components needed for the adapter
 from ..verifier.verifier import VERIFIER_REGISTRY, VerifierFunction, get_boolean_verifier
@@ -24,14 +26,14 @@ def reward(name: Optional[str] = None):
         Callable: The decorator function.
     """
     def decorator(func: Callable) -> Callable:
-        registration_name = name if name is not None else func.__name__
+        registration_name = name if name is not None else getattr(func, '__name__', 'unknown')
         if registration_name in REWARD_REGISTRY:
             logger.warning(
                 f"[RewardRegistry] Reward function '{registration_name}' is already registered. "
-                f"Overwriting with {func.__module__}.{func.__name__}"
+                f"Overwriting with {getattr(func, '__module__', 'unknown')}.{getattr(func, '__name__', 'unknown')}"
             )
         REWARD_REGISTRY[registration_name] = func
-        logger.debug(f"[RewardRegistry] Registered reward function: '{registration_name}' -> {func.__module__}.{func.__name__}")
+        logger.debug(f"[RewardRegistry] Registered reward function: '{registration_name}' -> {getattr(func, '__module__', 'unknown')}.{getattr(func, '__name__', 'unknown')}")
         return func
     return decorator
 
@@ -232,6 +234,7 @@ def create_grpo_batch_reward_func(
     ) -> List[torch.Tensor]:
         # Pass closure variables explicitly to batch_reward_processor_sync.
         # 'infos' is extracted from kwargs as it's part of the dynamic data from the caller (e.g., TRL).
+        assert loaded_base_reward_fn_closure is not None  # Already checked above
         return batch_reward_processor_sync(
             prompts=prompts,
             completions=completions,
@@ -338,3 +341,475 @@ def batch_reward_processor_sync(
         
     logger.debug(f"[TRL Adapter] batch_reward_processor_sync (for {base_reward_name}): Final reward tensors: {final_rewards_tensors}")
     return final_rewards_tensors
+
+
+
+
+
+@ray.remote(num_cpus=2, num_gpus=0)
+class ReReward:
+    """
+    Reward Calculator Ray Actor.
+    
+    Manages reward computation for training data using
+    multiple reward functions with parallel processing.
+    
+    This actor handles:
+    1. Loading and managing reward functions from the registry
+    2. Batch reward computation for training data
+    3. Multi-component reward aggregation
+    4. Integration with DataBuffer for reward workflow
+    """
+    
+    def __init__(self, config: Any, databuffer: ray.ObjectRef):
+        """
+        Initialize ReReward actor with configuration and databuffer reference.
+        
+        Args:
+            config: Training configuration object
+            databuffer: Reference to the ReDataBuffer actor for data coordination
+        """
+        self.config = config
+        self.databuffer = databuffer
+        self.reward_functions: List[Callable] = []
+        self.reward_weights: Dict[str, float] = {}
+        self.reward_stats: Dict[str, Dict[str, Any]] = {}
+        self.is_initialized = False
+        
+        # Reward computation tracking
+        self.total_rewards_computed = 0
+        self.reward_computation_times = []
+        self.reward_value_history = []
+        
+        logger.info("ReReward actor initialized")
+        
+    async def initialize(self) -> None:
+        """Initialize reward functions based on configuration."""
+        logger.info("Initializing ReReward...")
+        
+        try:
+            # Load reward configuration
+            reward_config = getattr(self.config, 'rewards', {})
+            
+            if not reward_config:
+                # Use default reward configuration
+                reward_config = {
+                    'functions': ['accuracy_reward'],
+                    'weights': {'accuracy_reward': 1.0}
+                }
+                logger.info("No reward config specified, using defaults")
+            
+            # Load reward functions
+            await self._load_reward_functions(reward_config)
+            
+            # Load custom reward functions if specified
+            custom_rewards = reward_config.get('custom_functions', [])
+            for custom_reward in custom_rewards:
+                if callable(custom_reward):
+                    self.reward_functions.append(custom_reward)
+                    func_name = getattr(custom_reward, '__name__', 'custom_reward')
+                    self.reward_weights[func_name] = reward_config.get('weights', {}).get(func_name, 1.0)
+                    
+            if not self.reward_functions:
+                logger.warning("No reward functions loaded - using default constant reward")
+                self.reward_functions = [self._default_reward_function]
+                self.reward_weights['default'] = 1.0
+                
+            self.is_initialized = True
+            logger.info(f"ReReward initialized with {len(self.reward_functions)} reward functions")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize ReReward: {e}")
+            raise
+            
+    async def _load_reward_functions(self, reward_config: Dict[str, Any]) -> None:
+        """Load reward functions from registry and configuration."""
+        function_names = reward_config.get('functions', [])
+        weights = reward_config.get('weights', {})
+        
+        for func_name in function_names:
+            try:
+                # Try to get from REWARD_REGISTRY first
+                if func_name in REWARD_REGISTRY:
+                    reward_func = REWARD_REGISTRY[func_name]
+                    self.reward_functions.append(reward_func)
+                    self.reward_weights[func_name] = weights.get(func_name, 1.0)
+                    
+                    # Initialize stats for this reward function
+                    self.reward_stats[func_name] = {
+                        'calls': 0,
+                        'total_value': 0.0,
+                        'average_value': 0.0,
+                        'min_value': float('inf'),
+                        'max_value': float('-inf'),
+                        'average_time': 0.0,
+                        'errors': 0
+                    }
+                    
+                    logger.info(f"Loaded reward function: {func_name}")
+                    
+                else:
+                    # Try to load built-in reward functions
+                    if func_name == 'accuracy_reward':
+                        self.reward_functions.append(self._accuracy_reward)
+                        self.reward_weights['accuracy_reward'] = weights.get('accuracy_reward', 1.0)
+                        self.reward_stats['accuracy_reward'] = self._init_reward_stats()
+                    elif func_name == 'efficiency_reward':
+                        self.reward_functions.append(self._efficiency_reward)
+                        self.reward_weights['efficiency_reward'] = weights.get('efficiency_reward', 0.3)
+                        self.reward_stats['efficiency_reward'] = self._init_reward_stats()
+                    elif func_name == 'quality_reward':
+                        self.reward_functions.append(self._quality_reward)
+                        self.reward_weights['quality_reward'] = weights.get('quality_reward', 0.5)
+                        self.reward_stats['quality_reward'] = self._init_reward_stats()
+                    else:
+                        logger.warning(f"Unknown reward function: {func_name}")
+                        
+            except Exception as e:
+                logger.error(f"Failed to load reward function {func_name}: {e}")
+                
+    def _init_reward_stats(self) -> Dict[str, Any]:
+        """Initialize statistics dictionary for a reward function."""
+        return {
+            'calls': 0,
+            'total_value': 0.0,
+            'average_value': 0.0,
+            'min_value': float('inf'),
+            'max_value': float('-inf'),
+            'average_time': 0.0,
+            'errors': 0
+        }
+        
+    async def compute_rewards(self, rollout_data: List[Dict[str, Any]], episode_id: int) -> List[float]:
+        """
+        Compute rewards for rollout data.
+        
+        Args:
+            rollout_data: List of rollout data to process
+            episode_id: Current episode identifier
+            
+        Returns:
+            List of computed reward values
+        """
+        if not self.is_initialized:
+            raise RuntimeError("ReReward not initialized")
+            
+        logger.info(f"Computing rewards for {len(rollout_data)} rollouts in episode {episode_id}")
+        
+        start_time = time.time()
+        rewards = []
+        
+        for i, rollout in enumerate(rollout_data):
+            try:
+                reward = await self._compute_single_reward(rollout, episode_id, i)
+                rewards.append(reward)
+                
+            except Exception as e:
+                logger.error(f"Failed to compute reward for rollout {i}: {e}")
+                rewards.append(0.0)  # Default reward for failed computation
+                
+        computation_time = time.time() - start_time
+        self.reward_computation_times.append(computation_time)
+        self.total_rewards_computed += len(rewards)
+        
+        # Update global statistics
+        self.reward_value_history.extend(rewards)
+        
+        # Keep only recent history to prevent memory growth
+        if len(self.reward_value_history) > 1000:
+            self.reward_value_history = self.reward_value_history[-1000:]
+            
+        logger.info(f"Computed {len(rewards)} rewards in {computation_time:.2f}s")
+        return rewards
+        
+    async def _compute_single_reward(self, rollout: Dict[str, Any], episode_id: int, rollout_idx: int) -> float:
+        """Compute reward for a single rollout."""
+        if not self.reward_functions:
+            return 0.0
+            
+        total_reward = 0.0
+        total_weight = 0.0
+        
+        for reward_func in self.reward_functions:
+            func_name = getattr(reward_func, '__name__', 'unknown')
+            weight = self.reward_weights.get(func_name, 1.0)
+            
+            start_time = time.time()
+            
+            try:
+                # Compute individual reward
+                if func_name in ['accuracy_reward', 'efficiency_reward', 'quality_reward']:
+                    # Built-in functions that return (value, weight) tuple
+                    reward_value, func_weight = reward_func(rollout)
+                    weight = func_weight  # Use function's own weight
+                else:
+                    # Registry functions or custom functions
+                    reward_value = reward_func(rollout)
+                    
+                computation_time = time.time() - start_time
+                
+                # Update function statistics
+                if func_name in self.reward_stats:
+                    stats = self.reward_stats[func_name]
+                    stats['calls'] += 1
+                    stats['total_value'] += reward_value
+                    stats['average_value'] = stats['total_value'] / stats['calls']
+                    stats['min_value'] = min(stats['min_value'], reward_value)
+                    stats['max_value'] = max(stats['max_value'], reward_value)
+                    
+                    # Update average computation time
+                    old_avg = stats['average_time']
+                    new_avg = ((old_avg * (stats['calls'] - 1)) + computation_time) / stats['calls']
+                    stats['average_time'] = new_avg
+                    
+                # Add to total weighted reward
+                total_reward += reward_value * weight
+                total_weight += weight
+                
+            except Exception as e:
+                logger.error(f"Reward function {func_name} failed for rollout {rollout_idx}: {e}")
+                
+                # Update error statistics
+                if func_name in self.reward_stats:
+                    self.reward_stats[func_name]['errors'] += 1
+                    
+        # Normalize by total weight
+        if total_weight > 0:
+            return total_reward / total_weight
+        else:
+            return 0.0
+            
+    def _accuracy_reward(self, rollout: Dict[str, Any]) -> tuple[float, float]:
+        """Built-in accuracy-based reward function."""
+        # Check for success indicators in the rollout
+        success = rollout.get('success', False)
+        
+        # Check environment success if available
+        if not success and 'environment_success' in rollout:
+            success = rollout['environment_success']
+            
+        # Check verification results if available
+        if not success and 'verification_results' in rollout:
+            verification = rollout['verification_results']
+            if isinstance(verification, dict):
+                success = verification.get('overall_passed', False)
+                
+        # Check conversation completion
+        if not success and 'conversation_history' in rollout:
+            conversation = rollout['conversation_history']
+            if isinstance(conversation, list) and conversation:
+                last_msg = conversation[-1]
+                if isinstance(last_msg, dict):
+                    success = not last_msg.get('error', False)
+                    
+        return (1.0 if success else 0.0, 1.0)
+        
+    def _efficiency_reward(self, rollout: Dict[str, Any]) -> tuple[float, float]:
+        """Built-in efficiency-based reward function."""
+        # Reward based on number of steps/actions taken
+        steps = rollout.get('steps', 1)
+        max_steps = rollout.get('max_steps', 10)
+        
+        # Check conversation length as proxy for steps
+        if steps == 1 and 'conversation_history' in rollout:
+            conversation = rollout['conversation_history']
+            if isinstance(conversation, list):
+                steps = len(conversation)
+                
+        # Check action count
+        if 'executed_llm_actions' in rollout:
+            actions = rollout['executed_llm_actions']
+            if isinstance(actions, list):
+                steps = max(steps, len(actions))
+                
+        # Efficiency score: fewer steps = higher reward
+        if max_steps > 0:
+            efficiency = max(0, (max_steps - steps) / max_steps)
+        else:
+            efficiency = 1.0 if steps == 1 else 0.5
+            
+        return (efficiency, 0.3)
+        
+    def _quality_reward(self, rollout: Dict[str, Any]) -> tuple[float, float]:
+        """Built-in quality-based reward function."""
+        quality_score = 0.5  # Default neutral quality
+        
+        # Use verification confidence if available
+        if 'verification_results' in rollout:
+            verification = rollout['verification_results']
+            if isinstance(verification, dict):
+                quality_score = verification.get('confidence_score', 0.5)
+                
+        # Use environment processing quality if available
+        elif 'processing_status' in rollout:
+            status = rollout['processing_status']
+            if status == 'success':
+                quality_score = 0.8
+            elif status == 'partial':
+                quality_score = 0.5
+            else:
+                quality_score = 0.2
+                
+        # Check for processing errors
+        if rollout.get('processing_error') or rollout.get('verification_error'):
+            quality_score *= 0.5
+            
+        return (quality_score, 0.5)
+        
+    def _default_reward_function(self, rollout: Dict[str, Any]) -> float:
+        """Default reward function when no others are available."""
+        # Simple constant reward to prevent training failure
+        return 0.5
+        
+    async def create_batch_reward_function(self, base_reward_config: Dict[str, Any]) -> Optional[Callable]:
+        """Create a batch reward function compatible with training libraries."""
+        try:
+            # Create batch processor using existing functionality
+            batch_func = create_grpo_batch_reward_func(
+                base_reward_config=base_reward_config,
+                default_penalty=0.0
+            )
+            
+            if batch_func:
+                logger.info(f"Created batch reward function for: {base_reward_config.get('name', 'unknown')}")
+                return batch_func
+            else:
+                logger.error("Failed to create batch reward function")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error creating batch reward function: {e}")
+            return None
+            
+    async def get_reward_status(self) -> Dict[str, Any]:
+        """Get current status of reward computation."""
+        status = {
+            'initialized': self.is_initialized,
+            'reward_function_count': len(self.reward_functions),
+            'total_rewards_computed': self.total_rewards_computed,
+            'average_computation_time': 0.0,
+            'average_reward_value': 0.0,
+            'reward_functions': {}
+        }
+        
+        # Calculate average computation time
+        if self.reward_computation_times:
+            status['average_computation_time'] = sum(self.reward_computation_times) / len(self.reward_computation_times)
+            
+        # Calculate average reward value
+        if self.reward_value_history:
+            status['average_reward_value'] = sum(self.reward_value_history) / len(self.reward_value_history)
+            
+        # Add individual function statistics
+        for func_name, stats in self.reward_stats.items():
+            status['reward_functions'][func_name] = {
+                **stats,
+                'weight': self.reward_weights.get(func_name, 1.0)
+            }
+            
+        return status
+        
+    async def health_check(self) -> Dict[str, Any]:
+        """Perform health check and return status."""
+        health_status = {
+            'status': 'healthy',
+            'initialized': self.is_initialized,
+            'function_count': len(self.reward_functions),
+            'total_computed': self.total_rewards_computed,
+            'timestamp': time.time()
+        }
+        
+        # Check for performance issues
+        if self.reward_computation_times:
+            avg_time = sum(self.reward_computation_times) / len(self.reward_computation_times)
+            if avg_time > 5.0:  # Warning if reward computation takes >5s on average
+                health_status['status'] = 'warning'
+                health_status['warning'] = f'Slow reward computation: {avg_time:.2f}s average'
+                
+        # Check for high error rates
+        total_errors = sum(stats['errors'] for stats in self.reward_stats.values())
+        total_calls = sum(stats['calls'] for stats in self.reward_stats.values())
+        
+        if total_calls > 0:
+            error_rate = total_errors / total_calls
+            if error_rate > 0.1:  # Warning if >10% error rate
+                health_status['status'] = 'warning'
+                health_status['warning'] = f'High reward error rate: {error_rate:.1%}'
+                
+        # Check reward value distribution
+        if self.reward_value_history:
+            avg_reward = sum(self.reward_value_history) / len(self.reward_value_history)
+            if avg_reward <= 0.0:  # Warning if average reward is zero or negative
+                health_status['status'] = 'warning'
+                health_status['warning'] = f'Low average reward: {avg_reward:.3f}'
+                
+        return health_status
+        
+    async def add_reward_function(self, func_name: str, reward_func: Callable, weight: float = 1.0) -> bool:
+        """
+        Dynamically add a new reward function.
+        
+        Args:
+            func_name: Name for the reward function
+            reward_func: Reward function to add
+            weight: Weight for this reward function
+            
+        Returns:
+            True if successfully added, False otherwise
+        """
+        try:
+            if func_name in [f.__name__ for f in self.reward_functions]:
+                logger.warning(f"Reward function {func_name} already exists, overwriting")
+                
+            self.reward_functions.append(reward_func)
+            self.reward_weights[func_name] = weight
+            self.reward_stats[func_name] = self._init_reward_stats()
+            
+            logger.info(f"Added reward function: {func_name} (weight: {weight})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to add reward function {func_name}: {e}")
+            return False
+            
+    async def remove_reward_function(self, func_name: str) -> bool:
+        """
+        Remove a reward function.
+        
+        Args:
+            func_name: Name of reward function to remove
+            
+        Returns:
+            True if successfully removed, False otherwise
+        """
+        try:
+            # Find and remove function
+            for i, func in enumerate(self.reward_functions):
+                if getattr(func, '__name__', '') == func_name:
+                    del self.reward_functions[i]
+                    if func_name in self.reward_weights:
+                        del self.reward_weights[func_name]
+                    if func_name in self.reward_stats:
+                        del self.reward_stats[func_name]
+                    logger.info(f"Removed reward function: {func_name}")
+                    return True
+                    
+            logger.warning(f"Reward function {func_name} not found")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to remove reward function {func_name}: {e}")
+            return False
+            
+    async def shutdown(self) -> None:
+        """Gracefully shutdown the reward actor."""
+        logger.info("Shutting down ReReward...")
+        
+        self.reward_functions.clear()
+        self.reward_weights.clear()
+        self.reward_stats.clear()
+        self.reward_computation_times.clear()
+        self.reward_value_history.clear()
+        self.is_initialized = False
+        
+        logger.info("ReReward shutdown complete")
