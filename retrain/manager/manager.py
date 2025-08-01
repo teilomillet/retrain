@@ -81,6 +81,43 @@ class ReManager:
             
             logger.info(f"Initializing Ray with configuration: {ray_config}")
             
+            # Define large files/directories to exclude from Ray package upload
+            # This prevents Ray from exceeding the 512MB upload limit
+            runtime_excludes = [
+                # Large Spider2 database files
+                'Spider2/spider2-lite/resource/local_sqlite.zip',
+                'Spider2/spider2-lite/resource/databases/bigquery/*/DDL.csv',
+                'Spider2/spider2-snow/resource/databases/*/DDL.csv',
+                'Spider2/',  # Exclude entire Spider2 directory
+                
+                # Git submodule pack files
+                '.git/modules/*/objects/pack/*.pack',
+                '.git/modules/',  # Exclude all git modules
+                
+                # Third-party repositories not needed for training  
+                # Note: fastmcp is excluded because retrain has dependencies on it
+                'smolagents/', 
+                'trl/',
+                'unsloth/',
+                'mcp-alchemy/',
+                
+                # Other large files and directories
+                '*.zip',
+                '*.tar.gz',
+                '__pycache__/',
+                '.pytest_cache/', 
+                'node_modules/',
+                
+                # Optimize fastmcp by excluding non-essential parts
+                'fastmcp/tests/',
+                'fastmcp/docs/',
+                'fastmcp/examples/',
+            ]
+            
+            # Set environment variable to disable autoscaler warnings
+            import os
+            os.environ['RAY_SCHEDULER_EVENTS'] = '0'
+            
             ray.init(
                 log_to_driver=ray_config.get('log_to_driver', True),
                 logging_level=ray_config.get('logging_level', logging.INFO),
@@ -88,6 +125,10 @@ class ReManager:
                 num_cpus=ray_config.get('num_cpus'),
                 num_gpus=ray_config.get('num_gpus'),
                 local_mode=ray_config.get('local_mode', False),
+                runtime_env={
+                    'excludes': runtime_excludes,
+                    'working_dir': None  # Prevent automatic working_dir upload that causes URI validation errors
+                }
             )
             
         # Analyze available resources after Ray initialization
@@ -126,6 +167,12 @@ class ReManager:
         """
         Create placement groups using hardware-optimized bundles.
         """
+        # Skip placement groups on development mode to avoid resource over-allocation
+        if self.hardware_detector.recommendations['deployment_type'] == 'development':
+            logger.info("Skipping placement groups on development mode to conserve resources")
+            self.placement_groups = {}
+            return
+            
         logger.info("Creating placement groups for actor isolation...")
         
         # Get optimal placement group bundles from actor factory
@@ -193,10 +240,7 @@ class ReManager:
         logger.info("Initializing all 4  actor groups...")
         
         try:
-            # Create databuffer first (required by all groups)
-            self.databuffer = self.actor_factory.create_databuffer_actor(self.config)
-            
-            # Create ALL 4  GROUPS with smart hardware allocation
+            # DataBuffer already created in _initialize_databuffer(), don't recreate it
             
             # 1. Create  trainer group (distributed training across multiple GPUs)
             try:
@@ -223,7 +267,7 @@ class ReManager:
             # 2. Create  inference group (mixed CPU/GPU workers with load balancing)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
-                    num_inference_workers = 2  # macOS: 2 workers for load balancing
+                    num_inference_workers = 1  # macOS: single worker to conserve CPU resources
                 else:
                     # Mixed hardware: GPU workers + CPU workers for optimal load distribution
                     gpu_count = self.hardware_detector.capabilities['device']['gpu_count']
@@ -249,14 +293,31 @@ class ReManager:
             # 3. Create  reward group (multiple workers with auto-restart)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
-                    num_reward_workers = 2  # Conservative for macOS
+                    num_reward_workers = 1  # Single worker to conserve CPU resources
                 else:
                     num_reward_workers = min(4, self.hardware_detector.capabilities['cpu']['cpu_count'] // 2)
-                    
-                self.actor_groups['reward_group'] = self.actor_factory.create_reward_group(
-                    self.config, self.databuffer, num_reward_workers
-                )
-                logger.info(f"Created  reward group with {num_reward_workers} workers")
+                
+                # Create reward workers in main process to avoid nested actor creation issues
+                logger.info(f"Creating {num_reward_workers} reward workers in main process...")
+                reward_workers = []
+                for i in range(num_reward_workers):
+                    try:
+                        worker = self.actor_factory.create_reward_actor(self.config, self.databuffer)
+                        reward_workers.append(worker)
+                        logger.info(f"Created reward worker {i+1}/{num_reward_workers}")
+                    except Exception as worker_error:
+                        logger.error(f"Failed to create reward worker {i}: {worker_error}")
+
+                if reward_workers:
+                    # Create the group and set pre-created workers
+                    self.actor_groups['reward_group'] = self.actor_factory.create_reward_group(
+                        self.config, self.databuffer, len(reward_workers)
+                    )
+                    # Set the pre-created workers to avoid nested creation
+                    await self.actor_groups['reward_group'].set_precreated_workers.remote(reward_workers)
+                    logger.info(f"Created reward group with {len(reward_workers)} pre-created workers")
+                else:
+                    raise RuntimeError("Failed to create any reward workers")
                 
             except Exception as e:
                 logger.error(f"Failed to create reward group: {e}")
@@ -272,15 +333,32 @@ class ReManager:
             # 4. Create  verifier group (multiple workers with auto-restart)
             try:
                 if self.hardware_detector.recommendations['deployment_type'] == 'development':
-                    num_verifier_workers = 2  # Conservative for macOS
+                    num_verifier_workers = 1  # Single worker to conserve CPU resources
                 else:
                     num_verifier_workers = min(3, self.hardware_detector.capabilities['cpu']['cpu_count'] // 3)
-                    
-                self.actor_groups['verifier_group'] = self.actor_factory.create_verifier_group(
-                    self.config, self.databuffer, num_verifier_workers
-                )
-                logger.info(f"Created  verifier group with {num_verifier_workers} workers")
                 
+                # Create verifier workers in main process to avoid nested actor creation issues
+                logger.info(f"Creating {num_verifier_workers} verifier workers in main process...")
+                verifier_workers = []
+                for i in range(num_verifier_workers):
+                    try:
+                        worker = self.actor_factory.create_verifier_actor(self.config, self.databuffer)
+                        verifier_workers.append(worker)
+                        logger.info(f"Created verifier worker {i+1}/{num_verifier_workers}")
+                    except Exception as worker_error:
+                        logger.error(f"Failed to create verifier worker {i}: {worker_error}")
+
+                if verifier_workers:
+                    # Create the group and set pre-created workers
+                    self.actor_groups['verifier_group'] = self.actor_factory.create_verifier_group(
+                        self.config, self.databuffer, len(verifier_workers)
+                    )
+                    # Set the pre-created workers to avoid nested creation
+                    await self.actor_groups['verifier_group'].set_precreated_workers.remote(verifier_workers)
+                    logger.info(f"Created verifier group with {len(verifier_workers)} pre-created workers")
+                else:
+                    raise RuntimeError("Failed to create any verifier workers")
+                    
             except Exception as e:
                 logger.error(f"Failed to create verifier group: {e}")
                 # Fallback to single verifier actor
@@ -410,7 +488,11 @@ class ReManager:
         
         try:
             # Step 1: Generate rollouts (parallel inference)
-            rollout_future = self.actor_groups['inference'].generate_rollouts.remote(
+            inference_actor = self.actor_groups.get('inference_group') or self.actor_groups.get('inference')
+            if not inference_actor:
+                raise RuntimeError("No inference actor available")
+            
+            rollout_future = inference_actor.generate_rollouts.remote(
                 episode_id=episode,
                 batch_size=getattr(self.config, 'batch_size', 4)
             )
@@ -495,15 +577,21 @@ class ReManager:
                 }
             
             # Step 6: Execute training step
-            training_metrics = await self.actor_groups['trainer'].train_step.remote(
+            trainer_actor = self.actor_groups.get('trainer_group') or self.actor_groups.get('trainer')
+            if not trainer_actor:
+                raise RuntimeError("No trainer actor available")
+                
+            training_metrics = await trainer_actor.train_step.remote(
                 training_batch=training_batch,
                 episode_id=episode
             )
             
             # Step 7: Update model weights across inference actors
-            await self.actor_groups['inference'].update_weights.remote(
-                self.actor_groups['trainer']
-            )
+            inference_actor = self.actor_groups.get('inference_group') or self.actor_groups.get('inference')
+            trainer_actor = self.actor_groups.get('trainer_group') or self.actor_groups.get('trainer')
+            
+            if inference_actor and trainer_actor:
+                await inference_actor.update_weights.remote(trainer_actor)
             
             episode_time = time.time() - episode_start_time
             
@@ -612,9 +700,14 @@ class ReManager:
         try:
             checkpoint_path = f"{getattr(self.config, 'output_dir', './checkpoints')}/checkpoint_episode_{episode}"
             
+            # Create checkpoint directory
+            import os
+            os.makedirs(checkpoint_path, exist_ok=True)
+            
             # Save trainer state
-            if 'trainer' in self.actor_groups:
-                await self.actor_groups['trainer'].save_checkpoint.remote(checkpoint_path)
+            trainer_actor = self.actor_groups.get('trainer_group') or self.actor_groups.get('trainer')
+            if trainer_actor:
+                await trainer_actor.save_checkpoint.remote(checkpoint_path)
                 
             # Save databuffer state if available
             if hasattr(self.databuffer, 'save_state'):
@@ -631,8 +724,13 @@ class ReManager:
             # Save final model
             final_checkpoint = f"{getattr(self.config, 'output_dir', './checkpoints')}/final_model"
             
-            if 'trainer' in self.actor_groups:
-                await self.actor_groups['trainer'].save_checkpoint.remote(final_checkpoint)
+            # Create final checkpoint directory
+            import os
+            os.makedirs(final_checkpoint, exist_ok=True)
+            
+            trainer_actor = self.actor_groups.get('trainer_group') or self.actor_groups.get('trainer')
+            if trainer_actor:
+                await trainer_actor.save_checkpoint.remote(final_checkpoint)
             
             # Collect final metrics from all components
             final_metrics = {

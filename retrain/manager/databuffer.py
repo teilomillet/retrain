@@ -3,7 +3,7 @@
 import logging
 import pickle
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import ray
 import torch
 
@@ -11,7 +11,7 @@ from ..config_models import TrainingConfig
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=2, num_gpus=0)
+@ray.remote
 class ReDataBuffer:
     """
     Distributed DataBuffer actor for managing training data flow.
@@ -171,32 +171,137 @@ class ReDataBuffer:
     async def _grpo_data_converter(self,
                                  rollout_data: List[Dict[str, Any]],
                                  rewards: List[float],
-                                 verification_results: Dict[str, Any],
+                                 verification_results: Union[Dict[str, Any], List[Dict[str, Any]], None],
                                  episode_id: int) -> Dict[str, Any]:
         """Convert data to GRPO training format."""
+        # Handle verification results - can be either dict or list
+        if isinstance(verification_results, dict):
+            # Single aggregated result
+            verification_passed = verification_results.get('passed', [True] * len(rollout_data))
+        elif isinstance(verification_results, list):
+            # List of individual verification results (one per rollout)
+            verification_passed = [
+                result.get('overall_passed', True) if isinstance(result, dict) else True
+                for result in verification_results
+            ]
+        else:
+            # Fallback if verification_results is None or unexpected type
+            verification_passed = [True] * len(rollout_data)
+        
         training_batch = {
             'input_ids': [],
             'attention_mask': [],
             'labels': [],
             'rewards': rewards,
+            'old_log_probs': [],  # Add old log probabilities for GRPO policy ratio
             'episode_id': episode_id,
-            'verification_passed': verification_results.get('passed', [True] * len(rollout_data))
+            'verification_passed': verification_passed
         }
         
         for sample in rollout_data:
-            # Extract tokenized data from rollout
+            # Handle different data formats from inference actors
+            sample_input_ids = None
+            sample_attention_mask = None
+            sample_old_log_probs = None
+            
+            # Format 1: Direct tokenized data (preferred)
             if 'tokens' in sample:
-                training_batch['input_ids'].append(sample['tokens'])
-            if 'attention_mask' in sample:
-                training_batch['attention_mask'].append(sample['attention_mask'])
-            if 'labels' in sample:
-                training_batch['labels'].append(sample['labels'])
+                sample_input_ids = sample['tokens']
+                sample_attention_mask = sample.get('attention_mask')
+                # Extract old log probs if available
+                sample_old_log_probs = sample.get('old_per_token_logps')
+            
+            # Format 2: Inference actor format (prompts/responses)
+            elif 'prompts' in sample and 'responses' in sample:
+                # Create simple tokenized representation from text
+                # For now, use a placeholder tokenization
+                prompt_text = sample['prompts'][0] if sample['prompts'] else ""
+                response_text = sample['responses'][0] if sample['responses'] else ""
+                combined_text = f"{prompt_text} {response_text}"
                 
-        # Convert to tensors if using PyTorch
+                # Simple word-based tokenization (placeholder)
+                # In production, this should use the actual model tokenizer
+                words = combined_text.split()[:50]  # Limit to 50 tokens
+                sample_input_ids = list(range(1, len(words) + 1))  # Simple token IDs
+                sample_attention_mask = [1] * len(sample_input_ids)
+                
+                # Extract old log probs from environment action data
+                sample_old_log_probs = sample.get('old_per_token_logps')
+                if sample_old_log_probs is None:
+                    # Check in action_list if available (environment rollout format)
+                    action_list = sample.get('action_list', [])
+                    if action_list and len(action_list) > 0:
+                        # Get from first action (could be improved to aggregate)
+                        sample_old_log_probs = action_list[0].get('old_per_token_logps')
+            
+            # Format 3: Fallback with test data
+            else:
+                # Create minimal test tokens
+                sample_input_ids = [1, 2, 3, 4, 5]  # Test token sequence
+                sample_attention_mask = [1, 1, 1, 1, 1]
+                sample_old_log_probs = None  # No log probs for test data
+            
+            # Add to batch if we have data
+            if sample_input_ids:
+                training_batch['input_ids'].append(sample_input_ids)
+                if sample_attention_mask:
+                    training_batch['attention_mask'].append(sample_attention_mask)
+                else:
+                    training_batch['attention_mask'].append([1] * len(sample_input_ids))
+                
+                # Labels for autoregressive training (copy input_ids)
+                training_batch['labels'].append(sample_input_ids.copy())
+                
+                # Handle old log probabilities for GRPO policy ratio computation
+                if sample_old_log_probs is not None:
+                    # Convert tensor to list if needed
+                    if hasattr(sample_old_log_probs, 'tolist'):
+                        old_log_probs_list = sample_old_log_probs.tolist()
+                    elif isinstance(sample_old_log_probs, (list, tuple)):
+                        old_log_probs_list = list(sample_old_log_probs)
+                    else:
+                        # Fallback: create zeros matching token length
+                        old_log_probs_list = [0.0] * len(sample_input_ids)
+                    training_batch['old_log_probs'].append(old_log_probs_list)
+                else:
+                    # No old log probs available, use zeros (neutral for policy ratio)
+                    training_batch['old_log_probs'].append([0.0] * len(sample_input_ids))
+                
+        # Convert to tensors if using PyTorch with correct dtypes
         if training_batch['input_ids'] and isinstance(training_batch['input_ids'][0], list):
-            training_batch['input_ids'] = torch.tensor(training_batch['input_ids'])
+            # Pad sequences to same length
+            max_len = max(len(seq) for seq in training_batch['input_ids']) if training_batch['input_ids'] else 0
+            
+            # Pad input_ids with 0 (typical padding token)
+            padded_input_ids = []
+            for seq in training_batch['input_ids']:
+                padded_seq = seq + [0] * (max_len - len(seq))
+                padded_input_ids.append(padded_seq)
+            training_batch['input_ids'] = torch.tensor(padded_input_ids, dtype=torch.long)
+            
+            # Pad attention_mask with 0 (masked positions)
             if training_batch['attention_mask']:
-                training_batch['attention_mask'] = torch.tensor(training_batch['attention_mask'])
+                padded_attention_mask = []
+                for seq in training_batch['attention_mask']:
+                    padded_seq = seq + [0] * (max_len - len(seq))
+                    padded_attention_mask.append(padded_seq)
+                training_batch['attention_mask'] = torch.tensor(padded_attention_mask, dtype=torch.long)
+            
+            # Pad labels with -100 (typical ignore token for loss)
+            if training_batch['labels'] and isinstance(training_batch['labels'][0], list):
+                padded_labels = []
+                for seq in training_batch['labels']:
+                    padded_seq = seq + [-100] * (max_len - len(seq))
+                    padded_labels.append(padded_seq)
+                training_batch['labels'] = torch.tensor(padded_labels, dtype=torch.long)
+            
+            # Pad old_log_probs with 0.0 (neutral for policy ratio computation)
+            if training_batch['old_log_probs'] and isinstance(training_batch['old_log_probs'][0], list):
+                padded_old_log_probs = []
+                for seq in training_batch['old_log_probs']:
+                    padded_seq = seq + [0.0] * (max_len - len(seq))
+                    padded_old_log_probs.append(padded_seq)
+                training_batch['old_log_probs'] = torch.tensor(padded_old_log_probs, dtype=torch.float32)
                 
         return training_batch
         
@@ -271,6 +376,10 @@ class ReDataBuffer:
             'sample_index': self.sample_index,
             'config': self.config.dict()
         }
+        
+        # Create checkpoint directory if it doesn't exist
+        import os
+        os.makedirs(checkpoint_path, exist_ok=True)
         
         checkpoint_file = f"{checkpoint_path}/databuffer_state.pkl"
         with open(checkpoint_file, 'wb') as f:

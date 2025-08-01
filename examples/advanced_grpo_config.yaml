@@ -1,0 +1,81 @@
+# Advanced GRPO Configuration with ReManager
+experiment_name: "advanced_grpo_hardware_optimized"
+seed: 42
+logging_level: "INFO"
+
+# Training episodes configuration
+num_episodes: 4  # Number of RL episodes to run (each episode = environment interaction + training)
+
+# Model configuration with automatic hardware optimization
+model:
+  name_or_path: "Qwen/Qwen3-0.6B"
+  loader: "huggingface"  # ReManager will optimize based on hardware
+  trust_remote_code: null
+  torch_dtype: "auto"  # Hardware detector will choose optimal dtype
+
+# Algorithm with enhanced hyperparameters
+algorithm:
+  name: "grpo"
+  backend: "native"  # Use native Ray GRPO implementation
+  
+  # Wandb integration (future feature)
+  report_to: ["wandb"]
+  wandb_project: "retrain_advanced_grpo"
+  wandb_entity: null
+  wandb_run_name: "hardware_optimized_run"
+  
+  # Enhanced hyperparameters for native GRPO implementation
+  hyperparameters:
+    learning_rate: 0.00002
+    logging_steps: 1
+    
+    # GRPO-specific parameters
+    clip_range: 0.2          # PPO clipping range for policy loss
+    value_clip_range: 0.2    # Clipping range for value loss
+    entropy_coef: 0.01       # Entropy regularization coefficient
+    value_coef: 0.5          # Value loss coefficient
+    gamma: 0.99              # Discount factor for GAE
+    gae_lambda: 0.95         # GAE lambda parameter
+    
+    # Generation parameters
+    max_prompt_length: 256
+    max_completion_length: 512
+    
+    # Batch sizes (ReManager will optimize based on hardware)
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 1
+    
+    # Sampling parameters for environment interactions
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 40
+
+# Environment configuration
+environment:
+  type: "smol_agent"
+  env_specific_config:
+    max_turns: 8
+    max_tokens_per_llm_turn: 512
+    tools:
+      registry_keys: ["simple_calculator_tool"]
+
+# Prompt source with more complex problems
+prompt_source:
+  type: "list"
+  source_config:
+    prompts:
+      - "Calculate the compound interest on $5000 at 8% annual rate for 3 years, compounded quarterly. Show each step using the calculator tool."
+      - "A rectangle has length 15.7 and width 8.3. Calculate its area and perimeter. Then find what the new area would be if both dimensions increased by 20%."
+      - "Solve this step by step: If a train travels 420 km in 3.5 hours, what is its average speed? Then calculate how long it would take to travel 756 km at the same speed."
+
+# Advanced reward setup leveraging the new architecture
+reward_setup:
+  step_reward_configs:
+    advanced_math_reward:
+      weight: 2.0
+      params:
+        expected_answer: "varies"  # Will be set dynamically
+        parsing_error_penalty: -2.0
+      verifiers: null
+      verifier_penalty: -1.0
+  rollout_reward_configs: {}

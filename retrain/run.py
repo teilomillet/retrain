@@ -2,6 +2,8 @@ from typing import Any, Dict, Optional, List, Callable, Tuple, Type, Union, TYPE
 import os
 import asyncio
 import time
+import logging
+import ray
 
 from loguru import logger # Import Loguru logger
 
@@ -328,6 +330,29 @@ def _setup_trainer_instance(
         except Exception as e:
             logger_run.error(f"Error instantiating GRPOTrainerAdapterTRL: {e}", exc_info=True)
             raise
+    elif algo_cfg.name == "drgrpo" and algo_cfg.backend in ["retrain", "native"]:
+        logger_run.info(f"Setting up DRGRPO (Retrain backend) with algorithm config: {algo_cfg}")
+        
+        try:
+            # Import the DRGRPO adapter
+            from retrain.trainer.grpo.drgrpo_adapter import DRGRPOAdapter
+            
+            # Create the DRGRPO adapter instance
+            trainer_instance = DRGRPOAdapter(
+                model=model,
+                algorithm_config=algo_cfg,
+                environment=environment,
+                reward_calculator=reward_calculator,
+                prompt_source=prompt_source,
+                tokenizer=tokenizer,
+                reference_model=reference_model
+            )
+            
+            logger_run.info("DRGRPO adapter instantiated successfully.")
+            
+        except Exception as e:
+            logger_run.error(f"Error instantiating DRGRPO adapter: {e}", exc_info=True)
+            raise
     else:
         raise ValueError(f"Unsupported algorithm/backend: {algo_cfg.name}/{algo_cfg.backend}")
     
@@ -339,6 +364,30 @@ async def run_async_training(cfg: TrainingConfig):
     # Fix HuggingFace tokenizers parallelism warning that occurs when process forks
     # after tokenizers have been used. This is common in training environments.
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
+    # Initialize Ray if not already initialized (required for DRGRPO and other Ray-based trainers)
+    if not ray.is_initialized():
+        logger_run.info("Initializing Ray for distributed training...")
+        
+        # Configure Ray to exclude large files and avoid uploading the entire working directory
+        # Set object_store_memory to 2GB to avoid performance issues on macOS
+        ray_init_config = {
+            "log_to_driver": True,
+            "logging_level": logging.INFO,
+            "local_mode": False,  # Set to True for debugging if needed
+            "object_store_memory": 2_000_000_000,  # 2GB limit for macOS compatibility
+            "runtime_env": {
+                "working_dir": None,  # Don't upload the working directory
+                "excludes": [
+                    "*.zip", "*.tar.gz", "*.pack", "*.csv", "*.sqlite", "*.db",
+                    "Spider2/", "gg-bench/", ".git/", "wandb/", "logs/", "trainer_output/",
+                    "examples/", "tests/", "docs/", "*.md", "*.txt", "*.pdf"
+                ]
+            }
+        }
+        
+        ray.init(**ray_init_config)
+        logger_run.info("Ray initialized successfully")
     
     # DIAGNOSTIC: Manual WANDB INIT
     if cfg.algorithm.report_to and "wandb" in cfg.algorithm.report_to:

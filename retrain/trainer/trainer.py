@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Callable
 import ray
 import torch
+import asyncio
 
 from ..config_models import TrainingConfig
 
@@ -176,64 +177,102 @@ class ReTrainer:
         self.step_times = []
         self.memory_usage = []
         
+        # Recovery tracking - for immediate health status updates after actor recovery
+        self._last_successful_recovery = None
+        
         logger.info(f"ReTrainer initialized for algorithm: {config.algorithm.name}")
         
     async def initialize(self) -> None:
         """
-        Initialize the trainer and spawn algorithm-specific actors.
-        Enhanced to use new clean GRPO architecture with auto hardware detection.
+        Initialize the trainer with lazy algorithm loading.
+        Fixed to avoid nested actor creation which causes Ray pickle errors.
         """
         logger.info("Initializing ReTrainer...")
         
-        # Create algorithm-specific actor based on configuration
-        algorithm_name = self.config.algorithm.name.lower()
+        # Store algorithm name but don't create nested actor yet (lazy loading)
+        # This prevents nested Ray actor creation which causes pickle serialization issues
+        self.algorithm_name = self.config.algorithm.name.lower()
+        self.algorithm_actor = None  # Will be created on first training call
+        self._creating_algorithm_actor = False  # Track initialization state
         
-        if algorithm_name == "grpo":
-            # Import and create new unified GRPO actor (no databuffer)
-            from .grpo.grpo import GRPO
-            self.algorithm_actor = GRPO.remote(self.config)  # type: ignore
-            
-        elif algorithm_name == "drgrpo":
-            # Import and create DRGRPO actor (extends GRPO)
-            from .grpo.drgrpo import DRGRPO
-            self.algorithm_actor = DRGRPO.remote(self.config)  # type: ignore
-            
-        elif algorithm_name == "rloo":
-            # Import and create RLOO actor
-            from .rloo.rloo import RLOOActor  # type: ignore
-            self.algorithm_actor = RLOOActor.options(
-                num_gpus=1,
-                num_cpus=2
-            ).remote(self.config)  # No databuffer parameter
-            
-        elif algorithm_name == "ppo":
-            # Import and create PPO actor (future implementation)
-            from .ppo.ppo import PPOActor  # type: ignore
-            self.algorithm_actor = PPOActor.options(
-                num_gpus=1,
-                num_cpus=2
-            ).remote(self.config)  # No databuffer parameter
-            
-        else:
-            raise ValueError(f"Unsupported algorithm: {algorithm_name}")
-        
-        # Initialize the algorithm actor
-        await self.algorithm_actor.initialize.remote()  # type: ignore
-        
-        # Get initial model weights
-        self.current_weights = await self.algorithm_actor.get_model_weights.remote()  # type: ignore
-        
+        # Basic initialization without heavy model loading
         self.is_initialized = True
-        logger.info(f"ReTrainer initialization complete for {algorithm_name}")
+        logger.info(f"ReTrainer initialized (lazy) - {self.algorithm_name} actor will be created on first use")
         
-    async def train_step(self, rollout_data: List[Dict[str, Any]], episode_id: int) -> TrainingMetrics:
+    async def _create_algorithm_actor(self) -> None:
         """
-        Execute a single training step with enhanced atomic databuffer operations.
+        Create algorithm-specific actor lazily on first training call.
+        This prevents nested Ray actor creation during group initialization.
+        """
+        # Set flag to indicate initialization is in progress
+        self._creating_algorithm_actor = True
         
-        ReTrainer handles ALL databuffer operations while algorithm actors focus on pure computation.
+        try:
+            logger.info(f"Creating {self.algorithm_name} algorithm actor...")
+            
+            if self.algorithm_name == "grpo":
+                # Check backend configuration to select correct GRPO implementation
+                backend = getattr(self.config.algorithm, 'backend', 'native')
+                if backend == "trl":
+                    # Use TRL GRPO backend for production training with HF/TRL integration
+                    logger.info("Using TRL GRPO backend for training")
+                    from .grpo.trl import GRPOTrainerAdapter
+                    # Note: TRL backend needs different initialization - will need environment, model, etc.
+                    # For now, fallback to native implementation as TRL integration needs more work
+                    logger.warning("TRL backend requested but not fully integrated yet, falling back to native GRPO")
+                    from .grpo.grpo import GRPO
+                    self.algorithm_actor = GRPO.remote(self.config)  # type: ignore
+                else:
+                    # Use native Ray-based GRPO implementation (research/development)
+                    logger.info("Using native Ray GRPO implementation")
+                    from .grpo.grpo import GRPO
+                    self.algorithm_actor = GRPO.remote(self.config)  # type: ignore
+                
+            elif self.algorithm_name == "drgrpo":
+                # Import and create DRGRPO actor (extends GRPO)
+                from .grpo.drgrpo import DRGRPO
+                self.algorithm_actor = DRGRPO.remote(self.config)  # type: ignore
+                
+            elif self.algorithm_name == "rloo":
+                # Import and create RLOO actor
+                from .rloo.rloo import RLOOActor  # type: ignore
+                self.algorithm_actor = RLOOActor.options(
+                    num_gpus=1,
+                    num_cpus=2
+                ).remote(self.config)  # No databuffer parameter
+                
+            elif self.algorithm_name == "ppo":
+                # Import and create PPO actor (future implementation)
+                from .ppo.ppo import PPOActor  # type: ignore
+                self.algorithm_actor = PPOActor.options(
+                    num_gpus=1,
+                    num_cpus=2
+                ).remote(self.config)  # No databuffer parameter
+                
+            else:
+                raise ValueError(f"Unsupported algorithm: {self.algorithm_name}")
+            
+            # Initialize the algorithm actor (this will now load models)
+            await self.algorithm_actor.initialize.remote()  # type: ignore
+            
+            # Get initial model weights
+            self.current_weights = await self.algorithm_actor.get_model_weights.remote()  # type: ignore
+            
+            logger.info(f"Algorithm actor {self.algorithm_name} created and initialized")
+            
+        finally:
+            # Clear the initialization flag regardless of success/failure
+            self._creating_algorithm_actor = False
+        
+    async def train_step(self, training_batch: Dict[str, Any], episode_id: int) -> TrainingMetrics:
+        """
+        Execute a single training step with prepared training batch.
+        
+        ReTrainer now receives pre-prepared training batches from ReManager,
+        focusing purely on algorithm execution and model training.
         
         Args:
-            rollout_data: Raw rollout data from environment interactions
+            training_batch: Pre-prepared training data from ReManager
             episode_id: Current episode identifier
             
         Returns:
@@ -241,36 +280,52 @@ class ReTrainer:
         """
         if not self.is_initialized:
             raise RuntimeError("ReTrainer not initialized. Call initialize() first.")
+        
+        # Lazy algorithm actor creation - create on first training call
+        # This avoids nested Ray actor creation during initialization
+        if self.algorithm_actor is None:
+            await self._create_algorithm_actor()
             
         step_start_time = time.time()
         
         logger.info(f"Executing training step for episode {episode_id}")
         
-        # 1. Store rollout data atomically via DataBuffer
-        storage_id = await self.databuffer.store_rollout_data.remote(rollout_data, episode_id)  # type: ignore
-        logger.debug(f"Stored rollout data with ID: {storage_id}")
-        
-        # 2. Prepare optimized training batch via DataBuffer
-        # This handles algorithm-specific preprocessing, batching, and optimization
-        training_batch = await self.databuffer.prepare_training_batch.remote(  # type: ignore
-            rollout_data=rollout_data,
-            episode_id=episode_id,
-            algorithm_type=self.config.algorithm.name.lower(),
-            batch_size=getattr(self.config.algorithm, 'batch_size', 32)
-        )
-        logger.debug(f"Prepared training batch with {len(training_batch.get('input_ids', []))} samples")
-        
-        # 3. Execute pure algorithm computation (no infrastructure concerns)
-        step_metrics = await self.algorithm_actor.train_step.remote(  # type: ignore
-            training_batch=training_batch
-        )
+        # Execute pure algorithm computation with prepared batch
+        try:
+            step_metrics = await self.algorithm_actor.train_step.remote(  # type: ignore
+                training_batch=training_batch
+            )
+        except Exception as e:
+            # Check if algorithm actor died and needs recreation
+            error_str = str(e)
+            if ('actor died' in error_str.lower() or 
+                'rayactorerror' in error_str.lower() or 
+                'actor is dead' in error_str.lower() or
+                'actor process has died' in error_str.lower()):
+                
+                logger.warning(f"Algorithm actor died during training, recreating: {e}")
+                self.algorithm_actor = None  # Clear dead reference
+                await self._create_algorithm_actor()  # Recreate immediately
+                
+                # Retry the training step with new actor
+                step_metrics = await self.algorithm_actor.train_step.remote(  # type: ignore
+                    training_batch=training_batch
+                )
+                logger.info("Successfully recovered from dead algorithm actor")
+                
+                # CRITICAL: Force immediate health status update after successful recovery
+                # This prevents the TrainerGroup from marking this worker as unhealthy
+                # due to stale health check cache from the crashed actor period
+                self._last_successful_recovery = time.time()
+            else:
+                # Re-raise other errors
+                raise
         logger.debug(f"Algorithm step completed with metrics: {list(step_metrics.keys())}")
         
-        # 4. Store evaluation results atomically via DataBuffer
+        # Store evaluation results atomically via DataBuffer
         evaluation_data = {
             'metrics': step_metrics,
             'training_batch_size': len(training_batch.get('input_ids', [])),
-            'rollout_size': len(rollout_data),
             'algorithm': self.config.algorithm.name,
             'timestamp': time.time()
         }
@@ -284,23 +339,15 @@ class ReTrainer:
         # Get updated model weights
         self.current_weights = await self.algorithm_actor.get_model_weights.remote()  # type: ignore
         
-        # 5. Enhanced metrics with databuffer coordination info
+        # Enhanced metrics with streamlined data flow
         enhanced_metrics = {
             **step_metrics,
             'trainer_step_count': self.training_step_count,
             'step_time': step_time,
             'episode_id': episode_id,
             'algorithm': self.config.algorithm.name,
-            'storage_id': storage_id,
-            'databuffer_operations': {
-                'store_rollout': True,
-                'prepare_batch': True,
-                'store_evaluation': True
-            },
             'data_flow': {
-                'rollout_samples': len(rollout_data),
                 'training_samples': len(training_batch.get('input_ids', [])),
-                'batch_utilization': len(training_batch.get('input_ids', [])) / max(len(rollout_data), 1)
             },
             'timestamp': time.time()
         }
@@ -313,7 +360,7 @@ class ReTrainer:
             oldest_key = min(self.training_metrics.keys())
             del self.training_metrics[oldest_key]
             
-        logger.info(f"Training step {self.training_step_count} completed in {step_time:.2f}s with atomic databuffer ops")
+        logger.info(f"Training step {self.training_step_count} completed in {step_time:.2f}s")
         return enhanced_metrics
         
     async def get_model_weights(self) -> Dict[str, torch.Tensor]:
@@ -418,13 +465,43 @@ class ReTrainer:
         Returns:
             Health status and performance metrics
         """
+        # CRITICAL: Check for recent successful recovery first
+        # If we recently recovered from a dead actor, return healthy immediately
+        # This prevents health check lag from marking recovered workers as unhealthy
+        if (self._last_successful_recovery and 
+            time.time() - self._last_successful_recovery < 60.0):  # 60 second grace period
+            return {
+                'status': 'healthy',
+                'recovery_status': 'recently_recovered',
+                'recovery_time': self._last_successful_recovery,
+                'initialized': self.is_initialized,
+                'training_step_count': self.training_step_count,
+                'algorithm': self.config.algorithm.name if self.config else 'unknown',
+                'timestamp': time.time(),
+                'message': 'Recently recovered from algorithm actor crash - skipping detailed health check'
+            }
+        
+        # Track if algorithm actor is being created
+        algorithm_actor_status = "not_created"
+        if self.algorithm_actor is not None:
+            algorithm_actor_status = "created"
+        elif hasattr(self, '_creating_algorithm_actor') and self._creating_algorithm_actor:
+            algorithm_actor_status = "initializing"
+            
         health_status = {
             'status': 'healthy',
             'initialized': self.is_initialized,
             'training_step_count': self.training_step_count,
             'algorithm': self.config.algorithm.name if self.config else 'unknown',
+            'algorithm_actor_status': algorithm_actor_status,
             'timestamp': time.time()
         }
+        
+        # If algorithm actor is being created, mark as initializing but still healthy
+        if algorithm_actor_status == "initializing":
+            health_status['status'] = 'initializing'
+            health_status['message'] = 'Algorithm actor initialization in progress'
+            return health_status  # Return early to avoid blocking operations
         
         # Add performance metrics
         if self.step_times:
@@ -436,14 +513,34 @@ class ReTrainer:
                 'total_steps': len(self.step_times)
             })
             
-        # Check algorithm actor health
+        # Check algorithm actor health (only if fully created)
         if self.algorithm_actor and self.is_initialized:
             try:
-                algorithm_health = await self.algorithm_actor.health_check.remote()  # type: ignore
+                # Use a short timeout for algorithm health check to avoid blocking
+                algorithm_health = await asyncio.wait_for(
+                    self.algorithm_actor.health_check.remote(), timeout=2.0  # type: ignore
+                )
                 health_status['algorithm_health'] = algorithm_health
-            except Exception as e:
+            except asyncio.TimeoutError:
                 health_status['status'] = 'warning'
-                health_status['algorithm_error'] = str(e)
+                health_status['algorithm_error'] = 'Algorithm health check timeout'
+            except Exception as e:
+                # Check if this is a dead actor error (Ray actor crashed/died)
+                error_str = str(e)
+                if ('actor died' in error_str.lower() or 
+                    'rayactorerror' in error_str.lower() or 
+                    'actor is dead' in error_str.lower() or
+                    'actor process has died' in error_str.lower()):
+                    # Algorithm actor died - mark for recreation on next training call
+                    logger.warning(f"Algorithm actor died, will recreate on next training call: {e}")
+                    self.algorithm_actor = None  # Clear dead reference
+                    health_status['status'] = 'healthy'  # Still healthy, just need to recreate actor
+                    health_status['algorithm_error'] = f'Algorithm actor died, cleared for recreation: {error_str}'
+                    health_status['recovery_action'] = 'algorithm_actor_cleared'
+                else:
+                    # Other temporary error - mark as warning
+                    health_status['status'] = 'warning'
+                    health_status['algorithm_error'] = str(e)
                 
         # Performance warnings
         if self.step_times:

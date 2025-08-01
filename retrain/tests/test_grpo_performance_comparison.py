@@ -105,6 +105,7 @@ class PerformanceComparison:
                 ignore_reinit_error=True,
                 include_dashboard=False,
                 log_to_driver=False,
+                object_store_memory=2_000_000_000,  # 2GB limit for macOS compatibility
                 runtime_env={
                     "env_vars": {"RAY_DISABLE_IMPORT_WARNING": "1"},
                     "working_dir": ".",

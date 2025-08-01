@@ -218,12 +218,24 @@ class HardwareDetector:
         device_count = self.capabilities.get('device', {}).get('device_count', 0)
         cpu_count = self.capabilities.get('cpu', {}).get('cpu_count', 4)
         
+        # Calculate object store memory with platform-specific capping
+        system_memory_gb = self.capabilities.get('memory', {}).get('system_memory_gb', 8)
+        calculated_object_store = int(system_memory_gb * 0.3 * 1e9)
+        
+        # Cap object store memory at 2GB for Mac systems (Ray performance issue)
+        is_macos = self.capabilities.get('platform', {}).get('is_macos', False)
+        if is_macos:
+            max_object_store_memory = 2_000_000_000  # 2GB in bytes
+            object_store_memory = min(calculated_object_store, max_object_store_memory)
+        else:
+            object_store_memory = calculated_object_store
+        
         return {
             'recommended_ray_resources': {
                 'num_cpus': cpu_count,
                 'num_gpus': device_count,
-                'object_store_memory': int(self.capabilities.get('memory', {}).get('system_memory_gb', 8) * 0.3 * 1e9),
-                'memory': int(self.capabilities.get('memory', {}).get('system_memory_gb', 8) * 0.5 * 1e9)
+                'object_store_memory': object_store_memory,
+                'memory': int(system_memory_gb * 0.5 * 1e9)
             },
             'placement_group_strategy': 'STRICT_PACK' if device_count > 1 else 'SPREAD',
             'optimal_actor_count': {
@@ -315,22 +327,27 @@ class HardwareDetector:
         cpu = self.capabilities['cpu']
         memory = self.capabilities['memory']
         
+        # Calculate object store memory with 2GB cap for Mac systems
+        calculated_object_store = int(memory['system_memory_gb'] * 0.2 * 1e9)
+        max_object_store_memory = 2_000_000_000  # 2GB in bytes
+        object_store_memory = min(calculated_object_store, max_object_store_memory)
+        
         return {
             'deployment_type': 'development',
             'backend': 'transformers',
             'model_size_class': 'small',
             'ray_config': {
                 'num_cpus': cpu['cpu_count'],
-                'num_gpus': 0,  # Force CPU for stability
-                'object_store_memory': int(memory['system_memory_gb'] * 0.2 * 1e9),
+                'num_gpus': 1 if device['mps_available'] else 0,  # Enable MPS when available for speed
+                'object_store_memory': object_store_memory,
             },
             'actor_resources': {
-                'trainer': {'num_gpus': 1 if device['mps_available'] else 0, 'num_cpus': 2},
-                'inference': {'num_gpus': 0, 'num_cpus': 2},  # CPU inference for stability
+                'trainer': {'num_gpus': 1 if device['mps_available'] else 0, 'num_cpus': 1},  # MPS training for speed
+                'inference': {'num_gpus': 0, 'num_cpus': 1},  # Reduced CPU for resource efficiency  
                 'environment': {'num_gpus': 0, 'num_cpus': 1},
                 'verifier': {'num_gpus': 0, 'num_cpus': 1},
                 'reward': {'num_gpus': 0, 'num_cpus': 1},
-                'databuffer': {'num_gpus': 0, 'num_cpus': 2}
+                'databuffer': {'num_gpus': 0, 'num_cpus': 1}  # Reduced CPU for resource efficiency
             },
             'model_recommendations': [
                 'gpt2',

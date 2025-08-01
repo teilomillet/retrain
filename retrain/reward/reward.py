@@ -346,7 +346,7 @@ def batch_reward_processor_sync(
 
 
 
-@ray.remote(num_cpus=2, num_gpus=0)
+@ray.remote
 class ReReward:
     """
     Reward Calculator Ray Actor.
@@ -369,6 +369,16 @@ class ReReward:
             config: Training configuration object
             databuffer: Reference to the ReDataBuffer actor for data coordination
         """
+        # Initialize clean logging for this Ray actor to avoid pickle issues
+        # Each actor needs its own logger setup to prevent serialization conflicts
+        try:
+            from loguru import logger as actor_logger
+            actor_logger.remove()  # Remove inherited handlers that can't be pickled
+            import sys
+            actor_logger.add(sys.stderr, level="INFO")  # Add clean stderr handler
+        except ImportError:
+            pass  # Fallback gracefully if loguru not available
+            
         self.config = config
         self.databuffer = databuffer
         self.reward_functions: List[Callable] = []
@@ -538,7 +548,10 @@ class ReReward:
             
             try:
                 # Compute individual reward
-                if func_name in ['accuracy_reward', 'efficiency_reward', 'quality_reward']:
+                # Handle both underscore-prefixed and regular built-in function names
+                builtin_functions = ['accuracy_reward', 'efficiency_reward', 'quality_reward', 
+                                   '_accuracy_reward', '_efficiency_reward', '_quality_reward']
+                if func_name in builtin_functions:
                     # Built-in functions that return (value, weight) tuple
                     reward_value, func_weight = reward_func(rollout)
                     weight = func_weight  # Use function's own weight
@@ -562,9 +575,15 @@ class ReReward:
                     new_avg = ((old_avg * (stats['calls'] - 1)) + computation_time) / stats['calls']
                     stats['average_time'] = new_avg
                     
-                # Add to total weighted reward
-                total_reward += reward_value * weight
-                total_weight += weight
+                # Add to total weighted reward with type safety
+                if isinstance(reward_value, (int, float)) and isinstance(weight, (int, float)):
+                    total_reward += float(reward_value) * float(weight)
+                    total_weight += float(weight)
+                else:
+                    logger.error(f"Invalid types for reward computation: reward_value={type(reward_value)}, weight={type(weight)}")
+                    # Use default values for invalid types
+                    total_reward += 0.0
+                    total_weight += 1.0
                 
             except Exception as e:
                 logger.error(f"Reward function {func_name} failed for rollout {rollout_idx}: {e}")

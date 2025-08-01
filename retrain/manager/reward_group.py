@@ -8,7 +8,7 @@ import ray
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=1, num_gpus=0)
+@ray.remote
 class RewardGroup:
     """
      Reward Actor Group Manager.
@@ -54,6 +54,12 @@ class RewardGroup:
         
         logger.info(f"RewardGroup initialized with {num_workers} workers")
         
+    def set_precreated_workers(self, workers: List[ray.ObjectRef]) -> None:
+        """Set pre-created workers to avoid nested actor creation issues."""
+        self.precreated_workers = workers
+        self.num_workers = len(workers)
+        logger.info(f"Set {len(workers)} pre-created workers")
+        
     async def initialize(self) -> None:
         """Initialize reward workers with resilience."""
         logger.info("Initializing RewardGroup workers...")
@@ -95,16 +101,53 @@ class RewardGroup:
             logger.warning(f"Platform detection failed: {e}")
             
     async def _create_worker_pool(self) -> None:
-        """Create the initial pool of reward workers."""
-        # Import ReReward class directly from reward module
-        from retrain.reward.reward import ReReward
+        """Create the initial pool of reward workers with proper resource allocation."""
+        # Check if we have pre-created workers
+        if hasattr(self, 'precreated_workers') and self.precreated_workers:
+            logger.info("Using pre-created reward workers to avoid nested actor creation issues")
+            
+            for worker_id, worker in enumerate(self.precreated_workers):
+                try:
+                    worker_name = f"reward_worker_{worker_id}"
+                    
+                    # Initialize the pre-created worker
+                    await worker.initialize.remote()  # type: ignore
+                    
+                    self.reward_workers.append(worker)
+                    self.worker_health[worker_name] = {
+                        'status': 'healthy',
+                        'last_check': time.time(),
+                        'start_time': time.time(),
+                        'restart_count': 0
+                    }
+                    self.restart_counts[worker_name] = 0
+                    
+                    logger.info(f"Initialized pre-created reward worker: {worker_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to initialize pre-created reward worker {worker_id}: {e}")
+            
+            if not self.reward_workers:
+                raise RuntimeError("Failed to initialize any pre-created reward workers")
+            return
+        
+        # Fallback: Try to create workers (will likely fail due to nested actor creation)
+        logger.warning("No pre-created workers provided, attempting nested actor creation (may fail)")
+        
+        # Import ActorFactory and hardware detection for proper resource allocation
+        from ..hardware import HardwareDetector, ActorFactory
+        
+        # Create hardware detector and actor factory for proper resource allocation
+        hardware_detector = HardwareDetector()
+        actor_factory = ActorFactory(hardware_detector)
         
         for worker_id in range(self.num_workers):
             try:
                 worker_name = f"reward_worker_{worker_id}"
                 
-                # Create worker - ReReward is already a Ray actor, use .remote() directly
-                worker = ReReward.remote(self.config, self.databuffer)  # type: ignore
+                # Create worker using ActorFactory for proper resource allocation
+                # This ensures the actor gets the right CPU/GPU allocation from hardware detection
+                worker = actor_factory.create_reward_actor(self.config, self.databuffer)
                 
                 # Initialize the worker
                 await worker.initialize.remote()  # type: ignore

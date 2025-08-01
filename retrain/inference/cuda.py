@@ -28,31 +28,42 @@ class CUDAInferenceActor(BaseInferenceActor):
         logger.info("CUDAInferenceActor initialized")
     
     async def initialize(self) -> None:
-        """Initialize CUDA-based inference engine"""
+        """Initialize CUDA-based inference engine with lazy model loading"""
         try:
             import torch
             
             if not torch.cuda.is_available():
                 raise RuntimeError("CUDA not available for CUDAInferenceActor")
             
-            model_name = getattr(self.config, 'model_name', 'microsoft/DialoGPT-medium')
+            # Store model name but don't load yet (lazy loading)
+            # This prevents simultaneous heavy model downloads during actor group initialization
+            self.model_name = getattr(self.config, 'model_name', 'microsoft/DialoGPT-medium')
+            self.model = None  # Will be loaded on first inference call
+            self.tokenizer = None
+            self.backend_type = None
             
-            # Try to use vLLM first, fall back to transformers
-            try:
-                await self._initialize_vllm(model_name)
-                self.backend_type = "vllm"
-                logger.info(f"CUDAInferenceActor initialized with vLLM: {model_name}")
-            except Exception as e:
-                logger.warning(f"vLLM initialization failed: {e}, falling back to transformers")
-                await self._initialize_transformers(model_name)
-                self.backend_type = "transformers"
-                logger.info(f"CUDAInferenceActor initialized with transformers: {model_name}")
+            logger.info(f"CUDAInferenceActor initialized (lazy) - model {self.model_name} will load on first use")
             
             self.is_initialized = True
             
         except Exception as e:
             logger.error(f"Failed to initialize CUDAInferenceActor: {e}")
             raise
+    
+    async def _lazy_initialize_model(self) -> None:
+        """Lazy model initialization - load model on first inference call"""
+        logger.info(f"Loading CUDA model {self.model_name} on first use...")
+        
+        # Try to use vLLM first, fall back to transformers
+        try:
+            await self._initialize_vllm(self.model_name)
+            self.backend_type = "vllm"
+            logger.info(f"CUDAInferenceActor loaded with vLLM: {self.model_name}")
+        except Exception as e:
+            logger.warning(f"vLLM initialization failed: {e}, falling back to transformers")
+            await self._initialize_transformers(self.model_name)
+            self.backend_type = "transformers"
+            logger.info(f"CUDAInferenceActor loaded with transformers: {self.model_name}")
     
     async def _initialize_vllm(self, model_name: str) -> None:
         """Initialize using vLLM for high-performance inference"""
@@ -105,6 +116,11 @@ class CUDAInferenceActor(BaseInferenceActor):
         """Generate a single rollout using CUDA inference"""
         if not self.is_initialized:
             await self.initialize()
+        
+        # Lazy model loading - load model on first inference call  
+        # This prevents simultaneous model downloads during actor initialization
+        if self.model is None or self.tokenizer is None:
+            await self._lazy_initialize_model()
         
         try:
             # Get prompts from databuffer or generate test prompts

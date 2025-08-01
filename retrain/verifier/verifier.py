@@ -103,7 +103,7 @@ def apply_verifiers_to_reward(
     return reward_function_with_verifiers 
 
 
-@ray.remote(num_cpus=1, num_gpus=0)
+@ray.remote
 class ReVerifier:
     """
     Verifier Manager Ray Actor.
@@ -126,6 +126,16 @@ class ReVerifier:
             config: Training configuration object
             databuffer: Reference to the ReDataBuffer actor for data coordination
         """
+        # Initialize clean logging for this Ray actor to avoid pickle issues
+        # Each actor needs its own logger setup to prevent serialization conflicts
+        try:
+            from loguru import logger as actor_logger
+            actor_logger.remove()  # Remove inherited handlers that can't be pickled
+            import sys
+            actor_logger.add(sys.stderr, level="INFO")  # Add clean stderr handler
+        except ImportError:
+            pass  # Fallback gracefully if loguru not available
+            
         self.config = config
         self.databuffer = databuffer
         self.active_verifiers: Dict[str, VerifierFunction] = {}

@@ -1,9 +1,13 @@
-from typing import TypedDict, Dict, Any, List, Tuple, Optional
+from typing import TypedDict, Dict, Any, List, Tuple, Optional, TYPE_CHECKING
 import torch
 
-# Assuming LLMAction and EnvironmentObservation are defined in retrain.environment.types
-# If not, they'd need to be imported or defined here as well for RawRolloutData.
-from retrain.environment.types import LLMAction, EnvironmentObservation # Ideal import
+# Use TYPE_CHECKING to avoid circular import
+if TYPE_CHECKING:
+    from retrain.environment.types import LLMAction, EnvironmentObservation
+else:
+    # For runtime, we'll use Any to avoid the circular import
+    LLMAction = Any
+    EnvironmentObservation = Any
 
 class SingleTurnDataForTrainer(TypedDict):
     """

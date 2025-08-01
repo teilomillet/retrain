@@ -10,7 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=1, num_gpus=0)
+@ray.remote
 class TrainerGroup:
     """
     Trainer Actor Group Manager 
@@ -181,11 +181,29 @@ class TrainerGroup:
         for worker_name, future in health_futures.items():
             try:
                 health_result = await asyncio.wait_for(future, timeout=10.0)
+                
+                # Extract status from health result
+                reported_status = health_result.get('status', 'unknown') if isinstance(health_result, dict) else 'unknown'
+                
+                # Map reported status to internal status
+                if reported_status in ['healthy', 'initializing']:
+                    internal_status = 'healthy'  # Treat initializing as healthy
+                elif reported_status == 'warning':
+                    internal_status = 'warning'
+                else:
+                    internal_status = 'unhealthy'
+                
                 self.worker_health[worker_name].update({
-                    'status': 'healthy',
+                    'status': internal_status,
+                    'reported_status': reported_status,  # Keep original status for debugging
                     'last_check': time.time(),
                     'last_health_data': health_result
                 })
+                
+                # Log initializing status differently
+                if reported_status == 'initializing':
+                    logger.info(f"{worker_name} is initializing (algorithm actor loading)")
+                    
             except asyncio.TimeoutError:
                 logger.warning(f"Trainer health check timeout for {worker_name}")
                 self.worker_health[worker_name]['status'] = 'timeout'
@@ -289,6 +307,19 @@ class TrainerGroup:
         for worker in self.trainer_workers:
             update_refs.append(worker.update_model_weights.remote(weights))  # type: ignore
         return update_refs
+        
+    async def train_step(self, training_batch: Dict[str, Any], episode_id: int) -> Dict[str, Any]:
+        """
+        Execute training step (simplified interface).
+        
+        Args:
+            training_batch: Batch of training data
+            episode_id: Current episode identifier
+            
+        Returns:
+            Training metrics dictionary
+        """
+        return await self.train_step_coordinated(training_batch, episode_id)
         
     async def train_step_coordinated(self, training_batch: Dict[str, Any], episode_id: int) -> Dict[str, Any]:
         """
@@ -409,6 +440,42 @@ class TrainerGroup:
                     
         self.num_workers = new_worker_count
         logger.info(f"TrainerGroup scaling complete: {len(self.trainer_workers)} workers")
+        
+    async def update_weights(self, source_actor: ray.ObjectRef) -> None:
+        """
+        Update weights from source actor (simplified interface).
+        
+        Args:
+            source_actor: Actor to get weights from
+        """
+        # For now, this is a placeholder - in practice, we might sync weights differently
+        logger.info("TrainerGroup update_weights called (placeholder)")
+        
+    async def save_checkpoint(self, checkpoint_path: str) -> None:
+        """
+        Save training checkpoint for all workers.
+        
+        Args:
+            checkpoint_path: Path to save checkpoint
+        """
+        try:
+            # Create checkpoint directory
+            import os
+            os.makedirs(checkpoint_path, exist_ok=True)
+            
+            # Save state from the first healthy worker
+            for worker in self.trainer_workers:
+                if worker is not None:
+                    try:
+                        await worker.save_checkpoint.remote(checkpoint_path)  # type: ignore
+                        logger.info(f"TrainerGroup checkpoint saved to {checkpoint_path}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to save checkpoint from worker: {e}")
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"TrainerGroup save_checkpoint failed: {e}")
         
     async def shutdown(self) -> None:
         """Gracefully shutdown all training workers."""

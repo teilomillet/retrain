@@ -1,11 +1,15 @@
-# Expose the main entry point for initiating training runs
-from .run import run
+# Lazy imports to avoid hanging during package import
+def run(*args, **kwargs):
+    """Lazy import and call the run function."""
+    from .run import run as _run
+    return _run(*args, **kwargs)
 
-# Import submodules to ensure their registrations (e.g., tools, rewards) take effect
-import retrain.reward # Already implicitly imported by other modules, but good to be explicit if needed
-import retrain.verifier # Ensure verifiers are registered
+def ensure_registrations():
+    """Ensure reward and verifier registrations are loaded when needed."""
+    import retrain.reward
+    import retrain.verifier
 
-__all__ = ['run']
+__all__ = ['run', 'ensure_registrations']
 
 # Optionally expose other core components if needed for advanced use
 # from .trainer.base import BaseTrainer

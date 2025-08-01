@@ -10,7 +10,7 @@ from ray.util.placement_group import PlacementGroup
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=1, num_gpus=0)
+@ray.remote
 class InferenceGroup:
     """
      Inference Actor Group Manager.
@@ -354,6 +354,19 @@ class InferenceGroup:
             update_refs.append(worker.update_model_weights.remote(weights))  # type: ignore
         return update_refs
         
+    async def generate_rollouts(self, episode_id: int, batch_size: int = 4) -> List[Dict[str, Any]]:
+        """
+        Generate rollouts for training (simplified interface).
+        
+        Args:
+            episode_id: Current episode identifier
+            batch_size: Number of rollouts to generate
+            
+        Returns:
+            List of generated rollout data
+        """
+        return await self.generate_rollouts_coordinated(episode_id, batch_size)
+        
     async def generate_rollouts_coordinated(self, episode_id: int, num_rollouts: int) -> List[Dict[str, Any]]:
         """
         Coordinated rollout generation with load balancing and fault tolerance.
@@ -486,6 +499,28 @@ class InferenceGroup:
                     
         self.num_workers = new_worker_count
         logger.info(f"InferenceGroup scaling complete: {len(self.inference_workers)} workers")
+        
+    async def update_weights(self, source_actor: ray.ObjectRef) -> None:
+        """
+        Update model weights from source actor.
+        
+        Args:
+            source_actor: Actor to get updated weights from (typically trainer)
+        """
+        try:
+            # Get weights from source actor (trainer)
+            # For now this is a placeholder - would need actual weight synchronization
+            logger.info("InferenceGroup update_weights called (placeholder)")
+            
+            # In a real implementation, we would:
+            # 1. Get weights from source_actor
+            # 2. Update all inference workers with new weights
+            # weights = await source_actor.get_weights.remote()
+            # for worker in self.inference_workers:
+            #     await worker.update_weights.remote(weights)
+            
+        except Exception as e:
+            logger.error(f"InferenceGroup update_weights failed: {e}")
         
     async def shutdown(self) -> None:
         """Gracefully shutdown all inference workers."""

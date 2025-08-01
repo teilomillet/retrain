@@ -36,14 +36,17 @@ class CPUInferenceActor(BaseInferenceActor):
         }
 
     async def initialize(self) -> None:
-        """Initialize the inference engine."""
+        """Initialize the inference engine with lazy model loading."""
         if self.is_initialized:
             return
         
         try:
-            await self._initialize_model()
+            # Don't load model during initialization (lazy loading)
+            # This prevents simultaneous heavy model downloads during actor group setup
+            self.model = None
+            self.tokenizer = None
             self.is_initialized = True
-            logger.info("CPUInferenceActor initialized successfully")
+            logger.info("CPUInferenceActor initialized (lazy) - model will load on first use")
         except Exception as e:
             logger.error(f"Failed to initialize CPUInferenceActor: {e}")
             raise
@@ -52,6 +55,11 @@ class CPUInferenceActor(BaseInferenceActor):
         """Generate a single rollout."""
         if not self.is_initialized:
             await self.initialize()
+        
+        # Lazy model loading - load model on first inference call
+        # This prevents simultaneous model downloads during actor initialization
+        if self.model is None or self.tokenizer is None:
+            await self._initialize_model()
         
         try:
             # Get prompts from databuffer or generate test prompts

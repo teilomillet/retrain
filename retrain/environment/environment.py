@@ -169,7 +169,7 @@ class Environment(ABC):
 
 
 
-@ray.remote(num_cpus=2, num_gpus=0)
+@ray.remote
 class ReEnvironment:
     """
     Environment Manager Ray Actor.

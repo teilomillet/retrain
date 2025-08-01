@@ -86,7 +86,7 @@ class TestGRPORayActor:
         if not RAY_AVAILABLE:
             pytest.skip("Ray not available")
         if not ray.is_initialized():  # type: ignore
-            ray.init(local_mode=True, ignore_reinit_error=True)  # type: ignore
+            ray.init(local_mode=True, ignore_reinit_error=True, object_store_memory=2_000_000_000)  # type: ignore
         yield
         # Don't shutdown Ray here as other tests might need it
         
@@ -239,7 +239,7 @@ class TestDRGRPORayActor:
         if not RAY_AVAILABLE:
             pytest.skip("Ray not available")
         if not ray.is_initialized():  # type: ignore
-            ray.init(local_mode=True, ignore_reinit_error=True)  # type: ignore
+            ray.init(local_mode=True, ignore_reinit_error=True, object_store_memory=2_000_000_000)  # type: ignore
         yield
         
     @pytest.fixture(autouse=True)
@@ -327,7 +327,7 @@ class TestRayActorIntegration:
         if not RAY_AVAILABLE:
             pytest.skip("Ray not available")
         if not ray.is_initialized():  # type: ignore
-            ray.init(local_mode=True, ignore_reinit_error=True)  # type: ignore
+            ray.init(local_mode=True, ignore_reinit_error=True, object_store_memory=2_000_000_000)  # type: ignore
         yield
         
     @pytest.fixture(autouse=True)
@@ -434,7 +434,7 @@ class TestRayActorPerformance:
     def setup_ray(self):
         """Setup Ray for testing."""
         if not ray.is_initialized(): # type: ignore
-            ray.init(local_mode=True, ignore_reinit_error=True) # type: ignore
+            ray.init(local_mode=True, ignore_reinit_error=True, object_store_memory=2_000_000_000) # type: ignore
         yield
         
     @pytest.fixture(autouse=True)
@@ -525,7 +525,8 @@ if __name__ == "__main__":
                         num_cpus=4,
                         num_gpus=0,
                         ignore_reinit_error=True,
-                        include_dashboard=False
+                        include_dashboard=False,
+                        object_store_memory=2_000_000_000  # 2GB limit for macOS compatibility
                     )
                 print("✅ Ray initialized successfully")
             except Exception as e:

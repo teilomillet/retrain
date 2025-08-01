@@ -10,8 +10,8 @@ model:
   torch_dtype: "auto" # e.g., "float16", "bfloat16", "auto"
 
 algorithm:
-  name: "grpo"
-  backend: "trl" # Can be "trl" or potentially others in the future
+  name: "drgrpo"
+  backend: "retrain" # Using our own DRGRPO implementation instead of TRL
   # Wandb specific configurations, parallel to hyperparameters
   report_to: ["wandb"] # Enable wandb logging (as a list)
   wandb_project: "retrain_grpo_calculator_example" # Specify your wandb project name

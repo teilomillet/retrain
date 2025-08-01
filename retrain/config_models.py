@@ -2,7 +2,6 @@ from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel, validator, Field
 
-print("[config_models.py] START OF FILE") # DEBUG
 
 # Forward declaration for PEFTConfig if it becomes complex, for now dict is fine
 PEFTConfig = Dict[str, Any] 
@@ -16,7 +15,6 @@ class ModelConfig(BaseModel):
     trust_remote_code: Optional[bool] = Field(None, description="Whether to trust remote code when loading the model.")
     torch_dtype: Optional[str] = Field(None, description="Optional torch dtype for model loading (e.g., 'float16', 'bfloat16').")
 
-print("[config_models.py] After ModelConfig") # DEBUG
 
 class AlgorithmConfig(BaseModel):
     """Configuration for the training algorithm."""
@@ -35,7 +33,7 @@ class AlgorithmConfig(BaseModel):
     def name_must_be_supported(cls, v):
         # Example: This list would grow as more algorithms are supported
         # Or, this could integrate with a registry of available algorithms
-        supported_algos = ["grpo", "rloo"] # Placeholder
+        supported_algos = ["grpo", "drgrpo", "rloo"] # Added drgrpo support
         if v.lower() not in supported_algos:
             raise ValueError(f"Unsupported algorithm name: '{v}'. Supported: {supported_algos}")
         return v.lower()
@@ -43,13 +41,14 @@ class AlgorithmConfig(BaseModel):
     @validator('backend')
     def backend_must_be_supported(cls, v, values):
         algo_name = values.get('name')
-        # Example: TRL is currently the main backend for GRPO
-        if algo_name == "grpo" and v.lower() != "trl":
-            raise ValueError(f"Unsupported backend '{v}' for algorithm '{algo_name}'. Expected 'trl'.")
+        # Support TRL, retrain, and native backends for grpo
+        if algo_name == "grpo" and v.lower() not in ["trl", "retrain", "native"]:
+            raise ValueError(f"Unsupported backend '{v}' for algorithm '{algo_name}'. Expected 'trl', 'retrain', or 'native'.")
+        if algo_name == "drgrpo" and v.lower() not in ["retrain", "native"]:
+            raise ValueError(f"Unsupported backend '{v}' for algorithm '{algo_name}'. Expected 'retrain' or 'native'.")
         # Add more backend checks as needed
         return v.lower()
 
-print("[config_models.py] After AlgorithmConfig") # DEBUG
 
 class EnvironmentConfig(BaseModel):
     """Configuration for the training environment."""
@@ -66,7 +65,6 @@ class EnvironmentConfig(BaseModel):
             raise ValueError(f"Unsupported environment type: '{v}'. Supported: {supported_envs}")
         return v.lower()
 
-print("[config_models.py] After EnvironmentConfig") # DEBUG
 
 class PromptSourceConfig(BaseModel):
     """Configuration for the prompt source."""
@@ -81,7 +79,6 @@ class PromptSourceConfig(BaseModel):
             raise ValueError("'prompts' key is required in 'source_config' for 'list_provider' type.")
         return v
 
-print("[config_models.py] Before RewardFunctionConfig") # DEBUG
 
 class RewardFunctionConfig(BaseModel):
     """Configuration for a single reward function, including verifiers."""
@@ -93,7 +90,6 @@ class RewardFunctionConfig(BaseModel):
     distribution_strategy: Optional[str] = Field(None, description="Strategy for distributing rollout-level rewards (e.g., 'last_step', 'all_steps_average'). Defaults to None, calculator might use 'last_step'.")
     # Example: "pass_through_if_invalid": False -> if a verifier makes the data invalid, this reward isn't calculated.
 
-print("[config_models.py] After RewardFunctionConfig") # DEBUG
 
 class RewardSetupConfig(BaseModel):
     """Configuration for the RewardCalculator."""
@@ -101,7 +97,6 @@ class RewardSetupConfig(BaseModel):
     rollout_reward_configs: Dict[str, RewardFunctionConfig] = Field(default_factory=dict, description="Configurations for rollout-level reward functions. Key is the registered reward name.")
     # Global verifier settings if any, or tokenizer path if needed directly by RewardCalculator
 
-print("[config_models.py] After RewardSetupConfig") # DEBUG
 
 class TrainingConfig(BaseModel):
     """Defines the complete configuration for a training run."""
@@ -138,18 +133,5 @@ class TrainingConfig(BaseModel):
             raise ValueError(f"YAML file '{file_path}' is empty or invalid.")
         return cls(**config_data) # Pydantic will validate here
 
-print("[config_models.py] After TrainingConfig class definition (including inner Config class)") # DEBUG
 
-# These debug prints and try-except must be at the top level (zero indent)
-print("[config_models.py] END OF FILE (before final try-except)") # DEBUG
-
-try:
-    # This block is just to confirm the module itself loads without Python syntax errors up to this point.
-    # The real test is the import in calculator.py
-    print("[config_models.py] Module level: Attempting to confirm RewardFunctionConfig is in globals()") # DEBUG
-    if 'RewardFunctionConfig' in globals():
-        print("[config_models.py] Module level: RewardFunctionConfig IS in globals().") # DEBUG
-    else:
-        print("[config_models.py] Module level: RewardFunctionConfig IS NOT in globals(). THIS IS THE PROBLEM IF IT HAPPENS!") # DEBUG
-except Exception as e:
-    print(f"[config_models.py] Error at module level check: {e}") # DEBUG 
+ 

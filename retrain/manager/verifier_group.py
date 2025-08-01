@@ -8,7 +8,7 @@ import ray
 
 logger = logging.getLogger(__name__)
 
-@ray.remote(num_cpus=1, num_gpus=0)
+@ray.remote
 class VerifierGroup:
     """
      Verifier Actor Group Manager.
@@ -54,6 +54,12 @@ class VerifierGroup:
         
         logger.info(f"VerifierGroup initialized with {num_workers} workers")
         
+    def set_precreated_workers(self, workers: List[ray.ObjectRef]) -> None:
+        """Set pre-created workers to avoid nested actor creation issues."""
+        self.precreated_workers = workers
+        self.num_workers = len(workers)
+        logger.info(f"Set {len(workers)} pre-created workers")
+        
     async def initialize(self) -> None:
         """Initialize verifier workers with resilience."""
         logger.info("Initializing VerifierGroup workers...")
@@ -95,16 +101,53 @@ class VerifierGroup:
             logger.warning(f"Platform detection failed: {e}")
             
     async def _create_worker_pool(self) -> None:
-        """Create the initial pool of verifier workers."""
-        # Import ReVerifier class directly from verifier module
-        from retrain.verifier.verifier import ReVerifier
+        """Create the initial pool of verifier workers with proper resource allocation."""
+        # Check if we have pre-created workers
+        if hasattr(self, 'precreated_workers') and self.precreated_workers:
+            logger.info("Using pre-created verifier workers to avoid nested actor creation issues")
+            
+            for worker_id, worker in enumerate(self.precreated_workers):
+                try:
+                    worker_name = f"verifier_worker_{worker_id}"
+                    
+                    # Initialize the pre-created worker
+                    await worker.initialize.remote()  # type: ignore
+                    
+                    self.verifier_workers.append(worker)
+                    self.worker_health[worker_name] = {
+                        'status': 'healthy',
+                        'last_check': time.time(),
+                        'start_time': time.time(),
+                        'restart_count': 0
+                    }
+                    self.restart_counts[worker_name] = 0
+                    
+                    logger.info(f"Initialized pre-created verifier worker: {worker_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to initialize pre-created verifier worker {worker_id}: {e}")
+            
+            if not self.verifier_workers:
+                raise RuntimeError("Failed to initialize any pre-created verifier workers")
+            return
+        
+        # Fallback: Try to create workers (will likely fail due to nested actor creation)
+        logger.warning("No pre-created workers provided, attempting nested actor creation (may fail)")
+        
+        # Import ActorFactory and hardware detection for proper resource allocation
+        from ..hardware import HardwareDetector, ActorFactory
+        
+        # Create hardware detector and actor factory for proper resource allocation
+        hardware_detector = HardwareDetector()
+        actor_factory = ActorFactory(hardware_detector)
         
         for worker_id in range(self.num_workers):
             try:
                 worker_name = f"verifier_worker_{worker_id}"
                 
-                # Create worker - ReVerifier is already a Ray actor, use .remote() directly
-                worker = ReVerifier.remote(self.config, self.databuffer)  # type: ignore
+                # Create worker using ActorFactory for proper resource allocation
+                # This ensures the actor gets the right CPU/GPU allocation from hardware detection
+                worker = actor_factory.create_verifier_actor(self.config, self.databuffer)
                 
                 # Initialize the worker
                 await worker.initialize.remote()  # type: ignore

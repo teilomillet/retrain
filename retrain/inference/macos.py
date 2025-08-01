@@ -27,7 +27,7 @@ class MacOSInferenceActor(BaseInferenceActor):
         logger.info("MacOSInferenceActor initialized")
     
     async def initialize(self) -> None:
-        """Initialize macOS-compatible inference engine"""
+        """Initialize macOS-compatible inference engine with lazy model loading"""
         try:
             import torch
             import platform
@@ -44,13 +44,14 @@ class MacOSInferenceActor(BaseInferenceActor):
                 self.device = "cpu"
                 logger.info("Using CPU for inference (MPS not available)")
             
-            model_name = getattr(self.config, 'model_name', 'microsoft/DialoGPT-medium')
-            
-            # Initialize model and tokenizer
-            await self._initialize_model(model_name)
+            # Store model name but don't load yet (lazy loading)
+            # This prevents simultaneous heavy model downloads during actor group initialization
+            self.model_name = getattr(self.config, 'model_name', 'microsoft/DialoGPT-medium')
+            self.model = None  # Will be loaded on first inference call
+            self.tokenizer = None
             
             self.is_initialized = True
-            logger.info(f"MacOSInferenceActor initialized with model: {model_name} on device: {self.device}")
+            logger.info(f"MacOSInferenceActor initialized (lazy) - model {self.model_name} will load on first use")
             
         except Exception as e:
             logger.error(f"Failed to initialize MacOSInferenceActor: {e}")
@@ -98,6 +99,11 @@ class MacOSInferenceActor(BaseInferenceActor):
         """Generate a single rollout using macOS-optimized inference"""
         if not self.is_initialized:
             await self.initialize()
+        
+        # Lazy model loading - load model on first inference call
+        # This prevents simultaneous model downloads during actor initialization
+        if self.model is None or self.tokenizer is None:
+            await self._initialize_model(self.model_name)
         
         try:
             # Get prompts from databuffer or generate test prompts

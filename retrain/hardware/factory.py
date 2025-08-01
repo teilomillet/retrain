@@ -207,6 +207,9 @@ class ActorFactory:
         """Get optimal Ray initialization configuration."""
         config = self.detector.get_ray_init_config()
         
+        # Remove runtime_env entirely - let Ray use the local installation
+        # This avoids packaging issues and uses the installed retrain package
+        
         # Add logging configuration for different deployment types
         if self.recommendations['deployment_type'] == 'development':
             config.update({
