@@ -25,7 +25,6 @@ from src.logging import JsonlLogger, KeyValue, json_float, json_int, json_string
 from src.pybridge import (
     load_tokenizer,
     encode_prompt,
-    decode,
     batch_decode,
     load_math_dataset,
     MathExample,
@@ -36,17 +35,14 @@ from src.pybridge import (
     forward_backward,
     optim_step,
     save_state,
-    build_datum,
+    batch_build_datums,
     load_vocab_table,
     vocab_lookup,
     extract_sample_results,
     SampleSequence,
-    to_python_list,
-    to_python_float_list,
     init_wandb,
     log_wandb,
     finish_wandb,
-    py_int,
     py_float,
     py_len,
 )
@@ -258,6 +254,13 @@ fn train(config: TrainConfig) raises:
     var examples = load_math_dataset(max_examples=config.max_examples)
     print("Loaded " + String(len(examples)) + " examples")
 
+    # Pre-encode all prompts (one-time cost at startup)
+    print("Pre-encoding prompts...")
+    var pre_encoded_prompts = List[List[Int]]()
+    for i in range(len(examples)):
+        pre_encoded_prompts.append(encode_prompt(tokenizer, examples[i].problem))
+    print("Pre-encoded " + String(len(pre_encoded_prompts)) + " prompts")
+
     # SEPA controller
     var sepa_controller = SEPAController(
         sepa_steps=config.sepa_steps,
@@ -309,7 +312,7 @@ fn train(config: TrainConfig) raises:
             training_client, "step_" + String(batch_idx)
         )
 
-        # 2. Select prompts and submit sample requests
+        # 2. Select prompts and submit sample requests (pre-encoded)
         var batch_prompts = List[String]()
         var batch_prompt_ids = List[List[Int]]()
         var batch_answers = List[String]()
@@ -317,25 +320,35 @@ fn train(config: TrainConfig) raises:
 
         for _ in range(config.batch_size):
             var ex_idx = example_idx % len(examples)
-            var example = examples[ex_idx].copy()
             example_idx += 1
 
-            var prompt_text = example.problem
-            var answer = example.answer
-            var prompt_ids = encode_prompt(tokenizer, prompt_text)
-
+            var prompt_ids = pre_encoded_prompts[ex_idx].copy()
             var future = sample(
                 sampling_client, prompt_ids,
                 config.group_size, config.max_tokens,
                 config.temperature,
             )
             sample_futures.append(future)
-            batch_prompts.append(prompt_text)
+            batch_prompts.append(examples[ex_idx].problem)
             batch_prompt_ids.append(prompt_ids^)
-            batch_answers.append(answer)
+            batch_answers.append(examples[ex_idx].answer)
 
-        # 3. Collect results, compute advantages, build datums
-        var datums_list = Python.import_module("builtins").list()
+        # 3. Collect all futures + single batch decode
+        var all_group_sequences = List[List[SampleSequence]]()
+        var all_token_seqs_flat = List[List[Int]]()
+        var group_flat_offsets = List[Int]()
+
+        for f_idx in range(len(sample_futures)):
+            var sample_result = sample_futures[f_idx].result()
+            var sequences = extract_sample_results(sample_result)
+            group_flat_offsets.append(len(all_token_seqs_flat))
+            for s_idx in range(len(sequences)):
+                all_token_seqs_flat.append(sequences[s_idx].tokens.copy())
+            all_group_sequences.append(sequences^)
+
+        var all_decoded_texts = batch_decode(tokenizer, all_token_seqs_flat)
+
+        # 4. Process groups, compute advantages, collect datum data
         var batch_rewards = List[Float64]()
         var batch_correct = 0
         var batch_max_token_hits = 0
@@ -344,47 +357,42 @@ fn train(config: TrainConfig) raises:
         var all_logprobs = List[List[Float64]]()
         var all_planning_masks = List[List[Int]]()
         var needs_planning = config.transform_mode == "gtpo_hicra" or config.transform_mode == "gtpo_sepa"
+        var all_datum_tokens = List[List[Int]]()
+        var all_datum_logprobs = List[List[Float64]]()
+        var all_datum_advantages = List[List[Float64]]()
 
-        for f_idx in range(len(sample_futures)):
-            var future = sample_futures[f_idx]
+        for f_idx in range(len(all_group_sequences)):
             var prompt_text = batch_prompts[f_idx]
             var prompt_ids = batch_prompt_ids[f_idx].copy()
             var answer = batch_answers[f_idx]
             var ob_len = len(prompt_ids)
+            var flat_offset = group_flat_offsets[f_idx]
+            var n_seqs = len(all_group_sequences[f_idx])
 
-            var sample_result = future.result()
-            var sequences = extract_sample_results(sample_result)
-
+            # Compute rewards + planning masks (pure Mojo)
             var rewards_G = List[Float64]()
             var logprobs_G = List[List[Float64]]()
-
-            # Batch decode: one Python call for all sequences in the group
-            var group_token_seqs = List[List[Int]]()
-            for s_idx in range(len(sequences)):
-                group_token_seqs.append(sequences[s_idx].tokens.copy())
-            var decoded_texts = batch_decode(tokenizer, group_token_seqs)
-
-            # Pre-compute planning masks (pure Mojo via vocab table lookup)
             var planning_masks_G = List[List[Int]]()
-            for s_idx in range(len(sequences)):
-                var reward = get_reward(decoded_texts[s_idx], answer)
+
+            for s_idx in range(n_seqs):
+                var reward = get_reward(all_decoded_texts[flat_offset + s_idx], answer)
                 rewards_G.append(reward)
-                logprobs_G.append(sequences[s_idx].logprobs.copy())
+                logprobs_G.append(all_group_sequences[f_idx][s_idx].logprobs.copy())
 
                 if needs_planning:
                     var token_strs = vocab_lookup(
-                        vocab_table, sequences[s_idx].tokens
+                        vocab_table, all_group_sequences[f_idx][s_idx].tokens
                     )
                     planning_masks_G.append(
                         identify_planning_tokens_native(token_strs, strategic_grams)
                     )
                 else:
                     planning_masks_G.append(
-                        List[Int](length=len(sequences[s_idx].tokens), fill=0)
+                        List[Int](length=len(all_group_sequences[f_idx][s_idx].tokens), fill=0)
                     )
 
-            # Accumulate for SEPA state update (reuses pre-computed masks)
-            for s_idx in range(len(sequences)):
+            # Accumulate for SEPA state update
+            for s_idx in range(n_seqs):
                 all_logprobs.append(logprobs_G[s_idx].copy())
                 all_planning_masks.append(planning_masks_G[s_idx].copy())
 
@@ -394,9 +402,9 @@ fn train(config: TrainConfig) raises:
                     batch_correct += 1
 
             # Track max-token truncations
-            for s_idx in range(len(sequences)):
+            for s_idx in range(n_seqs):
                 batch_total_completions += 1
-                if len(sequences[s_idx].tokens) >= config.max_tokens:
+                if len(all_group_sequences[f_idx][s_idx].tokens) >= config.max_tokens:
                     batch_max_token_hits += 1
 
             var group_correct = 0
@@ -446,33 +454,31 @@ fn train(config: TrainConfig) raises:
             if adv_result.has_stats:
                 batch_entropy_stats.append(adv_result.stats.copy())
 
-            # Build Datum objects
-            for s_idx in range(len(sequences)):
-                # Full sequence: prompt + completion
-                var seq_tokens = sequences[s_idx].tokens.copy()
-                var seq_logprobs = sequences[s_idx].logprobs.copy()
+            # Collect datum data (pure Mojo — batch built after loop)
+            for s_idx in range(n_seqs):
+                var seq_tokens = all_group_sequences[f_idx][s_idx].tokens.copy()
+                var seq_logprobs = all_group_sequences[f_idx][s_idx].logprobs.copy()
                 var full_tokens = List[Int](capacity=ob_len + len(seq_tokens))
                 for p_idx in range(ob_len):
                     full_tokens.append(prompt_ids[p_idx])
                 for t_idx in range(len(seq_tokens)):
                     full_tokens.append(seq_tokens[t_idx])
 
-                # Padded logprobs: zeros for prompt
                 var padded_logprobs = List[Float64](length=ob_len, fill=0.0)
                 for lp_idx in range(len(seq_logprobs)):
                     padded_logprobs.append(seq_logprobs[lp_idx])
 
-                # Padded advantages: zeros for prompt
                 var padded_advantages = List[Float64](length=ob_len, fill=0.0)
                 for a_idx in range(len(token_advs_G[s_idx])):
                     padded_advantages.append(token_advs_G[s_idx][a_idx])
 
-                var datum = build_datum(full_tokens, padded_logprobs, padded_advantages)
-                datums_list.append(datum)
+                all_datum_tokens.append(full_tokens^)
+                all_datum_logprobs.append(padded_logprobs^)
+                all_datum_advantages.append(padded_advantages^)
 
-            # Per-generation emergence logging (reuse cached decoded text)
-            for s_idx in range(len(sequences)):
-                var completion_text = decoded_texts[s_idx]
+            # Per-generation emergence logging
+            for s_idx in range(n_seqs):
+                var completion_text = all_decoded_texts[flat_offset + s_idx]
                 var reward = rewards_G[s_idx]
                 var gen_entries = List[KeyValue]()
                 gen_entries.append(json_int("step", batch_idx))
@@ -485,10 +491,17 @@ fn train(config: TrainConfig) raises:
                     comp_preview = String(comp_preview[:500])
                 gen_entries.append(json_string("completion", comp_preview))
                 gen_entries.append(json_float("reward", reward))
-                gen_entries.append(json_int("num_tokens", len(sequences[s_idx].tokens)))
+                gen_entries.append(json_int("num_tokens", len(all_group_sequences[f_idx][s_idx].tokens)))
                 generations_logger.log(gen_entries)
 
-        # 4. SEPA state updates
+        # 5. Batch build datums (single Python call)
+        var datums_list = Python.import_module("builtins").list()
+        if len(all_datum_tokens) > 0:
+            datums_list = batch_build_datums(
+                all_datum_tokens, all_datum_logprobs, all_datum_advantages
+            )
+
+        # 6. SEPA state updates
         total_completions += len(batch_rewards)
         total_correct += batch_correct
         var correct_rate: Float64 = 0.0
@@ -509,7 +522,7 @@ fn train(config: TrainConfig) raises:
                             exec_entropies.append(-logprobs[e_idx])
                     sepa_controller.update_auto_state(exec_entropies)
 
-        # 5. Train: forward_backward + optim_step
+        # 7. Train: forward_backward + optim_step
         var num_datums = py_len(datums_list)
         if num_datums == 0:
             print("Step " + String(batch_idx) + ": no informative datums, skipping.")
@@ -529,7 +542,7 @@ fn train(config: TrainConfig) raises:
         var step_time_ns = perf_counter_ns() - step_start_ns
         var step_time_s = Float64(step_time_ns) / 1_000_000_000.0
 
-        # 6. Logging
+        # 8. Logging
         var mean_reward: Float64 = 0.0
         if len(batch_rewards) > 0:
             var reward_sum: Float64 = 0.0

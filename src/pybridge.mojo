@@ -404,6 +404,50 @@ fn build_datum(
     )
 
 
+fn batch_build_datums(
+    all_full_tokens: List[List[Int]],
+    all_padded_logprobs: List[List[Float64]],
+    all_padded_advantages: List[List[Float64]],
+) raises -> PythonObject:
+    """Build all Tinker Datum objects in one batch.
+
+    Imports torch/tinker once, constructs all datums in a single
+    Python context. Reduces per-datum overhead vs calling build_datum N times.
+    """
+    var torch = Python.import_module("torch")
+    var types = Python.import_module("tinker.types")
+    var TensorData = Python.import_module("tinker.types.tensor_data").TensorData
+    var builtins = Python.import_module("builtins")
+
+    var datums = builtins.list()
+    var n = len(all_full_tokens)
+
+    for i in range(n):
+        var py_tokens = to_python_list(all_full_tokens[i])
+        var py_logprobs = to_python_float_list(all_padded_logprobs[i])
+        var py_advantages = to_python_float_list(all_padded_advantages[i])
+
+        var model_input = types.ModelInput.from_ints(py_tokens)
+
+        var loss_fn_inputs = Python.dict()
+        loss_fn_inputs["target_tokens"] = TensorData.from_torch(
+            torch.tensor(py_tokens, dtype=torch.long)
+        )
+        loss_fn_inputs["logprobs"] = TensorData.from_torch(
+            torch.tensor(py_logprobs, dtype=torch.float32)
+        )
+        loss_fn_inputs["advantages"] = TensorData.from_torch(
+            torch.tensor(py_advantages, dtype=torch.float32)
+        )
+
+        datums.append(types.Datum(
+            model_input=model_input,
+            loss_fn_inputs=loss_fn_inputs,
+        ))
+
+    return datums
+
+
 # ---------------------------------------------------------------------------
 # Vocabulary table (one-time load at startup)
 # ---------------------------------------------------------------------------
