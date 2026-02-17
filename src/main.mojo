@@ -18,6 +18,7 @@ from src.advantages import (
     apply_sepa_pooling,
     compute_entropy_stats,
     EntropyStats,
+    identify_planning_tokens_native,
 )
 from src.sepa import SEPAController
 from src.logging import JsonlLogger, KeyValue, json_float, json_int, json_string, json_bool, build_json_line
@@ -25,6 +26,7 @@ from src.pybridge import (
     load_tokenizer,
     encode_prompt,
     decode,
+    batch_decode,
     load_math_dataset,
     MathExample,
     create_tinker_client,
@@ -35,7 +37,8 @@ from src.pybridge import (
     optim_step,
     save_state,
     build_datum,
-    identify_planning_tokens,
+    load_vocab_table,
+    vocab_lookup,
     extract_sample_results,
     SampleSequence,
     to_python_list,
@@ -139,22 +142,20 @@ struct AdvantageResult:
 
 fn compute_composable_advantages(
     rewards_G: List[Float64],
-    sampled_tokens_G: List[List[Int]],
     logprobs_G: List[List[Float64]],
-    tokenizer: PythonObject,
+    planning_masks_G: List[List[Int]],
     *,
     advantage_mode: String = "grpo",
     transform_mode: String = "none",
     gtpo_beta: Float64 = 0.1,
     hicra_alpha: Float64 = 0.2,
     sepa_lambda: Float64 = 0.0,
-    strategic_grams: List[String] = List[String](),
 ) raises -> AdvantageResult:
-    """Compute token-level advantages with composable transforms."""
-    var grams = strategic_grams.copy()
-    if len(grams) == 0:
-        grams = default_strategic_grams()
+    """Compute token-level advantages with composable transforms.
 
+    Pure Mojo — no Python dependency. Planning masks are pre-computed
+    by the caller via identify_planning_tokens_native.
+    """
     # Step 1: Episode-level advantages
     var advantages_G: List[Float64]
     if advantage_mode == "maxrl":
@@ -165,8 +166,8 @@ fn compute_composable_advantages(
     # Step 2: Token-level expansion
     if transform_mode == "none":
         var all_token_advs = List[List[Float64]]()
-        for i in range(len(sampled_tokens_G)):
-            var n_tokens = len(sampled_tokens_G[i])
+        for i in range(len(logprobs_G)):
+            var n_tokens = len(logprobs_G[i])
             all_token_advs.append(List[Float64](length=n_tokens, fill=advantages_G[i]))
         return AdvantageResult(all_token_advs^, False, EntropyStats())
 
@@ -175,25 +176,15 @@ fn compute_composable_advantages(
     var all_exec_entropies = List[Float64]()
     var all_plan_entropies = List[Float64]()
 
-    var needs_planning = transform_mode == "gtpo_hicra" or transform_mode == "gtpo_sepa"
-
-    for idx in range(len(sampled_tokens_G)):
-        var tokens = sampled_tokens_G[idx].copy()
+    for idx in range(len(logprobs_G)):
         var logprobs = logprobs_G[idx].copy()
         var advantage = advantages_G[idx]
+        var planning_mask = planning_masks_G[idx].copy()
 
         # Entropy proxy: -logprob
         var entropies = List[Float64](capacity=len(logprobs))
         for j in range(len(logprobs)):
             entropies.append(-logprobs[j])
-
-        var planning_mask: List[Int]
-        if needs_planning:
-            planning_mask = identify_planning_tokens(
-                tokens, tokenizer, grams
-            )
-        else:
-            planning_mask = List[Int](length=len(tokens), fill=0)
 
         # Collect entropy stats
         for j in range(len(entropies)):
@@ -244,9 +235,12 @@ fn train(config: TrainConfig) raises:
     var steps_logger = JsonlLogger(steps_path)
     var generations_logger = JsonlLogger(generations_path)
 
-    # Load tokenizer
+    # Load tokenizer + vocabulary table
     print("Loading tokenizer for " + config.model + " ...")
     var tokenizer = load_tokenizer(config.model)
+    print("Loading vocabulary table...")
+    var vocab_table = load_vocab_table(tokenizer)
+    print("Vocabulary table: " + String(len(vocab_table)) + " entries")
 
     # Connect to Tinker
     print("Connecting to Tinker...")
@@ -347,8 +341,9 @@ fn train(config: TrainConfig) raises:
         var batch_max_token_hits = 0
         var batch_total_completions = 0
         var batch_entropy_stats = List[EntropyStats]()
-        var all_sampled_tokens = List[List[Int]]()
         var all_logprobs = List[List[Float64]]()
+        var all_planning_masks = List[List[Int]]()
+        var needs_planning = config.transform_mode == "gtpo_hicra" or config.transform_mode == "gtpo_sepa"
 
         for f_idx in range(len(sample_futures)):
             var future = sample_futures[f_idx]
@@ -361,19 +356,37 @@ fn train(config: TrainConfig) raises:
             var sequences = extract_sample_results(sample_result)
 
             var rewards_G = List[Float64]()
-            var sampled_tokens_G = List[List[Int]]()
             var logprobs_G = List[List[Float64]]()
 
+            # Batch decode: one Python call for all sequences in the group
+            var group_token_seqs = List[List[Int]]()
             for s_idx in range(len(sequences)):
-                var completion_text = decode(tokenizer, sequences[s_idx].tokens)
-                var reward = get_reward(completion_text, answer)
+                group_token_seqs.append(sequences[s_idx].tokens.copy())
+            var decoded_texts = batch_decode(tokenizer, group_token_seqs)
+
+            # Pre-compute planning masks (pure Mojo via vocab table lookup)
+            var planning_masks_G = List[List[Int]]()
+            for s_idx in range(len(sequences)):
+                var reward = get_reward(decoded_texts[s_idx], answer)
                 rewards_G.append(reward)
-                sampled_tokens_G.append(sequences[s_idx].tokens.copy())
                 logprobs_G.append(sequences[s_idx].logprobs.copy())
 
-            for s_idx in range(len(sampled_tokens_G)):
-                all_sampled_tokens.append(sampled_tokens_G[s_idx].copy())
+                if needs_planning:
+                    var token_strs = vocab_lookup(
+                        vocab_table, sequences[s_idx].tokens
+                    )
+                    planning_masks_G.append(
+                        identify_planning_tokens_native(token_strs, strategic_grams)
+                    )
+                else:
+                    planning_masks_G.append(
+                        List[Int](length=len(sequences[s_idx].tokens), fill=0)
+                    )
+
+            # Accumulate for SEPA state update (reuses pre-computed masks)
+            for s_idx in range(len(sequences)):
                 all_logprobs.append(logprobs_G[s_idx].copy())
+                all_planning_masks.append(planning_masks_G[s_idx].copy())
 
             for r_idx in range(len(rewards_G)):
                 batch_rewards.append(rewards_G[r_idx])
@@ -421,15 +434,13 @@ fn train(config: TrainConfig) raises:
 
             var adv_result = compute_composable_advantages(
                 rewards_G,
-                sampled_tokens_G,
                 logprobs_G,
-                tokenizer,
+                planning_masks_G,
                 advantage_mode=config.advantage_mode,
                 transform_mode=config.transform_mode,
                 gtpo_beta=config.gtpo_beta,
                 hicra_alpha=config.hicra_alpha,
                 sepa_lambda=sepa_lam,
-                strategic_grams=strategic_grams,
             )
             var token_advs_G = adv_result.token_advs.copy()
             if adv_result.has_stats:
@@ -459,9 +470,9 @@ fn train(config: TrainConfig) raises:
                 var datum = build_datum(full_tokens, padded_logprobs, padded_advantages)
                 datums_list.append(datum)
 
-            # Per-generation emergence logging
+            # Per-generation emergence logging (reuse cached decoded text)
             for s_idx in range(len(sequences)):
-                var completion_text = decode(tokenizer, sequences[s_idx].tokens)
+                var completion_text = decoded_texts[s_idx]
                 var reward = rewards_G[s_idx]
                 var gen_entries = List[KeyValue]()
                 gen_entries.append(json_int("step", batch_idx))
@@ -488,12 +499,10 @@ fn train(config: TrainConfig) raises:
             sepa_controller.observe_correct_rate(Optional[Float64](correct_rate))
 
             if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
-                for t_idx in range(len(all_sampled_tokens)):
-                    var tokens = all_sampled_tokens[t_idx].copy()
+                # Reuse pre-computed planning masks (no Python calls here)
+                for t_idx in range(len(all_logprobs)):
                     var logprobs = all_logprobs[t_idx].copy()
-                    var planning_mask = identify_planning_tokens(
-                        tokens, tokenizer, strategic_grams
-                    )
+                    var planning_mask = all_planning_masks[t_idx].copy()
                     var exec_entropies = List[Float64]()
                     for e_idx in range(len(logprobs)):
                         if planning_mask[e_idx] == 0:

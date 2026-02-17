@@ -8,6 +8,8 @@ so the rest of the codebase stays pure Mojo.
 from python import Python, PythonObject
 from collections import Optional
 
+from src.advantages import identify_planning_tokens_native
+
 
 # ---------------------------------------------------------------------------
 # Python -> Mojo conversion helpers
@@ -403,8 +405,116 @@ fn build_datum(
 
 
 # ---------------------------------------------------------------------------
-# Planning tokens (delegates to Python for regex/tokenizer)
+# Vocabulary table (one-time load at startup)
 # ---------------------------------------------------------------------------
+
+
+fn load_vocab_table(tokenizer: PythonObject) raises -> List[String]:
+    """Load the full tokenizer vocabulary into a Mojo List[String].
+
+    Indexed by token ID. One Python call at startup; after this,
+    token ID -> string fragment lookups are pure Mojo array access.
+    """
+    var builtins = Python.import_module("builtins")
+    var vocab_size = py_int(tokenizer.vocab_size)
+
+    # Some tokenizers have added tokens beyond vocab_size
+    var has_added = builtins.hasattr(tokenizer, "added_tokens_encoder")
+    var total_size = vocab_size
+    if Python.is_true(has_added):
+        var added_len = py_len(tokenizer.added_tokens_encoder)
+        if vocab_size + added_len > total_size:
+            total_size = vocab_size + added_len
+
+    # Build a list of all IDs [0, total_size)
+    var py_ids = builtins.list(builtins.range(total_size))
+    var py_tokens = tokenizer.convert_ids_to_tokens(py_ids)
+    var none_type = builtins.type(Python.none())
+
+    var table = List[String](capacity=total_size)
+    for i in range(total_size):
+        var tok = py_tokens[i]
+        if Python.is_true(builtins.isinstance(tok, none_type)):
+            table.append(String(""))
+        else:
+            table.append(String(tok))
+    return table^
+
+
+fn vocab_lookup(
+    vocab_table: List[String],
+    token_ids: List[Int],
+) -> List[String]:
+    """Look up token strings from a pre-loaded vocabulary table (pure Mojo).
+
+    Falls back to empty string for out-of-range IDs.
+    """
+    var n = len(token_ids)
+    var table_size = len(vocab_table)
+    var result = List[String](capacity=n)
+    for i in range(n):
+        var tid = token_ids[i]
+        if tid >= 0 and tid < table_size:
+            result.append(vocab_table[tid])
+        else:
+            result.append(String(""))
+    return result^
+
+
+# ---------------------------------------------------------------------------
+# Batch decode
+# ---------------------------------------------------------------------------
+
+
+fn batch_decode(
+    tokenizer: PythonObject,
+    sequences: List[List[Int]],
+) raises -> List[String]:
+    """Decode multiple token sequences in one Python call.
+
+    Uses tokenizer.batch_decode() — one call instead of N.
+    """
+    var builtins = Python.import_module("builtins")
+    var py_batch = builtins.list()
+    for i in range(len(sequences)):
+        py_batch.append(to_python_list(sequences[i]))
+
+    var py_results = tokenizer.batch_decode(py_batch, skip_special_tokens=True)
+    var n = py_len(py_results)
+    var result = List[String](capacity=n)
+    for i in range(n):
+        result.append(String(py_results[i]))
+    return result^
+
+
+# ---------------------------------------------------------------------------
+# Token string decoding + planning tokens
+# ---------------------------------------------------------------------------
+
+
+fn convert_ids_to_token_strs(
+    tokenizer: PythonObject,
+    token_ids: List[Int],
+) raises -> List[String]:
+    """Decode token IDs to string fragments via tokenizer (one Python call).
+
+    Returns Mojo strings ready for identify_planning_tokens_native.
+    Prefer vocab_lookup() with a pre-loaded table for hot paths.
+    """
+    var py_ids = to_python_list(token_ids)
+    var py_tokens = tokenizer.convert_ids_to_tokens(py_ids)
+    var n = py_len(py_tokens)
+    var builtins = Python.import_module("builtins")
+    var none_type = builtins.type(Python.none())
+
+    var result = List[String](capacity=n)
+    for i in range(n):
+        var tok = py_tokens[i]
+        if Python.is_true(builtins.isinstance(tok, none_type)):
+            result.append(String(""))
+        else:
+            result.append(String(tok))
+    return result^
 
 
 fn identify_planning_tokens(
@@ -415,20 +525,11 @@ fn identify_planning_tokens(
 ) raises -> List[Int]:
     """Identify planning tokens via strategic gram matching.
 
-    Delegates to the Python implementation for regex support.
+    Convenience wrapper: decodes token IDs then runs native matching.
+    For hot paths, prefer vocab_lookup + identify_planning_tokens_native.
     """
-    var advantages_mod = Python.import_module("textpolicy.tinker.advantages")
-
-    var py_ids = to_python_list(token_ids)
-    var builtins = Python.import_module("builtins")
-    var py_grams = builtins.list()
-    for i in range(len(strategic_grams)):
-        py_grams.append(strategic_grams[i])
-
-    var py_mask = advantages_mod.identify_planning_tokens(
-        py_ids, tokenizer, py_grams, max_window
-    )
-    return from_python_int_list(py_mask)
+    var token_strs = convert_ids_to_token_strs(tokenizer, token_ids)
+    return identify_planning_tokens_native(token_strs, strategic_grams, max_window)
 
 
 # ---------------------------------------------------------------------------

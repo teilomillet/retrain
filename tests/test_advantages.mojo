@@ -23,6 +23,9 @@ from src.advantages import (
     apply_hicra,
     apply_sepa_pooling,
     compute_entropy_stats,
+    identify_planning_tokens_native,
+    _clean_token_fragment,
+    _gram_matches_in,
 )
 
 
@@ -453,6 +456,177 @@ fn test_entropy_stats_basic() raises:
 
 
 # ---------------------------------------------------------------------------
+# H8: Planning token identification (native)
+# ---------------------------------------------------------------------------
+
+
+fn test_planning_simple_match() raises:
+    """H8: Detects 'let me think' in token stream."""
+    var token_strs = List[String]()
+    token_strs.append("let")
+    token_strs.append("me")
+    token_strs.append("think")
+    token_strs.append("about")
+    token_strs.append("this")
+    var grams = List[String]()
+    grams.append("let me think")
+    var mask = identify_planning_tokens_native(token_strs, grams)
+    assert_equal(mask[0], 1)
+    assert_equal(mask[1], 1)
+    assert_equal(mask[2], 1)
+    assert_equal(mask[3], 0)
+    assert_equal(mask[4], 0)
+
+
+fn test_planning_no_match() raises:
+    """No strategic grams found -> all zeros."""
+    var token_strs = List[String]()
+    token_strs.append("hello")
+    token_strs.append("world")
+    var grams = List[String]()
+    grams.append("let me think")
+    var mask = identify_planning_tokens_native(token_strs, grams)
+    assert_equal(mask[0], 0)
+    assert_equal(mask[1], 0)
+
+
+fn test_planning_empty_tokens() raises:
+    """Empty token list -> empty mask."""
+    var grams = List[String]()
+    grams.append("let me think")
+    var mask = identify_planning_tokens_native(List[String](), grams)
+    assert_equal(len(mask), 0)
+
+
+fn test_planning_empty_grams() raises:
+    """Empty gram list -> all zeros."""
+    var token_strs = List[String]()
+    token_strs.append("let")
+    token_strs.append("me")
+    var mask = identify_planning_tokens_native(token_strs, List[String]())
+    assert_equal(mask[0], 0)
+    assert_equal(mask[1], 0)
+
+
+fn test_planning_case_insensitive() raises:
+    """Matching is case-insensitive."""
+    var token_strs = List[String]()
+    token_strs.append("Let")
+    token_strs.append("Me")
+    token_strs.append("Think")
+    var grams = List[String]()
+    grams.append("let me think")
+    var mask = identify_planning_tokens_native(token_strs, grams)
+    assert_equal(mask[0], 1)
+    assert_equal(mask[1], 1)
+    assert_equal(mask[2], 1)
+
+
+fn test_planning_subword_markers() raises:
+    """Sentencepiece ▁ and BPE Ġ markers are cleaned to spaces."""
+    # ▁let = \xe2\x96\x81 + "let"
+    var cleaned = _clean_token_fragment("\xe2\x96\x81let")
+    assert_equal(cleaned, "let")
+
+    # Ġlet = \xc4\xa0 + "let"
+    var cleaned2 = _clean_token_fragment("\xc4\xa0let")
+    assert_equal(cleaned2, "let")
+
+
+fn test_planning_subword_full_sequence() raises:
+    """Full sequence with subword prefixes matches correctly."""
+    var token_strs = List[String]()
+    token_strs.append("\xe2\x96\x81let")
+    token_strs.append("\xe2\x96\x81me")
+    token_strs.append("\xe2\x96\x81think")
+    token_strs.append("\xe2\x96\x81about")
+    var grams = List[String]()
+    grams.append("let me think")
+    var mask = identify_planning_tokens_native(token_strs, grams)
+    assert_equal(mask[0], 1)
+    assert_equal(mask[1], 1)
+    assert_equal(mask[2], 1)
+    assert_equal(mask[3], 0)
+
+
+fn test_planning_multiple_grams() raises:
+    """Multiple grams: both detected in separated positions."""
+    var token_strs = List[String]()
+    token_strs.append("let")
+    token_strs.append("me")
+    token_strs.append("ok")
+    token_strs.append("start")
+    token_strs.append("over")
+    var grams = List[String]()
+    grams.append("let me")
+    grams.append("start over")
+    # max_window=2 so window doesn't bleed across gap
+    var mask = identify_planning_tokens_native(token_strs, grams, max_window=2)
+    # "let me" -> tokens 0,1
+    assert_equal(mask[0], 1)
+    assert_equal(mask[1], 1)
+    # Gap token untouched
+    assert_equal(mask[2], 0)
+    # "start over" -> tokens 3,4
+    assert_equal(mask[3], 1)
+    assert_equal(mask[4], 1)
+
+
+fn test_planning_window_expansion() raises:
+    """Window auto-expands for long grams (>5 words)."""
+    var token_strs = List[String]()
+    token_strs.append("a")
+    token_strs.append("b")
+    token_strs.append("c")
+    token_strs.append("d")
+    token_strs.append("e")
+    token_strs.append("f")
+    token_strs.append("g")
+    var grams = List[String]()
+    grams.append("a b c d e f")  # 6 words, exceeds default window of 5
+    var mask = identify_planning_tokens_native(token_strs, grams, max_window=5)
+    assert_equal(mask[0], 1)
+    assert_equal(mask[1], 1)
+    assert_equal(mask[2], 1)
+    assert_equal(mask[3], 1)
+    assert_equal(mask[4], 1)
+    assert_equal(mask[5], 1)
+    assert_equal(mask[6], 0)
+
+
+fn test_gram_word_boundary() raises:
+    """Word boundary prevents partial matches."""
+    # "let" should NOT match inside "letter"
+    assert_true(
+        not _gram_matches_in("letter me think", "let me think"),
+        "'let' should not match inside 'letter'"
+    )
+    # But should match when standalone
+    assert_true(
+        _gram_matches_in("ok let me think now", "let me think"),
+        "Should match standalone 'let me think'"
+    )
+
+
+fn test_gram_right_boundary() raises:
+    """Right word boundary prevents partial suffix matches."""
+    assert_true(
+        not _gram_matches_in("let me thinker", "let me think"),
+        "'think' should not match prefix of 'thinker'"
+    )
+
+
+fn test_clean_empty_fragment() raises:
+    """Empty fragment stays empty."""
+    assert_equal(_clean_token_fragment(""), "")
+
+
+fn test_clean_plain_ascii() raises:
+    """Plain ASCII fragment unchanged."""
+    assert_equal(_clean_token_fragment("hello"), "hello")
+
+
+# ---------------------------------------------------------------------------
 # Test runner
 # ---------------------------------------------------------------------------
 
@@ -498,4 +672,19 @@ fn main() raises:
     test_entropy_stats_empty()
     test_entropy_stats_basic()
 
-    print("All 30 advantage tests passed!")
+    # H8: Planning token identification
+    test_planning_simple_match()
+    test_planning_no_match()
+    test_planning_empty_tokens()
+    test_planning_empty_grams()
+    test_planning_case_insensitive()
+    test_planning_subword_markers()
+    test_planning_subword_full_sequence()
+    test_planning_multiple_grams()
+    test_planning_window_expansion()
+    test_gram_word_boundary()
+    test_gram_right_boundary()
+    test_clean_empty_fragment()
+    test_clean_plain_ascii()
+
+    print("All 43 advantage tests passed!")
