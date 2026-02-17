@@ -7,7 +7,7 @@ version = "0.1.0"
 
 [tasks]
 build = "mojo build src/main.mojo -o retrain-tinker"
-test = "mojo run tests/test_advantages.mojo && mojo run tests/test_sepa.mojo && mojo run tests/test_config.mojo && mojo run tests/test_logging.mojo && mojo run tests/test_main.mojo"
+test = "mojo run tests/test_advantages.mojo && mojo run tests/test_sepa.mojo && mojo run tests/test_config.mojo && mojo run tests/test_logging.mojo && mojo run tests/test_pybridge.mojo && mojo run tests/test_main.mojo"
 run = "./retrain-tinker"
 
 [dependencies]
