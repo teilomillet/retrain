@@ -1,0 +1,3 @@
+[submodule "textpolicy"]
+	path = textpolicy
+	url = https://github.com/teilomillet/textpolicy.git

@@ -1,0 +1,11 @@
+[workspace]
+authors = ["Teïlo Millet <teilomillet@gmail.com>"]
+channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
+name = "retrain"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+max = ">=26.1"
