@@ -1,8 +1,9 @@
-"""Tinker GPU training client — Mojo entry point.
+"""Training loop with swappable backends — Mojo entry point.
 
-Ports the training loop from textpolicy/tinker/train_math.py.
-All advantage math runs natively (SIMD); external services
-(Tinker, tokenizer, datasets, wandb) go through pybridge.
+The training loop is generic over TrainingBackend: the same loop
+runs with TinkerBackend (remote GPU) or MAXBackend (local multi-GPU).
+All advantage math runs natively (SIMD); backends handle the 4 I/O
+boundary points (checkpoint, sample, train, save).
 """
 
 from python import Python, PythonObject
@@ -22,29 +23,20 @@ from src.advantages import (
 )
 from src.sepa import SEPAController
 from src.logging import JsonlLogger, KeyValue, json_float, json_int, json_string, json_bool, build_json_line
+from src.backend import TrainingBackend, SampleSequence
+from src.tinker_backend import TinkerBackend
+from src.max_backend import MAXBackend
 from src.pybridge import (
     load_tokenizer,
     encode_prompt,
     batch_decode,
     load_math_dataset,
     MathExample,
-    create_tinker_client,
-    create_lora_training_client,
-    save_weights_and_get_sampling_client,
-    sample,
-    forward_backward,
-    optim_step,
-    save_state,
-    batch_build_datums,
     load_vocab_table,
     vocab_lookup,
-    extract_sample_results,
-    SampleSequence,
     init_wandb,
     log_wandb,
     finish_wandb,
-    py_float,
-    py_len,
 )
 
 
@@ -207,12 +199,16 @@ fn compute_composable_advantages(
 
 
 # ---------------------------------------------------------------------------
-# Training loop
+# Training loop (generic over backend)
 # ---------------------------------------------------------------------------
 
 
-fn train(config: TrainConfig) raises:
-    """Main training loop using the Tinker API."""
+fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
+    """Main training loop — backend-agnostic.
+
+    The loop handles tokenization, advantage computation, and logging.
+    The backend handles checkpoint, sample, train, and save.
+    """
     var os = Python.import_module("os")
     var pathlib = Python.import_module("pathlib")
 
@@ -237,17 +233,6 @@ fn train(config: TrainConfig) raises:
     print("Loading vocabulary table...")
     var vocab_table = load_vocab_table(tokenizer)
     print("Vocabulary table: " + String(len(vocab_table)) + " entries")
-
-    # Connect to Tinker
-    print("Connecting to Tinker...")
-    var service_client = create_tinker_client(config.base_url)
-
-    # Create LoRA training client
-    print("Creating LoRA training client (model=" + config.model + ", rank=" + String(config.lora_rank) + ")...")
-    var training_client = create_lora_training_client(
-        service_client, config.model, config.lora_rank
-    )
-    print("Training client ready.")
 
     # Load dataset
     print("Loading MATH dataset...")
@@ -295,6 +280,7 @@ fn train(config: TrainConfig) raises:
         wandb_config["hicra_alpha"] = PythonObject(config.hicra_alpha)
         wandb_config["sepa_steps"] = PythonObject(config.sepa_steps)
         wandb_config["max_steps"] = PythonObject(config.max_steps)
+        wandb_config["backend"] = PythonObject(config.backend)
         wandb_run = init_wandb(config.wandb_project, run_name, wandb_config)
         print("Wandb initialized: " + config.wandb_project + "/" + run_name)
 
@@ -307,44 +293,38 @@ fn train(config: TrainConfig) raises:
     for batch_idx in range(config.max_steps):
         var step_start_ns = perf_counter_ns()
 
-        # 1. Get sampling client
-        var sampling_client = save_weights_and_get_sampling_client(
-            training_client, "step_" + String(batch_idx)
-        )
+        # 1. Checkpoint for sampling
+        backend.checkpoint_for_sampling("step_" + String(batch_idx))
 
-        # 2. Select prompts and submit sample requests (pre-encoded)
+        # 2. Select prompts
         var batch_prompts = List[String]()
         var batch_prompt_ids = List[List[Int]]()
         var batch_answers = List[String]()
-        var sample_futures = List[PythonObject]()
 
         for _ in range(config.batch_size):
             var ex_idx = example_idx % len(examples)
             example_idx += 1
-
-            var prompt_ids = pre_encoded_prompts[ex_idx].copy()
-            var future = sample(
-                sampling_client, prompt_ids,
-                config.group_size, config.max_tokens,
-                config.temperature,
-            )
-            sample_futures.append(future)
             batch_prompts.append(examples[ex_idx].problem)
-            batch_prompt_ids.append(prompt_ids^)
+            batch_prompt_ids.append(pre_encoded_prompts[ex_idx].copy())
             batch_answers.append(examples[ex_idx].answer)
 
-        # 3. Collect all futures + single batch decode
-        var all_group_sequences = List[List[SampleSequence]]()
+        # 3. Sample completions via backend
+        var all_group_sequences = backend.sample_batch(
+            batch_prompt_ids,
+            config.group_size,
+            config.max_tokens,
+            config.temperature,
+            0.95,
+        )
+
+        # Build flat token sequences for batch decode
         var all_token_seqs_flat = List[List[Int]]()
         var group_flat_offsets = List[Int]()
 
-        for f_idx in range(len(sample_futures)):
-            var sample_result = sample_futures[f_idx].result()
-            var sequences = extract_sample_results(sample_result)
+        for f_idx in range(len(all_group_sequences)):
             group_flat_offsets.append(len(all_token_seqs_flat))
-            for s_idx in range(len(sequences)):
-                all_token_seqs_flat.append(sequences[s_idx].tokens.copy())
-            all_group_sequences.append(sequences^)
+            for s_idx in range(len(all_group_sequences[f_idx])):
+                all_token_seqs_flat.append(all_group_sequences[f_idx][s_idx].tokens.copy())
 
         var all_decoded_texts = batch_decode(tokenizer, all_token_seqs_flat)
 
@@ -494,14 +474,7 @@ fn train(config: TrainConfig) raises:
                 gen_entries.append(json_int("num_tokens", len(all_group_sequences[f_idx][s_idx].tokens)))
                 generations_logger.log(gen_entries)
 
-        # 5. Batch build datums (single Python call)
-        var datums_list = Python.import_module("builtins").list()
-        if len(all_datum_tokens) > 0:
-            datums_list = batch_build_datums(
-                all_datum_tokens, all_datum_logprobs, all_datum_advantages
-            )
-
-        # 6. SEPA state updates
+        # 5. SEPA state updates
         total_completions += len(batch_rewards)
         total_correct += batch_correct
         var correct_rate: Float64 = 0.0
@@ -522,8 +495,8 @@ fn train(config: TrainConfig) raises:
                             exec_entropies.append(-logprobs[e_idx])
                     sepa_controller.update_auto_state(exec_entropies)
 
-        # 7. Train: forward_backward + optim_step
-        var num_datums = py_len(datums_list)
+        # 6. Train via backend
+        var num_datums = len(all_datum_tokens)
         if num_datums == 0:
             print("Step " + String(batch_idx) + ": no informative datums, skipping.")
             continue
@@ -533,16 +506,15 @@ fn train(config: TrainConfig) raises:
             + String(num_datums) + " datums for training..."
         )
 
-        var fwd_bwd_future = forward_backward(training_client, datums_list)
-        var optim_future = optim_step(training_client, config.lr, config.weight_decay)
-
-        var fwd_bwd_result = fwd_bwd_future.result()
-        _ = optim_future.result()
+        var loss_value = backend.train_step(
+            all_datum_tokens, all_datum_logprobs, all_datum_advantages,
+            config.lr, config.weight_decay,
+        )
 
         var step_time_ns = perf_counter_ns() - step_start_ns
         var step_time_s = Float64(step_time_ns) / 1_000_000_000.0
 
-        # 8. Logging
+        # 7. Logging
         var mean_reward: Float64 = 0.0
         if len(batch_rewards) > 0:
             var reward_sum: Float64 = 0.0
@@ -553,14 +525,6 @@ fn train(config: TrainConfig) raises:
         var running_correct_rate: Float64 = 0.0
         if total_completions > 0:
             running_correct_rate = Float64(total_correct) / Float64(total_completions)
-
-        # Extract loss
-        var loss_value: Float64 = 0.0
-        var builtins = Python.import_module("builtins")
-        var has_metrics = builtins.hasattr(fwd_bwd_result, "metrics")
-        if Python.is_true(has_metrics) and Python.is_true(fwd_bwd_result.metrics):
-            var loss_sum = fwd_bwd_result.metrics.get("loss:sum", 0.0)
-            loss_value = py_float(loss_sum) / Float64(max(num_datums, 1))
 
         var max_token_hit_rate: Float64 = 0.0
         if batch_total_completions > 0:
@@ -652,11 +616,11 @@ fn train(config: TrainConfig) raises:
         # Periodic checkpoint
         if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
             var ckpt_name = "checkpoint_step_" + String(batch_idx + 1)
-            save_state(training_client, ckpt_name)
+            backend.save(ckpt_name)
             print("Saved checkpoint: " + ckpt_name)
 
     # Save final checkpoint
-    save_state(training_client, "final")
+    backend.save("final")
     var final_rate: Float64 = 0.0
     if total_completions > 0:
         final_rate = 100.0 * Float64(total_correct) / Float64(total_completions)
@@ -678,4 +642,9 @@ fn train(config: TrainConfig) raises:
 
 fn main() raises:
     var config = parse_args()
-    train(config)
+    if config.backend == "max":
+        var backend = MAXBackend(config)
+        train(backend, config)
+    else:
+        var backend = TinkerBackend(config)
+        train(backend, config)

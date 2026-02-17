@@ -29,6 +29,14 @@ fn test_defaults_model() raises:
     assert_equal(c.model, "Qwen/Qwen3-4B-Instruct-2507")
 
 
+fn test_defaults_backend() raises:
+    """Default backend selection fields."""
+    var c = TrainConfig()
+    assert_equal(c.backend, "tinker")
+    assert_equal(c.devices, "gpu:0")
+    assert_equal(c.adapter_path, "/tmp/retrain_adapter")
+
+
 fn test_defaults_tinker() raises:
     """Default base_url (empty=production) and lora_rank."""
     var c = TrainConfig()
@@ -85,6 +93,9 @@ fn test_fieldwise_init() raises:
     var c = TrainConfig(
         advantage_mode="grpo",
         transform_mode="none",
+        backend="max",
+        devices="gpu:0,gpu:1",
+        adapter_path="/tmp/test_adapter",
         model="test-model",
         base_url="http://localhost",
         lora_rank=16,
@@ -110,6 +121,9 @@ fn test_fieldwise_init() raises:
     )
     assert_equal(c.advantage_mode, "grpo")
     assert_equal(c.transform_mode, "none")
+    assert_equal(c.backend, "max")
+    assert_equal(c.devices, "gpu:0,gpu:1")
+    assert_equal(c.adapter_path, "/tmp/test_adapter")
     assert_equal(c.model, "test-model")
     assert_equal(c.lora_rank, 16)
     assert_equal(c.max_steps, 10)
@@ -147,6 +161,7 @@ fn test_write_to() raises:
 
 fn main() raises:
     test_defaults_algorithm_selection()
+    test_defaults_backend()
     test_defaults_model()
     test_defaults_tinker()
     test_defaults_training()
@@ -157,4 +172,4 @@ fn main() raises:
     test_copy()
     test_write_to()
 
-    print("All 10 config tests passed!")
+    print("All 11 config tests passed!")

@@ -14,6 +14,11 @@ struct TrainConfig(Copyable, Movable, Writable):
     var advantage_mode: String
     var transform_mode: String
 
+    # Backend selection
+    var backend: String  # "tinker" or "max"
+    var devices: String  # e.g. "gpu:0,gpu:1"
+    var adapter_path: String  # LoRA adapter exchange directory
+
     # Model & Tinker
     var model: String
     var base_url: String  # empty string means None/production default
@@ -51,6 +56,9 @@ struct TrainConfig(Copyable, Movable, Writable):
     fn __init__(out self):
         self.advantage_mode = "maxrl"
         self.transform_mode = "gtpo_sepa"
+        self.backend = "tinker"
+        self.devices = "gpu:0"
+        self.adapter_path = "/tmp/retrain_adapter"
         self.model = "Qwen/Qwen3-4B-Instruct-2507"
         self.base_url = ""
         self.lora_rank = 32
@@ -79,6 +87,7 @@ struct TrainConfig(Copyable, Movable, Writable):
             "TrainConfig(",
             "advantage_mode=", self.advantage_mode,
             ", transform_mode=", self.transform_mode,
+            ", backend=", self.backend,
             ", model=", self.model,
             ", batch_size=", self.batch_size,
             ", group_size=", self.group_size,
@@ -91,6 +100,11 @@ fn print_usage():
     print("Usage: retrain-tinker [OPTIONS]")
     print()
     print("Train on MATH with textpolicy advantages via Tinker.")
+    print()
+    print("Backend:")
+    print("  --backend MODE           tinker | max (default: tinker)")
+    print("  --devices SPECS          Device list, e.g. gpu:0,gpu:1 (default: gpu:0)")
+    print("  --adapter-path PATH      LoRA adapter exchange directory (default: /tmp/retrain_adapter)")
     print()
     print("Algorithm selection (composable):")
     print("  --advantage-mode MODE    grpo | maxrl (default: maxrl)")
@@ -160,7 +174,15 @@ fn parse_args() raises -> TrainConfig:
         var val = String(args[i + 1])
         i += 2
 
-        if arg == "--advantage-mode":
+        if arg == "--backend":
+            if val != "tinker" and val != "max":
+                raise Error("--backend must be 'tinker' or 'max', got: " + val)
+            config.backend = val
+        elif arg == "--devices":
+            config.devices = val
+        elif arg == "--adapter-path":
+            config.adapter_path = val
+        elif arg == "--advantage-mode":
             if val != "grpo" and val != "maxrl":
                 raise Error("--advantage-mode must be 'grpo' or 'maxrl', got: " + val)
             config.advantage_mode = val
