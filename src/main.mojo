@@ -1,8 +1,9 @@
 """Composable training loop — Mojo entry point.
 
-The training loop is generic over five traits: TrainingBackend, RewardFn,
-DataSource, EpisodeAdvantageFn, and TokenTransformFn. Users compose
-a pipeline in main() and get full monomorphization — zero dispatch overhead.
+The training loop is generic over six traits: TrainingBackend, RewardFn,
+DataSource, EpisodeAdvantageFn, TokenTransformFn, and BackPressure.
+Users compose a pipeline in main() and get full monomorphization — zero
+dispatch overhead.
 
 Built-in defaults (BoxedMathReward, MathDataSource, MaxRL + GTPO-SEPA)
 reproduce the original hardcoded behavior. External users bring their own
@@ -41,6 +42,13 @@ from src.advantage_fns import (
     GTPOTransform,
     GTPOHicraTransform,
     GTPOSepaTransform,
+)
+from src.backpressure import (
+    BackPressure,
+    BackPressureDecision,
+    StepObservation,
+    NoOpBackPressure,
+    USLBackPressure,
 )
 from src.pybridge import (
     load_tokenizer,
@@ -163,13 +171,13 @@ fn compute_composable_advantages(
 # ---------------------------------------------------------------------------
 
 
-fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, T: TokenTransformFn](
-    mut backend: B, reward_fn: R, mut data_source: D, episode_adv: E, mut token_transform: T, config: TrainConfig,
+fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, T: TokenTransformFn, BP: BackPressure](
+    mut backend: B, reward_fn: R, mut data_source: D, episode_adv: E, mut token_transform: T, mut backpressure: BP, config: TrainConfig,
 ) raises:
     """Main training loop — fully composable.
 
-    Generic over backend, reward, dataset, episode advantage, and token
-    transform. All monomorphized at compile time — zero dispatch overhead.
+    Generic over backend, reward, dataset, episode advantage, token
+    transform, and back pressure. All monomorphized at compile time.
     """
     var os = Python.import_module("os")
     var pathlib = Python.import_module("pathlib")
@@ -300,6 +308,7 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             batch_answers.append(examples[ex_idx].reference)
 
         # 3. Sample completions via backend
+        var sample_start_ns = perf_counter_ns()
         var all_group_sequences = backend.sample_batch(
             batch_prompt_ids,
             config.group_size,
@@ -317,6 +326,7 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             for s_idx in range(len(all_group_sequences[f_idx])):
                 all_token_seqs_flat.append(all_group_sequences[f_idx][s_idx].tokens.copy())
 
+        var sample_time_ns = perf_counter_ns() - sample_start_ns
         var all_decoded_texts = batch_decode(tokenizer, all_token_seqs_flat)
 
         # 4. Process groups, compute advantages, collect datum data
@@ -486,6 +496,14 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
         var num_datums = len(all_datum_tokens)
         if num_datums == 0:
             print("Step " + String(batch_idx) + ": no informative datums, skipping.")
+            # Record skipped observation for back pressure
+            var skip_obs = StepObservation()
+            skip_obs.step_time_s = Float64(perf_counter_ns() - step_start_ns) / 1_000_000_000.0
+            skip_obs.sample_time_s = Float64(sample_time_ns) / 1_000_000_000.0
+            skip_obs.batch_size = config.batch_size
+            skip_obs.group_size = config.group_size
+            skip_obs.skipped = True
+            backpressure.observe(skip_obs)
             continue
 
         print(
@@ -493,13 +511,35 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             + String(num_datums) + " datums for training..."
         )
 
+        var train_start_ns = perf_counter_ns()
         var loss_value = backend.train_step(
             all_datum_tokens, all_datum_logprobs, all_datum_advantages,
             config.lr, config.weight_decay,
         )
+        var train_time_ns = perf_counter_ns() - train_start_ns
 
         var step_time_ns = perf_counter_ns() - step_start_ns
         var step_time_s = Float64(step_time_ns) / 1_000_000_000.0
+
+        # Count total tokens for back pressure
+        var bp_total_tokens = 0
+        for d_idx in range(len(all_datum_tokens)):
+            bp_total_tokens += len(all_datum_tokens[d_idx])
+
+        # Build observation and feed to back pressure controller
+        var bp_obs = StepObservation()
+        bp_obs.step_time_s = step_time_s
+        bp_obs.sample_time_s = Float64(sample_time_ns) / 1_000_000_000.0
+        bp_obs.train_time_s = Float64(train_time_ns) / 1_000_000_000.0
+        bp_obs.num_datums = num_datums
+        bp_obs.batch_size = config.batch_size
+        bp_obs.group_size = config.group_size
+        bp_obs.total_tokens = bp_total_tokens
+        bp_obs.loss = loss_value
+        bp_obs.skipped = False
+        backpressure.observe(bp_obs)
+
+        var bp_decision = backpressure.recommend()
 
         # 7. Logging
         var mean_reward: Float64 = 0.0
@@ -562,6 +602,13 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             metrics_entries.append(json_float("exec_entropy_var", step_exec_var))
             metrics_entries.append(json_float("plan_entropy_mean", step_plan_mean))
             metrics_entries.append(json_float("plan_entropy_var", step_plan_var))
+        metrics_entries.append(json_string("bp_action", bp_decision.action))
+        metrics_entries.append(json_string("bp_regime", bp_decision.regime))
+        metrics_entries.append(json_float("bp_p_star", bp_decision.p_star))
+        metrics_entries.append(json_float("bp_sigma", bp_decision.sigma))
+        metrics_entries.append(json_float("bp_kappa", bp_decision.kappa))
+        metrics_entries.append(json_float("bp_utilization", bp_decision.utilization))
+        metrics_entries.append(json_float("bp_throughput", bp_decision.throughput))
         metrics_logger.log(metrics_entries)
 
         print(
@@ -584,6 +631,11 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             wandb_metrics["sepa_lambda"] = PythonObject(sepa_lambda_val)
             wandb_metrics["num_datums"] = PythonObject(num_datums)
             wandb_metrics["step_time_s"] = PythonObject(step_time_s)
+            wandb_metrics["bp_p_star"] = PythonObject(bp_decision.p_star)
+            wandb_metrics["bp_sigma"] = PythonObject(bp_decision.sigma)
+            wandb_metrics["bp_kappa"] = PythonObject(bp_decision.kappa)
+            wandb_metrics["bp_utilization"] = PythonObject(bp_decision.utilization)
+            wandb_metrics["bp_throughput"] = PythonObject(bp_decision.throughput)
             log_wandb(wandb_run, wandb_metrics, batch_idx)
 
         # Step record for emergence analysis
@@ -627,24 +679,24 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
 # ---------------------------------------------------------------------------
 
 
-fn _run[B: TrainingBackend, E: EpisodeAdvantageFn](
-    mut backend: B, ep: E, config: TrainConfig,
+fn _run[B: TrainingBackend, E: EpisodeAdvantageFn, BP: BackPressure](
+    mut backend: B, ep: E, mut bp: BP, config: TrainConfig,
 ) raises:
     """Dispatch over token transform mode, then call train()."""
     var reward = BoxedMathReward()
     var data = MathDataSource(config.max_examples)
     if config.transform_mode == "none":
         var tx = UniformExpand()
-        train(backend, reward, data, ep, tx, config)
+        train(backend, reward, data, ep, tx, bp, config)
     elif config.transform_mode == "gtpo":
         var tx = GTPOTransform(config.gtpo_beta)
-        train(backend, reward, data, ep, tx, config)
+        train(backend, reward, data, ep, tx, bp, config)
     elif config.transform_mode == "gtpo_hicra":
         var tx = GTPOHicraTransform(config.gtpo_beta, config.hicra_alpha)
-        train(backend, reward, data, ep, tx, config)
+        train(backend, reward, data, ep, tx, bp, config)
     else:
         var tx = GTPOSepaTransform(config.gtpo_beta)
-        train(backend, reward, data, ep, tx, config)
+        train(backend, reward, data, ep, tx, bp, config)
 
 
 # ---------------------------------------------------------------------------
@@ -654,15 +706,40 @@ fn _run[B: TrainingBackend, E: EpisodeAdvantageFn](
 
 fn main() raises:
     var config = parse_args()
-    if config.backend == "max":
-        var backend = MAXBackend(config)
-        if config.advantage_mode == "grpo":
-            _run(backend, GRPOAdvantage(), config)
+    if config.bp_enabled:
+        var bp = USLBackPressure(
+            warmup_steps=config.bp_warmup_steps,
+            ema_decay=config.bp_ema_decay,
+            throttle_margin=config.bp_throttle_margin,
+            increase_margin=config.bp_increase_margin,
+            min_batch_size=config.bp_min_batch_size,
+            max_batch_size=config.bp_max_batch_size,
+            peak_gflops=config.bp_peak_gflops,
+            peak_bw_gb_s=config.bp_peak_bw_gb_s,
+        )
+        if config.backend == "max":
+            var backend = MAXBackend(config)
+            if config.advantage_mode == "grpo":
+                _run(backend, GRPOAdvantage(), bp, config)
+            else:
+                _run(backend, MaxRLAdvantage(), bp, config)
         else:
-            _run(backend, MaxRLAdvantage(), config)
+            var backend = TinkerBackend(config)
+            if config.advantage_mode == "grpo":
+                _run(backend, GRPOAdvantage(), bp, config)
+            else:
+                _run(backend, MaxRLAdvantage(), bp, config)
     else:
-        var backend = TinkerBackend(config)
-        if config.advantage_mode == "grpo":
-            _run(backend, GRPOAdvantage(), config)
+        var bp = NoOpBackPressure()
+        if config.backend == "max":
+            var backend = MAXBackend(config)
+            if config.advantage_mode == "grpo":
+                _run(backend, GRPOAdvantage(), bp, config)
+            else:
+                _run(backend, MaxRLAdvantage(), bp, config)
         else:
-            _run(backend, MaxRLAdvantage(), config)
+            var backend = TinkerBackend(config)
+            if config.advantage_mode == "grpo":
+                _run(backend, GRPOAdvantage(), bp, config)
+            else:
+                _run(backend, MaxRLAdvantage(), bp, config)

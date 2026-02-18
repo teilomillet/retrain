@@ -50,6 +50,17 @@ struct TrainConfig(Copyable, Movable, Writable):
     # Strategic grams (JSON string, empty = use defaults)
     var strategic_grams: String
 
+    # Back pressure
+    var bp_enabled: Bool
+    var bp_warmup_steps: Int
+    var bp_ema_decay: Float64
+    var bp_throttle_margin: Float64
+    var bp_increase_margin: Float64
+    var bp_min_batch_size: Int
+    var bp_max_batch_size: Int
+    var bp_peak_gflops: Float64
+    var bp_peak_bw_gb_s: Float64
+
     # Logging
     var log_dir: String
     var wandb_project: String  # empty = disabled
@@ -80,6 +91,15 @@ struct TrainConfig(Copyable, Movable, Writable):
         self.sepa_delay_steps = 50
         self.sepa_correct_rate_gate = 0.1
         self.strategic_grams = ""
+        self.bp_enabled = False
+        self.bp_warmup_steps = 10
+        self.bp_ema_decay = 0.9
+        self.bp_throttle_margin = 0.85
+        self.bp_increase_margin = 0.5
+        self.bp_min_batch_size = 1
+        self.bp_max_batch_size = 64
+        self.bp_peak_gflops = 0.0
+        self.bp_peak_bw_gb_s = 0.0
         self.log_dir = "logs/tinker_math"
         self.wandb_project = ""
         self.wandb_run_name = ""
@@ -94,6 +114,7 @@ struct TrainConfig(Copyable, Movable, Writable):
             ", batch_size=", self.batch_size,
             ", group_size=", self.group_size,
             ", max_steps=", self.max_steps,
+            ", bp_enabled=", self.bp_enabled,
             ")",
         )
 
@@ -144,6 +165,17 @@ fn print_usage():
     print("  --wandb-project NAME     Enable wandb logging")
     print("  --wandb-run-name NAME    Wandb run name")
     print("  --strategic-grams JSON   JSON list of strategic gram phrases")
+    print()
+    print("Back pressure (USL+Roofline):")
+    print("  --bp-enabled BOOL        Enable adaptive back pressure (default: false)")
+    print("  --bp-warmup-steps N      Warmup before fitting (default: 10)")
+    print("  --bp-ema-decay F         EMA decay for throughput (default: 0.9)")
+    print("  --bp-throttle-margin F   Throttle when p > p*×margin (default: 0.85)")
+    print("  --bp-increase-margin F   Increase when p < p*×margin (default: 0.5)")
+    print("  --bp-min-batch-size N    Minimum batch size (default: 1)")
+    print("  --bp-max-batch-size N    Maximum batch size (default: 64)")
+    print("  --bp-peak-gflops F       Peak GFLOPS for roofline (default: 0=auto)")
+    print("  --bp-peak-bw-gb-s F      Peak bandwidth GB/s for roofline (default: 0=auto)")
     print()
     print("Config file:")
     print("  --config PATH            TOML config file (CLI args override)")
@@ -258,6 +290,20 @@ fn _apply_toml(mut config: TrainConfig, path: String) raises:
             config.sepa_schedule = v
         config.sepa_delay_steps = _py_int(sec, "delay_steps", config.sepa_delay_steps)
         config.sepa_correct_rate_gate = _py_float(sec, "correct_rate_gate", config.sepa_correct_rate_gate)
+
+    # [backpressure]
+    if "backpressure" in data:
+        var sec = data["backpressure"]
+        if "enabled" in sec:
+            config.bp_enabled = String(sec["enabled"]).lower() == "true"
+        config.bp_warmup_steps = _py_int(sec, "warmup_steps", config.bp_warmup_steps)
+        config.bp_ema_decay = _py_float(sec, "ema_decay", config.bp_ema_decay)
+        config.bp_throttle_margin = _py_float(sec, "throttle_margin", config.bp_throttle_margin)
+        config.bp_increase_margin = _py_float(sec, "increase_margin", config.bp_increase_margin)
+        config.bp_min_batch_size = _py_int(sec, "min_batch_size", config.bp_min_batch_size)
+        config.bp_max_batch_size = _py_int(sec, "max_batch_size", config.bp_max_batch_size)
+        config.bp_peak_gflops = _py_float(sec, "peak_gflops", config.bp_peak_gflops)
+        config.bp_peak_bw_gb_s = _py_float(sec, "peak_bw_gb_s", config.bp_peak_bw_gb_s)
 
     # [logging]
     if "logging" in data:
@@ -377,6 +423,24 @@ fn parse_args() raises -> TrainConfig:
             config.sepa_delay_steps = Int(val)
         elif arg == "--sepa-correct-rate-gate":
             config.sepa_correct_rate_gate = Float64(val)
+        elif arg == "--bp-enabled":
+            config.bp_enabled = val.lower() == "true" or val == "1"
+        elif arg == "--bp-warmup-steps":
+            config.bp_warmup_steps = Int(val)
+        elif arg == "--bp-ema-decay":
+            config.bp_ema_decay = Float64(val)
+        elif arg == "--bp-throttle-margin":
+            config.bp_throttle_margin = Float64(val)
+        elif arg == "--bp-increase-margin":
+            config.bp_increase_margin = Float64(val)
+        elif arg == "--bp-min-batch-size":
+            config.bp_min_batch_size = Int(val)
+        elif arg == "--bp-max-batch-size":
+            config.bp_max_batch_size = Int(val)
+        elif arg == "--bp-peak-gflops":
+            config.bp_peak_gflops = Float64(val)
+        elif arg == "--bp-peak-bw-gb-s":
+            config.bp_peak_bw_gb_s = Float64(val)
         elif arg == "--strategic-grams":
             config.strategic_grams = val
         elif arg == "--log-dir":
