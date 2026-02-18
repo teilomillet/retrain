@@ -14,6 +14,7 @@ The MAXBackend in Mojo calls into this module via Python interop.
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn.functional as F
@@ -86,7 +87,14 @@ class MAXTrainHelper:
         # Gradient checkpointing — trade compute for VRAM
         self.train_model.gradient_checkpointing_enable()
 
+        # Async pipeline state — initialized before first _sync_lora_weights call
+        self._train_future = None       # Future from last submitted training
+        self._pending_loss = 0.0        # Loss from last completed training
+        self._weight_snapshot = None    # LoRA weight snapshot for safe cross-thread sync
+
         if self.split_mode:
+            self._train_executor = ThreadPoolExecutor(max_workers=1)
+
             # Create separate infer model on a different device
             print(f"Loading infer model: {model_name} on {self.infer_device}...")
             base_infer = AutoModelForCausalLM.from_pretrained(
@@ -94,8 +102,8 @@ class MAXTrainHelper:
             )
             self.infer_model = get_peft_model(base_infer, peft_config)
             self.infer_model.to(self.infer_device)
-            # Initial sync so infer model starts with same LoRA weights
-            self._sync_lora_weights()
+            # Initial sync: copy directly from train_model (no snapshot yet)
+            self._do_initial_sync()
         else:
             # Single-model mode: same object for both roles
             self.infer_model = self.train_model
@@ -114,21 +122,47 @@ class MAXTrainHelper:
 
         print(f"MAXTrainHelper ready (split_mode={self.split_mode}).")
 
-    def _sync_lora_weights(self):
-        """Copy LoRA weights from train_model to infer_model.
+    def _do_initial_sync(self):
+        """Copy LoRA weights from train_model to infer_model at init time.
 
-        No-op when split_mode is False (infer_model is train_model).
+        Used once during __init__ before any training has occurred (no snapshot
+        exists yet). After this, all syncs go through _sync_lora_weights which
+        reads from the weight snapshot.
         """
-        if not self.split_mode:
-            return
-
         train_state = dict(self.train_model.named_parameters())
         for name, infer_param in self.infer_model.named_parameters():
             if "lora_" in name and name in train_state:
                 infer_param.data.copy_(train_state[name].data.to(infer_param.device))
 
+    def _sync_lora_weights(self):
+        """Copy LoRA weights from snapshot to infer_model.
+
+        In split mode: copies from _weight_snapshot (created after each completed
+        training step) rather than live train_model weights. This is safe to call
+        while training is running on GPU 1 — reads snapshot, not live weights.
+
+        No-op when split_mode is False (infer_model is train_model) or when
+        no training has completed yet (_weight_snapshot is None).
+        """
+        if not self.split_mode:
+            return
+        if self._weight_snapshot is None:
+            return
+
+        for name, infer_param in self.infer_model.named_parameters():
+            if "lora_" in name and name in self._weight_snapshot:
+                infer_param.data.copy_(self._weight_snapshot[name].to(infer_param.device))
+
     def checkpoint(self, name):
-        """Prepare for sampling by syncing LoRA weights train -> infer."""
+        """Prepare for sampling by syncing LoRA weights from snapshot -> infer.
+
+        Non-blocking: if _train_future is done, collects loss into _pending_loss.
+        Syncs from latest weight snapshot. Does NOT block-wait for in-flight
+        training — this enables overlap between sample(N) and train(N-1).
+        """
+        if self._train_future is not None and self._train_future.done():
+            self._pending_loss = self._train_future.result()
+            self._train_future = None
         self._sync_lora_weights()
 
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
@@ -190,48 +224,17 @@ class MAXTrainHelper:
 
         return results
 
-    def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
-        """Run one training step with importance sampling loss.
+    def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
+        """Execute training forward/backward/step on pre-prepared tensors.
 
-        Pads sequences into a single batch for one forward pass instead
-        of looping per-datum. Uses torch.cuda.amp for mixed precision.
-
-        Args:
-            all_tokens: List of full token sequences (prompt + completion).
-            all_logprobs: List of per-token logprobs (0-padded for prompt).
-            all_advantages: List of per-token advantages (0-padded for prompt).
-            lr: Learning rate.
-            weight_decay: Weight decay coefficient.
+        After the optimizer step, clones LoRA params into _weight_snapshot
+        for safe cross-thread syncing. Runs on background thread in split mode.
 
         Returns:
-            Mean loss over the batch.
+            Scalar loss value.
         """
-        n = len(all_tokens)
-        if n == 0:
-            return 0.0
-
-        # Update optimizer hyperparameters
-        for pg in self.optimizer.param_groups:
-            pg["lr"] = lr
-            pg["weight_decay"] = weight_decay
-
         self.train_model.train()
         self.optimizer.zero_grad()
-
-        # Pad all sequences into a single batch
-        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
-        lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
-        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
-
-        # pad_sequence pads to max length in batch (batch_first=True -> [N, max_len])
-        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
-        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-
-        # Build attention mask: 1 where real tokens, 0 where padding
-        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
-        max_len = input_ids.shape[1]
-        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
 
         # Single batched forward pass with AMP
         with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
@@ -259,15 +262,94 @@ class MAXTrainHelper:
         self.scaler.update()
         self.optimizer.zero_grad()
 
-        return masked_loss.item()
+        loss_val = masked_loss.item()
+
+        # Snapshot LoRA weights for safe cross-thread sync
+        if self.split_mode:
+            snapshot = {}
+            for name, param in self.train_model.named_parameters():
+                if "lora_" in name:
+                    snapshot[name] = param.data.clone()
+            self._weight_snapshot = snapshot
+
+        return loss_val
+
+    def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
+        """Run one training step with importance sampling loss.
+
+        Split mode (async): waits for any previous training future (back pressure),
+        prepares tensors on train_device, submits _do_train_impl to the executor,
+        and returns _pending_loss (loss from the previously completed step).
+        Step 0 returns 0.0 since no training has completed yet.
+
+        Single mode: unchanged synchronous path returning current step's loss.
+
+        Args:
+            all_tokens: List of full token sequences (prompt + completion).
+            all_logprobs: List of per-token logprobs (0-padded for prompt).
+            all_advantages: List of per-token advantages (0-padded for prompt).
+            lr: Learning rate.
+            weight_decay: Weight decay coefficient.
+
+        Returns:
+            Mean loss (from previous step in split mode, current step otherwise).
+        """
+        n = len(all_tokens)
+        if n == 0:
+            return 0.0
+
+        # Update optimizer hyperparameters
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = lr
+            pg["weight_decay"] = weight_decay
+
+        # Pad all sequences into a single batch
+        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
+        lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
+        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
+
+        # pad_sequence pads to max length in batch (batch_first=True -> [N, max_len])
+        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
+        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+
+        # Build attention mask: 1 where real tokens, 0 where padding
+        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
+        max_len = input_ids.shape[1]
+        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
+
+        if self.split_mode:
+            # Async path: wait for previous training to finish (back pressure)
+            if self._train_future is not None:
+                self._pending_loss = self._train_future.result()
+                self._train_future = None
+
+            # Submit training to background thread
+            self._train_future = self._train_executor.submit(
+                self._do_train_impl, input_ids, old_logprobs, advantages, attention_mask
+            )
+
+            # Return loss from the previously completed training step
+            return self._pending_loss
+        else:
+            # Synchronous path: run training inline, return current loss
+            return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
 
     def save_adapter(self, path, name):
         """Save LoRA adapter to disk.
+
+        Flushes any pending async training before saving to ensure
+        the saved weights include the latest completed training step.
 
         Args:
             path: Base directory for adapter storage.
             name: Checkpoint name (creates subdirectory).
         """
+        # Flush pending training before saving
+        if self._train_future is not None:
+            self._pending_loss = self._train_future.result()
+            self._train_future = None
+
         save_dir = os.path.join(path, name)
         os.makedirs(save_dir, exist_ok=True)
         self.train_model.save_pretrained(save_dir)
