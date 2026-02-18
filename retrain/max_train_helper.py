@@ -5,6 +5,11 @@ MAX is inference-only (no autograd). This helper provides:
 - PyTorch generate with logprobs for inference (fallback, upgradeable to MAX)
 - Adapter save/load for weight synchronization
 
+GPU split mode (multi-GPU): separate devices for inference and training.
+- infer_model on first device (sampling)
+- train_model on last device (gradient updates)
+- checkpoint() syncs LoRA weights train -> infer
+
 The MAXBackend in Mojo calls into this module via Python interop.
 """
 
@@ -17,6 +22,17 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
 
 
+def _parse_device(device_str):
+    """Convert a device spec like 'gpu:0' to a torch device string like 'cuda:0'."""
+    device_str = device_str.strip()
+    if device_str.startswith("gpu:"):
+        return device_str.replace("gpu:", "cuda:")
+    elif device_str == "cpu":
+        return "cpu"
+    else:
+        return "cuda:0"
+
+
 class MAXTrainHelper:
     """Hybrid helper: PyTorch/PEFT training + inference."""
 
@@ -24,29 +40,29 @@ class MAXTrainHelper:
         self.adapter_path = adapter_path
         self.model_name = model_name
 
-        # Parse device from devices spec (e.g. "gpu:0" -> "cuda:0", "cpu" -> "cpu")
-        device_str = devices.split(",")[0].strip()
-        if device_str.startswith("gpu:"):
-            self.device = device_str.replace("gpu:", "cuda:")
-        elif device_str == "cpu":
-            self.device = "cpu"
+        # Parse all devices from comma-separated spec
+        raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
+        parsed_devices = [_parse_device(d) for d in raw_devices]
+
+        # Determine split mode: need >1 device and CUDA available
+        cuda_devices = [d for d in parsed_devices if d.startswith("cuda")]
+        self.split_mode = len(cuda_devices) > 1 and torch.cuda.is_available()
+
+        if self.split_mode:
+            self.infer_device = cuda_devices[0]   # first GPU for inference
+            self.train_device = cuda_devices[-1]   # last GPU for training
         else:
-            self.device = "cuda:0"
+            # Single-model mode: use first device (with CUDA fallback)
+            device = parsed_devices[0] if parsed_devices else "cuda:0"
+            if device.startswith("cuda") and not torch.cuda.is_available():
+                print("CUDA not available, falling back to CPU")
+                device = "cpu"
+            self.infer_device = device
+            self.train_device = device
 
-        # Check if CUDA is actually available
-        if self.device.startswith("cuda") and not torch.cuda.is_available():
-            print("CUDA not available, falling back to CPU")
-            self.device = "cpu"
+        self.use_amp = self.train_device != "cpu"
+        dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
 
-        self.use_amp = self.device != "cpu"
-
-        print(f"Loading base model: {model_name} on {self.device}...")
-        dtype = torch.bfloat16 if self.device != "cpu" else torch.float32
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype
-        )
-
-        # Apply LoRA
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
@@ -57,16 +73,36 @@ class MAXTrainHelper:
                 "gate_proj", "up_proj", "down_proj",
             ],
         )
-        self.model = get_peft_model(self.model, peft_config)
-        self.model.to(self.device)
-        self.model.print_trainable_parameters()
+
+        # Create train model
+        print(f"Loading train model: {model_name} on {self.train_device}...")
+        base_train = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype
+        )
+        self.train_model = get_peft_model(base_train, peft_config)
+        self.train_model.to(self.train_device)
+        self.train_model.print_trainable_parameters()
 
         # Gradient checkpointing — trade compute for VRAM
-        self.model.gradient_checkpointing_enable()
+        self.train_model.gradient_checkpointing_enable()
 
-        # Optimizer
+        if self.split_mode:
+            # Create separate infer model on a different device
+            print(f"Loading infer model: {model_name} on {self.infer_device}...")
+            base_infer = AutoModelForCausalLM.from_pretrained(
+                model_name, torch_dtype=dtype
+            )
+            self.infer_model = get_peft_model(base_infer, peft_config)
+            self.infer_model.to(self.infer_device)
+            # Initial sync so infer model starts with same LoRA weights
+            self._sync_lora_weights()
+        else:
+            # Single-model mode: same object for both roles
+            self.infer_model = self.train_model
+
+        # Optimizer (only for train_model)
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            self.train_model.parameters(),
             lr=4e-5,
             betas=(0.9, 0.95),
             eps=1e-8,
@@ -76,11 +112,24 @@ class MAXTrainHelper:
         # AMP scaler for mixed precision
         self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
-        print("MAXTrainHelper ready.")
+        print(f"MAXTrainHelper ready (split_mode={self.split_mode}).")
+
+    def _sync_lora_weights(self):
+        """Copy LoRA weights from train_model to infer_model.
+
+        No-op when split_mode is False (infer_model is train_model).
+        """
+        if not self.split_mode:
+            return
+
+        train_state = dict(self.train_model.named_parameters())
+        for name, infer_param in self.infer_model.named_parameters():
+            if "lora_" in name and name in train_state:
+                infer_param.data.copy_(train_state[name].data.to(infer_param.device))
 
     def checkpoint(self, name):
-        """Prepare for sampling. In PyTorch fallback, model is always current."""
-        pass
+        """Prepare for sampling by syncing LoRA weights train -> infer."""
+        self._sync_lora_weights()
 
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
         """Generate completions with per-token logprobs.
@@ -96,17 +145,17 @@ class MAXTrainHelper:
             List of lists of (token_ids, logprobs) tuples.
         """
         results = []
-        self.model.eval()
+        self.infer_model.eval()
 
         with torch.no_grad():
             for prompt_ids in prompt_ids_list:
                 # Expand prompt for num_samples
                 input_ids = torch.tensor(
-                    [prompt_ids] * num_samples, device=self.device
+                    [prompt_ids] * num_samples, device=self.infer_device
                 )
                 prompt_len = len(prompt_ids)
 
-                outputs = self.model.generate(
+                outputs = self.infer_model.generate(
                     input_ids,
                     max_new_tokens=max_tokens,
                     temperature=max(temperature, 1e-7),
@@ -166,7 +215,7 @@ class MAXTrainHelper:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
 
-        self.model.train()
+        self.train_model.train()
         self.optimizer.zero_grad()
 
         # Pad all sequences into a single batch
@@ -175,18 +224,18 @@ class MAXTrainHelper:
         adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
 
         # pad_sequence pads to max length in batch (batch_first=True -> [N, max_len])
-        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.device)
-        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.device)
-        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.device)
+        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
+        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
 
         # Build attention mask: 1 where real tokens, 0 where padding
-        lengths = torch.tensor([len(t) for t in all_tokens], device=self.device)
+        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
         max_len = input_ids.shape[1]
-        attention_mask = torch.arange(max_len, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
 
         # Single batched forward pass with AMP
-        with torch.amp.autocast(device_type=self.device.split(":")[0], enabled=self.use_amp):
-            outputs = self.model(input_ids, attention_mask=attention_mask)
+        with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
+            outputs = self.train_model(input_ids, attention_mask=attention_mask)
             logits = outputs.logits[:, :-1]  # [N, max_len-1, vocab] — shift
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
 
@@ -221,5 +270,5 @@ class MAXTrainHelper:
         """
         save_dir = os.path.join(path, name)
         os.makedirs(save_dir, exist_ok=True)
-        self.model.save_pretrained(save_dir)
+        self.train_model.save_pretrained(save_dir)
         print(f"Adapter saved to {save_dir}")
