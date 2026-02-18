@@ -29,7 +29,7 @@ from src.sepa import SEPAController
 from src.logging import JsonlLogger, KeyValue, json_float, json_int, json_string, json_bool, build_json_line
 from src.backend import TrainingBackend, SampleSequence
 from src.tinker_backend import TinkerBackend
-from src.max_backend import MAXBackend
+from src.local_backend import LocalBackend
 from src.reward import RewardFn, BoxedMathReward, extract_boxed, grade_answer, get_reward
 from src.data import DataSource, Example, MathDataSource
 from src.advantage_fns import (
@@ -799,8 +799,8 @@ fn main() raises:
             peak_gflops=config.bp_peak_gflops,
             peak_bw_gb_s=config.bp_peak_bw_gb_s,
         )
-        if config.backend == "max":
-            var backend = MAXBackend(config)
+        if config.backend == "local":
+            var backend = LocalBackend(config)
             if config.advantage_mode == "grpo":
                 _run(backend, GRPOAdvantage(), bp, config)
             else:
@@ -813,8 +813,8 @@ fn main() raises:
                 _run(backend, MaxRLAdvantage(), bp, config)
     else:
         var bp = NoOpBackPressure()
-        if config.backend == "max":
-            var backend = MAXBackend(config)
+        if config.backend == "local":
+            var backend = LocalBackend(config)
             if config.advantage_mode == "grpo":
                 _run(backend, GRPOAdvantage(), bp, config)
             else:

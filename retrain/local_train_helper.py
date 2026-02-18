@@ -1,16 +1,16 @@
-"""Python helper for MAXBackend: PyTorch/PEFT training + inference fallback.
+"""Python helper for LocalBackend: PyTorch/PEFT training + pluggable inference.
 
-MAX is inference-only (no autograd). This helper provides:
+This helper provides:
 - PyTorch model with PEFT LoRA for training (gradient computation)
-- PyTorch generate with logprobs for inference (fallback, upgradeable to MAX)
+- Pluggable InferenceEngine for sampling (PyTorch fallback or server-based)
 - Adapter save/load for weight synchronization
 
 GPU split mode (multi-GPU): separate devices for inference and training.
-- infer_model on first device (sampling)
+- engine on first device (sampling)
 - train_model on last device (gradient updates)
-- checkpoint() syncs LoRA weights train -> infer
+- checkpoint() syncs LoRA weights train -> engine
 
-The MAXBackend in Mojo calls into this module via Python interop.
+The LocalBackend in Mojo calls into this module via Python interop.
 """
 
 import os
@@ -21,6 +21,8 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
+
+from retrain.inference_engine import create_engine
 
 
 def _parse_device(device_str):
@@ -34,12 +36,14 @@ def _parse_device(device_str):
         return "cuda:0"
 
 
-class MAXTrainHelper:
-    """Hybrid helper: PyTorch/PEFT training + inference."""
+class LocalTrainHelper:
+    """Local GPU helper: pluggable inference engine + PyTorch/PEFT training."""
 
-    def __init__(self, model_name, adapter_path, devices, lora_rank=32):
+    def __init__(self, model_name, adapter_path, devices, lora_rank=32,
+                 engine_type="pytorch", inference_url=""):
         self.adapter_path = adapter_path
         self.model_name = model_name
+        self.engine_type = engine_type
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -49,7 +53,21 @@ class MAXTrainHelper:
         cuda_devices = [d for d in parsed_devices if d.startswith("cuda")]
         self.split_mode = len(cuda_devices) > 1 and torch.cuda.is_available()
 
-        if self.split_mode:
+        # Non-PyTorch engines manage their own inference independently.
+        # Server engines use a remote process; MAX engine uses its own in-process model.
+        self._server_engine = engine_type in ("vllm", "sglang", "openai")
+        self._external_engine = engine_type in ("max", "vllm", "sglang", "openai")
+
+        if self._external_engine:
+            # Server handles inference — all local GPUs for training
+            device = parsed_devices[-1] if parsed_devices else "cuda:0"
+            if device.startswith("cuda") and not torch.cuda.is_available():
+                print("CUDA not available, falling back to CPU")
+                device = "cpu"
+            self.infer_device = device  # not used for sampling, but kept for compat
+            self.train_device = device
+            self.split_mode = False
+        elif self.split_mode:
             self.infer_device = cuda_devices[0]   # first GPU for inference
             self.train_device = cuda_devices[-1]   # last GPU for training
         else:
@@ -91,22 +109,44 @@ class MAXTrainHelper:
         self._train_future = None       # Future from last submitted training
         self._pending_loss = 0.0        # Loss from last completed training
         self._weight_snapshot = None    # LoRA weight snapshot for safe cross-thread sync
+        self._weights_dirty = False     # Track if weights changed since last server sync
 
-        if self.split_mode:
+        # Create inference engine
+        if self._external_engine:
+            # External engine (MAX in-process or server-based) — manages its own model
+            self.engine = create_engine(
+                engine_type=engine_type,
+                model_name=model_name,
+                device=self.infer_device,
+                peft_config=peft_config,
+                dtype=dtype,
+                inference_url=inference_url,
+            )
+        elif self.split_mode:
             self._train_executor = ThreadPoolExecutor(max_workers=1)
 
-            # Create separate infer model on a different device
-            print(f"Loading infer model: {model_name} on {self.infer_device}...")
-            base_infer = AutoModelForCausalLM.from_pretrained(
-                model_name, torch_dtype=dtype
+            # PyTorch engine on separate inference device
+            self.engine = create_engine(
+                engine_type="pytorch",
+                model_name=model_name,
+                device=self.infer_device,
+                peft_config=peft_config,
+                dtype=dtype,
             )
-            self.infer_model = get_peft_model(base_infer, peft_config)
-            self.infer_model.to(self.infer_device)
-            # Initial sync: copy directly from train_model (no snapshot yet)
+            # Initial sync: copy LoRA weights from train to infer
             self._do_initial_sync()
         else:
-            # Single-model mode: same object for both roles
-            self.infer_model = self.train_model
+            # Single-model mode: engine wraps the train model directly
+            # We use a thin wrapper that points to train_model
+            self.engine = create_engine(
+                engine_type="pytorch",
+                model_name=model_name,
+                device=self.infer_device,
+                peft_config=peft_config,
+                dtype=dtype,
+            )
+            # Point the engine's model to the train model (same object)
+            self.engine.model = self.train_model
 
         # Optimizer (only for train_model)
         self.optimizer = torch.optim.AdamW(
@@ -120,41 +160,54 @@ class MAXTrainHelper:
         # AMP scaler for mixed precision
         self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
 
-        print(f"MAXTrainHelper ready (split_mode={self.split_mode}).")
+        print(f"LocalTrainHelper ready (engine={engine_type}, split_mode={self.split_mode}).")
 
     def _do_initial_sync(self):
-        """Copy LoRA weights from train_model to infer_model at init time.
+        """Copy LoRA weights from train_model to engine at init time.
 
         Used once during __init__ before any training has occurred (no snapshot
         exists yet). After this, all syncs go through _sync_lora_weights which
         reads from the weight snapshot.
         """
         train_state = dict(self.train_model.named_parameters())
-        for name, infer_param in self.infer_model.named_parameters():
-            if "lora_" in name and name in train_state:
-                infer_param.data.copy_(train_state[name].data.to(infer_param.device))
+        lora_dict = {}
+        for name, param in train_state.items():
+            if "lora_" in name:
+                lora_dict[name] = param.data
+        self.engine.sync_from_state_dict(lora_dict)
 
     def _sync_lora_weights(self):
-        """Copy LoRA weights from snapshot to infer_model.
+        """Copy LoRA weights from snapshot to engine.
 
         In split mode: copies from _weight_snapshot (created after each completed
         training step) rather than live train_model weights. This is safe to call
         while training is running on GPU 1 — reads snapshot, not live weights.
 
-        No-op when split_mode is False (infer_model is train_model) or when
+        For external engines (MAX, server-based): saves adapter to disk and
+        tells engine to reload.
+
+        No-op when split_mode is False (engine shares train_model) or when
         no training has completed yet (_weight_snapshot is None).
         """
+        if self._external_engine:
+            if self._weights_dirty and self._weight_snapshot is not None:
+                # Save adapter to disk, then tell engine to reload
+                save_dir = os.path.join(self.adapter_path, "_live_adapter")
+                os.makedirs(save_dir, exist_ok=True)
+                self.train_model.save_pretrained(save_dir)
+                self.engine.reload_weights(save_dir)
+                self._weights_dirty = False
+            return
+
         if not self.split_mode:
             return
         if self._weight_snapshot is None:
             return
 
-        for name, infer_param in self.infer_model.named_parameters():
-            if "lora_" in name and name in self._weight_snapshot:
-                infer_param.data.copy_(self._weight_snapshot[name].to(infer_param.device))
+        self.engine.sync_from_state_dict(self._weight_snapshot)
 
     def checkpoint(self, name):
-        """Prepare for sampling by syncing LoRA weights from snapshot -> infer.
+        """Prepare for sampling by syncing LoRA weights from snapshot -> engine.
 
         Non-blocking: if _train_future is done, collects loss into _pending_loss.
         Syncs from latest weight snapshot. Does NOT block-wait for in-flight
@@ -168,6 +221,10 @@ class MAXTrainHelper:
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
         """Generate completions with per-token logprobs.
 
+        Delegates to the configured InferenceEngine, then converts
+        SampleResult objects to (token_ids, logprobs) tuples for
+        backward compatibility with the Mojo caller.
+
         Args:
             prompt_ids_list: List of lists of token IDs (one per prompt).
             num_samples: Number of completions per prompt.
@@ -178,50 +235,17 @@ class MAXTrainHelper:
         Returns:
             List of lists of (token_ids, logprobs) tuples.
         """
+        engine_results = self.engine.generate(
+            prompt_ids_list, num_samples, max_tokens, temperature, top_p
+        )
+
+        # Convert SampleResult -> tuples for Mojo interop
         results = []
-        self.infer_model.eval()
-
-        with torch.no_grad():
-            for prompt_ids in prompt_ids_list:
-                # Expand prompt for num_samples
-                input_ids = torch.tensor(
-                    [prompt_ids] * num_samples, device=self.infer_device
-                )
-                prompt_len = len(prompt_ids)
-
-                outputs = self.infer_model.generate(
-                    input_ids,
-                    max_new_tokens=max_tokens,
-                    temperature=max(temperature, 1e-7),
-                    top_p=top_p,
-                    do_sample=True,
-                    output_scores=True,
-                    return_dict_in_generate=True,
-                )
-
-                # Vectorized logprob extraction: stack all scores at once
-                # outputs.scores is a tuple of (num_steps,) tensors each [num_samples, vocab]
-                if len(outputs.scores) > 0:
-                    all_scores = torch.stack(outputs.scores, dim=1)  # [num_samples, steps, vocab]
-                    all_log_probs = F.log_softmax(all_scores.float(), dim=-1)
-
-                group = []
-                for i in range(num_samples):
-                    gen_ids = outputs.sequences[i][prompt_len:].tolist()
-                    gen_len = len(gen_ids)
-
-                    if gen_len > 0 and len(outputs.scores) > 0:
-                        # Gather logprobs for chosen tokens in one shot
-                        gen_tensor = outputs.sequences[i][prompt_len:prompt_len + gen_len]
-                        logprobs = all_log_probs[i, :gen_len].gather(
-                            1, gen_tensor.unsqueeze(1)
-                        ).squeeze(1).tolist()
-                    else:
-                        logprobs = []
-
-                    group.append((gen_ids, logprobs))
-                results.append(group)
-
+        for group in engine_results:
+            converted = []
+            for sr in group:
+                converted.append((sr.token_ids, sr.logprobs))
+            results.append(converted)
         return results
 
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
@@ -265,12 +289,13 @@ class MAXTrainHelper:
         loss_val = masked_loss.item()
 
         # Snapshot LoRA weights for safe cross-thread sync
-        if self.split_mode:
+        if self.split_mode or self._external_engine:
             snapshot = {}
             for name, param in self.train_model.named_parameters():
                 if "lora_" in name:
                     snapshot[name] = param.data.clone()
             self._weight_snapshot = snapshot
+            self._weights_dirty = True
 
         return loss_val
 

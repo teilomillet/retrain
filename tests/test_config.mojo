@@ -74,6 +74,13 @@ fn test_defaults_sepa() raises:
     assert_almost_equal(c.sepa_correct_rate_gate, 0.1, atol=1e-10)
 
 
+fn test_defaults_inference_engine() raises:
+    """Default inference engine parameters."""
+    var c = TrainConfig()
+    assert_equal(c.inference_engine, "pytorch")
+    assert_equal(c.inference_url, "")
+
+
 fn test_defaults_logging() raises:
     """Default logging parameters."""
     var c = TrainConfig()
@@ -93,7 +100,7 @@ fn test_fieldwise_init() raises:
     var c = TrainConfig(
         advantage_mode="grpo",
         transform_mode="none",
-        backend="max",
+        backend="local",
         devices="gpu:0,gpu:1",
         adapter_path="/tmp/test_adapter",
         model="test-model",
@@ -124,13 +131,15 @@ fn test_fieldwise_init() raises:
         bp_max_batch_size=64,
         bp_peak_gflops=0.0,
         bp_peak_bw_gb_s=0.0,
+        inference_engine="vllm",
+        inference_url="http://localhost:8000",
         log_dir="/tmp/logs",
         wandb_project="test-project",
         wandb_run_name="run-1",
     )
     assert_equal(c.advantage_mode, "grpo")
     assert_equal(c.transform_mode, "none")
-    assert_equal(c.backend, "max")
+    assert_equal(c.backend, "local")
     assert_equal(c.devices, "gpu:0,gpu:1")
     assert_equal(c.adapter_path, "/tmp/test_adapter")
     assert_equal(c.model, "test-model")
@@ -138,6 +147,8 @@ fn test_fieldwise_init() raises:
     assert_equal(c.max_steps, 10)
     assert_almost_equal(c.temperature, 0.9, atol=1e-10)
     assert_equal(c.sepa_schedule, "auto")
+    assert_equal(c.inference_engine, "vllm")
+    assert_equal(c.inference_url, "http://localhost:8000")
     assert_equal(c.wandb_project, "test-project")
 
 
@@ -176,9 +187,10 @@ fn main() raises:
     test_defaults_training()
     test_defaults_algorithm_hparams()
     test_defaults_sepa()
+    test_defaults_inference_engine()
     test_defaults_logging()
     test_fieldwise_init()
     test_copy()
     test_write_to()
 
-    print("All 11 config tests passed!")
+    print("All 12 config tests passed!")

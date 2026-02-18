@@ -1,11 +1,10 @@
-"""MAXBackend — hybrid MAX inference + PyTorch/PEFT training.
+"""LocalBackend — local GPU training via PyTorch/PEFT + pluggable inference.
 
-MAX (Modular's framework) is inference-only — no autograd, no backward pass.
-This backend uses PyTorch/PEFT for LoRA training and, in the initial
-implementation, PyTorch for inference as well (upgradeable to MAX's
-multi-GPU tensor parallelism for sampling).
+This backend uses PyTorch/PEFT for LoRA training locally and delegates
+inference to a pluggable InferenceEngine (PyTorch fallback, vLLM, SGLang,
+or any OpenAI-compatible server).
 
-The heavy lifting is delegated to retrain.max_train_helper.MAXTrainHelper.
+The heavy lifting is delegated to retrain.local_train_helper.LocalTrainHelper.
 """
 
 from python import Python, PythonObject
@@ -21,32 +20,34 @@ from src.pybridge import (
 )
 
 
-struct MAXBackend(TrainingBackend):
-    """Training backend using local GPU via PyTorch/PEFT (MAX-upgradeable)."""
+struct LocalBackend(TrainingBackend):
+    """Training backend using local GPU via PyTorch/PEFT."""
 
     var helper: PythonObject
     var adapter_path: String
 
     fn __init__(out self, config: TrainConfig) raises:
         """Initialize PyTorch model with PEFT LoRA adapter."""
-        print("Initializing MAX backend (PyTorch/PEFT fallback)...")
+        print("Initializing local backend (PyTorch/PEFT)...")
 
         # Ensure retrain package is importable from project root
         var sys = Python.import_module("sys")
         sys.path.insert(0, ".")
 
-        var helper_mod = Python.import_module("retrain.max_train_helper")
-        self.helper = helper_mod.MAXTrainHelper(
+        var helper_mod = Python.import_module("retrain.local_train_helper")
+        self.helper = helper_mod.LocalTrainHelper(
             config.model,
             config.adapter_path,
             config.devices,
             config.lora_rank,
+            config.inference_engine,
+            config.inference_url,
         )
         self.adapter_path = config.adapter_path
-        print("MAX backend ready.")
+        print("Local backend ready.")
 
     fn checkpoint_for_sampling(mut self, name: String) raises:
-        """Prepare for sampling. In PyTorch fallback, model is always current."""
+        """Prepare for sampling by syncing weights to inference engine."""
         self.helper.checkpoint(name)
 
     fn sample_batch(
@@ -57,7 +58,7 @@ struct MAXBackend(TrainingBackend):
         temperature: Float64,
         top_p: Float64,
     ) raises -> List[List[SampleSequence]]:
-        """Generate completions via PyTorch model.generate with logprobs."""
+        """Generate completions via the configured inference engine."""
         var builtins = Python.import_module("builtins")
 
         # Convert prompts to Python list of lists

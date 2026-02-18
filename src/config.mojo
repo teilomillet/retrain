@@ -17,7 +17,7 @@ struct TrainConfig(Copyable, Movable, Writable):
     var transform_mode: String
 
     # Backend selection
-    var backend: String  # "tinker" or "max"
+    var backend: String  # "tinker" or "local"
     var devices: String  # e.g. "gpu:0,gpu:1"
     var adapter_path: String  # LoRA adapter exchange directory
 
@@ -61,6 +61,10 @@ struct TrainConfig(Copyable, Movable, Writable):
     var bp_peak_gflops: Float64
     var bp_peak_bw_gb_s: Float64
 
+    # Inference engine
+    var inference_engine: String  # "pytorch" | "max" | "vllm" | "sglang" | "openai"
+    var inference_url: String  # Server URL for server-based engines (empty = default)
+
     # Logging
     var log_dir: String
     var wandb_project: String  # empty = disabled
@@ -91,6 +95,8 @@ struct TrainConfig(Copyable, Movable, Writable):
         self.sepa_delay_steps = 50
         self.sepa_correct_rate_gate = 0.1
         self.strategic_grams = ""
+        self.inference_engine = "pytorch"
+        self.inference_url = ""
         self.bp_enabled = False
         self.bp_warmup_steps = 10
         self.bp_ema_decay = 0.9
@@ -125,7 +131,7 @@ fn print_usage():
     print("Train on MATH with textpolicy advantages via Tinker.")
     print()
     print("Backend:")
-    print("  --backend MODE           tinker | max (default: tinker)")
+    print("  --backend MODE           tinker | local (default: tinker)")
     print("  --devices SPECS          Device list, e.g. gpu:0,gpu:1 (default: gpu:0)")
     print("  --adapter-path PATH      LoRA adapter exchange directory (default: /tmp/retrain_adapter)")
     print()
@@ -176,6 +182,11 @@ fn print_usage():
     print("  --bp-max-batch-size N    Maximum batch size (default: 64)")
     print("  --bp-peak-gflops F       Peak GFLOPS for roofline (default: 0=auto)")
     print("  --bp-peak-bw-gb-s F      Peak bandwidth GB/s for roofline (default: 0=auto)")
+    print()
+    print("Inference engine:")
+    print("  --inference-engine MODE  pytorch | max | vllm | sglang | openai (default: pytorch)")
+    print("                           max: in-process if no URL, max serve if --inference-url set")
+    print("  --inference-url URL      Server URL for server-based engines (default: auto)")
     print()
     print("Config file:")
     print("  --config PATH            TOML config file (CLI args override)")
@@ -291,6 +302,16 @@ fn _apply_toml(mut config: TrainConfig, path: String) raises:
         config.sepa_delay_steps = _py_int(sec, "delay_steps", config.sepa_delay_steps)
         config.sepa_correct_rate_gate = _py_float(sec, "correct_rate_gate", config.sepa_correct_rate_gate)
 
+    # [inference]
+    if "inference" in data:
+        var sec = data["inference"]
+        var v = _py_str(sec, "engine")
+        if len(v) > 0:
+            config.inference_engine = v
+        v = _py_str(sec, "url")
+        if len(v) > 0:
+            config.inference_url = v
+
     # [backpressure]
     if "backpressure" in data:
         var sec = data["backpressure"]
@@ -361,8 +382,8 @@ fn parse_args() raises -> TrainConfig:
         i += 2
 
         if arg == "--backend":
-            if val != "tinker" and val != "max":
-                raise Error("--backend must be 'tinker' or 'max', got: " + val)
+            if val != "tinker" and val != "local":
+                raise Error("--backend must be 'tinker' or 'local', got: " + val)
             config.backend = val
         elif arg == "--devices":
             config.devices = val
@@ -441,6 +462,14 @@ fn parse_args() raises -> TrainConfig:
             config.bp_peak_gflops = Float64(val)
         elif arg == "--bp-peak-bw-gb-s":
             config.bp_peak_bw_gb_s = Float64(val)
+        elif arg == "--inference-engine":
+            if val != "pytorch" and val != "max" and val != "vllm" and val != "sglang" and val != "openai":
+                raise Error(
+                    "--inference-engine must be pytorch|max|vllm|sglang|openai, got: " + val
+                )
+            config.inference_engine = val
+        elif arg == "--inference-url":
+            config.inference_url = val
         elif arg == "--strategic-grams":
             config.strategic_grams = val
         elif arg == "--log-dir":
