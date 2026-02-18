@@ -91,6 +91,18 @@ fn default_strategic_grams() -> List[String]:
     return grams^
 
 
+fn _safe_truncate(s: String, max_bytes: Int) -> String:
+    """Truncate a string at a UTF-8 safe boundary."""
+    if len(s) <= max_bytes:
+        return s
+    var end = max_bytes
+    var b = s.as_bytes()
+    # Back up past any UTF-8 continuation bytes (0x80-0xBF)
+    while end > 0 and (Int(b[end]) & 0xC0) == 0x80:
+        end -= 1
+    return String(s[:end])
+
+
 # ---------------------------------------------------------------------------
 # Composable advantage pipeline (backward-compatible convenience wrapper)
 # ---------------------------------------------------------------------------
@@ -395,7 +407,7 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
 
             var answer_preview = answer
             if len(answer_preview) > 40:
-                answer_preview = String(answer_preview[:40])
+                answer_preview = _safe_truncate(answer_preview, 40)
             print(
                 "  group: " + String(group_correct) + "/"
                 + String(len(rewards_G)) + " correct | answer=" + answer_preview
@@ -461,11 +473,11 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
                 gen_entries.append(json_int("step", batch_idx))
                 var prompt_preview = prompt_text
                 if len(prompt_preview) > 200:
-                    prompt_preview = String(prompt_preview[:200])
+                    prompt_preview = _safe_truncate(prompt_preview, 200)
                 gen_entries.append(json_string("prompt", prompt_preview))
                 var comp_preview = completion_text
                 if len(comp_preview) > 500:
-                    comp_preview = String(comp_preview[:500])
+                    comp_preview = _safe_truncate(comp_preview, 500)
                 gen_entries.append(json_string("completion", comp_preview))
                 gen_entries.append(json_float("reward", reward))
                 gen_entries.append(json_int("num_tokens", len(all_group_sequences[f_idx][s_idx].tokens)))
@@ -704,7 +716,38 @@ fn _run[B: TrainingBackend, E: EpisodeAdvantageFn, BP: BackPressure](
 # ---------------------------------------------------------------------------
 
 
+fn _load_dotenv() raises:
+    """Load .env file if present. Sets vars into os.environ."""
+    var os = Python.import_module("os")
+    var pathlib = Python.import_module("pathlib")
+    var env_path = pathlib.Path(".env")
+    if not env_path.exists():
+        return
+    var builtins = Python.import_module("builtins")
+    var f = builtins.open(String(env_path), "r")
+    var lines = f.read().splitlines()
+    f.close()
+    for i in range(len(lines)):
+        var line = String(lines[i]).strip()
+        if len(line) == 0 or line.startswith("#"):
+            continue
+        var eq = line.find("=")
+        if eq == -1:
+            continue
+        var key = String(String(line[:eq]).strip())
+        var val = String(String(line[eq + 1 :]).strip())
+        # Strip surrounding quotes
+        if len(val) >= 2:
+            if (val.startswith('"') and val.endswith('"')) or (
+                val.startswith("'") and val.endswith("'")
+            ):
+                val = String(val[1 : len(val) - 1])
+        os.environ[key] = val
+    print("Loaded .env")
+
+
 fn main() raises:
+    _load_dotenv()
     var config = parse_args()
     if config.bp_enabled:
         var bp = USLBackPressure(
