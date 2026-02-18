@@ -10,14 +10,9 @@ Covers:
 from testing import assert_true, assert_false, assert_equal, assert_almost_equal
 from math import abs
 
-from src.main import (
-    extract_boxed,
-    grade_answer,
-    get_reward,
-    compute_composable_advantages,
-    AdvantageResult,
-    default_strategic_grams,
-)
+from src.reward import extract_boxed, grade_answer, get_reward
+from src.main import compute_composable_advantages, default_strategic_grams
+from src.advantage_fns import AdvantageResult
 from src.advantages import EntropyStats
 
 

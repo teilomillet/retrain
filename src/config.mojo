@@ -1,8 +1,10 @@
 """TrainConfig struct and CLI argument parser.
 
 Ports argparse from textpolicy/tinker/train_math.py into native Mojo.
+Supports --config PATH for TOML-based configuration (CLI args override).
 """
 
+from python import Python, PythonObject
 from sys import argv
 
 
@@ -143,18 +145,156 @@ fn print_usage():
     print("  --wandb-run-name NAME    Wandb run name")
     print("  --strategic-grams JSON   JSON list of strategic gram phrases")
     print()
+    print("Config file:")
+    print("  --config PATH            TOML config file (CLI args override)")
+    print()
     print("  --help                   Show this help message")
+
+
+fn _py_str(obj: PythonObject, key: String) raises -> String:
+    """Get a string value from a Python dict, or empty string if missing."""
+    if key in obj:
+        return String(obj[key])
+    return String("")
+
+
+fn _py_int(obj: PythonObject, key: String, default: Int) raises -> Int:
+    """Get an int value from a Python dict, or default if missing."""
+    if key in obj:
+        return Int(String(obj[key]))
+    return default
+
+
+fn _py_float(obj: PythonObject, key: String, default: Float64) raises -> Float64:
+    """Get a float value from a Python dict, or default if missing."""
+    if key in obj:
+        return Float64(String(obj[key]))
+    return default
+
+
+fn _apply_toml(mut config: TrainConfig, path: String) raises:
+    """Load a TOML config file and apply its values to config.
+
+    Uses Python's tomllib (3.11+) for parsing. TOML sections map to
+    config fields:
+        [algorithm]   -> advantage_mode, transform_mode
+        [backend]     -> backend, devices, adapter_path
+        [model]       -> model, base_url, lora_rank
+        [training]    -> max_steps, batch_size, group_size, etc.
+        [gtpo]        -> gtpo_beta
+        [hicra]       -> hicra_alpha
+        [sepa]        -> sepa_steps, sepa_schedule, etc.
+        [logging]     -> log_dir, wandb_project, wandb_run_name, strategic_grams
+    """
+    var tomllib = Python.import_module("tomllib")
+    var builtins = Python.import_module("builtins")
+    var f = builtins.open(path, "rb")
+    var data = tomllib.load(f)
+    f.close()
+
+    # [algorithm]
+    if "algorithm" in data:
+        var sec = data["algorithm"]
+        var v = _py_str(sec, "advantage_mode")
+        if len(v) > 0:
+            config.advantage_mode = v
+        v = _py_str(sec, "transform_mode")
+        if len(v) > 0:
+            config.transform_mode = v
+
+    # [backend]
+    if "backend" in data:
+        var sec = data["backend"]
+        var v = _py_str(sec, "backend")
+        if len(v) > 0:
+            config.backend = v
+        v = _py_str(sec, "devices")
+        if len(v) > 0:
+            config.devices = v
+        v = _py_str(sec, "adapter_path")
+        if len(v) > 0:
+            config.adapter_path = v
+
+    # [model]
+    if "model" in data:
+        var sec = data["model"]
+        var v = _py_str(sec, "model")
+        if len(v) > 0:
+            config.model = v
+        v = _py_str(sec, "base_url")
+        if len(v) > 0:
+            config.base_url = v
+        config.lora_rank = _py_int(sec, "lora_rank", config.lora_rank)
+
+    # [training]
+    if "training" in data:
+        var sec = data["training"]
+        config.max_steps = _py_int(sec, "max_steps", config.max_steps)
+        config.batch_size = _py_int(sec, "batch_size", config.batch_size)
+        config.group_size = _py_int(sec, "group_size", config.group_size)
+        config.max_tokens = _py_int(sec, "max_tokens", config.max_tokens)
+        config.temperature = _py_float(sec, "temperature", config.temperature)
+        config.lr = _py_float(sec, "lr", config.lr)
+        config.weight_decay = _py_float(sec, "weight_decay", config.weight_decay)
+        config.max_examples = _py_int(sec, "max_examples", config.max_examples)
+        config.save_every = _py_int(sec, "save_every", config.save_every)
+
+    # [gtpo]
+    if "gtpo" in data:
+        var sec = data["gtpo"]
+        config.gtpo_beta = _py_float(sec, "beta", config.gtpo_beta)
+
+    # [hicra]
+    if "hicra" in data:
+        var sec = data["hicra"]
+        config.hicra_alpha = _py_float(sec, "alpha", config.hicra_alpha)
+
+    # [sepa]
+    if "sepa" in data:
+        var sec = data["sepa"]
+        config.sepa_steps = _py_int(sec, "steps", config.sepa_steps)
+        var v = _py_str(sec, "schedule")
+        if len(v) > 0:
+            config.sepa_schedule = v
+        config.sepa_delay_steps = _py_int(sec, "delay_steps", config.sepa_delay_steps)
+        config.sepa_correct_rate_gate = _py_float(sec, "correct_rate_gate", config.sepa_correct_rate_gate)
+
+    # [logging]
+    if "logging" in data:
+        var sec = data["logging"]
+        var v = _py_str(sec, "log_dir")
+        if len(v) > 0:
+            config.log_dir = v
+        v = _py_str(sec, "wandb_project")
+        if len(v) > 0:
+            config.wandb_project = v
+        v = _py_str(sec, "wandb_run_name")
+        if len(v) > 0:
+            config.wandb_run_name = v
+        v = _py_str(sec, "strategic_grams")
+        if len(v) > 0:
+            config.strategic_grams = v
 
 
 fn parse_args() raises -> TrainConfig:
     """Parse CLI arguments into a TrainConfig.
 
-    Matches Python's argparse behavior including legacy --algorithm resolution.
+    If --config PATH is given, TOML values are loaded first, then CLI
+    arguments override. Matches Python's argparse behavior including
+    legacy --algorithm resolution.
     """
     var config = TrainConfig()
     var args = argv()
     var n = len(args)
     var i = 1  # skip program name
+
+    # First pass: find --config and apply TOML before CLI overrides
+    var ci = 1
+    while ci < n:
+        if String(args[ci]) == "--config" and ci + 1 < n:
+            _apply_toml(config, String(args[ci + 1]))
+            break
+        ci += 1
 
     var has_algorithm = False
     var algorithm_value = String("")
@@ -245,6 +385,8 @@ fn parse_args() raises -> TrainConfig:
             config.wandb_project = val
         elif arg == "--wandb-run-name":
             config.wandb_run_name = val
+        elif arg == "--config":
+            pass  # Already handled in first pass
         else:
             raise Error("Unknown argument: " + arg)
 

@@ -1,9 +1,12 @@
-"""Training loop with swappable backends — Mojo entry point.
+"""Composable training loop — Mojo entry point.
 
-The training loop is generic over TrainingBackend: the same loop
-runs with TinkerBackend (remote GPU) or MAXBackend (local multi-GPU).
-All advantage math runs natively (SIMD); backends handle the 4 I/O
-boundary points (checkpoint, sample, train, save).
+The training loop is generic over five traits: TrainingBackend, RewardFn,
+DataSource, EpisodeAdvantageFn, and TokenTransformFn. Users compose
+a pipeline in main() and get full monomorphization — zero dispatch overhead.
+
+Built-in defaults (BoxedMathReward, MathDataSource, MaxRL + GTPO-SEPA)
+reproduce the original hardcoded behavior. External users bring their own
+reward function and dataset without forking.
 """
 
 from python import Python, PythonObject
@@ -26,6 +29,19 @@ from src.logging import JsonlLogger, KeyValue, json_float, json_int, json_string
 from src.backend import TrainingBackend, SampleSequence
 from src.tinker_backend import TinkerBackend
 from src.max_backend import MAXBackend
+from src.reward import RewardFn, BoxedMathReward, extract_boxed, grade_answer, get_reward
+from src.data import DataSource, Example, MathDataSource
+from src.advantage_fns import (
+    EpisodeAdvantageFn,
+    TokenTransformFn,
+    AdvantageResult,
+    GRPOAdvantage,
+    MaxRLAdvantage,
+    UniformExpand,
+    GTPOTransform,
+    GTPOHicraTransform,
+    GTPOSepaTransform,
+)
 from src.pybridge import (
     load_tokenizer,
     encode_prompt,
@@ -68,64 +84,8 @@ fn default_strategic_grams() -> List[String]:
 
 
 # ---------------------------------------------------------------------------
-# Reward / grading (native Mojo)
+# Composable advantage pipeline (backward-compatible convenience wrapper)
 # ---------------------------------------------------------------------------
-
-
-fn extract_boxed(text: String) -> String:
-    """Extract \\boxed{...} answer from MATH solution text."""
-    var marker = "\\boxed{"
-    var marker_len = len(marker)
-
-    var idx = text.rfind(marker)
-    if idx == -1:
-        return String("")
-
-    var start = idx + marker_len
-    var depth = 1
-    var pos = start
-    var text_len = len(text)
-    var bytes = text.as_bytes()
-    while pos < text_len and depth > 0:
-        if bytes[pos] == UInt8(ord("{")):
-            depth += 1
-        elif bytes[pos] == UInt8(ord("}")):
-            depth -= 1
-        pos += 1
-
-    var extracted = String(text[start : pos - 1])
-    return String(extracted.strip())
-
-
-fn grade_answer(given: String, expected: String) -> Bool:
-    """Simple string-match grading. Strips whitespace."""
-    return String(given.strip()) == String(expected.strip())
-
-
-fn get_reward(response: String, answer: String) -> Float64:
-    """Binary correctness reward for MATH problems."""
-    var given = extract_boxed(response)
-    if grade_answer(given, answer):
-        return 1.0
-    return 0.0
-
-
-# ---------------------------------------------------------------------------
-# Composable advantage pipeline (native)
-# ---------------------------------------------------------------------------
-
-
-struct AdvantageResult:
-    """Result from compute_composable_advantages."""
-
-    var token_advs: List[List[Float64]]
-    var has_stats: Bool
-    var stats: EntropyStats
-
-    fn __init__(out self, var token_advs: List[List[Float64]], has_stats: Bool, var stats: EntropyStats):
-        self.token_advs = token_advs^
-        self.has_stats = has_stats
-        self.stats = stats^
 
 
 fn compute_composable_advantages(
@@ -203,11 +163,13 @@ fn compute_composable_advantages(
 # ---------------------------------------------------------------------------
 
 
-fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
-    """Main training loop — backend-agnostic.
+fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, T: TokenTransformFn](
+    mut backend: B, reward_fn: R, mut data_source: D, episode_adv: E, mut token_transform: T, config: TrainConfig,
+) raises:
+    """Main training loop — fully composable.
 
-    The loop handles tokenization, advantage computation, and logging.
-    The backend handles checkpoint, sample, train, and save.
+    Generic over backend, reward, dataset, episode advantage, and token
+    transform. All monomorphized at compile time — zero dispatch overhead.
     """
     var os = Python.import_module("os")
     var pathlib = Python.import_module("pathlib")
@@ -235,15 +197,15 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
     print("Vocabulary table: " + String(len(vocab_table)) + " entries")
 
     # Load dataset
-    print("Loading MATH dataset...")
-    var examples = load_math_dataset(max_examples=config.max_examples)
+    print("Loading dataset...")
+    var examples = data_source.load()
     print("Loaded " + String(len(examples)) + " examples")
 
     # Pre-encode all prompts (one-time cost at startup)
     print("Pre-encoding prompts...")
     var pre_encoded_prompts = List[List[Int]]()
     for i in range(len(examples)):
-        pre_encoded_prompts.append(encode_prompt(tokenizer, examples[i].problem))
+        pre_encoded_prompts.append(encode_prompt(tokenizer, examples[i].prompt))
     print("Pre-encoded " + String(len(pre_encoded_prompts)) + " prompts")
 
     # SEPA controller
@@ -254,8 +216,37 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
         sepa_correct_rate_gate=config.sepa_correct_rate_gate,
     )
 
-    # Strategic grams
-    var strategic_grams = default_strategic_grams()
+    # Strategic grams: parse from config or use defaults
+    var strategic_grams: List[String]
+    if len(config.strategic_grams) > 0:
+        # Parse comma-separated list (or JSON array via Python)
+        var raw = config.strategic_grams
+        if raw.startswith("["):
+            # JSON array — parse via Python json
+            var json_mod = Python.import_module("json")
+            var parsed = json_mod.loads(raw)
+            strategic_grams = List[String]()
+            for i in range(len(parsed)):
+                var gram = String(String(parsed[i]).strip())
+                if len(gram) > 0:
+                    strategic_grams.append(gram)
+        else:
+            # Comma-separated
+            strategic_grams = List[String]()
+            var remaining = raw
+            while True:
+                var comma_pos = remaining.find(",")
+                if comma_pos == -1:
+                    var gram = String(remaining.strip())
+                    if len(gram) > 0:
+                        strategic_grams.append(gram)
+                    break
+                var gram = String(String(remaining[:comma_pos]).strip())
+                if len(gram) > 0:
+                    strategic_grams.append(gram)
+                remaining = String(remaining[comma_pos + 1 :])
+    else:
+        strategic_grams = default_strategic_grams()
 
     # Wandb
     var wandb_run = Python.none()
@@ -304,9 +295,9 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
         for _ in range(config.batch_size):
             var ex_idx = example_idx % len(examples)
             example_idx += 1
-            batch_prompts.append(examples[ex_idx].problem)
+            batch_prompts.append(examples[ex_idx].prompt)
             batch_prompt_ids.append(pre_encoded_prompts[ex_idx].copy())
-            batch_answers.append(examples[ex_idx].answer)
+            batch_answers.append(examples[ex_idx].reference)
 
         # 3. Sample completions via backend
         var all_group_sequences = backend.sample_batch(
@@ -355,7 +346,7 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
             var planning_masks_G = List[List[Int]]()
 
             for s_idx in range(n_seqs):
-                var reward = get_reward(all_decoded_texts[flat_offset + s_idx], answer)
+                var reward = reward_fn.score(all_decoded_texts[flat_offset + s_idx], answer)
                 rewards_G.append(reward)
                 logprobs_G.append(all_group_sequences[f_idx][s_idx].logprobs.copy())
 
@@ -415,20 +406,16 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
                     print("    -> skipped (all wrong)")
                 continue
 
-            # Compute advantages
-            var sepa_lam: Float64 = 0.0
+            # Update SEPA lambda from controller (no-op for non-SEPA transforms)
             if config.transform_mode == "gtpo_sepa":
-                sepa_lam = sepa_controller.resolve_lambda(step=Float64(batch_idx))
+                token_transform.update_sepa_lambda(
+                    sepa_controller.resolve_lambda(step=Float64(batch_idx))
+                )
 
-            var adv_result = compute_composable_advantages(
-                rewards_G,
-                logprobs_G,
-                planning_masks_G,
-                advantage_mode=config.advantage_mode,
-                transform_mode=config.transform_mode,
-                gtpo_beta=config.gtpo_beta,
-                hicra_alpha=config.hicra_alpha,
-                sepa_lambda=sepa_lam,
+            # Compute advantages via trait-based pipeline
+            var episode_advantages = episode_adv.compute(rewards_G)
+            var adv_result = token_transform.transform(
+                episode_advantages, logprobs_G, planning_masks_G,
             )
             var token_advs_G = adv_result.token_advs.copy()
             if adv_result.has_stats:
@@ -636,6 +623,31 @@ fn train[B: TrainingBackend](mut backend: B, config: TrainConfig) raises:
 
 
 # ---------------------------------------------------------------------------
+# Monomorphization dispatch helpers
+# ---------------------------------------------------------------------------
+
+
+fn _run[B: TrainingBackend, E: EpisodeAdvantageFn](
+    mut backend: B, ep: E, config: TrainConfig,
+) raises:
+    """Dispatch over token transform mode, then call train()."""
+    var reward = BoxedMathReward()
+    var data = MathDataSource(config.max_examples)
+    if config.transform_mode == "none":
+        var tx = UniformExpand()
+        train(backend, reward, data, ep, tx, config)
+    elif config.transform_mode == "gtpo":
+        var tx = GTPOTransform(config.gtpo_beta)
+        train(backend, reward, data, ep, tx, config)
+    elif config.transform_mode == "gtpo_hicra":
+        var tx = GTPOHicraTransform(config.gtpo_beta, config.hicra_alpha)
+        train(backend, reward, data, ep, tx, config)
+    else:
+        var tx = GTPOSepaTransform(config.gtpo_beta)
+        train(backend, reward, data, ep, tx, config)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -644,7 +656,13 @@ fn main() raises:
     var config = parse_args()
     if config.backend == "max":
         var backend = MAXBackend(config)
-        train(backend, config)
+        if config.advantage_mode == "grpo":
+            _run(backend, GRPOAdvantage(), config)
+        else:
+            _run(backend, MaxRLAdvantage(), config)
     else:
         var backend = TinkerBackend(config)
-        train(backend, config)
+        if config.advantage_mode == "grpo":
+            _run(backend, GRPOAdvantage(), config)
+        else:
+            _run(backend, MaxRLAdvantage(), config)
