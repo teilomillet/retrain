@@ -78,6 +78,38 @@ fn test_extract_boxed_text_after() raises:
     assert_equal(result, "42")
 
 
+fn test_extract_boxed_unbalanced_braces() raises:
+    """Unbalanced braces (missing closing) -> returns content without crash."""
+    var result = extract_boxed("\\boxed{42 and {more")
+    assert_true(len(result) > 0, "Should return partial content, not crash")
+
+
+fn test_extract_boxed_marker_at_end() raises:
+    """\\boxed{ at very end of string with nothing after -> empty."""
+    var result = extract_boxed("answer is \\boxed{")
+    assert_equal(result, "")
+
+
+fn test_extract_boxed_truncated_content() raises:
+    """\\boxed{abc without closing brace -> returns content gracefully."""
+    var result = extract_boxed("\\boxed{abc")
+    assert_equal(result, "abc")
+
+
+fn test_extract_boxed_utf8_content() raises:
+    """UTF-8 multi-byte characters inside boxed don't cause crash."""
+    var result = extract_boxed("\\boxed{π × r²}")
+    assert_true(len(result) > 0, "Should handle UTF-8 without crash")
+
+
+fn test_extract_boxed_garbage_bytes() raises:
+    """Long garbage after marker doesn't crash."""
+    var garbage = String("x") * 10000
+    var text = "\\boxed{" + garbage
+    var result = extract_boxed(text)
+    assert_true(len(result) > 0, "Should handle long unbalanced content")
+
+
 # ---------------------------------------------------------------------------
 # grade_answer
 # ---------------------------------------------------------------------------
@@ -223,4 +255,11 @@ fn main() raises:
     # Custom RewardFn
     test_always_one_reward()
 
-    print("All 22 reward tests passed!")
+    # Edge cases (crash prevention)
+    test_extract_boxed_unbalanced_braces()
+    test_extract_boxed_marker_at_end()
+    test_extract_boxed_truncated_content()
+    test_extract_boxed_utf8_content()
+    test_extract_boxed_garbage_bytes()
+
+    print("All 27 reward tests passed!")

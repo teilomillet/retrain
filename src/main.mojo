@@ -301,8 +301,31 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
     var total_completions = 0
     var sepa_lambda_val: Float64 = 0.0
 
+    # Back pressure: mutable loop variables
+    var current_batch_size: Int = config.batch_size
+    var current_group_size: Int = config.group_size
+
+    # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
+    var warmup_batch_sizes = List[Int]()
+    if config.bp_enabled:
+        var bs = config.bp_min_batch_size
+        if bs < 1:
+            bs = 1
+        while bs <= config.bp_max_batch_size:
+            warmup_batch_sizes.append(bs)
+            bs *= 2
+        # Ensure max is included if not a power of 2
+        if len(warmup_batch_sizes) > 0 and warmup_batch_sizes[len(warmup_batch_sizes) - 1] != config.bp_max_batch_size:
+            warmup_batch_sizes.append(config.bp_max_batch_size)
+
     for batch_idx in range(config.max_steps):
         var step_start_ns = perf_counter_ns()
+
+        # Back pressure warmup sweep: cycle through geometric batch sizes
+        var bp_warmup = False
+        if config.bp_enabled and len(warmup_batch_sizes) > 0 and batch_idx < config.bp_warmup_steps:
+            bp_warmup = True
+            current_batch_size = warmup_batch_sizes[batch_idx % len(warmup_batch_sizes)]
 
         # 1. Checkpoint for sampling
         backend.checkpoint_for_sampling("step_" + String(batch_idx))
@@ -312,7 +335,7 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
         var batch_prompt_ids = List[List[Int]]()
         var batch_answers = List[String]()
 
-        for _ in range(config.batch_size):
+        for _ in range(current_batch_size):
             var ex_idx = example_idx % len(examples)
             example_idx += 1
             batch_prompts.append(examples[ex_idx].prompt)
@@ -323,7 +346,7 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
         var sample_start_ns = perf_counter_ns()
         var all_group_sequences = backend.sample_batch(
             batch_prompt_ids,
-            config.group_size,
+            current_group_size,
             config.max_tokens,
             config.temperature,
             0.95,
@@ -512,8 +535,8 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             var skip_obs = StepObservation()
             skip_obs.step_time_s = Float64(perf_counter_ns() - step_start_ns) / 1_000_000_000.0
             skip_obs.sample_time_s = Float64(sample_time_ns) / 1_000_000_000.0
-            skip_obs.batch_size = config.batch_size
-            skip_obs.group_size = config.group_size
+            skip_obs.batch_size = current_batch_size
+            skip_obs.group_size = current_group_size
             skip_obs.skipped = True
             backpressure.observe(skip_obs)
             continue
@@ -544,14 +567,22 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
         bp_obs.sample_time_s = Float64(sample_time_ns) / 1_000_000_000.0
         bp_obs.train_time_s = Float64(train_time_ns) / 1_000_000_000.0
         bp_obs.num_datums = num_datums
-        bp_obs.batch_size = config.batch_size
-        bp_obs.group_size = config.group_size
+        bp_obs.batch_size = current_batch_size
+        bp_obs.group_size = current_group_size
         bp_obs.total_tokens = bp_total_tokens
         bp_obs.loss = loss_value
         bp_obs.skipped = False
         backpressure.observe(bp_obs)
 
         var bp_decision = backpressure.recommend()
+
+        # Actuate: apply back pressure recommendation (skip during warmup)
+        if config.bp_enabled and not bp_warmup:
+            if bp_decision.action == "throttle" or bp_decision.action == "increase":
+                var new_bs = bp_decision.recommended_batch_size
+                new_bs = max(config.bp_min_batch_size, min(config.bp_max_batch_size, new_bs))
+                if new_bs > 0:
+                    current_batch_size = new_bs
 
         # 7. Logging
         var mean_reward: Float64 = 0.0
@@ -614,6 +645,9 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             metrics_entries.append(json_float("exec_entropy_var", step_exec_var))
             metrics_entries.append(json_float("plan_entropy_mean", step_plan_mean))
             metrics_entries.append(json_float("plan_entropy_var", step_plan_var))
+        metrics_entries.append(json_int("batch_size", current_batch_size))
+        metrics_entries.append(json_int("group_size", current_group_size))
+        metrics_entries.append(json_bool("bp_warmup", bp_warmup))
         metrics_entries.append(json_string("bp_action", bp_decision.action))
         metrics_entries.append(json_string("bp_regime", bp_decision.regime))
         metrics_entries.append(json_float("bp_p_star", bp_decision.p_star))
@@ -628,6 +662,8 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             + String(loss_value) + " | reward=" + String(mean_reward)
             + " | correct=" + String(correct_rate * 100.0) + "%"
             + " | datums=" + String(num_datums)
+            + " | bs=" + String(current_batch_size)
+            + " | gs=" + String(current_group_size)
             + " | sepa_l=" + String(sepa_lambda_val)
             + " | time=" + String(step_time_s) + "s"
         )
@@ -643,6 +679,9 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
             wandb_metrics["sepa_lambda"] = PythonObject(sepa_lambda_val)
             wandb_metrics["num_datums"] = PythonObject(num_datums)
             wandb_metrics["step_time_s"] = PythonObject(step_time_s)
+            wandb_metrics["batch_size"] = PythonObject(current_batch_size)
+            wandb_metrics["group_size"] = PythonObject(current_group_size)
+            wandb_metrics["bp_warmup"] = PythonObject(bp_warmup)
             wandb_metrics["bp_p_star"] = PythonObject(bp_decision.p_star)
             wandb_metrics["bp_sigma"] = PythonObject(bp_decision.sigma)
             wandb_metrics["bp_kappa"] = PythonObject(bp_decision.kappa)

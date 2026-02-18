@@ -31,18 +31,35 @@ fn extract_boxed(text: String) -> String:
         return String("")
 
     var start = idx + marker_len
+    var text_len = len(text)
+
+    # Guard: marker at end of string with nothing inside
+    if start >= text_len:
+        return String("")
+
     var depth = 1
     var pos = start
-    var text_len = len(text)
     var bytes = text.as_bytes()
     while pos < text_len and depth > 0:
-        if bytes[pos] == UInt8(ord("{")):
+        # Skip UTF-8 continuation bytes (0x80-0xBF) to avoid
+        # misinterpreting multi-byte characters as braces.
+        var b = bytes[pos]
+        if (Int(b) & 0xC0) == 0x80:
+            pos += 1
+            continue
+        if b == UInt8(ord("{")):
             depth += 1
-        elif bytes[pos] == UInt8(ord("}")):
+        elif b == UInt8(ord("}")):
             depth -= 1
         pos += 1
 
-    var extracted = String(text[start : pos - 1])
+    # If braces were unbalanced, depth > 0 and pos == text_len.
+    # Take everything we have rather than crashing.
+    var end = pos - 1 if depth == 0 else pos
+    if end <= start:
+        return String("")
+
+    var extracted = String(text[start:end])
     return String(extracted.strip())
 
 
