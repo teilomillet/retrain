@@ -79,6 +79,10 @@ fn test_defaults_inference_engine() raises:
     var c = TrainConfig()
     assert_equal(c.inference_engine, "pytorch")
     assert_equal(c.inference_url, "")
+    assert_equal(c.attention_kernel, "default")
+    assert_equal(c.inference_dtype, "auto")
+    assert_equal(c.kv_cache_dtype, "auto")
+    assert_true(c.prefix_caching, "prefix_caching should default to true")
 
 
 fn test_defaults_logging() raises:
@@ -133,6 +137,10 @@ fn test_fieldwise_init() raises:
         bp_peak_bw_gb_s=0.0,
         inference_engine="vllm",
         inference_url="http://localhost:8000",
+        attention_kernel="flash",
+        inference_dtype="fp8",
+        kv_cache_dtype="fp8",
+        prefix_caching=True,
         log_dir="/tmp/logs",
         wandb_project="test-project",
         wandb_run_name="run-1",

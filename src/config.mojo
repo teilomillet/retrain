@@ -62,8 +62,12 @@ struct TrainConfig(Copyable, Movable, Writable):
     var bp_peak_bw_gb_s: Float64
 
     # Inference engine
-    var inference_engine: String  # "pytorch" | "max" | "vllm" | "sglang" | "openai"
+    var inference_engine: String  # "pytorch" | "max" | "vllm" | "sglang" | "trtllm" | "openai"
     var inference_url: String  # Server URL for server-based engines (empty = default)
+    var attention_kernel: String  # "default" | "flash" | "triton" | "tk" | "cutlass"
+    var inference_dtype: String  # "auto" | "bf16" | "fp8" | "fp4"
+    var kv_cache_dtype: String  # "auto" | "bf16" | "fp8" | "int8"
+    var prefix_caching: Bool  # Share prompt KV across group completions
 
     # Logging
     var log_dir: String
@@ -97,6 +101,10 @@ struct TrainConfig(Copyable, Movable, Writable):
         self.strategic_grams = ""
         self.inference_engine = "pytorch"
         self.inference_url = ""
+        self.attention_kernel = "default"
+        self.inference_dtype = "auto"
+        self.kv_cache_dtype = "auto"
+        self.prefix_caching = True
         self.bp_enabled = False
         self.bp_warmup_steps = 10
         self.bp_ema_decay = 0.9
@@ -155,7 +163,11 @@ fn print_usage():
     print("  save_every = 20")
     print()
     print("  [inference]")
-    print("  engine = \"pytorch\"         # pytorch | max | vllm | sglang | openai")
+    print("  engine = \"pytorch\"         # pytorch | max | vllm | sglang | trtllm | openai")
+    print("  attention_kernel = \"default\"  # default | flash | triton | tk | cutlass")
+    print("  dtype = \"auto\"             # auto | bf16 | fp8 | fp4")
+    print("  kv_cache_dtype = \"auto\"    # auto | bf16 | fp8 | int8")
+    print("  prefix_caching = true      # share prompt KV across group completions")
     print()
     print("  [sepa]")
     print("  steps = 500")
@@ -288,6 +300,17 @@ fn _apply_toml(mut config: TrainConfig, path: String) raises:
         v = _py_str(sec, "url")
         if len(v) > 0:
             config.inference_url = v
+        v = _py_str(sec, "attention_kernel")
+        if len(v) > 0:
+            config.attention_kernel = v
+        v = _py_str(sec, "dtype")
+        if len(v) > 0:
+            config.inference_dtype = v
+        v = _py_str(sec, "kv_cache_dtype")
+        if len(v) > 0:
+            config.kv_cache_dtype = v
+        if "prefix_caching" in sec:
+            config.prefix_caching = String(sec["prefix_caching"]).lower() == "true"
 
     # [backpressure]
     if "backpressure" in data:

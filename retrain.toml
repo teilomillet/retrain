@@ -21,6 +21,10 @@ save_every = 20
 
 [inference]
 engine = "pytorch"
+attention_kernel = "default"
+dtype = "auto"
+kv_cache_dtype = "auto"
+prefix_caching = true
 
 [sepa]
 steps = 500
