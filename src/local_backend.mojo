@@ -30,10 +30,6 @@ struct LocalBackend(TrainingBackend):
         """Initialize PyTorch model with PEFT LoRA adapter."""
         print("Initializing local backend (PyTorch/PEFT)...")
 
-        # Ensure retrain package is importable from project root
-        var sys = Python.import_module("sys")
-        sys.path.insert(0, ".")
-
         var helper_mod = Python.import_module("retrain.local_train_helper")
         self.helper = helper_mod.LocalTrainHelper(
             config.model,

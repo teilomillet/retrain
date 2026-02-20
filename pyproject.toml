@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "retrain"
+version = "0.1.0"
+description = "RLVR training framework for LLMs"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.4.0",
+    "transformers>=4.44.0",
+    "datasets>=2.20.0",
+    "wandb>=0.17.0",
+    "peft>=0.12.0",
+    "tinker>=0.1.0",
+    "safetensors>=0.4.0",
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+retrain = "retrain.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["retrain"]
