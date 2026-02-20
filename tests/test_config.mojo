@@ -32,7 +32,7 @@ fn test_defaults_model() raises:
 fn test_defaults_backend() raises:
     """Default backend selection fields."""
     var c = TrainConfig()
-    assert_equal(c.backend, "tinker")
+    assert_equal(c.backend, "local")
     assert_equal(c.devices, "gpu:0")
     assert_equal(c.adapter_path, "/tmp/retrain_adapter")
 
@@ -84,7 +84,7 @@ fn test_defaults_inference_engine() raises:
 fn test_defaults_logging() raises:
     """Default logging parameters."""
     var c = TrainConfig()
-    assert_equal(c.log_dir, "logs/tinker_math")
+    assert_equal(c.log_dir, "logs/train")
     assert_equal(c.wandb_project, "")
     assert_equal(c.wandb_run_name, "")
     assert_equal(c.strategic_grams, "")

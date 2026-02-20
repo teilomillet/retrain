@@ -35,6 +35,10 @@ Thumbs.db
 trainer_output/
 wandb/
 *.db
+# Build artifacts
+retrain-tinker
+logs/
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml

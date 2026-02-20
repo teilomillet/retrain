@@ -2,7 +2,7 @@
 authors = ["Teïlo Millet <teilomillet@gmail.com>"]
 channels = ["https://conda.modular.com/max-nightly", "conda-forge"]
 name = "retrain"
-platforms = ["osx-arm64"]
+platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
@@ -12,6 +12,9 @@ run = "./retrain-tinker"
 
 [dependencies]
 max = ">=26.1"
+
+[system-requirements]
+cuda = "12"
 
 [pypi-dependencies]
 tinker = "*"

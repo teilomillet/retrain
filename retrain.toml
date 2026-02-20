@@ -1,0 +1,31 @@
+[backend]
+backend = "local"
+devices = "gpu:0"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[algorithm]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_sepa"
+
+[training]
+max_steps = 500
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[inference]
+engine = "pytorch"
+
+[sepa]
+steps = 500
+schedule = "linear"
+delay_steps = 50
+
+[logging]
+log_dir = "logs/train"
