@@ -76,28 +76,52 @@ class BoxedMathReward:
 # ---------------------------------------------------------------------------
 
 class VerifiersMathReward:
-    """Symbolic math equivalence via ``verifiers.MathRubric``.
+    """Symbolic math equivalence via ``math_verify.parse`` + ``math_verify.verify``.
 
-    ``MathRubric.correct_answer`` expects ``(parser, completion, answer)``.
-    We pass the rubric's own parser (``MaybeThinkParser`` with
-    ``extract_boxed_answer``) so the framework can extract the answer
-    from the completion messages.
+    Calls the sync ``parse()``/``verify()`` API directly, avoiding the
+    MathRubric async wrapper and its per-call ``asyncio.run()`` overhead.
+
+    Extracts the last ``\\boxed{}`` answer from the response (matching our
+    convention), then uses ``math_verify`` for symbolic comparison only.
+    Reference parses are cached since the same problem is scored G times.
     """
 
     def __init__(self) -> None:
-        from verifiers.rubrics.math_rubric import MathRubric
-        self._rubric = MathRubric()
+        from math_verify import LatexExtractionConfig, parse, verify
+
+        self._parse = parse
+        self._verify = verify
+        self._extraction_config = [LatexExtractionConfig()]
+        self._ref_cache: dict[str, list] = {}
+
+    def _parse_expr(self, text: str) -> list:
+        return self._parse(
+            f"\\boxed{{{text}}}",
+            extraction_config=self._extraction_config,
+            parsing_timeout=5,
+        )
+
+    def _parse_ref(self, reference: str) -> list:
+        cached = self._ref_cache.get(reference)
+        if cached is not None:
+            return cached
+        parsed = self._parse_expr(reference)
+        self._ref_cache[reference] = parsed
+        return parsed
 
     def score(self, response: str, reference: str) -> float:
-        completion = [{"role": "assistant", "content": response}]
         try:
-            return asyncio.run(
-                self._rubric.correct_answer(
-                    parser=self._rubric.parser,
-                    completion=completion,
-                    answer=reference,
-                )
-            )
+            # Extract last \boxed{} (same convention as BoxedMathReward)
+            given = extract_boxed(response)
+            if not given:
+                return 0.0
+            parsed_response = self._parse_expr(given)
+            if not parsed_response:
+                return 0.0
+            parsed_ref = self._parse_ref(reference)
+            if not parsed_ref:
+                return 0.0
+            return 1.0 if self._verify(parsed_ref, parsed_response) else 0.0
         except Exception:
             return 0.0
 
@@ -176,7 +200,7 @@ def create_reward(config: TrainConfig) -> RewardFunction:
         except ModuleNotFoundError:
             raise ImportError(
                 f"Reward type '{rtype}' requires the verifiers library. "
-                "Install it with:  pip install retrain[verifiers]"
+                "Install it with:  pip install verifiers"
             ) from None
 
         if rtype == "math":

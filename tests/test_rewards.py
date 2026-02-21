@@ -93,13 +93,13 @@ class TestCreateRewardFactory:
     def test_math_type_without_verifiers_raises(self):
         config = TrainConfig(reward_type="math")
         with mock.patch.dict(sys.modules, {"verifiers": None}):
-            with pytest.raises(ImportError, match="pip install retrain\\[verifiers\\]"):
+            with pytest.raises(ImportError, match="pip install verifiers"):
                 create_reward(config)
 
     def test_judge_type_without_verifiers_raises(self):
         config = TrainConfig(reward_type="judge")
         with mock.patch.dict(sys.modules, {"verifiers": None}):
-            with pytest.raises(ImportError, match="pip install retrain\\[verifiers\\]"):
+            with pytest.raises(ImportError, match="pip install verifiers"):
                 create_reward(config)
 
     def test_custom_type_missing_module_raises(self):
