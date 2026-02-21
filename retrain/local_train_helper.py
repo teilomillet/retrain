@@ -40,7 +40,9 @@ class LocalTrainHelper:
     """Local GPU helper: pluggable inference engine + PyTorch/PEFT training."""
 
     def __init__(self, model_name, adapter_path, devices, lora_rank=32,
-                 engine_type="pytorch", inference_url=""):
+                 engine_type="pytorch", inference_url="",
+                 lora_alpha=0, lora_dropout=0.0,
+                 optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
@@ -82,11 +84,12 @@ class LocalTrainHelper:
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
 
+        effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
-            lora_alpha=lora_rank * 2,
-            lora_dropout=0.0,
+            lora_alpha=effective_alpha,
+            lora_dropout=lora_dropout,
             target_modules=[
                 "q_proj", "k_proj", "v_proj", "o_proj",
                 "gate_proj", "up_proj", "down_proj",
@@ -152,8 +155,8 @@ class LocalTrainHelper:
         self.optimizer = torch.optim.AdamW(
             self.train_model.parameters(),
             lr=4e-5,
-            betas=(0.9, 0.95),
-            eps=1e-8,
+            betas=(optim_beta1, optim_beta2),
+            eps=optim_eps,
             weight_decay=0.0,
         )
 

@@ -15,12 +15,7 @@ from transformers import AutoTokenizer
 from retrain.advantages import (
     DEFAULT_STRATEGIC_GRAMS,
     EntropyStats,
-    apply_gtpo_weighting,
-    apply_hicra,
-    apply_sepa_pooling,
-    compute_entropy_stats,
-    compute_grpo_advantages,
-    compute_maxrl_advantages,
+    compute_composable_advantages,
     identify_planning_tokens,
 )
 from retrain.backpressure import (
@@ -37,6 +32,7 @@ from retrain.sepa import SEPAController
 
 
 _TRAINER_STATE_FILE = "trainer_state.json"
+_CORRECT_THRESHOLD = 0.5
 
 
 def _save_trainer_state(
@@ -184,6 +180,9 @@ def train(config: TrainConfig) -> None:
             config.model,
             config.inference_url,
             config.lora_rank,
+            optim_beta1=config.optim_beta1,
+            optim_beta2=config.optim_beta2,
+            optim_eps=config.optim_eps,
         )
     elif config.backend == "local":
         from retrain.local_train_helper import LocalTrainHelper
@@ -195,6 +194,11 @@ def train(config: TrainConfig) -> None:
             config.lora_rank,
             config.inference_engine,
             config.inference_url,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            optim_beta1=config.optim_beta1,
+            optim_beta2=config.optim_beta2,
+            optim_eps=config.optim_eps,
         )
     else:
         raise ValueError(
@@ -346,7 +350,7 @@ def train(config: TrainConfig) -> None:
             current_group_size,
             config.max_tokens,
             config.temperature,
-            0.95,
+            config.top_p,
         )
         sample_time = time.perf_counter() - sample_start
 
@@ -374,6 +378,10 @@ def train(config: TrainConfig) -> None:
         all_datum_tokens: list[list[int]] = []
         all_datum_logprobs: list[list[float]] = []
         all_datum_advantages: list[list[float]] = []
+
+        # Resolve SEPA lambda once per step (before group loop)
+        if config.transform_mode == "gtpo_sepa":
+            sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
         for f_idx, group in enumerate(all_group_sequences):
             prompt_ids = batch_prompt_ids[f_idx]
@@ -410,7 +418,7 @@ def train(config: TrainConfig) -> None:
 
             for r in rewards_G:
                 batch_rewards.append(r)
-                if r > 0.5:
+                if r > _CORRECT_THRESHOLD:
                     batch_correct += 1
 
             # Track max-token truncations
@@ -419,7 +427,7 @@ def train(config: TrainConfig) -> None:
                 if len(seq_tokens) >= config.max_tokens:
                     batch_max_token_hits += 1
 
-            group_correct = sum(1 for r in rewards_G if r > 0.5)
+            group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
             answer_preview = answer[:40] if len(answer) > 40 else answer
             print(
                 f"  group: {group_correct}/{len(rewards_G)} correct "
@@ -428,61 +436,26 @@ def train(config: TrainConfig) -> None:
 
             # Skip uninformative groups
             if rewards_G and all(r == rewards_G[0] for r in rewards_G):
-                if rewards_G[0] > 0.5:
+                if rewards_G[0] > _CORRECT_THRESHOLD:
                     print("    -> skipped (all correct)")
                 else:
                     print("    -> skipped (all wrong)")
                 continue
 
-            # Update SEPA lambda
-            if config.transform_mode == "gtpo_sepa":
-                sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
-
-            # Episode-level advantages
-            if config.advantage_mode == "maxrl":
-                advantages_G = compute_maxrl_advantages(rewards_G)
-            else:
-                advantages_G = compute_grpo_advantages(rewards_G)
-
-            # Token-level expansion
-            all_token_advs_G: list[list[float]] = []
-            all_exec_ent: list[float] = []
-            all_plan_ent: list[float] = []
-
-            if config.transform_mode == "none":
-                for i in range(n_seqs):
-                    all_token_advs_G.append(
-                        [advantages_G[i]] * len(logprobs_G[i])
-                    )
-            else:
-                for i in range(n_seqs):
-                    entropies = [-lp for lp in logprobs_G[i]]
-                    pmask = planning_masks_G[i]
-
-                    for j, e in enumerate(entropies):
-                        if pmask[j]:
-                            all_plan_ent.append(e)
-                        else:
-                            all_exec_ent.append(e)
-
-                    if config.transform_mode == "gtpo_sepa" and sepa_lambda_val > 0.0:
-                        entropies = apply_sepa_pooling(entropies, pmask, sepa_lambda_val)
-
-                    token_advs = apply_gtpo_weighting(
-                        advantages_G[i], entropies, beta=config.gtpo_beta
-                    )
-
-                    if config.transform_mode == "gtpo_hicra":
-                        token_advs = apply_hicra(
-                            token_advs, pmask, alpha=config.hicra_alpha
-                        )
-
-                    all_token_advs_G.append(token_advs)
-
-                if all_exec_ent or all_plan_ent:
-                    batch_entropy_stats.append(
-                        compute_entropy_stats(all_exec_ent, all_plan_ent)
-                    )
+            # Composable advantage pipeline
+            adv_result = compute_composable_advantages(
+                rewards_G,
+                logprobs_G,
+                planning_masks_G,
+                advantage_mode=config.advantage_mode,
+                transform_mode=config.transform_mode,
+                gtpo_beta=config.gtpo_beta,
+                hicra_alpha=config.hicra_alpha,
+                sepa_lambda=sepa_lambda_val,
+            )
+            all_token_advs_G = adv_result.token_advs
+            if adv_result.has_stats:
+                batch_entropy_stats.append(adv_result.stats)
 
             # Build datums
             for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
@@ -597,9 +570,6 @@ def train(config: TrainConfig) -> None:
             step_exec_var = sum(s.exec_var for s in batch_entropy_stats) / n_stats
             step_plan_mean = sum(s.plan_mean for s in batch_entropy_stats) / n_stats
             step_plan_var = sum(s.plan_var for s in batch_entropy_stats) / n_stats
-
-        if config.transform_mode == "gtpo_sepa":
-            sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
         condition_label = f"{config.advantage_mode}+{config.transform_mode}"
         sepa_gate = (

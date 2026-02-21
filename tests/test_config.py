@@ -201,3 +201,54 @@ wandb_run_name = "run-1"
         assert c.wandb_entity == "my-team"
         assert c.wandb_group == "sweep-1"
         assert c.wandb_tags == "baseline,seed42"
+
+    def test_new_fields_defaults(self):
+        c = TrainConfig()
+        assert c.top_p == pytest.approx(0.95)
+        assert c.optim_beta1 == pytest.approx(0.9)
+        assert c.optim_beta2 == pytest.approx(0.95)
+        assert c.optim_eps == pytest.approx(1e-8)
+        assert c.lora_alpha == 0
+        assert c.lora_dropout == pytest.approx(0.0)
+
+    def test_new_fields_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[training]\ntop_p = 0.9\n\n'
+            '[optimizer]\nbeta1 = 0.85\nbeta2 = 0.99\neps = 1e-6\n\n'
+            '[lora]\nalpha = 64\ndropout = 0.05\n'
+        )
+        c = load_config(str(toml))
+        assert c.top_p == pytest.approx(0.9)
+        assert c.optim_beta1 == pytest.approx(0.85)
+        assert c.optim_beta2 == pytest.approx(0.99)
+        assert c.optim_eps == pytest.approx(1e-6)
+        assert c.lora_alpha == 64
+        assert c.lora_dropout == pytest.approx(0.05)
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+class TestValidation:
+    def test_invalid_advantage_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid advantage_mode"):
+            TrainConfig(advantage_mode="invalid")
+
+    def test_invalid_transform_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid transform_mode"):
+            TrainConfig(transform_mode="typo")
+
+    def test_valid_modes_accepted(self):
+        for am in ("grpo", "maxrl"):
+            for tm in ("none", "gtpo", "gtpo_hicra", "gtpo_sepa"):
+                c = TrainConfig(advantage_mode=am, transform_mode=tm)
+                assert c.advantage_mode == am
+                assert c.transform_mode == tm
+
+    def test_invalid_mode_from_toml_raises(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[algorithm]\nadvantage_mode = "wrong"\n')
+        with pytest.raises(ValueError, match="Invalid advantage_mode"):
+            load_config(str(toml))

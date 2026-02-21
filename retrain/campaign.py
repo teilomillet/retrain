@@ -16,6 +16,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from retrain.config import TrainConfig
+
 # 5 conditions from the SEPA paper
 CONDITIONS: list[tuple[str, str]] = [
     ("grpo", "none"),
@@ -82,7 +84,7 @@ def main() -> None:
     execute = False
     seeds = list(DEFAULT_SEEDS)
     wandb_project = ""
-    max_steps = 100
+    max_steps = TrainConfig().max_steps
     config_path: str | None = None
 
     i = 0

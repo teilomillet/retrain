@@ -1,8 +1,11 @@
 """Tests for retrain.advantages — GRPO, MaxRL, GTPO, HICRA, SEPA, planning tokens."""
 
+import math
+
 import pytest
 
 from retrain.advantages import (
+    MAX_ENTROPY,
     apply_gtpo_weighting,
     apply_hicra,
     apply_sepa_pooling,
@@ -263,3 +266,72 @@ class TestComposablePipeline:
         )
         assert len(result.token_advs) == 2
         assert result.has_stats
+
+    def test_all_transform_modes_produce_correct_shape(self):
+        """Every transform mode produces one advantage list per sequence."""
+        rewards = [1.0, 0.0, 0.5]
+        logprobs = [[-0.5, -0.3, -0.1], [-0.8, -0.6, -0.4], [-0.2, -0.7, -0.9]]
+        masks = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+        for mode in ("none", "gtpo", "gtpo_hicra", "gtpo_sepa"):
+            result = compute_composable_advantages(
+                rewards, logprobs, masks,
+                advantage_mode="grpo",
+                transform_mode=mode,
+                sepa_lambda=0.5,
+            )
+            assert len(result.token_advs) == 3
+            for i, ta in enumerate(result.token_advs):
+                assert len(ta) == len(logprobs[i])
+
+    def test_composable_matches_manual_grpo_none(self):
+        """Composable pipeline matches manual GRPO + none expansion."""
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.5, -0.3], [-0.8, -0.6]]
+        masks = [[0, 0], [0, 0]]
+
+        result = compute_composable_advantages(
+            rewards, logprobs, masks,
+            advantage_mode="grpo", transform_mode="none",
+        )
+        grpo_advs = compute_grpo_advantages(rewards)
+        for i in range(2):
+            assert all(a == pytest.approx(grpo_advs[i]) for a in result.token_advs[i])
+
+
+# ---------------------------------------------------------------------------
+# Numeric guard tests (inf entropy)
+# ---------------------------------------------------------------------------
+
+class TestNumericGuards:
+    def test_gtpo_weighting_handles_inf(self):
+        """apply_gtpo_weighting clamps inf entropies to MAX_ENTROPY."""
+        result = apply_gtpo_weighting(1.0, [float("inf"), 0.5, 0.3], beta=0.1)
+        assert all(math.isfinite(r) for r in result)
+
+    def test_sepa_pooling_handles_inf(self):
+        """apply_sepa_pooling clamps inf entropies to MAX_ENTROPY."""
+        result = apply_sepa_pooling(
+            [float("inf"), 0.5, 0.3], [0, 0, 0], lambda_t=0.5
+        )
+        assert all(math.isfinite(r) for r in result)
+
+    def test_entropy_stats_handles_inf(self):
+        """compute_entropy_stats clamps inf values."""
+        stats = compute_entropy_stats([float("inf"), 0.5], [float("inf")])
+        assert math.isfinite(stats.exec_mean)
+        assert math.isfinite(stats.exec_var)
+        assert math.isfinite(stats.plan_mean)
+
+    def test_composable_handles_inf_logprobs(self):
+        """Composable pipeline handles -inf logprobs (which become +inf entropies)."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[float("-inf"), -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+        )
+        for ta in result.token_advs:
+            assert all(math.isfinite(a) for a in ta)
+        assert math.isfinite(result.stats.exec_mean)

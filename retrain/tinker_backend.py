@@ -21,6 +21,9 @@ class TinkerTrainHelper:
         model_name: str,
         base_url: str,
         lora_rank: int = 32,
+        optim_beta1: float = 0.9,
+        optim_beta2: float = 0.95,
+        optim_eps: float = 1e-8,
     ) -> None:
         """Create Tinker service client and LoRA training client."""
         import tinker
@@ -39,6 +42,9 @@ class TinkerTrainHelper:
             rank=lora_rank,
         )
         self.sampling_client = None
+        self._optim_beta1 = optim_beta1
+        self._optim_beta2 = optim_beta2
+        self._optim_eps = optim_eps
         print("Training client ready.")
 
     def checkpoint(self, name: str) -> None:
@@ -139,9 +145,9 @@ class TinkerTrainHelper:
         # Optimizer step
         adam_params = types.AdamParams(
             learning_rate=lr,
-            beta1=0.9,
-            beta2=0.95,
-            eps=1e-8,
+            beta1=self._optim_beta1,
+            beta2=self._optim_beta2,
+            eps=self._optim_eps,
             weight_decay=weight_decay,
         )
         optim_future = self.training_client.optim_step(adam_params)

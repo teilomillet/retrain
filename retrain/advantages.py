@@ -5,8 +5,13 @@ Ports the core functions from src/advantages.mojo into pure Python.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
+
+# Cap entropy values to prevent inf from poisoning downstream math.
+# Real per-token entropy (-logprob) rarely exceeds ~15; 50 is a safe upper bound.
+MAX_ENTROPY = 50.0
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +85,7 @@ def apply_gtpo_weighting(
     if beta == 0.0:
         return [advantage] * n
 
+    entropies = [min(e, MAX_ENTROPY) for e in entropies]
     mean_h = sum(entropies) / n
     if mean_h < 1e-7:
         return [advantage] * n
@@ -132,6 +138,7 @@ def apply_sepa_pooling(
     if lam == 0.0:
         return list(entropies)
 
+    entropies = [min(e, MAX_ENTROPY) for e in entropies]
     exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
     if not exec_vals:
         return list(entropies)
@@ -153,6 +160,9 @@ def compute_entropy_stats(
 ) -> EntropyStats:
     """Compute summary stats for execution vs planning entropy."""
     stats = EntropyStats()
+
+    exec_entropies = [min(e, MAX_ENTROPY) for e in exec_entropies]
+    plan_entropies = [min(e, MAX_ENTROPY) for e in plan_entropies]
 
     if exec_entropies:
         n = len(exec_entropies)
@@ -308,8 +318,8 @@ def compute_composable_advantages(
         advantage = advantages_G[idx]
         planning_mask = planning_masks_G[idx]
 
-        # Entropy proxy: -logprob
-        entropies = [-lp for lp in logprobs]
+        # Entropy proxy: -logprob (clamped to avoid inf)
+        entropies = [min(-lp, MAX_ENTROPY) for lp in logprobs]
 
         # Collect entropy stats
         for j, e in enumerate(entropies):

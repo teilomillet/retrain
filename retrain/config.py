@@ -9,8 +9,11 @@ from __future__ import annotations
 import sys
 import tomllib
 import typing
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+
+_VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
+_VALID_TRANSFORM_MODES = {"none", "gtpo", "gtpo_hicra", "gtpo_sepa"}
 
 
 @dataclass
@@ -38,10 +41,20 @@ class TrainConfig:
     group_size: int = 16
     max_tokens: int = 2048
     temperature: float = 0.7
+    top_p: float = 0.95
     lr: float = 4e-5
     weight_decay: float = 0.0
     max_examples: int = 0
     save_every: int = 20
+
+    # Optimizer
+    optim_beta1: float = 0.9
+    optim_beta2: float = 0.95
+    optim_eps: float = 1e-8
+
+    # LoRA
+    lora_alpha: int = 0  # 0 = auto = rank * 2
+    lora_dropout: float = 0.0
 
     # Algorithm hyperparameters
     gtpo_beta: float = 0.1
@@ -92,6 +105,18 @@ class TrainConfig:
     wandb_group: str = ""
     wandb_tags: str = ""
 
+    def __post_init__(self) -> None:
+        if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
+            raise ValueError(
+                f"Invalid advantage_mode '{self.advantage_mode}'. "
+                f"Must be one of: {sorted(_VALID_ADVANTAGE_MODES)}"
+            )
+        if self.transform_mode not in _VALID_TRANSFORM_MODES:
+            raise ValueError(
+                f"Invalid transform_mode '{self.transform_mode}'. "
+                f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)}"
+            )
+
 
 # TOML section -> config field mapping
 _TOML_MAP: dict[str, dict[str, str]] = {
@@ -116,10 +141,20 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "group_size": "group_size",
         "max_tokens": "max_tokens",
         "temperature": "temperature",
+        "top_p": "top_p",
         "lr": "lr",
         "weight_decay": "weight_decay",
         "max_examples": "max_examples",
         "save_every": "save_every",
+    },
+    "optimizer": {
+        "beta1": "optim_beta1",
+        "beta2": "optim_beta2",
+        "eps": "optim_eps",
+    },
+    "lora": {
+        "alpha": "lora_alpha",
+        "dropout": "lora_dropout",
     },
     "gtpo": {"beta": "gtpo_beta"},
     "hicra": {"alpha": "hicra_alpha"},
@@ -213,4 +248,6 @@ def load_config(path: str | None = None) -> TrainConfig:
                 if s:
                     setattr(config, field_name, s)
 
+    # Re-validate after TOML overrides
+    config.__post_init__()
     return config
