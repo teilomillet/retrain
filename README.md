@@ -45,6 +45,3 @@ Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
 
-## License
-
-See [LICENSE](LICENSE).

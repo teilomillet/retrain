@@ -1,7 +1,7 @@
 site_name: retrain
 site_description: RLVR training framework for LLMs
-repo_url: https://github.com/modularml/retrain
-repo_name: modularml/retrain
+repo_url: https://github.com/teilomillet/retrain
+repo_name: teilomillet/retrain
 
 theme:
   name: material
