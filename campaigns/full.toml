@@ -1,0 +1,57 @@
+# Full SEPA experiment: all 5 conditions x 8 seeds x 500 steps
+#
+# Run: retrain campaigns/full.toml
+
+[campaign]
+seeds = [42, 101, 202, 303, 404, 505, 606, 707]
+max_steps = 500
+
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "none"
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo"
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_hicra"
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_sepa"
+
+# --- base training config for all runs ---
+
+[backend]
+backend = "local"
+devices = "gpu:0"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[inference]
+engine = "pytorch"
+prefix_caching = true
+
+[sepa]
+steps = 500
+schedule = "linear"
+delay_steps = 50
+
+[logging]
+# wandb_project = "sepa-full"

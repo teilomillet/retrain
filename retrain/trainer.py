@@ -79,6 +79,51 @@ def train(config: TrainConfig) -> None:
     """Main training loop -- fully self-contained."""
 
     # -----------------------------------------------------------------------
+    # 0. Init backend (fail fast, before loading anything else)
+    # -----------------------------------------------------------------------
+    if config.backend == "tinker":
+        try:
+            from retrain.tinker_backend import TinkerTrainHelper
+        except ImportError:
+            raise RuntimeError(
+                "Backend 'tinker' requires the tinker SDK.\n"
+                "Install it with: pip install tinker"
+            )
+        helper = TinkerTrainHelper(
+            config.model,
+            config.inference_url,
+            config.lora_rank,
+            optim_beta1=config.optim_beta1,
+            optim_beta2=config.optim_beta2,
+            optim_eps=config.optim_eps,
+        )
+    elif config.backend == "local":
+        try:
+            from retrain.local_train_helper import LocalTrainHelper
+        except ImportError:
+            raise RuntimeError(
+                "Backend 'local' requires PyTorch.\n"
+                "Install it with: pip install torch"
+            )
+        helper = LocalTrainHelper(
+            config.model,
+            config.adapter_path,
+            config.devices,
+            config.lora_rank,
+            config.inference_engine,
+            config.inference_url,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            optim_beta1=config.optim_beta1,
+            optim_beta2=config.optim_beta2,
+            optim_eps=config.optim_eps,
+        )
+    else:
+        raise ValueError(
+            f"Unknown backend '{config.backend}'. Use 'local' or 'tinker'."
+        )
+
+    # -----------------------------------------------------------------------
     # 1. Setup directories + loggers
     # -----------------------------------------------------------------------
     log_path = Path(config.log_dir)
@@ -171,42 +216,7 @@ def train(config: TrainConfig) -> None:
         strategic_grams = list(DEFAULT_STRATEGIC_GRAMS)
 
     # -----------------------------------------------------------------------
-    # 7. Init backend (local or tinker)
-    # -----------------------------------------------------------------------
-    if config.backend == "tinker":
-        from retrain.tinker_backend import TinkerTrainHelper
-
-        helper = TinkerTrainHelper(
-            config.model,
-            config.inference_url,
-            config.lora_rank,
-            optim_beta1=config.optim_beta1,
-            optim_beta2=config.optim_beta2,
-            optim_eps=config.optim_eps,
-        )
-    elif config.backend == "local":
-        from retrain.local_train_helper import LocalTrainHelper
-
-        helper = LocalTrainHelper(
-            config.model,
-            config.adapter_path,
-            config.devices,
-            config.lora_rank,
-            config.inference_engine,
-            config.inference_url,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            optim_beta1=config.optim_beta1,
-            optim_beta2=config.optim_beta2,
-            optim_eps=config.optim_eps,
-        )
-    else:
-        raise ValueError(
-            f"Unknown backend '{config.backend}'. Use 'local' or 'tinker'."
-        )
-
-    # -----------------------------------------------------------------------
-    # 8. Back pressure
+    # 7. Back pressure
     # -----------------------------------------------------------------------
     if config.bp_enabled:
         backpressure: NoOpBackPressure | USLBackPressure = USLBackPressure(
@@ -223,7 +233,7 @@ def train(config: TrainConfig) -> None:
         backpressure = NoOpBackPressure()
 
     # -----------------------------------------------------------------------
-    # 9. Optional wandb
+    # 8. Optional wandb
     # -----------------------------------------------------------------------
     wandb_run = None
     wandb_enabled = bool(config.wandb_project)
@@ -271,7 +281,7 @@ def train(config: TrainConfig) -> None:
         print(f"Wandb initialized: {config.wandb_project}/{run_name}")
 
     # -----------------------------------------------------------------------
-    # 10. Training loop
+    # 9. Training loop
     # -----------------------------------------------------------------------
     reward_fn = create_reward(config)
     example_idx = 0
