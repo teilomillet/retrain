@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tinker = ["tinker>=0.1.0"]
+dev = ["pytest>=8.0.0"]
 
 [project.scripts]
 retrain = "retrain.cli:main"

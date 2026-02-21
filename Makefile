@@ -12,7 +12,7 @@ build:
 test: test-python test-mojo
 
 test-python:
-	python -m pytest tests/ -x -q 2>/dev/null || python -c "from retrain.config import load_config; print('config:', load_config())"
+	uv run python -m pytest tests/test_*.py -x -q
 
 test-mojo:
 	mojo run tests/test_advantages.mojo
