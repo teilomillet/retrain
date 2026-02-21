@@ -84,40 +84,42 @@ def train(config: TrainConfig) -> None:
     if config.backend == "tinker":
         try:
             from retrain.tinker_backend import TinkerTrainHelper
+
+            helper = TinkerTrainHelper(
+                config.model,
+                config.inference_url,
+                config.lora_rank,
+                optim_beta1=config.optim_beta1,
+                optim_beta2=config.optim_beta2,
+                optim_eps=config.optim_eps,
+            )
         except ImportError:
             raise RuntimeError(
                 "Backend 'tinker' requires the tinker SDK.\n"
-                "Install it with: pip install tinker"
+                "Install it with: uv add tinker"
             )
-        helper = TinkerTrainHelper(
-            config.model,
-            config.inference_url,
-            config.lora_rank,
-            optim_beta1=config.optim_beta1,
-            optim_beta2=config.optim_beta2,
-            optim_eps=config.optim_eps,
-        )
     elif config.backend == "local":
         try:
             from retrain.local_train_helper import LocalTrainHelper
+
+            helper = LocalTrainHelper(
+                config.model,
+                config.adapter_path,
+                config.devices,
+                config.lora_rank,
+                config.inference_engine,
+                config.inference_url,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                optim_beta1=config.optim_beta1,
+                optim_beta2=config.optim_beta2,
+                optim_eps=config.optim_eps,
+            )
         except ImportError:
             raise RuntimeError(
                 "Backend 'local' requires PyTorch.\n"
-                "Install it with: pip install torch"
+                "Install it with: uv add torch"
             )
-        helper = LocalTrainHelper(
-            config.model,
-            config.adapter_path,
-            config.devices,
-            config.lora_rank,
-            config.inference_engine,
-            config.inference_url,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            optim_beta1=config.optim_beta1,
-            optim_beta2=config.optim_beta2,
-            optim_eps=config.optim_eps,
-        )
     else:
         raise ValueError(
             f"Unknown backend '{config.backend}'. Use 'local' or 'tinker'."

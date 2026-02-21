@@ -140,6 +140,11 @@ def run_campaign(campaign_path: str) -> None:
 
             train(cfg)
             print(f"  OK")
+        except RuntimeError as e:
+            # Fatal errors (missing backend, bad config) — abort campaign
+            print(f"  FATAL: {e}")
+            print(f"\nAborting campaign.")
+            sys.exit(1)
         except Exception as e:
             print(f"  FAILED: {e}")
             failed += 1
