@@ -157,6 +157,21 @@ class TinkerTrainHelper:
             return float(loss_sum) / n
         return 0.0
 
+    def load_state(self, name: str) -> None:
+        """Load training state from a Tinker checkpoint.
+
+        Requires the Tinker SDK to support load_state on the training client.
+        Raises AttributeError with a clear message if not available.
+        """
+        if not hasattr(self.training_client, "load_state"):
+            raise AttributeError(
+                f"Tinker training client does not support load_state(). "
+                f"Cannot resume from checkpoint '{name}'. "
+                f"Check your Tinker SDK version supports checkpoint loading."
+            )
+        self.training_client.load_state(name=name)
+        print(f"Tinker checkpoint loaded: {name}")
+
     def save_adapter(self, path: str, name: str) -> None:
         """Save training state checkpoint via Tinker."""
         self.training_client.save_state(name=name)

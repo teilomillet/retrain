@@ -360,6 +360,52 @@ class LocalTrainHelper:
             # Synchronous path: run training inline, return current loss
             return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
 
+    def load_state(self, name):
+        """Load adapter weights from a saved checkpoint for resume.
+
+        Restores LoRA adapter weights into the train model and re-syncs
+        to the inference engine. Optimizer state (Adam momentum/variance)
+        is NOT restored — training will re-warm the optimizer.
+
+        Args:
+            name: Checkpoint name (subdirectory under adapter_path).
+        """
+        save_dir = os.path.join(self.adapter_path, name)
+        if not os.path.isdir(save_dir):
+            raise FileNotFoundError(
+                f"Adapter checkpoint not found: {save_dir}. "
+                f"Cannot resume from checkpoint '{name}'."
+            )
+
+        from peft import set_peft_model_state_dict
+
+        safetensors_path = os.path.join(save_dir, "adapter_model.safetensors")
+        bin_path = os.path.join(save_dir, "adapter_model.bin")
+
+        if os.path.isfile(safetensors_path):
+            from safetensors.torch import load_file
+            adapter_state = load_file(safetensors_path, device=str(self.train_device))
+        elif os.path.isfile(bin_path):
+            adapter_state = torch.load(bin_path, map_location=self.train_device, weights_only=True)
+        else:
+            raise FileNotFoundError(
+                f"No adapter weights in {save_dir}. "
+                f"Expected adapter_model.safetensors or adapter_model.bin."
+            )
+
+        set_peft_model_state_dict(self.train_model, adapter_state)
+
+        # Re-sync weights to inference engine
+        if self.split_mode or self._external_engine:
+            snapshot = {}
+            for pname, param in self.train_model.named_parameters():
+                if "lora_" in pname:
+                    snapshot[pname] = param.data.clone()
+            self._weight_snapshot = snapshot
+            self._weights_dirty = True
+
+        print(f"Loaded adapter checkpoint: {save_dir} (optimizer state not restored)")
+
     def save_adapter(self, path, name):
         """Save LoRA adapter to disk.
 

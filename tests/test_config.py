@@ -162,3 +162,13 @@ wandb_run_name = "run-1"
         toml.write_text('[training]\nmax_steps = 42\nunknown_key = "value"\n')
         c = load_config(str(toml))
         assert c.max_steps == 42
+
+    def test_resume_from_default(self):
+        c = TrainConfig()
+        assert c.resume_from == ""
+
+    def test_resume_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[resume]\nfrom = "logs/my_run"\n')
+        c = load_config(str(toml))
+        assert c.resume_from == "logs/my_run"

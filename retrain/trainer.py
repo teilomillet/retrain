@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 from transformers import AutoTokenizer
 
@@ -33,6 +34,49 @@ from retrain.data import MathDataSource
 from retrain.logging_utils import JsonlLogger
 from retrain.rewards import create_reward
 from retrain.sepa import SEPAController
+
+
+_TRAINER_STATE_FILE = "trainer_state.json"
+
+
+def _save_trainer_state(
+    path: Path,
+    *,
+    step: int,
+    example_idx: int,
+    total_correct: int,
+    total_completions: int,
+    current_batch_size: int,
+    current_group_size: int,
+    checkpoint_name: str,
+    sepa_state: dict[str, Any],
+) -> None:
+    """Write trainer-side state to JSON for checkpoint resume."""
+    state = {
+        "step": step,
+        "example_idx": example_idx,
+        "total_correct": total_correct,
+        "total_completions": total_completions,
+        "current_batch_size": current_batch_size,
+        "current_group_size": current_group_size,
+        "checkpoint_name": checkpoint_name,
+        "sepa": sepa_state,
+    }
+    tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
+    tmp.write_text(json.dumps(state, indent=2) + "\n")
+    tmp.rename(path / _TRAINER_STATE_FILE)
+
+
+def _load_trainer_state(resume_dir: str) -> dict[str, Any]:
+    """Load trainer state from a checkpoint directory."""
+    p = Path(resume_dir)
+    state_file = p / _TRAINER_STATE_FILE
+    if not state_file.is_file():
+        raise FileNotFoundError(
+            f"No {_TRAINER_STATE_FILE} found in {resume_dir}. "
+            f"Cannot resume without trainer state."
+        )
+    return json.loads(state_file.read_text())
 
 
 def train(config: TrainConfig) -> None:
@@ -202,6 +246,33 @@ def train(config: TrainConfig) -> None:
     current_batch_size = config.batch_size
     current_group_size = config.group_size
     needs_planning = config.transform_mode in ("gtpo_hicra", "gtpo_sepa")
+    start_step = 0
+
+    # -----------------------------------------------------------------------
+    # 10b. Resume from checkpoint (if requested)
+    # -----------------------------------------------------------------------
+    if config.resume_from:
+        saved = _load_trainer_state(config.resume_from)
+        start_step = saved["step"] + 1
+        example_idx = saved["example_idx"]
+        total_correct = saved["total_correct"]
+        total_completions = saved["total_completions"]
+        current_batch_size = saved["current_batch_size"]
+        current_group_size = saved["current_group_size"]
+
+        # Restore SEPA controller state
+        if "sepa" in saved:
+            sepa_controller.load_state_dict(saved["sepa"])
+
+        # Restore backend model state
+        ckpt_name = saved.get("checkpoint_name", "")
+        if ckpt_name:
+            helper.load_state(ckpt_name)
+
+        print(
+            f"Resumed from step {saved['step']} "
+            f"(checkpoint: {ckpt_name}), continuing from step {start_step}"
+        )
 
     # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
     warmup_batch_sizes: list[int] = []
@@ -213,7 +284,7 @@ def train(config: TrainConfig) -> None:
         if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
             warmup_batch_sizes.append(config.bp_max_batch_size)
 
-    for batch_idx in range(config.max_steps):
+    for batch_idx in range(start_step, config.max_steps):
         step_start = time.perf_counter()
 
         # Back pressure warmup sweep
@@ -592,12 +663,34 @@ def train(config: TrainConfig) -> None:
         if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
             ckpt_name = f"checkpoint_step_{batch_idx + 1}"
             helper.save_adapter(config.adapter_path, ckpt_name)
+            _save_trainer_state(
+                log_path,
+                step=batch_idx,
+                example_idx=example_idx,
+                total_correct=total_correct,
+                total_completions=total_completions,
+                current_batch_size=current_batch_size,
+                current_group_size=current_group_size,
+                checkpoint_name=ckpt_name,
+                sepa_state=sepa_controller.state_dict(),
+            )
             print(f"Saved checkpoint: {ckpt_name}")
 
     # -----------------------------------------------------------------------
     # Final
     # -----------------------------------------------------------------------
     helper.save_adapter(config.adapter_path, "final")
+    _save_trainer_state(
+        log_path,
+        step=config.max_steps - 1,
+        example_idx=example_idx,
+        total_correct=total_correct,
+        total_completions=total_completions,
+        current_batch_size=current_batch_size,
+        current_group_size=current_group_size,
+        checkpoint_name="final",
+        sepa_state=sepa_controller.state_dict(),
+    )
     final_rate = (
         100.0 * total_correct / total_completions if total_completions > 0 else 0.0
     )

@@ -88,6 +88,9 @@ Example retrain.toml:
   [backpressure]
   enabled = true
   warmup_steps = 10
+
+  [resume]
+  from = "logs/train"       # resume from trainer_state.json in this dir
 """
 
 
@@ -104,7 +107,22 @@ def main() -> None:
     from retrain.config import load_config
     from retrain.trainer import train
 
-    config_path = args[0] if args else None
+    # Parse --resume flag
+    resume_from = ""
+    remaining: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--resume" and i + 1 < len(args):
+            resume_from = args[i + 1]
+            i += 2
+        elif args[i].startswith("--resume="):
+            resume_from = args[i].split("=", 1)[1]
+            i += 1
+        else:
+            remaining.append(args[i])
+            i += 1
+
+    config_path = remaining[0] if remaining else None
 
     if config_path is None and not Path("retrain.toml").is_file():
         print("Error: no config file found.")
@@ -115,6 +133,8 @@ def main() -> None:
         sys.exit(1)
 
     config = load_config(config_path)
+    if resume_from:
+        config.resume_from = resume_from
     train(config)
 
 

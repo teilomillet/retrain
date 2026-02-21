@@ -8,6 +8,7 @@ this class handles when and how much to pool.
 from __future__ import annotations
 
 import math
+from typing import Any
 
 
 class SEPAController:
@@ -137,3 +138,49 @@ class SEPAController:
             self._warmup_seen += 1
             if self._warmup_seen >= self.sepa_warmup:
                 self._var_0 = max(self._var_ema, self.eps)
+
+    def state_dict(self) -> dict[str, Any]:
+        """Serialize scheduler state for checkpointing."""
+        return {
+            "sepa_steps": self.sepa_steps,
+            "sepa_schedule": self.sepa_schedule,
+            "sepa_delay_steps": self.sepa_delay_steps,
+            "sepa_correct_rate_gate": self.sepa_correct_rate_gate,
+            "sepa_ema_decay": self.sepa_ema_decay,
+            "sepa_var_threshold": self.sepa_var_threshold,
+            "sepa_warmup": self.sepa_warmup,
+            "eps": self.eps,
+            "var_ema": self._var_ema,
+            "var_0": self._var_0,
+            "warmup_seen": self._warmup_seen,
+            "gate_open": self._gate_open,
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore scheduler state from checkpoint."""
+        if not isinstance(state, dict):
+            raise ValueError(f"state must be a dict, got {type(state)!r}.")
+
+        def _maybe_float(key: str) -> float | None:
+            value = state.get(key)
+            if value is None:
+                return None
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise ValueError(f"state[{key!r}] must be finite, got {parsed}.")
+            return parsed
+
+        self._var_ema = _maybe_float("var_ema")
+        self._var_0 = _maybe_float("var_0")
+
+        warmup_seen = state.get("warmup_seen", self._warmup_seen)
+        self._warmup_seen = int(warmup_seen)
+        if self._warmup_seen < 0:
+            raise ValueError(
+                f"state['warmup_seen'] must be >= 0, got {self._warmup_seen}."
+            )
+
+        gate_open = state.get("gate_open", self._gate_open)
+        if not isinstance(gate_open, bool):
+            raise ValueError("state['gate_open'] must be a boolean.")
+        self._gate_open = gate_open

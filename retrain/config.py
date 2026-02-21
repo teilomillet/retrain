@@ -80,6 +80,9 @@ class TrainConfig:
     reward_custom_module: str = ""
     reward_custom_function: str = "score"
 
+    # Resume
+    resume_from: str = ""
+
     # Logging
     log_dir: str = "logs/train"
     wandb_project: str = ""
@@ -145,6 +148,9 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "judge_model": "reward_judge_model",
         "custom_module": "reward_custom_module",
         "custom_function": "reward_custom_function",
+    },
+    "resume": {
+        "from": "resume_from",
     },
     "logging": {
         "log_dir": "log_dir",

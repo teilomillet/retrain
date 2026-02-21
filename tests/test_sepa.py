@@ -141,6 +141,87 @@ class TestEnabled:
         assert not ctrl.enabled()
 
 
+class TestStateDict:
+    def test_roundtrip_linear(self):
+        ctrl = SEPAController(sepa_steps=100, sepa_schedule="linear")
+        ctrl.observe_correct_rate(0.5)  # open the gate
+        lam_before = ctrl.resolve_lambda(step=50.0)
+
+        state = ctrl.state_dict()
+        ctrl2 = SEPAController(sepa_steps=100, sepa_schedule="linear")
+        ctrl2.load_state_dict(state)
+
+        assert ctrl2.resolve_lambda(step=50.0) == pytest.approx(lam_before)
+        assert ctrl2.gate_open() == ctrl.gate_open()
+
+    def test_roundtrip_auto(self):
+        ctrl = SEPAController(
+            sepa_steps=100, sepa_schedule="auto",
+            sepa_warmup=2, sepa_ema_decay=0.0,
+        )
+        ctrl.update_auto_state([0.0, 10.0])
+        ctrl.update_auto_state([0.0, 10.0])  # warmup done
+        ctrl.update_auto_state([4.0, 6.0])   # lower variance
+        lam_before = ctrl.resolve_lambda(step=0.0)
+
+        state = ctrl.state_dict()
+        ctrl2 = SEPAController(
+            sepa_steps=100, sepa_schedule="auto",
+            sepa_warmup=2, sepa_ema_decay=0.0,
+        )
+        ctrl2.load_state_dict(state)
+        assert ctrl2.resolve_lambda(step=0.0) == pytest.approx(lam_before)
+
+    def test_roundtrip_preserves_gate(self):
+        ctrl = SEPAController(
+            sepa_steps=100, sepa_schedule="linear",
+            sepa_correct_rate_gate=0.2,
+        )
+        ctrl.observe_correct_rate(0.25)
+        assert ctrl.gate_open()
+
+        ctrl2 = SEPAController(
+            sepa_steps=100, sepa_schedule="linear",
+            sepa_correct_rate_gate=0.2,
+        )
+        ctrl2.load_state_dict(ctrl.state_dict())
+        assert ctrl2.gate_open()
+        assert ctrl2.resolve_lambda(step=50.0) == pytest.approx(0.5)
+
+    def test_state_dict_contains_all_fields(self):
+        ctrl = SEPAController(sepa_steps=100, sepa_schedule="auto", sepa_warmup=3)
+        ctrl.update_auto_state([1.0, 2.0, 3.0])
+        state = ctrl.state_dict()
+
+        assert "sepa_steps" in state
+        assert "sepa_schedule" in state
+        assert "var_ema" in state
+        assert "var_0" in state
+        assert "warmup_seen" in state
+        assert "gate_open" in state
+        assert state["warmup_seen"] == 1
+
+    def test_load_rejects_non_dict(self):
+        ctrl = SEPAController(sepa_steps=100)
+        with pytest.raises(ValueError, match="must be a dict"):
+            ctrl.load_state_dict("not a dict")
+
+    def test_load_rejects_non_finite(self):
+        ctrl = SEPAController(sepa_steps=100)
+        with pytest.raises(ValueError, match="must be finite"):
+            ctrl.load_state_dict({"var_ema": float("inf")})
+
+    def test_load_rejects_negative_warmup(self):
+        ctrl = SEPAController(sepa_steps=100)
+        with pytest.raises(ValueError, match="must be >= 0"):
+            ctrl.load_state_dict({"warmup_seen": -1})
+
+    def test_load_rejects_non_bool_gate(self):
+        ctrl = SEPAController(sepa_steps=100)
+        with pytest.raises(ValueError, match="must be a boolean"):
+            ctrl.load_state_dict({"gate_open": 1})
+
+
 class TestValidation:
     def test_negative_steps(self):
         with pytest.raises(ValueError):
