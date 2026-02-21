@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "retrain"
 version = "0.1.0"
 description = "RLVR training framework for LLMs"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.4.0",

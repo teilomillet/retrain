@@ -1,0 +1,61 @@
+site_name: retrain
+site_description: RLVR training framework for LLMs
+repo_url: https://github.com/modularml/retrain
+repo_name: modularml/retrain
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.tabs.link
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - Algorithms:
+    - Advantage Functions: advantages.md
+    - SEPA: sepa.md
+  - Components:
+    - Reward Functions: rewards.md
+    - Inference Engines: inference-engines.md
+    - Back Pressure: backpressure.md
+  - Operations:
+    - Campaigns: campaigns.md
+    - Backends: backends.md
+    - Logging & wandb: logging.md
+  - Research Guide: research-guide.md

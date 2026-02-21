@@ -39,6 +39,9 @@ wandb/
 retrain-tinker
 logs/
 
+# MkDocs
+site/
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml
