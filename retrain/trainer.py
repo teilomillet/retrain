@@ -95,6 +95,22 @@ def train(config: TrainConfig) -> None:
     generations_logger = JsonlLogger(str(emergence_dir / "generations.jsonl"))
 
     # -----------------------------------------------------------------------
+    # 1b. Seed for reproducibility
+    # -----------------------------------------------------------------------
+    if config.seed >= 0:
+        import random
+
+        import numpy as np
+        import torch
+
+        random.seed(config.seed)
+        np.random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(config.seed)
+        print(f"Seeded RNGs with {config.seed}")
+
+    # -----------------------------------------------------------------------
     # 2. Load tokenizer + vocab table
     # -----------------------------------------------------------------------
     print(f"Loading tokenizer for {config.model} ...")
@@ -212,10 +228,15 @@ def train(config: TrainConfig) -> None:
 
         condition_label = f"{config.advantage_mode}+{config.transform_mode}"
         run_name = config.wandb_run_name or condition_label
-        wandb_run = wandb.init(
-            project=config.wandb_project,
-            name=run_name,
-            config={
+        wandb_tags = (
+            [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
+            if config.wandb_tags
+            else None
+        )
+        wandb_kwargs: dict[str, Any] = {
+            "project": config.wandb_project,
+            "name": run_name,
+            "config": {
                 "advantage_mode": config.advantage_mode,
                 "transform_mode": config.transform_mode,
                 "condition": condition_label,
@@ -229,10 +250,20 @@ def train(config: TrainConfig) -> None:
                 "gtpo_beta": config.gtpo_beta,
                 "hicra_alpha": config.hicra_alpha,
                 "sepa_steps": config.sepa_steps,
+                "sepa_delay_steps": config.sepa_delay_steps,
+                "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
                 "max_steps": config.max_steps,
                 "backend": config.backend,
+                "seed": config.seed,
             },
-        )
+        }
+        if config.wandb_entity:
+            wandb_kwargs["entity"] = config.wandb_entity
+        if config.wandb_group:
+            wandb_kwargs["group"] = config.wandb_group
+        if wandb_tags:
+            wandb_kwargs["tags"] = wandb_tags
+        wandb_run = wandb.init(**wandb_kwargs)
         print(f"Wandb initialized: {config.wandb_project}/{run_name}")
 
     # -----------------------------------------------------------------------
@@ -622,27 +653,32 @@ def train(config: TrainConfig) -> None:
 
         # Wandb
         if wandb_enabled and wandb_run is not None:
-            wandb_run.log(
-                {
-                    "step": batch_idx,
-                    "loss": loss_value,
-                    "mean_reward": mean_reward,
-                    "correct_rate": correct_rate,
-                    "running_correct_rate": running_correct_rate,
-                    "sepa_lambda": sepa_lambda_val,
-                    "num_datums": num_datums,
-                    "step_time_s": step_time,
-                    "batch_size": current_batch_size,
-                    "group_size": current_group_size,
-                    "bp_warmup": bp_warmup,
-                    "bp_p_star": bp_decision.p_star,
-                    "bp_sigma": bp_decision.sigma,
-                    "bp_kappa": bp_decision.kappa,
-                    "bp_utilization": bp_decision.utilization,
-                    "bp_throughput": bp_decision.throughput,
-                },
-                step=batch_idx,
-            )
+            wandb_metrics: dict[str, Any] = {
+                "train/loss": loss_value,
+                "train/rewards/mean_reward": mean_reward,
+                "train/rewards/correct_rate": correct_rate,
+                "train/rewards/running_correct_rate": running_correct_rate,
+                "train/sepa_lambda": sepa_lambda_val,
+                "train/sepa_gate_open": int(sepa_gate),
+                "train/max_token_hit_rate": max_token_hit_rate,
+                "train/num_datums": num_datums,
+                "train/step_time_s": step_time,
+                "train/batch_size": current_batch_size,
+                "train/group_size": current_group_size,
+                "train/entropy/exec_mean": step_exec_mean,
+                "train/entropy/exec_var": step_exec_var,
+                "train/entropy/plan_mean": step_plan_mean,
+                "train/entropy/plan_var": step_plan_var,
+                "train/backpressure/action": bp_decision.action,
+                "train/backpressure/regime": bp_decision.regime,
+                "train/backpressure/p_star": bp_decision.p_star,
+                "train/backpressure/sigma": bp_decision.sigma,
+                "train/backpressure/kappa": bp_decision.kappa,
+                "train/backpressure/utilization": bp_decision.utilization,
+                "train/backpressure/throughput": bp_decision.throughput,
+                "train/backpressure/warmup": int(bp_warmup),
+            }
+            wandb_run.log(wandb_metrics, step=batch_idx)
 
         # Step record for emergence analysis
         step_entry: dict = {

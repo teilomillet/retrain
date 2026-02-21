@@ -32,6 +32,7 @@ class TrainConfig:
     lora_rank: int = 32
 
     # Training
+    seed: int = -1
     max_steps: int = 500
     batch_size: int = 8
     group_size: int = 16
@@ -87,6 +88,9 @@ class TrainConfig:
     log_dir: str = "logs/train"
     wandb_project: str = ""
     wandb_run_name: str = ""
+    wandb_entity: str = ""
+    wandb_group: str = ""
+    wandb_tags: str = ""
 
 
 # TOML section -> config field mapping
@@ -106,6 +110,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "lora_rank": "lora_rank",
     },
     "training": {
+        "seed": "seed",
         "max_steps": "max_steps",
         "batch_size": "batch_size",
         "group_size": "group_size",
@@ -156,6 +161,9 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "log_dir": "log_dir",
         "wandb_project": "wandb_project",
         "wandb_run_name": "wandb_run_name",
+        "wandb_entity": "wandb_entity",
+        "wandb_group": "wandb_group",
+        "wandb_tags": "wandb_tags",
         "strategic_grams": "strategic_grams",
     },
 }

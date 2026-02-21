@@ -172,3 +172,32 @@ wandb_run_name = "run-1"
         toml.write_text('[resume]\nfrom = "logs/my_run"\n')
         c = load_config(str(toml))
         assert c.resume_from == "logs/my_run"
+
+    def test_seed_default(self):
+        c = TrainConfig()
+        assert c.seed == -1
+
+    def test_seed_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("[training]\nseed = 42\n")
+        c = load_config(str(toml))
+        assert c.seed == 42
+
+    def test_wandb_entity_tags_group_defaults(self):
+        c = TrainConfig()
+        assert c.wandb_entity == ""
+        assert c.wandb_group == ""
+        assert c.wandb_tags == ""
+
+    def test_wandb_extended_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[logging]\n'
+            'wandb_entity = "my-team"\n'
+            'wandb_group = "sweep-1"\n'
+            'wandb_tags = "baseline,seed42"\n'
+        )
+        c = load_config(str(toml))
+        assert c.wandb_entity == "my-team"
+        assert c.wandb_group == "sweep-1"
+        assert c.wandb_tags == "baseline,seed42"
