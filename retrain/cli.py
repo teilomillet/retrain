@@ -79,6 +79,12 @@ Example retrain.toml:
   log_dir = "logs/train"
   # wandb_project = "my-project"
 
+  [reward]
+  type = "match"             # match | math | judge | custom
+  # judge_model = "gpt-4o-mini"   # only for type = "judge"
+  # custom_module = "my_pkg.rewards"  # only for type = "custom"
+  # custom_function = "my_score"      # only for type = "custom"
+
   [backpressure]
   enabled = true
   warmup_steps = 10

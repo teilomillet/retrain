@@ -74,6 +74,12 @@ class TrainConfig:
     kv_cache_dtype: str = "auto"
     prefix_caching: bool = True
 
+    # Reward / verifier
+    reward_type: str = "match"
+    reward_judge_model: str = ""
+    reward_custom_module: str = ""
+    reward_custom_function: str = "score"
+
     # Logging
     log_dir: str = "logs/train"
     wandb_project: str = ""
@@ -133,6 +139,12 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "max_batch_size": "bp_max_batch_size",
         "peak_gflops": "bp_peak_gflops",
         "peak_bw_gb_s": "bp_peak_bw_gb_s",
+    },
+    "reward": {
+        "type": "reward_type",
+        "judge_model": "reward_judge_model",
+        "custom_module": "reward_custom_module",
+        "custom_function": "reward_custom_function",
     },
     "logging": {
         "log_dir": "log_dir",

@@ -31,7 +31,7 @@ from retrain.backpressure import (
 from retrain.config import TrainConfig
 from retrain.data import MathDataSource
 from retrain.logging_utils import JsonlLogger
-from retrain.rewards import BoxedMathReward
+from retrain.rewards import create_reward
 from retrain.sepa import SEPAController
 
 
@@ -194,7 +194,7 @@ def train(config: TrainConfig) -> None:
     # -----------------------------------------------------------------------
     # 10. Training loop
     # -----------------------------------------------------------------------
-    reward_fn = BoxedMathReward()
+    reward_fn = create_reward(config)
     example_idx = 0
     total_correct = 0
     total_completions = 0
