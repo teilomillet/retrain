@@ -43,7 +43,7 @@ If no path is given, loads retrain.toml from the current directory.
 Example retrain.toml:
 
   [backend]
-  backend = "local"          # local (tinker not yet ported)
+  backend = "local"          # local | tinker
   devices = "gpu:0"          # e.g. gpu:0,gpu:1
 
   [model]

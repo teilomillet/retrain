@@ -30,7 +30,6 @@ from retrain.backpressure import (
 )
 from retrain.config import TrainConfig
 from retrain.data import MathDataSource
-from retrain.local_train_helper import LocalTrainHelper
 from retrain.logging_utils import JsonlLogger
 from retrain.rewards import BoxedMathReward
 from retrain.sepa import SEPAController
@@ -116,22 +115,31 @@ def train(config: TrainConfig) -> None:
         strategic_grams = list(DEFAULT_STRATEGIC_GRAMS)
 
     # -----------------------------------------------------------------------
-    # 7. Init LocalTrainHelper
+    # 7. Init backend (local or tinker)
     # -----------------------------------------------------------------------
-    if config.backend != "local":
-        raise NotImplementedError(
-            f"Backend '{config.backend}' not implemented in Python CLI. "
-            "Use the Mojo binary for tinker backend."
-        )
+    if config.backend == "tinker":
+        from retrain.tinker_backend import TinkerTrainHelper
 
-    helper = LocalTrainHelper(
-        config.model,
-        config.adapter_path,
-        config.devices,
-        config.lora_rank,
-        config.inference_engine,
-        config.inference_url,
-    )
+        helper = TinkerTrainHelper(
+            config.model,
+            config.inference_url,
+            config.lora_rank,
+        )
+    elif config.backend == "local":
+        from retrain.local_train_helper import LocalTrainHelper
+
+        helper = LocalTrainHelper(
+            config.model,
+            config.adapter_path,
+            config.devices,
+            config.lora_rank,
+            config.inference_engine,
+            config.inference_url,
+        )
+    else:
+        raise ValueError(
+            f"Unknown backend '{config.backend}'. Use 'local' or 'tinker'."
+        )
 
     # -----------------------------------------------------------------------
     # 8. Back pressure
