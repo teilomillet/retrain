@@ -1,25 +1,45 @@
-"""Campaign orchestrator: generates and optionally runs a full sweep.
+"""Campaign runner: executes a sweep defined in a TOML file.
 
-Usage:
-    python -m retrain.campaign                           # dry-run
-    python -m retrain.campaign --execute                 # run all
-    python -m retrain.campaign --seeds 101,102,103,104   # custom seeds
-    python -m retrain.campaign --wandb-project sepa-deep # set wandb project
-    python -m retrain.campaign --max-steps 100           # override max steps
+A campaign TOML has a [campaign] section with conditions and seeds.
+All other sections (model, training, inference, etc.) serve as the
+base config for each run.
+
+Example:
+
+    [campaign]
+    seeds = [42, 101, 202, 303]
+    max_steps = 50
+
+    [[campaign.conditions]]
+    advantage_mode = "grpo"
+    transform_mode = "none"
+
+    [[campaign.conditions]]
+    advantage_mode = "maxrl"
+    transform_mode = "gtpo_sepa"
+
+    # Everything below is the base training config
+    [model]
+    model = "Qwen/Qwen3-4B-Instruct-2507"
+
+    [training]
+    batch_size = 8
+
+    [logging]
+    wandb_project = "sepa-pilot"
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from retrain.config import TrainConfig
+from retrain.config import TrainConfig, load_config
 
-# 5 conditions from the SEPA paper
-CONDITIONS: list[tuple[str, str]] = [
+DEFAULT_CONDITIONS: list[tuple[str, str]] = [
     ("grpo", "none"),
     ("maxrl", "none"),
     ("maxrl", "gtpo"),
@@ -30,107 +50,57 @@ CONDITIONS: list[tuple[str, str]] = [
 DEFAULT_SEEDS: list[int] = [42, 101, 202, 303, 404, 505, 606, 707]
 
 
-def build_commands(
-    *,
-    seeds: list[int],
-    wandb_project: str,
-    max_steps: int,
-    config_path: str | None,
-    campaign_dir: Path,
-) -> list[dict[str, str | list[str]]]:
-    """Build the list of run commands for all conditions × seeds."""
-    runs: list[dict[str, str | list[str]]] = []
+def run_campaign(campaign_path: str) -> None:
+    """Load a campaign TOML and execute all runs sequentially."""
+    with open(campaign_path, "rb") as f:
+        data = tomllib.load(f)
 
-    for adv_mode, tx_mode in CONDITIONS:
-        condition = f"{adv_mode}+{tx_mode}"
-        for seed in seeds:
-            run_name = f"{condition}_s{seed}"
-            log_dir = str(campaign_dir / "runs" / run_name)
+    campaign = data.get("campaign", {})
 
-            cmd = [sys.executable, "-m", "retrain"]
-            if config_path:
-                cmd.append(config_path)
-            cmd.extend([
-                "--advantage-mode", adv_mode,
-                "--transform-mode", tx_mode,
-                "--seed", str(seed),
-                "--max-steps", str(max_steps),
-                "--log-dir", log_dir,
-            ])
-            if wandb_project:
-                cmd.extend([
-                    "--wandb-project", wandb_project,
-                    "--wandb-group", condition,
-                    "--wandb-run-name", run_name,
-                    "--wandb-tags", f"{condition},seed{seed}",
-                ])
+    # Campaign-level settings
+    seeds = campaign.get("seeds", DEFAULT_SEEDS)
+    max_steps = campaign.get("max_steps", TrainConfig().max_steps)
 
-            runs.append({
-                "condition": condition,
-                "seed": str(seed),
-                "run_name": run_name,
-                "log_dir": log_dir,
-                "cmd": cmd,
-            })
+    # Conditions
+    raw_conditions = campaign.get("conditions", None)
+    if raw_conditions:
+        conditions = [
+            (c["advantage_mode"], c["transform_mode"])
+            for c in raw_conditions
+        ]
+    else:
+        conditions = list(DEFAULT_CONDITIONS)
 
-    return runs
+    # Load the same TOML as a base training config (non-campaign sections)
+    base_config = load_config(campaign_path)
 
-
-def main() -> None:
-    """CLI entry point for campaign orchestrator."""
-    args = sys.argv[1:]
-
-    # Parse args
-    execute = False
-    seeds = list(DEFAULT_SEEDS)
-    wandb_project = ""
-    max_steps = TrainConfig().max_steps
-    config_path: str | None = None
-
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--execute":
-            execute = True
-            i += 1
-        elif arg == "--seeds" and i + 1 < len(args):
-            seeds = [int(s.strip()) for s in args[i + 1].split(",")]
-            i += 2
-        elif arg == "--wandb-project" and i + 1 < len(args):
-            wandb_project = args[i + 1]
-            i += 2
-        elif arg == "--max-steps" and i + 1 < len(args):
-            max_steps = int(args[i + 1])
-            i += 2
-        elif arg == "--config" and i + 1 < len(args):
-            config_path = args[i + 1]
-            i += 2
-        elif arg in ("-h", "--help"):
-            print(__doc__)
-            sys.exit(0)
-        else:
-            print(f"Unknown argument: {arg}")
-            sys.exit(1)
-
-    # Create campaign directory
+    # Campaign directory
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     campaign_dir = Path("logs") / f"campaign_{timestamp}"
     campaign_dir.mkdir(parents=True, exist_ok=True)
 
-    runs = build_commands(
-        seeds=seeds,
-        wandb_project=wandb_project,
-        max_steps=max_steps,
-        config_path=config_path,
-        campaign_dir=campaign_dir,
-    )
+    # Build run list
+    runs: list[dict] = []
+    for adv_mode, tx_mode in conditions:
+        condition = f"{adv_mode}+{tx_mode}"
+        for seed in seeds:
+            run_name = f"{condition}_s{seed}"
+            log_dir = str(campaign_dir / "runs" / run_name)
+            runs.append({
+                "condition": condition,
+                "advantage_mode": adv_mode,
+                "transform_mode": tx_mode,
+                "seed": seed,
+                "run_name": run_name,
+                "log_dir": log_dir,
+            })
 
     # Write manifest
     manifest = {
         "timestamp": timestamp,
-        "conditions": [f"{a}+{t}" for a, t in CONDITIONS],
+        "campaign_toml": campaign_path,
+        "conditions": [f"{a}+{t}" for a, t in conditions],
         "seeds": seeds,
-        "wandb_project": wandb_project,
         "max_steps": max_steps,
         "num_runs": len(runs),
         "runs": runs,
@@ -138,44 +108,44 @@ def main() -> None:
     manifest_path = campaign_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
-    # Write shell script
-    script_path = campaign_dir / "run_all.sh"
-    lines = ["#!/usr/bin/env bash", "set -euo pipefail", ""]
-    for run in runs:
-        cmd_str = " ".join(run["cmd"])  # type: ignore[arg-type]
-        lines.append(f"echo '>>> {run['run_name']}'")
-        lines.append(cmd_str)
-        lines.append("")
-    script_path.write_text("\n".join(lines))
-    script_path.chmod(0o755)
-
     # Summary
-    n_conditions = len(CONDITIONS)
-    n_seeds = len(seeds)
-    print(f"Campaign: {n_conditions} conditions x {n_seeds} seeds = {len(runs)} runs")
-    print(f"  manifest: {manifest_path}")
-    print(f"  script:   {script_path}")
+    print(f"Campaign: {len(conditions)} conditions x {len(seeds)} seeds = {len(runs)} runs")
+    print(f"  conditions: {', '.join(f'{a}+{t}' for a, t in conditions)}")
+    print(f"  seeds:      {seeds}")
+    print(f"  max_steps:  {max_steps}")
+    print(f"  output:     {campaign_dir}")
     print()
 
-    for run in runs:
-        cmd_str = " ".join(run["cmd"])  # type: ignore[arg-type]
-        print(f"  {cmd_str}")
-    print()
+    # Execute: each run is a train() call with overridden fields
+    from retrain.trainer import train
+    import copy
 
-    if not execute:
-        print("Dry run. Pass --execute to run all commands.")
-        return
-
-    # Execute sequentially
-    print("Executing campaign...")
+    failed = 0
     for idx, run in enumerate(runs):
-        print(f"\n[{idx + 1}/{len(runs)}] {run['run_name']}")
-        result = subprocess.run(run["cmd"], check=False)  # type: ignore[arg-type]
-        if result.returncode != 0:
-            print(f"  FAILED (exit {result.returncode})")
-        else:
+        print(f"[{idx + 1}/{len(runs)}] {run['run_name']}")
+        try:
+            cfg = copy.deepcopy(base_config)
+            cfg.advantage_mode = run["advantage_mode"]
+            cfg.transform_mode = run["transform_mode"]
+            cfg.seed = run["seed"]
+            cfg.max_steps = max_steps
+            cfg.log_dir = run["log_dir"]
+
+            # Set wandb fields if configured
+            condition = run["condition"]
+            if cfg.wandb_project:
+                cfg.wandb_group = condition
+                cfg.wandb_run_name = run["run_name"]
+                cfg.wandb_tags = f"{condition},seed{run['seed']}"
+
+            train(cfg)
             print(f"  OK")
+        except Exception as e:
+            print(f"  FAILED: {e}")
+            failed += 1
 
-
-if __name__ == "__main__":
-    main()
+    if failed:
+        print(f"\n{failed}/{len(runs)} runs failed.")
+    else:
+        print(f"\nAll {len(runs)} runs completed.")
+    print(f"Results in {campaign_dir}")
