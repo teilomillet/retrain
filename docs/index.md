@@ -25,7 +25,8 @@ retrain
 ├── sepa.py             # SEPA scheduler (linear / auto)
 ├── rewards.py          # match, math, judge, custom reward functions
 ├── backpressure.py     # USL+Roofline adaptive batch sizing
-├── campaign.py         # Sweep orchestrator (conditions x seeds)
+├── campaign.py         # Sweep orchestrator (conditions x seeds) with auto-squeeze
+├── squeeze.py          # LoRA-Squeeze rank analysis and compression
 ├── local_train_helper.py   # Local GPU backend (PyTorch/PEFT + inference engine)
 ├── tinker_backend.py       # Remote GPU backend (Tinker API)
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang)
@@ -44,7 +45,8 @@ retrain
 | **Inference engines** | PyTorch, MAX, vLLM, SGLang, OpenAI-compatible servers |
 | **Reward functions** | String match, symbolic math (math_verify), LLM judge, custom |
 | **Back pressure** | USL model fits throughput curves, auto-adjusts batch size |
-| **Campaigns** | Sweep 5 conditions x N seeds, generates shell scripts + wandb groups |
+| **Campaigns** | Sweep conditions x seeds from a single TOML with wandb groups |
+| **LoRA-Squeeze** | Train at high rank, auto-analyze optimal rank via SVD after first run |
 | **Checkpoint resume** | Full trainer state (step, SEPA, optimizer) saved and restored |
 | **wandb integration** | Structured metric prefixes (`train/`, `train/entropy/`, `train/backpressure/`) |
 
@@ -57,7 +59,7 @@ retrain
 - [Reward Functions](rewards.md) -- match, math, judge, custom
 - [Inference Engines](inference-engines.md) -- engine selection and multi-GPU setup
 - [Back Pressure](backpressure.md) -- adaptive batch sizing
-- [Campaigns](campaigns.md) -- sweep orchestrator
+- [Campaigns & LoRA-Squeeze](campaigns.md) -- sweep orchestrator with auto rank analysis
 - [Backends](backends.md) -- local vs Tinker
 - [Logging & wandb](logging.md) -- metrics and experiment tracking
 - [Research Guide](research-guide.md) -- interpreting results, statistical testing, analysis code

@@ -95,6 +95,23 @@ The wandb run config records all hyperparameters:
 - `sepa_steps`, `sepa_delay_steps`, `sepa_correct_rate_gate`
 - `max_steps`, `backend`, `seed`
 
+### Squeeze metrics
+
+When a campaign has a `[squeeze]` section, a dedicated **"squeeze-analysis"** wandb run is created after the first training run completes. It logs:
+
+| Prefix | Metrics |
+|--------|---------|
+| `squeeze/` | `variance_table` (wandb Table), `mean_variance`, `min_variance`, `max_variance`, `rank` |
+
+Summary metrics on the run:
+
+| Key | Description |
+|-----|-------------|
+| `squeeze/recommended_rank` | Smallest rank meeting the variance threshold |
+| `squeeze/source_rank` | Original training rank |
+| `squeeze/min_variance_retention` | Configured threshold |
+| `squeeze/num_layers` | Number of LoRA layers analyzed |
+
 ### Campaign integration
 
-When running campaigns with `--wandb-project`, each run gets a structured name, group, and tags for easy comparison in the wandb dashboard. See [Campaigns](campaigns.md).
+When running campaigns with `wandb_project` set, each training run gets a structured name, group, and tags for easy comparison in the wandb dashboard. The squeeze-analysis run appears in the same project. See [Campaigns](campaigns.md).

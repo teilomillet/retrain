@@ -184,5 +184,5 @@ Use `--max-steps 100` for a quick validation run.
 
 - [Configuration](configuration.md) -- tune hyperparameters, enable wandb, switch inference engines
 - [Advantage Functions](advantages.md) -- understand GRPO vs MaxRL and the GTPO/HICRA/SEPA transforms
-- [Campaigns](campaigns.md) -- sweep all 5 conditions across multiple seeds
+- [Campaigns](campaigns.md) -- sweep conditions across seeds with auto-squeeze rank analysis
 - [Backends](backends.md) -- scale to multiple GPUs or use Tinker remote training

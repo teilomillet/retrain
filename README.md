@@ -8,7 +8,8 @@ RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLM
 - **Pluggable inference** -- PyTorch, MAX, vLLM, SGLang, or any OpenAI-compatible server
 - **Pluggable rewards** -- string match, symbolic math, LLM judge, or bring your own
 - **Back pressure** -- USL+Roofline adaptive batch sizing
-- **Campaign orchestrator** -- sweep all 5 conditions across seeds with wandb logging
+- **Campaign orchestrator** -- sweep conditions x seeds from a single TOML, with wandb logging
+- **LoRA-Squeeze** -- auto-analyze optimal LoRA rank after first campaign run (arXiv 2602.10993)
 - **Checkpoint resume** -- save and restore full trainer state across preemptions
 
 ## Install
@@ -42,6 +43,7 @@ Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [Configuration Reference](https://retrain.readthedocs.io/configuration/)
 - [Advantage Functions](https://retrain.readthedocs.io/advantages/)
 - [SEPA Scheduling](https://retrain.readthedocs.io/sepa/)
+- [Campaigns & LoRA-Squeeze](https://retrain.readthedocs.io/campaigns/)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
 

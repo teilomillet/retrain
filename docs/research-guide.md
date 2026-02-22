@@ -66,7 +66,7 @@ The gap between conditions 1 and 2 (SEPA vs HICRA) is the key comparison. Both u
 
 ## Comparing conditions in wandb
 
-When you run campaigns with `--wandb-project`, each run gets a **group** label (the condition) and **tags** (condition + seed). To compare:
+When you run campaigns with `wandb_project` set in the TOML, each run gets a **group** label (the condition) and **tags** (condition + seed). To compare:
 
 1. Open your wandb project dashboard
 2. Create a panel: x-axis = `step`, y-axis = `train/rewards/correct_rate`
@@ -97,7 +97,7 @@ The effect size between conditions (especially SEPA vs HICRA) is modest. More se
 | Standard campaign | 8 | 40 | Default. Adequate for large effects |
 | Paper-grade claims | 16+ | 80+ | Needed for modest effect sizes (~1-2% absolute lift) |
 
-Use `--max-steps 100` with 3 seeds first to validate your setup. Then scale to 8 seeds / 500 steps for real results.
+Use `max_steps = 100` with 3 seeds first to validate your setup. Then scale to 8 seeds / 500 steps for real results.
 
 ### Power analysis guidance
 
@@ -319,18 +319,41 @@ Verdicts:
     ```
     Check that training runs, metrics are logged, correct_rate > 0.
 
-2. **Small sweep** (a few hours):
-    ```bash
-    python -m retrain.campaign --max-steps 100 --seeds 42,101,202 --wandb-project test-sweep
+2. **Small sweep** (a few hours) — create a campaign TOML:
+    ```toml
+    # test_sweep.toml
+    [campaign]
+    seeds = [42, 101, 202]
+    max_steps = 100
+
+    [[campaign.conditions]]
+    advantage_mode = "grpo"
+    transform_mode = "none"
+
+    [[campaign.conditions]]
+    advantage_mode = "maxrl"
+    transform_mode = "gtpo_sepa"
+
+    [model]
+    lora_rank = 128
+
+    [squeeze]
+    min_variance_retention = 0.95
+
+    [logging]
+    wandb_project = "test-sweep"
     ```
-    Check wandb: do the 5 conditions separate? Is the ordering roughly right?
+    ```bash
+    retrain test_sweep.toml
+    ```
+    Check wandb: do the conditions separate? Does squeeze recommend a reasonable rank?
 
 3. **Full campaign** (1-2 days on H100, longer on 4090):
     ```bash
-    python -m retrain.campaign --max-steps 500 --seeds 42,101,202,303,404,505,606,707 \
-      --wandb-project sepa-full --execute
+    retrain campaigns/pilot.toml
     ```
+    Or create your own TOML with all 5 conditions and 8+ seeds.
 
-4. **Analyze**: Plot learning curves, check entropy distributions, run significance tests.
+4. **Analyze**: Plot learning curves, check entropy distributions, review squeeze recommendation, run significance tests.
 
 5. **Scale up if needed**: If SEPA vs HICRA is directional but non-significant, double the seeds (16) and re-run.

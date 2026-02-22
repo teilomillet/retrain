@@ -73,6 +73,14 @@ max_batch_size = 64
 peak_gflops = 0.0          # 0 = skip roofline hints
 peak_bw_gb_s = 0.0
 
+[squeeze]
+# Only needed in campaign TOMLs or standalone squeeze TOMLs
+min_variance_retention = 0.95  # threshold for rank recommendation
+# adapter_path = ""           # required for standalone squeeze, auto-filled in campaigns
+# source_rank = 0             # 0 = detect from [model].lora_rank
+# output_path = ""            # set to save compressed adapter
+# compress_to = 0             # 0 = use recommended rank
+
 [resume]
 from = ""                  # path to log dir with trainer_state.json
 
@@ -180,6 +188,20 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `max_batch_size` | int | `64` | Ceiling for adaptive batch size |
 | `peak_gflops` | float | `0.0` | Hardware peak GFLOPS for roofline hints. `0` = skip |
 | `peak_bw_gb_s` | float | `0.0` | Hardware peak memory bandwidth (GB/s) |
+
+### `[squeeze]`
+
+Optional section for LoRA-Squeeze rank analysis. In campaign TOMLs, triggers auto-squeeze after the first run. See [Campaigns](campaigns.md#auto-squeeze-lora-squeeze) for details.
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `min_variance_retention` | float | `0.95` | Minimum variance fraction to retain (0.95 = 95%) |
+| `adapter_path` | str | `""` | Path to adapter directory. Required for standalone squeeze, auto-filled in campaigns |
+| `source_rank` | int | `0` | Expected source rank. `0` = detect from `[model].lora_rank` |
+| `target_ranks` | list[int] | `[]` | Ranks to evaluate. `[]` = auto power-of-2 |
+| `output_path` | str | `""` | Directory to save compressed adapter. Empty = don't compress |
+| `compress_to` | int | `0` | Target rank for compression. `0` = use recommended rank |
+| `device` | str | `"cpu"` | Torch device for SVD computation |
 
 ### `[resume]`
 
