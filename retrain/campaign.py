@@ -51,9 +51,13 @@ DEFAULT_SEEDS: list[int] = [42, 101, 202, 303, 404, 505, 606, 707]
 
 
 def _auto_squeeze(
-    adapter_path: str, squeeze_cfg: dict, lora_rank: int
+    adapter_path: str,
+    squeeze_cfg: dict,
+    lora_rank: int,
+    wandb_project: str = "",
+    wandb_entity: str = "",
 ) -> int:
-    """Run squeeze analysis on an adapter and print results. Returns recommended rank."""
+    """Run squeeze analysis, print results, log to wandb. Returns recommended rank."""
     from retrain.squeeze import analyze_adapter
 
     min_var = float(squeeze_cfg.get("min_variance_retention", 0.95))
@@ -93,7 +97,73 @@ def _auto_squeeze(
     )
     print(f"{'=' * 60}\n")
 
+    # Log to wandb
+    if wandb_project:
+        _log_squeeze_to_wandb(analysis, wandb_project, wandb_entity)
+
     return analysis.recommended_rank
+
+
+def _log_squeeze_to_wandb(
+    analysis: "SqueezeAnalysis",  # noqa: F821
+    wandb_project: str,
+    wandb_entity: str = "",
+) -> None:
+    """Log squeeze analysis to wandb as a dedicated run with table + summary."""
+    try:
+        import wandb
+    except ImportError:
+        print("wandb not installed, skipping squeeze logging")
+        return
+
+    wandb_kwargs: dict = {
+        "project": wandb_project,
+        "name": "squeeze-analysis",
+        "job_type": "squeeze",
+        "tags": ["squeeze", f"rank-{analysis.recommended_rank}"],
+        "config": {
+            "source_rank": analysis.layers[0].source_rank,
+            "recommended_rank": analysis.recommended_rank,
+            "min_variance_retention": analysis.min_variance_retention,
+            "num_layers": len(analysis.layers),
+        },
+    }
+    if wandb_entity:
+        wandb_kwargs["entity"] = wandb_entity
+
+    run = wandb.init(**wandb_kwargs)
+
+    # Variance table
+    columns = ["rank", "mean_variance", "min_variance", "max_variance", "recommended"]
+    table = wandb.Table(columns=columns)
+
+    for k in analysis.target_ranks:
+        vals = [layer.variance_at_rank[k] for layer in analysis.layers]
+        mean_v = analysis.mean_variance[k]
+        min_v = min(vals)
+        max_v = max(vals)
+        table.add_data(k, mean_v, min_v, max_v, k == analysis.recommended_rank)
+
+    run.log({"squeeze/variance_table": table})
+
+    # Line chart data: log each rank as a step for a clean variance curve
+    for k in analysis.target_ranks:
+        vals = [layer.variance_at_rank[k] for layer in analysis.layers]
+        run.log({
+            "squeeze/mean_variance": analysis.mean_variance[k],
+            "squeeze/min_variance": min(vals),
+            "squeeze/max_variance": max(vals),
+            "squeeze/rank": k,
+        })
+
+    # Summary metrics
+    run.summary["squeeze/recommended_rank"] = analysis.recommended_rank
+    run.summary["squeeze/source_rank"] = analysis.layers[0].source_rank
+    run.summary["squeeze/min_variance_retention"] = analysis.min_variance_retention
+    run.summary["squeeze/num_layers"] = len(analysis.layers)
+
+    run.finish()
+    print(f"Squeeze results logged to wandb: {wandb_project}/squeeze-analysis")
 
 
 def run_campaign(campaign_path: str) -> None:
@@ -195,7 +265,11 @@ def run_campaign(campaign_path: str) -> None:
             # Auto-squeeze after first run
             if idx == 0 and squeeze_cfg and adapter_path:
                 recommended_rank = _auto_squeeze(
-                    adapter_path, squeeze_cfg, base_config.lora_rank
+                    adapter_path,
+                    squeeze_cfg,
+                    base_config.lora_rank,
+                    wandb_project=base_config.wandb_project,
+                    wandb_entity=base_config.wandb_entity,
                 )
         except RuntimeError as e:
             # Fatal errors (missing backend, bad config) — abort campaign
