@@ -178,7 +178,10 @@ class TinkerTrainHelper:
         self.training_client.load_state(name=name)
         print(f"Tinker checkpoint loaded: {name}")
 
-    def save_adapter(self, path: str, name: str) -> None:
-        """Save training state checkpoint via Tinker."""
-        self.training_client.save_state(name=name)
-        print(f"Tinker checkpoint saved: {name}")
+    def save_adapter(self, path: str, name: str) -> str:
+        """Save training state checkpoint via Tinker. Returns tinker:// path."""
+        result = self.training_client.save_state(name=name)
+        response = result.result()
+        tinker_path = response.path
+        print(f"Tinker checkpoint saved: {name} ({tinker_path})")
+        return tinker_path

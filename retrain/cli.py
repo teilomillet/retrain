@@ -37,6 +37,13 @@ def _load_dotenv() -> None:
     print("Loaded .env")
 
 
+def _is_squeeze(path: str) -> bool:
+    """Check if a TOML file has a [squeeze] section."""
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    return "squeeze" in data
+
+
 def _is_campaign(path: str) -> bool:
     """Check if a TOML file has a [campaign] section."""
     with open(path, "rb") as f:
@@ -68,10 +75,14 @@ def main() -> None:
         print(f"File not found: {config_path}")
         sys.exit(1)
 
-    # Route: campaign or single run
+    # Route: campaign | squeeze | single run
+    # Campaign checked first — a campaign TOML may also have [squeeze] for auto-squeeze.
     if _is_campaign(config_path):
         from retrain.campaign import run_campaign
         run_campaign(config_path)
+    elif _is_squeeze(config_path):
+        from retrain.squeeze import run_squeeze
+        run_squeeze(config_path)
     else:
         from retrain.config import load_config
         from retrain.trainer import train

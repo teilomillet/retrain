@@ -1,5 +1,6 @@
 # Minimal pilot: baseline vs full-stack SEPA
 # 2 conditions x 4 seeds x 50 steps = 8 runs
+# High rank (128) — auto-squeeze after first run finds optimal rank.
 #
 # Run: retrain campaigns/pilot.toml
 
@@ -22,7 +23,7 @@ backend = "tinker"
 
 [model]
 model = "Qwen/Qwen3-4B-Instruct-2507"
-lora_rank = 32
+lora_rank = 128
 
 [training]
 batch_size = 8
@@ -36,6 +37,9 @@ save_every = 20
 steps = 50
 schedule = "linear"
 delay_steps = 10
+
+[squeeze]
+min_variance_retention = 0.95
 
 [logging]
 wandb_project = "sepa-pilot"

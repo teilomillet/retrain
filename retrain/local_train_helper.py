@@ -409,7 +409,7 @@ class LocalTrainHelper:
 
         print(f"Loaded adapter checkpoint: {save_dir} (optimizer state not restored)")
 
-    def save_adapter(self, path, name):
+    def save_adapter(self, path, name) -> str:
         """Save LoRA adapter to disk.
 
         Flushes any pending async training before saving to ensure
@@ -418,6 +418,9 @@ class LocalTrainHelper:
         Args:
             path: Base directory for adapter storage.
             name: Checkpoint name (creates subdirectory).
+
+        Returns:
+            Path to the saved adapter directory.
         """
         # Flush pending training before saving
         if self._train_future is not None:
@@ -428,3 +431,4 @@ class LocalTrainHelper:
         os.makedirs(save_dir, exist_ok=True)
         self.train_model.save_pretrained(save_dir)
         print(f"Adapter saved to {save_dir}")
+        return save_dir

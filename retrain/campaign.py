@@ -50,6 +50,52 @@ DEFAULT_CONDITIONS: list[tuple[str, str]] = [
 DEFAULT_SEEDS: list[int] = [42, 101, 202, 303, 404, 505, 606, 707]
 
 
+def _auto_squeeze(
+    adapter_path: str, squeeze_cfg: dict, lora_rank: int
+) -> int:
+    """Run squeeze analysis on an adapter and print results. Returns recommended rank."""
+    from retrain.squeeze import analyze_adapter
+
+    min_var = float(squeeze_cfg.get("min_variance_retention", 0.95))
+    source_rank = int(squeeze_cfg.get("source_rank", 0)) or lora_rank
+
+    print(f"\n{'=' * 60}")
+    print(f"Auto-squeeze: analyzing {adapter_path}")
+    print(f"  source_rank={source_rank}, min_variance_retention={min_var}")
+
+    analysis = analyze_adapter(
+        adapter_path=adapter_path,
+        source_rank=source_rank,
+        min_variance_retention=min_var,
+    )
+
+    # Print variance table
+    print(f"\nSource rank: {analysis.layers[0].source_rank}")
+    print(f"Layers analyzed: {len(analysis.layers)}\n")
+
+    header = f"{'Rank':>6}  {'Mean Var%':>9}  {'Min Var%':>9}  {'Max Var%':>9}"
+    print(header)
+    print("-" * len(header))
+
+    for k in analysis.target_ranks:
+        vals = [layer.variance_at_rank[k] for layer in analysis.layers]
+        mean_v = analysis.mean_variance[k]
+        min_v = min(vals)
+        max_v = max(vals)
+        marker = " <--" if k == analysis.recommended_rank else ""
+        print(
+            f"{k:>6}  {mean_v * 100:>8.2f}%  {min_v * 100:>8.2f}%  {max_v * 100:>8.2f}%{marker}"
+        )
+
+    print(
+        f"\nRecommended rank: {analysis.recommended_rank} "
+        f"(>= {min_var * 100:.0f}% variance retained)"
+    )
+    print(f"{'=' * 60}\n")
+
+    return analysis.recommended_rank
+
+
 def run_campaign(campaign_path: str) -> None:
     """Load a campaign TOML and execute all runs sequentially."""
     with open(campaign_path, "rb") as f:
@@ -116,11 +162,16 @@ def run_campaign(campaign_path: str) -> None:
     print(f"  output:     {campaign_dir}")
     print()
 
+    # Squeeze config (optional)
+    squeeze_cfg = data.get("squeeze", None)
+
     # Execute: each run is a train() call with overridden fields
     from retrain.trainer import train
     import copy
 
     failed = 0
+    recommended_rank: int | None = None
+
     for idx, run in enumerate(runs):
         print(f"[{idx + 1}/{len(runs)}] {run['run_name']}")
         try:
@@ -138,8 +189,14 @@ def run_campaign(campaign_path: str) -> None:
                 cfg.wandb_run_name = run["run_name"]
                 cfg.wandb_tags = f"{condition},seed{run['seed']}"
 
-            train(cfg)
+            adapter_path = train(cfg)
             print(f"  OK")
+
+            # Auto-squeeze after first run
+            if idx == 0 and squeeze_cfg and adapter_path:
+                recommended_rank = _auto_squeeze(
+                    adapter_path, squeeze_cfg, base_config.lora_rank
+                )
         except RuntimeError as e:
             # Fatal errors (missing backend, bad config) — abort campaign
             print(f"  FATAL: {e}")
@@ -149,8 +206,15 @@ def run_campaign(campaign_path: str) -> None:
             print(f"  FAILED: {e}")
             failed += 1
 
+    # Update manifest with squeeze result
+    if recommended_rank is not None:
+        manifest["squeeze"] = {"recommended_rank": recommended_rank}
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
     if failed:
         print(f"\n{failed}/{len(runs)} runs failed.")
     else:
         print(f"\nAll {len(runs)} runs completed.")
+    if recommended_rank is not None:
+        print(f"Squeeze recommended rank: {recommended_rank}")
     print(f"Results in {campaign_dir}")

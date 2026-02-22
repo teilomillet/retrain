@@ -75,8 +75,8 @@ def _load_trainer_state(resume_dir: str) -> dict[str, Any]:
     return json.loads(state_file.read_text())
 
 
-def train(config: TrainConfig) -> None:
-    """Main training loop -- fully self-contained."""
+def train(config: TrainConfig) -> str | None:
+    """Main training loop -- fully self-contained. Returns final adapter path."""
 
     # -----------------------------------------------------------------------
     # 0. Init backend (fail fast, before loading anything else)
@@ -697,7 +697,7 @@ def train(config: TrainConfig) -> None:
     # -----------------------------------------------------------------------
     # Final
     # -----------------------------------------------------------------------
-    helper.save_adapter(config.adapter_path, "final")
+    final_path = helper.save_adapter(config.adapter_path, "final")
     _save_trainer_state(
         log_path,
         step=config.max_steps - 1,
@@ -720,3 +720,5 @@ def train(config: TrainConfig) -> None:
 
     if wandb_enabled and wandb_run is not None:
         wandb_run.finish()
+
+    return final_path
