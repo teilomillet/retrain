@@ -81,101 +81,23 @@ If no conditions are specified, defaults to the 5-condition ablation:
 | 4 | `maxrl` | `gtpo_hicra` | `maxrl+gtpo_hicra` |
 | 5 | `maxrl` | `gtpo_sepa` | `maxrl+gtpo_sepa` |
 
-## Auto-squeeze (LoRA-Squeeze)
+## Auto-squeeze
 
-Add a `[squeeze]` section to your campaign TOML and retrain will automatically analyze the optimal LoRA rank after the first run completes.
-
-```toml
-[squeeze]
-min_variance_retention = 0.95
-```
-
-### How it works
-
-1. Train at high rank (e.g., `lora_rank = 128`)
-2. After the first run finishes, retrain runs memory-efficient SVD on the saved adapter
-3. Prints the variance table showing how much information each rank retains
-4. Reports the recommended rank (smallest rank that retains >= `min_variance_retention` of variance)
-5. Logs results to wandb (if enabled)
-6. Continues the remaining campaign runs normally
-
-Based on [LoRA-Squeeze (arXiv 2602.10993)](https://arxiv.org/abs/2602.10993): "it is better to first learn an expressive, higher-rank solution and then compress it."
-
-### Example output
-
-```
-============================================================
-Auto-squeeze: analyzing tinker://run-abc123/weights/final
-  source_rank=128, min_variance_retention=0.95
-
-Source rank: 128
-Layers analyzed: 196
-
-  Rank  Mean Var%  Min Var%  Max Var%
--------------------------------------------
-     1     12.47%     5.23%    22.81%
-     2     23.15%    12.08%    38.42%
-     4     42.31%    28.67%    61.05%
-     8     68.94%    52.13%    82.47%
-    16     85.72%    74.30%    93.18%
-    32     95.48%    91.22%    98.15% <--
-    64     99.12%    97.84%    99.73%
-   128    100.00%   100.00%   100.00%
-
-Recommended rank: 32 (>= 95% variance retained)
-============================================================
-```
-
-### `[squeeze]` section reference
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `min_variance_retention` | float | `0.95` | Minimum fraction of variance to retain. `0.95` = 95% |
-| `source_rank` | int | `0` | Expected source rank. `0` = auto-detect from `[model].lora_rank` |
-
-### wandb integration
-
-When `wandb_project` is set, squeeze results are logged as a dedicated **"squeeze-analysis"** run with:
-
-- **Variance table** — rank vs mean/min/max variance retention
-- **Variance curves** — line chart of variance vs rank
-- **Summary metrics** — `squeeze/recommended_rank`, `squeeze/source_rank`, `squeeze/num_layers`
-
-### Workflow
-
-The recommended workflow is:
-
-1. Pick a high rank (64 or 128) for the campaign
-2. Add `[squeeze]` with your desired retention threshold
-3. Run the campaign — squeeze runs automatically after the first training run
-4. Check the recommended rank in the output or wandb
-5. Use the recommended rank for future production runs
-
-## Standalone squeeze
-
-For analyzing an adapter outside of a campaign, create a squeeze-only TOML:
+Add a `[squeeze]` section to your campaign TOML to automatically find the optimal LoRA rank after the first run:
 
 ```toml
-[squeeze]
-adapter_path = "logs/campaign_.../runs/grpo+none_s42/final"
-min_variance_retention = 0.95
-output_path = "logs/squeezed"    # save compressed adapter here
-compress_to = 0                  # 0 = use recommended rank
-
 [model]
-lora_rank = 128                  # source rank fallback
-```
+lora_rank = 128          # train at high rank
 
-```bash
-retrain squeeze.toml
-```
-
-This analyzes the adapter and optionally compresses it to the target rank. For Tinker adapters, use the `tinker://` path directly:
-
-```toml
 [squeeze]
-adapter_path = "tinker://run-id/weights/final"
+min_variance_retention = 0.95
 ```
+
+After the first training run completes, retrain analyzes the adapter via SVD, prints a variance table, reports the recommended rank, and logs everything to wandb. The remaining campaign runs continue normally.
+
+The recommendation is also saved to `manifest.json` so you can retrieve it programmatically.
+
+See [LoRA-Squeeze](squeeze.md) for the full documentation: algorithm details, standalone usage, compression, configuration reference, and Python API.
 
 ## Output structure
 

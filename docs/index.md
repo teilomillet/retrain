@@ -59,7 +59,8 @@ retrain
 - [Reward Functions](rewards.md) -- match, math, judge, custom
 - [Inference Engines](inference-engines.md) -- engine selection and multi-GPU setup
 - [Back Pressure](backpressure.md) -- adaptive batch sizing
-- [Campaigns & LoRA-Squeeze](campaigns.md) -- sweep orchestrator with auto rank analysis
+- [Campaigns](campaigns.md) -- sweep orchestrator with auto-squeeze
+- [LoRA-Squeeze](squeeze.md) -- optimal rank analysis and compression
 - [Backends](backends.md) -- local vs Tinker
 - [Logging & wandb](logging.md) -- metrics and experiment tracking
 - [Research Guide](research-guide.md) -- interpreting results, statistical testing, analysis code

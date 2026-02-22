@@ -191,7 +191,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 
 ### `[squeeze]`
 
-Optional section for LoRA-Squeeze rank analysis. In campaign TOMLs, triggers auto-squeeze after the first run. See [Campaigns](campaigns.md#auto-squeeze-lora-squeeze) for details.
+Optional section for LoRA-Squeeze rank analysis. In campaign TOMLs, triggers auto-squeeze after the first run. See [LoRA-Squeeze](squeeze.md) for details.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
