@@ -13,11 +13,10 @@ from typing import Any
 from transformers import AutoTokenizer
 
 from retrain.advantages import (
-    DEFAULT_STRATEGIC_GRAMS,
     EntropyStats,
     compute_composable_advantages,
-    identify_planning_tokens,
 )
+from retrain.planning import create_planning_detector
 from retrain.backpressure import (
     BackPressureDecision,
     NoOpBackPressure,
@@ -170,6 +169,12 @@ def train(config: TrainConfig) -> str | None:
     print(f"Vocabulary table: {len(vocab_table)} entries")
 
     # -----------------------------------------------------------------------
+    # 2b. Planning detector
+    # -----------------------------------------------------------------------
+    detector = create_planning_detector(config)
+    print(f"Planning detector: {config.planning_detector}")
+
+    # -----------------------------------------------------------------------
     # 3. Load dataset
     # -----------------------------------------------------------------------
     print("Loading dataset...")
@@ -205,20 +210,7 @@ def train(config: TrainConfig) -> str | None:
     )
 
     # -----------------------------------------------------------------------
-    # 6. Strategic grams
-    # -----------------------------------------------------------------------
-    strategic_grams: list[str]
-    if config.strategic_grams:
-        raw = config.strategic_grams
-        if raw.startswith("["):
-            strategic_grams = [g.strip() for g in json.loads(raw) if g.strip()]
-        else:
-            strategic_grams = [g.strip() for g in raw.split(",") if g.strip()]
-    else:
-        strategic_grams = list(DEFAULT_STRATEGIC_GRAMS)
-
-    # -----------------------------------------------------------------------
-    # 7. Back pressure
+    # 6. Back pressure
     # -----------------------------------------------------------------------
     if config.bp_enabled:
         backpressure: NoOpBackPressure | USLBackPressure = USLBackPressure(
@@ -418,9 +410,7 @@ def train(config: TrainConfig) -> str | None:
                         vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
                         for tid in seq_tokens
                     ]
-                    planning_masks_G.append(
-                        identify_planning_tokens(token_strs, strategic_grams)
-                    )
+                    planning_masks_G.append(detector.detect(token_strs))
                 else:
                     planning_masks_G.append([0] * len(seq_tokens))
 

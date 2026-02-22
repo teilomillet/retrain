@@ -14,6 +14,7 @@ from pathlib import Path
 
 _VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
 _VALID_TRANSFORM_MODES = {"none", "gtpo", "gtpo_hicra", "gtpo_sepa"}
+_VALID_PLANNING_DETECTORS = {"regex", "semantic"}
 
 
 @dataclass
@@ -118,6 +119,11 @@ class TrainConfig:
     # Strategic grams (JSON string, empty = use defaults)
     strategic_grams: str = ""
 
+    # Planning detector
+    planning_detector: str = "regex"
+    planning_model: str = "all-MiniLM-L6-v2"
+    planning_threshold: float = 0.02
+
     # Back pressure
     bp_enabled: bool = False
     bp_warmup_steps: int = 10
@@ -164,6 +170,11 @@ class TrainConfig:
             raise ValueError(
                 f"Invalid transform_mode '{self.transform_mode}'. "
                 f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)}"
+            )
+        if self.planning_detector not in _VALID_PLANNING_DETECTORS:
+            raise ValueError(
+                f"Invalid planning_detector '{self.planning_detector}'. "
+                f"Must be one of: {sorted(_VALID_PLANNING_DETECTORS)}"
             )
 
 
@@ -231,6 +242,11 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "max_batch_size": "bp_max_batch_size",
         "peak_gflops": "bp_peak_gflops",
         "peak_bw_gb_s": "bp_peak_bw_gb_s",
+    },
+    "planning": {
+        "detector": "planning_detector",
+        "model": "planning_model",
+        "threshold": "planning_threshold",
     },
     "reward": {
         "type": "reward_type",
