@@ -179,9 +179,28 @@ class TinkerTrainHelper:
         print(f"Tinker checkpoint loaded: {name}")
 
     def save_adapter(self, path: str, name: str) -> str:
-        """Save training state checkpoint via Tinker. Returns tinker:// path."""
+        """Save training state + sampler weights via Tinker.
+
+        save_state() creates a training checkpoint (for resume), but
+        the Tinker archive download API only works with sampler weights.
+        So we also create sampler weights (downloadable for squeeze).
+
+        Returns the tinker:// path for the sampler weights checkpoint.
+        """
+        # Training state (for resume)
         result = self.training_client.save_state(name=name)
         response = result.result()
-        tinker_path = response.path
-        print(f"Tinker checkpoint saved: {name} ({tinker_path})")
-        return tinker_path
+        training_path = response.path
+
+        # Sampler weights (downloadable for squeeze analysis)
+        squeeze_name = f"{name}_squeeze"
+        self.training_client.save_weights_and_get_sampling_client(name=squeeze_name)
+
+        # Construct tinker:// path for sampler weights from training path
+        # training_path: tinker://run-id/weights/{name}
+        # sampler_path:  tinker://run-id/weights/{squeeze_name}
+        base = training_path.rsplit("/", 1)[0]
+        sampler_path = f"{base}/{squeeze_name}"
+
+        print(f"Tinker checkpoint saved: {name} ({sampler_path})")
+        return sampler_path

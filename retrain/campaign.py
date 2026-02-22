@@ -262,15 +262,18 @@ def run_campaign(campaign_path: str) -> None:
             adapter_path = train(cfg)
             print(f"  OK")
 
-            # Auto-squeeze after first run
+            # Auto-squeeze after first run (errors here don't fail the run)
             if idx == 0 and squeeze_cfg and adapter_path:
-                recommended_rank = _auto_squeeze(
-                    adapter_path,
-                    squeeze_cfg,
-                    base_config.lora_rank,
-                    wandb_project=base_config.wandb_project,
-                    wandb_entity=base_config.wandb_entity,
-                )
+                try:
+                    recommended_rank = _auto_squeeze(
+                        adapter_path,
+                        squeeze_cfg,
+                        base_config.lora_rank,
+                        wandb_project=base_config.wandb_project,
+                        wandb_entity=base_config.wandb_entity,
+                    )
+                except Exception as e:
+                    print(f"  Squeeze failed (non-fatal): {e}")
         except RuntimeError as e:
             # Fatal errors (missing backend, bad config) — abort campaign
             print(f"  FATAL: {e}")
