@@ -278,7 +278,7 @@ CONFIGURATION
                         High-surprisal tokens get more credit.
                         Controlled by gtpo_beta.
         gtpo_hicra      GTPO + HICRA planning token amplification.
-        gtpo_sepa       GTPO + SEPA selective surprisal pooling (default).
+        gtpo_sepa       GTPO + SEPA selective entropy pooling (default).
         gtpo_sepa_amp   GTPO + SEPA with amplification variant.
         gtpo_sepa_amp_c GTPO + SEPA amplification with clamping.
         entropy_mask    Yue et al. surprisal masking. Zeros out advantages
@@ -437,7 +437,7 @@ CONFIGURATION
 
     schedule = "linear"
         "linear" or "auto". Auto adapts based on execution-token
-        surprisal variance decay with linear as fallback floor.
+        entropy variance decay with linear as fallback floor.
 
     delay_steps = 50
         Steps to delay before beginning the SEPA ramp. Must be >= 0.
@@ -861,11 +861,13 @@ ADVANTAGE PIPELINE
         or semantic similarity.
 
     SEPA
-        Selective Surprisal Pooling of Attention.
-        Pools execution-token surprisals toward their mean, reducing
-        surprisal variance on execution tokens while preserving diverse
-        planning behavior. Lambda ramps 0->1 over training, gated by
-        a correct_rate threshold.
+        Selective Entropy Pooling of Attention.
+        Pools execution-token uncertainty values toward their mean,
+        reducing variance on execution tokens while preserving diverse
+        planning behavior. Currently operates on surprisal (the only
+        available signal); will use full entropy when backends provide
+        token distributions. Lambda ramps 0->1 over training, gated
+        by a correct_rate threshold.
 
   Post-Process Hooks
 
@@ -1155,9 +1157,10 @@ GLOSSARY
             weighted credit assignment at the token level.
     HICRA   Hierarchical Credit Assignment. Planning token amplification
             via a learned mask.
-    SEPA    Selective Surprisal Pooling of Attention. Pools execution-token
-            surprisals to reduce variance while preserving planning
-            diversity.
+    SEPA    Selective Entropy Pooling of Attention. Pools execution-token
+            uncertainty values to reduce variance while preserving
+            planning diversity. Uses surprisal today; full entropy
+            when backends provide token distributions.
     LoRA    Low-Rank Adaptation. Parameter-efficient fine-tuning via
             rank-decomposed weight updates.
     SVD     Singular Value Decomposition. Used by LoRA-Squeeze for rank
