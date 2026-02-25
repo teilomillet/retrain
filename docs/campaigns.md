@@ -65,6 +65,29 @@ wandb_project = "sepa-pilot"
 | `max_workers` | int | `0` | Max concurrent subprocesses when `parallel = true`. `0` = launch all runs |
 | `stagger_seconds` | float | `0.0` | Delay between launching workers to reduce API bursts |
 
+#### Tinker backend throttling
+
+When running parallel campaigns against the Tinker backend, retrain automatically creates a shared lock directory (`tinker_throttle/` inside the campaign output) and limits how many subprocesses call the Tinker API simultaneously. This prevents the 502/504 errors that occurred when 12-15 workers hit the backend at once.
+
+| Key (in `[backend]`) | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_concurrent` | int | `4` | Max simultaneous Tinker API calls across all campaign workers |
+| `throttle_dir` | str | `""` | Path to shared lock directory. Auto-set by campaigns; leave empty for standalone runs |
+
+For most setups, the default `max_concurrent = 4` works well. Increase it if your Tinker endpoint has been scaled up; decrease it if you still see intermittent timeouts.
+
+```toml
+[campaign]
+parallel = true
+max_workers = 12
+
+[backend]
+backend = "tinker"
+max_concurrent = 4    # only 4 of the 12 workers call Tinker at a time
+```
+
+Standalone runs (no campaign) skip throttling entirely — there is zero overhead.
+
 ### `[[campaign.conditions]]`
 
 Each condition is a table with two required keys:
@@ -147,13 +170,19 @@ This makes it easy to compare conditions in the wandb dashboard: group by condit
 
 ## Capacity planning
 
-Treat campaign sizing as a first-class part of experiment design:
+Use capacity planning to size retrain campaign runs before you launch full seed sweeps:
 
 - `total_campaign_steps = num_conditions * num_seeds * max_steps`
 - `effective_parallelism = min(max_workers, total_runs)` when `parallel = true`, else `1`
 - `estimated_wall_time = total_campaign_steps * median_step_time / effective_parallelism`
 
-Use `retrain status` and run logs to update your `median_step_time` estimate after a short pilot.
+Suggested retrain flow:
+
+1. `retrain explain campaign.toml` to confirm condition count and run matrix.
+2. Run a short pilot campaign (`max_steps = 20-50` in TOML).
+3. Use `retrain status logs` and `metrics.jsonl` to estimate `median_step_time`.
+4. Set `parallel/max_workers/stagger_seconds` for the full run.
+
 See [Capacity Planning](capacity-planning.md) for the full workflow.
 
 ## Compute budget

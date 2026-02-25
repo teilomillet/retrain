@@ -4,11 +4,10 @@
 
 === "Local backend (default)"
 
-    **Hardware:** A CUDA GPU with at least **16 GB VRAM** for smoke tests. The default model (Qwen3-4B) loads in bf16 (~8 GB) plus LoRA adapter and KV cache overhead. The standard training profile (`batch_size=8, group_size=16, max_tokens=10240`) is capacity-heavy and may require substantially more memory.
+    **Hardware:** A CUDA GPU with at least **16 GB VRAM** (e.g., RTX 4090, A100, H100). The default model (Qwen3-4B) loads in bf16 (~8 GB) plus LoRA adapter and KV cache overhead.
 
     !!! tip "Low VRAM?"
-        Use the smoke-test profile first: `batch_size=2, group_size=4, max_tokens=1024`.
-        Then scale up with [Capacity Planning](capacity-planning.md).
+        Start with `retrain init --template quickstart` (smoke-test profile with `max_tokens=1024`), then move to the standard training defaults (`max_tokens=10240`) once your run is stable.
 
     **Software:** Python 3.11+, CUDA 12.x, internet access for the first run (downloads model weights from HuggingFace and the MATH dataset).
 
@@ -157,7 +156,7 @@ Each step shows the condition label, loss, mean reward, correct rate, number of 
 
 ## Typical training times
 
-Times vary by hardware and config. Rough estimates for **Qwen3-4B** with the standard profile (`batch_size=8, group_size=16, max_tokens=10240`) are shown below. Actual runtime depends heavily on realized generation length, not only `max_tokens`.
+Times vary by hardware and config. Rough estimates for **Qwen3-4B** are shown below. These are orientation values for retrain experiments, not hard guarantees.
 
 === "Local backend"
 
@@ -172,6 +171,8 @@ Times vary by hardware and config. Rough estimates for **Qwen3-4B** with the sta
 === "Tinker backend"
 
     Training times depend on the remote hardware provisioned by the Tinker service. Per-step latency includes network round-trips for sampling and training RPCs. Expect similar per-step times to the equivalent local GPU, plus ~1-3s of network overhead per step.
+
+    When running parallel campaigns, retrain automatically throttles concurrent Tinker API calls (default: 4 at a time) to prevent backend overload. See [Campaigns](campaigns.md#tinker-backend-throttling) for details.
 
 Use `--max-steps 100` for a quick validation run.
 

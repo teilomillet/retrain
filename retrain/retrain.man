@@ -199,6 +199,8 @@ OPTIONS
         --strategic-grams
         --surprisal-mask-rho
         --temperature
+        --tinker-max-concurrent
+        --tinker-throttle-dir
         --top-p
         --transform-mode
         --uncertainty-kind
@@ -325,6 +327,19 @@ CONFIGURATION
     adapter_path = "/tmp/retrain_adapter"
         Filesystem path for LoRA adapter checkpoints.
         Warning if starts with /tmp (checkpoints may be lost).
+
+    throttle_dir = ""
+        Path to a shared lock directory for cross-process Tinker API
+        throttling. When non-empty, a file-based counting semaphore
+        limits how many processes call the Tinker API concurrently.
+        Auto-set by campaign mode for parallel tinker runs; leave
+        empty for standalone runs (zero overhead).
+
+    max_concurrent = 4
+        Maximum simultaneous Tinker API calls when throttle_dir is
+        set. Only relevant for the tinker backend during parallel
+        campaigns. Increase if your Tinker endpoint has been scaled
+        up; decrease if you still see intermittent timeouts.
 
   [backend.options]
 
@@ -676,6 +691,25 @@ CAMPAIGN MODE
     Ctrl-C gracefully terminates all active processes. When max_workers
     is 0 or omitted, all runs launch at once.
 
+    For the tinker backend, parallel campaigns automatically create a
+    shared lock directory (tinker_throttle/ inside the campaign output)
+    and set throttle_dir on every per-run config. This limits concurrent
+    Tinker API calls to max_concurrent (default 4), preventing the
+    502/504 errors that previously occurred when many workers hit the
+    endpoint simultaneously. You can safely set max_workers higher than
+    max_concurrent — workers queue for API access instead of flooding
+    the backend.
+
+        [campaign]
+        parallel = true
+        max_workers = 12
+
+        [backend]
+        backend = "tinker"
+        max_concurrent = 4    # only 4 of 12 workers call Tinker at once
+
+    Standalone runs (no campaign) skip throttling entirely — zero overhead.
+
   Status matrix
 
     `retrain status` displays a condition x seed matrix for campaigns:
@@ -1017,7 +1051,8 @@ METRICS GUIDE
         bp_regime               Stuck in "retrograde" = batch size too high.
 
 CAPACITY PLANNING
-    Capacity is a first-class part of experiment design. Use these
+    Capacity planning in retrain is about sizing actual trainer runs,
+    not generic infrastructure. Use these
     formulas before launching long runs:
 
         concurrency = batch_size * group_size
@@ -1047,6 +1082,11 @@ CAPACITY PLANNING
         parallel        Enable concurrent subprocesses.
         max_workers     Concurrency cap (0 = launch all runs).
         stagger_seconds Launch delay between workers (helps with API bursts).
+
+    Suggested retrain flow:
+        retrain explain campaign.toml
+        retrain campaign.toml
+        retrain status logs
 
 TROUBLESHOOTING
     1) Run "retrain doctor" for dependency problems.
