@@ -5,9 +5,27 @@ from __future__ import annotations
 import difflib
 import importlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, TypedDict, cast
+
+if TYPE_CHECKING:
+    from retrain.backends import TrainHelper
+    from retrain.config import TrainConfig
+
+
+BackendFactory = Callable[["TrainConfig"], "TrainHelper"]
+OptionValidator = Callable[[object], str | None]
+
+
+class PrimeRLOptions(TypedDict):
+    transport: str
+    zmq_host: str
+    zmq_port: int
+    zmq_hwm: int
+    strict_advantages: bool
+    sync_wait_s: int
+    sync_poll_s: float
 
 
 @dataclass(frozen=True)
@@ -17,7 +35,7 @@ class BackendOptionSpec:
     value_type: type
     default: object
     choices: tuple[object, ...] | None = None
-    validator: Callable[[object], str | None] | None = None
+    validator: OptionValidator | None = None
 
 
 @dataclass(frozen=True)
@@ -35,14 +53,14 @@ class BackendDefinition:
     """Single source of truth for a built-in backend."""
 
     name: str
-    factory: Callable[[object], object]
+    factory: BackendFactory
     dependency_import: str
     dependency_hint: str
     capabilities: BackendCapabilities
     option_schema: dict[str, BackendOptionSpec] = field(default_factory=dict)
 
 
-def _create_local(config: object) -> object:
+def _create_local(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.local_train_helper import LocalTrainHelper
     except ImportError:
@@ -65,7 +83,7 @@ def _create_local(config: object) -> object:
     )
 
 
-def _create_tinker(config: object) -> object:
+def _create_tinker(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.tinker_backend import TinkerTrainHelper
     except ImportError:
@@ -85,7 +103,20 @@ def _create_tinker(config: object) -> object:
     )
 
 
-def _create_prime_rl(config: object) -> object:
+def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOptions:
+    options = normalize_backend_options("prime_rl", raw_options)
+    return {
+        "transport": cast(str, options["transport"]),
+        "zmq_host": cast(str, options["zmq_host"]),
+        "zmq_port": cast(int, options["zmq_port"]),
+        "zmq_hwm": cast(int, options["zmq_hwm"]),
+        "strict_advantages": cast(bool, options["strict_advantages"]),
+        "sync_wait_s": cast(int, options["sync_wait_s"]),
+        "sync_poll_s": cast(float, options["sync_poll_s"]),
+    }
+
+
+def _create_prime_rl(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.prime_rl_backend import PrimeRLTrainHelper
     except ImportError:
@@ -94,7 +125,7 @@ def _create_prime_rl(config: object) -> object:
             "Install it with: pip install prime-rl"
         ) from None
 
-    options = normalize_backend_options("prime_rl", config.backend_options)
+    options = _normalize_prime_rl_options(config.backend_options)
     inference_url = config.inference_url or config.base_url or "http://localhost:8000"
 
     return PrimeRLTrainHelper(
@@ -112,26 +143,26 @@ def _create_prime_rl(config: object) -> object:
 
 
 def _validate_port(value: object) -> str | None:
-    v = int(value)
+    v = cast(int, value)
     if v <= 0 or v > 65535:
         return "must be in [1, 65535]. Try: 5555"
     return None
 
 
 def _validate_positive_int(value: object) -> str | None:
-    if int(value) <= 0:
+    if cast(int, value) <= 0:
         return "must be > 0"
     return None
 
 
 def _validate_non_negative_int(value: object) -> str | None:
-    if int(value) < 0:
+    if cast(int, value) < 0:
         return "must be >= 0"
     return None
 
 
 def _validate_positive_float(value: object) -> str | None:
-    if float(value) <= 0:
+    if cast(float, value) <= 0:
         return "must be > 0"
     return None
 
@@ -239,12 +270,13 @@ def _coerce_backend_capabilities(raw: object) -> BackendCapabilities | None:
     if isinstance(raw, BackendCapabilities):
         return raw
     if isinstance(raw, Mapping):
+        payload = cast(Mapping[str, object], raw)
         try:
             return BackendCapabilities(
-                reports_sync_loss=bool(raw["reports_sync_loss"]),
-                preserves_token_advantages=bool(raw["preserves_token_advantages"]),
-                supports_checkpoint_resume=bool(raw["supports_checkpoint_resume"]),
-                resume_runtime_dependent=bool(raw["resume_runtime_dependent"]),
+                reports_sync_loss=bool(payload["reports_sync_loss"]),
+                preserves_token_advantages=bool(payload["preserves_token_advantages"]),
+                supports_checkpoint_resume=bool(payload["supports_checkpoint_resume"]),
+                resume_runtime_dependent=bool(payload["resume_runtime_dependent"]),
             )
         except KeyError:
             return None
@@ -278,10 +310,11 @@ def _coerce_plugin_option_spec(key: str, raw: object) -> BackendOptionSpec:
             f"Invalid backend option schema entry for '{key}'. "
             "Expected BackendOptionSpec or mapping."
         )
-    raw_type = raw.get("value_type", raw.get("type", str))
+    raw_map = cast(Mapping[str, object], raw)
+    raw_type = raw_map.get("value_type", raw_map.get("type", str))
     value_type = _coerce_option_type(raw_type)
-    default = raw.get("default")
-    choices_raw = raw.get("choices")
+    default = raw_map.get("default")
+    choices_raw = raw_map.get("choices")
     choices: tuple[object, ...] | None = None
     if choices_raw is not None:
         if not isinstance(choices_raw, (list, tuple)):
@@ -289,11 +322,12 @@ def _coerce_plugin_option_spec(key: str, raw: object) -> BackendOptionSpec:
                 f"Invalid backend option schema choices for '{key}': expected list/tuple."
             )
         choices = tuple(choices_raw)
-    validator = raw.get("validator")
-    if validator is not None and not callable(validator):
+    validator_raw = raw_map.get("validator")
+    if validator_raw is not None and not callable(validator_raw):
         raise ValueError(
             f"Invalid backend option validator for '{key}': expected callable."
         )
+    validator = cast(OptionValidator | None, validator_raw)
     return BackendOptionSpec(
         value_type=value_type,
         default=default,
@@ -325,10 +359,11 @@ def _coerce_plugin_option_schema(
 def _resolve_hook_value(raw: object, backend_options: Mapping[str, object]) -> object:
     if not callable(raw):
         return raw
+    callback = cast(Callable[..., object], raw)
     try:
-        return raw(dict(backend_options))
+        return callback(dict(backend_options))
     except TypeError:
-        return raw()
+        return callback()
 
 
 def _import_plugin_target(backend_name: str) -> tuple[object, object] | tuple[None, None]:
@@ -499,7 +534,7 @@ def _coerce_option_value(backend: str, key: str, raw: object, spec: BackendOptio
                 "expected an integer."
             )
         try:
-            value = int(raw)
+            value = int(cast(str | int | float, raw))
         except (TypeError, ValueError):
             raise ValueError(
                 f"Invalid [backend.options] {key}={raw!r} for backend '{backend}': "
@@ -507,7 +542,7 @@ def _coerce_option_value(backend: str, key: str, raw: object, spec: BackendOptio
             ) from None
     elif spec.value_type is float:
         try:
-            value = float(raw)
+            value = float(cast(str | int | float, raw))
         except (TypeError, ValueError):
             raise ValueError(
                 f"Invalid [backend.options] {key}={raw!r} for backend '{backend}': "
