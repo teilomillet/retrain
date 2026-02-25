@@ -6,12 +6,14 @@ import pytest
 
 from retrain.advantages import (
     MAX_ENTROPY,
+    apply_entropy_mask,
     apply_gtpo_weighting,
     apply_hicra,
     apply_sepa_amplification,
     apply_sepa_amplification_clamped,
     apply_sepa_pooling,
     compute_composable_advantages,
+    compute_entropy_mask_threshold,
     compute_entropy_stats,
     compute_grpo_advantages,
     compute_maxrl_advantages,
@@ -248,6 +250,80 @@ class TestPlanningTokens:
 
 
 # ---------------------------------------------------------------------------
+# Entropy masking (Yue et al.)
+# ---------------------------------------------------------------------------
+
+class TestEntropyMask:
+    def test_basic_masking(self):
+        """Top 50% kept, bottom 50% zeroed."""
+        entropies = [1.0, 2.0, 3.0, 4.0]
+        threshold = compute_entropy_mask_threshold(entropies, rho=0.5)
+        advs = [1.0, 1.0, 1.0, 1.0]
+        result = apply_entropy_mask(advs, entropies, threshold)
+        # Top 50% (3.0, 4.0) kept; bottom 50% (1.0, 2.0) zeroed
+        assert result[0] == 0.0
+        assert result[1] == 0.0
+        assert result[2] == 1.0
+        assert result[3] == 1.0
+
+    def test_rho_zero_masks_all(self):
+        threshold = compute_entropy_mask_threshold([1.0, 2.0, 3.0], rho=0.0)
+        result = apply_entropy_mask([1.0, 1.0, 1.0], [1.0, 2.0, 3.0], threshold)
+        assert all(a == 0.0 for a in result)
+
+    def test_rho_one_masks_none(self):
+        threshold = compute_entropy_mask_threshold([1.0, 2.0, 3.0], rho=1.0)
+        result = apply_entropy_mask([1.0, 1.0, 1.0], [1.0, 2.0, 3.0], threshold)
+        assert all(a == 1.0 for a in result)
+
+    def test_empty_entropies(self):
+        threshold = compute_entropy_mask_threshold([], rho=0.5)
+        assert threshold == 0.0
+
+    def test_all_same_entropy(self):
+        entropies = [2.0, 2.0, 2.0, 2.0]
+        threshold = compute_entropy_mask_threshold(entropies, rho=0.5)
+        # All entropies are equal and >= threshold, so all kept
+        result = apply_entropy_mask([1.0, 1.0, 1.0, 1.0], entropies, threshold)
+        assert all(a == 1.0 for a in result)
+
+    def test_composable_with_entropy_mask(self):
+        """Full pipeline integration with entropy_mask transform."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3, -0.1], [-0.8, -0.6, -0.4]],
+            planning_masks_G=[[0, 0, 0], [0, 0, 0]],
+            advantage_mode="maxrl",
+            transform_mode="entropy_mask",
+            gtpo_beta=0.0,
+            entropy_mask_rho=0.5,
+        )
+        assert len(result.token_advs) == 2
+        assert result.mask_threshold > 0.0
+        assert 0.0 < result.mask_fraction < 1.0
+        # Some tokens should be zeroed
+        all_advs = [a for seq in result.token_advs for a in seq]
+        assert any(a == 0.0 for a in all_advs)
+        assert any(a != 0.0 for a in all_advs)
+
+    def test_entropy_mask_rho_zero_is_noop(self):
+        """rho=0 should produce identical results to no masking."""
+        kwargs = dict(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+            gtpo_beta=0.1,
+        )
+        result_no_mask = compute_composable_advantages(**kwargs, entropy_mask_rho=0.0)
+        result_with_mask = compute_composable_advantages(**kwargs, entropy_mask_rho=0.0)
+        assert result_no_mask.token_advs == result_with_mask.token_advs
+        assert result_with_mask.mask_threshold == 0.0
+        assert result_with_mask.mask_fraction == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Composable pipeline
 # ---------------------------------------------------------------------------
 
@@ -308,6 +384,7 @@ class TestComposablePipeline:
         for mode in (
             "none",
             "gtpo",
+            "entropy_mask",
             "gtpo_hicra",
             "gtpo_sepa",
             "gtpo_sepa_amp",

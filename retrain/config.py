@@ -117,6 +117,7 @@ class TrainConfig:
     # Algorithm hyperparameters
     gtpo_beta: float = 0.1
     hicra_alpha: float = 0.2
+    entropy_mask_rho: float = 0.0
 
     # SEPA
     sepa_steps: int = 500
@@ -198,6 +199,10 @@ class TrainConfig:
             errors.append("temperature must be >= 0. Try: temperature = 0.7")
         if self.top_p <= 0 or self.top_p > 1:
             errors.append("top_p must be in (0, 1]. Try: top_p = 0.95")
+        if self.entropy_mask_rho < 0.0 or self.entropy_mask_rho > 1.0:
+            errors.append(
+                "entropy_mask_rho must be in [0.0, 1.0]. Try: entropy_mask_rho = 0.2"
+            )
 
         if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
             errors.append(
@@ -267,6 +272,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
     "algorithm": {
         "advantage_mode": "advantage_mode",
         "transform_mode": "transform_mode",
+        "entropy_mask_rho": "entropy_mask_rho",
     },
     "backend": {
         "backend": "backend",

@@ -281,6 +281,7 @@ class TestValidation:
             for tm in (
                 "none",
                 "gtpo",
+                "entropy_mask",
                 "gtpo_hicra",
                 "gtpo_sepa",
                 "gtpo_sepa_amp",
@@ -462,3 +463,36 @@ class TestValidationWarnings:
             TrainConfig(save_every=0)
         msgs = [str(x.message) for x in w]
         assert any("disables periodic" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# Entropy mask rho
+# ---------------------------------------------------------------------------
+
+
+class TestEntropyMaskRho:
+    def test_default_value(self):
+        c = TrainConfig()
+        assert c.entropy_mask_rho == pytest.approx(0.0)
+
+    def test_toml_loading(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[algorithm]\nentropy_mask_rho = 0.2\n')
+        c = load_config(str(toml))
+        assert c.entropy_mask_rho == pytest.approx(0.2)
+
+    def test_out_of_range_negative(self):
+        with pytest.raises(ValueError, match="entropy_mask_rho"):
+            TrainConfig(entropy_mask_rho=-0.1)
+
+    def test_out_of_range_above_one(self):
+        with pytest.raises(ValueError, match="entropy_mask_rho"):
+            TrainConfig(entropy_mask_rho=1.1)
+
+    def test_boundary_zero(self):
+        c = TrainConfig(entropy_mask_rho=0.0)
+        assert c.entropy_mask_rho == 0.0
+
+    def test_boundary_one(self):
+        c = TrainConfig(entropy_mask_rho=1.0)
+        assert c.entropy_mask_rho == 1.0

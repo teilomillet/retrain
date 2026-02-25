@@ -37,6 +37,8 @@ class AdvantageResult:
     token_advs: list[list[float]] = field(default_factory=list)
     has_stats: bool = False
     stats: EntropyStats = field(default_factory=EntropyStats)
+    mask_threshold: float = 0.0
+    mask_fraction: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +148,41 @@ def apply_hicra(
 
 
 # ---------------------------------------------------------------------------
+# 3b. Entropy masking (Yue et al. proxy replication)
+# ---------------------------------------------------------------------------
+
+
+def compute_entropy_mask_threshold(
+    all_entropies: list[float], rho: float
+) -> float:
+    """Compute the threshold for top-ρ entropy masking.
+
+    Returns the entropy value at the ρ-percentile boundary (descending).
+    Tokens with entropy >= threshold are kept; the rest are zeroed.
+    """
+    if rho >= 1.0:
+        return float("-inf")
+    if rho <= 0.0:
+        return float("inf")
+    n = len(all_entropies)
+    if n == 0:
+        return 0.0
+    sorted_desc = sorted(all_entropies, reverse=True)
+    idx = max(1, int(n * rho)) - 1
+    return sorted_desc[idx]
+
+
+def apply_entropy_mask(
+    token_advs: list[float], entropies: list[float], threshold: float
+) -> list[float]:
+    """Zero out advantages for tokens below the entropy threshold."""
+    return [
+        a if e >= threshold else 0.0
+        for a, e in zip(token_advs, entropies)
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 4. SEPA selective entropy pooling
 # ---------------------------------------------------------------------------
 
@@ -244,6 +281,7 @@ def apply_sepa_amplification_clamped(
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
     "none": TransformSpec(name="none", use_gtpo=False),
     "gtpo": TransformSpec(name="gtpo"),
+    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True),
     "gtpo_hicra": TransformSpec(
         name="gtpo_hicra", needs_planning=True, apply_hicra=True
     ),
@@ -478,6 +516,7 @@ def compute_composable_advantages(
     gtpo_beta: float = 0.1,
     hicra_alpha: float = 0.2,
     sepa_lambda: float = 0.0,
+    entropy_mask_rho: float = 0.0,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
     transform_spec = get_transform_spec(transform_mode)
@@ -500,6 +539,7 @@ def compute_composable_advantages(
     all_token_advs = []
     all_exec_entropies: list[float] = []
     all_plan_entropies: list[float] = []
+    all_raw_entropies: list[list[float]] = []  # for entropy masking
 
     for idx in range(len(logprobs_G)):
         logprobs = logprobs_G[idx]
@@ -508,6 +548,9 @@ def compute_composable_advantages(
 
         # Entropy proxy: -logprob (clamped to avoid inf)
         entropies = [min(-lp, MAX_ENTROPY) for lp in logprobs]
+
+        # Store raw entropies before any transform (for entropy masking)
+        all_raw_entropies.append(list(entropies))
 
         # Collect entropy stats
         for j, e in enumerate(entropies):
@@ -531,5 +574,27 @@ def compute_composable_advantages(
 
         all_token_advs.append(token_advs)
 
+    # Entropy masking (Yue et al.): zero out advantages for low-entropy tokens
+    mask_threshold = 0.0
+    mask_fraction = 0.0
+    if entropy_mask_rho > 0.0:
+        flat_entropies = [e for seq in all_raw_entropies for e in seq]
+        mask_threshold = compute_entropy_mask_threshold(flat_entropies, entropy_mask_rho)
+        total_tokens = 0
+        masked_tokens = 0
+        for idx in range(len(all_token_advs)):
+            all_token_advs[idx] = apply_entropy_mask(
+                all_token_advs[idx], all_raw_entropies[idx], mask_threshold
+            )
+            for e in all_raw_entropies[idx]:
+                total_tokens += 1
+                if e < mask_threshold:
+                    masked_tokens += 1
+        mask_fraction = masked_tokens / total_tokens if total_tokens > 0 else 0.0
+
     stats = compute_entropy_stats(all_exec_entropies, all_plan_entropies)
-    return AdvantageResult(all_token_advs, True, stats)
+    return AdvantageResult(
+        all_token_advs, True, stats,
+        mask_threshold=mask_threshold,
+        mask_fraction=mask_fraction,
+    )
