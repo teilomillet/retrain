@@ -11,6 +11,7 @@ SYNOPSIS
     retrain migrate-config <config.toml> [--check|--write|--output PATH] [--json]
     retrain diff <run_a> <run_b> [--json]
     retrain diff <campaign_dir> <cond_a> <cond_b> [--json]
+    retrain trace [config.toml] [--json]
     retrain doctor
     retrain man [--topic NAME] [--path] [--list-topics] [--sync] [--check] [--json]
 
@@ -106,6 +107,12 @@ COMMANDS
         Compares two conditions in a campaign (averaged across seeds).
         --json            machine-readable JSON output.
 
+    retrain trace [config.toml] [--json]
+        Pre-flight validation: build flow, trace with synthetic data.
+        Catches incompatible modes, missing data, and unsupported
+        uncertainty kinds before committing GPU time.
+        --json            machine-readable JSON output.
+
     retrain man
         Shows this manual.
         --topic <name>    prints one section.
@@ -148,7 +155,6 @@ OPTIONS
         --bp-warmup-steps
         --data-source
         --devices
-        --entropy-mask-rho
         --environment-args
         --environment-auto-install
         --environment-id
@@ -191,9 +197,11 @@ OPTIONS
         --sepa-schedule
         --sepa-steps
         --strategic-grams
+        --surprisal-mask-rho
         --temperature
         --top-p
         --transform-mode
+        --uncertainty-kind
         --wandb-entity
         --wandb-group
         --wandb-project
@@ -266,27 +274,35 @@ CONFIGURATION
 
         none            No transform. Episode advantages broadcast to
                         all tokens uniformly.
-        gtpo            Entropy-weighted credit assignment. High-entropy
-                        tokens get more credit. Controlled by gtpo_beta.
+        gtpo            Token-surprisal-weighted credit assignment.
+                        High-surprisal tokens get more credit.
+                        Controlled by gtpo_beta.
         gtpo_hicra      GTPO + HICRA planning token amplification.
-        gtpo_sepa       GTPO + SEPA selective entropy pooling (default).
+        gtpo_sepa       GTPO + SEPA selective surprisal pooling (default).
         gtpo_sepa_amp   GTPO + SEPA with amplification variant.
         gtpo_sepa_amp_c GTPO + SEPA amplification with clamping.
-        entropy_mask    Yue et al. entropy masking. Zeros out advantages
-                        on low-entropy tokens, keeping only the top-rho
-                        fraction by entropy rank. Controlled by
-                        entropy_mask_rho. Uses GTPO weighting.
+        entropy_mask    Yue et al. surprisal masking. Zeros out advantages
+                        on low-surprisal tokens, keeping only the top-rho
+                        fraction by surprisal rank. Controlled by
+                        surprisal_mask_rho. Uses GTPO weighting.
 
         Or a dotted plugin path (e.g. "my_module.make_spec").
         See PLUGINS for the full plugin authoring guide.
 
-    entropy_mask_rho = 0.0
-        Float in [0.0, 1.0]. Fraction of tokens to keep by entropy
+    uncertainty_kind = "surprisal"
+        Token uncertainty signal for GTPO-family transforms.
+        "surprisal" uses sampled-token -logprob (requires only logprobs).
+        "shannon_entropy" and "varentropy" are parsed but require full
+        token distributions that backends don't yet provide — flow.trace()
+        catches the mismatch with a diagnostic error.
+
+    surprisal_mask_rho = 0.0
+        Float in [0.0, 1.0]. Fraction of tokens to keep by surprisal
         rank when transform_mode = "entropy_mask". Tokens in the
-        top-rho fraction (highest entropy) keep their advantages;
+        top-rho fraction (highest surprisal) keep their advantages;
         the rest are zeroed. 0.0 masks all tokens (no training
         signal); 1.0 keeps all tokens (no masking). Typical
-        values: 0.1-0.5. Only used with the entropy_mask transform.
+        values: 0.1-0.5. TOML key entropy_mask_rho accepted as alias.
 
   [backend]
 
@@ -314,7 +330,7 @@ CONFIGURATION
         zmq_host = "localhost"
         zmq_port = 5555
         zmq_hwm = 10
-        strict_advantages = true
+        strict_advantages = true   # must remain true; false is rejected
         sync_wait_s = 30
         sync_poll_s = 0.2
 
@@ -404,8 +420,8 @@ CONFIGURATION
   [gtpo]
 
     beta = 0.1
-        Entropy-weighted credit assignment strength.
-        0.0 disables entropy weighting (uniform advantages).
+        Token-surprisal-weighted credit assignment strength.
+        0.0 disables weighting (uniform advantages).
 
   [hicra]
 
@@ -421,7 +437,7 @@ CONFIGURATION
 
     schedule = "linear"
         "linear" or "auto". Auto adapts based on execution-token
-        entropy variance decay with linear as fallback floor.
+        surprisal variance decay with linear as fallback floor.
 
     delay_steps = 50
         Steps to delay before beginning the SEPA ramp. Must be >= 0.
@@ -601,6 +617,9 @@ CAMPAIGN MODE
                         subprocesses instead of sequentially.
         max_workers     Integer. Maximum concurrent subprocesses when
                         parallel = true. 0 (default) = all runs at once.
+        stagger_seconds Float. Delay between launching consecutive
+                        subprocesses to desynchronize API calls.
+                        Default: 0.0 (no delay).
 
     Default conditions (when omitted):
         ("grpo", "none"), ("maxrl", "none"), ("maxrl", "gtpo"),
@@ -778,10 +797,15 @@ LOGGING
         group_size              Current group size
         bp_action               Back pressure action
         bp_regime               Back pressure regime
-        exec_entropy_mean       Mean execution-token entropy (GTPO)
-        exec_entropy_var        Execution-token entropy variance
-        plan_entropy_mean       Mean planning-token entropy
-        plan_entropy_var        Planning-token entropy variance
+        uncertainty_kind        Uncertainty variant (surprisal, etc.)
+        exec_surprisal_mean     Mean execution-token surprisal (GTPO)
+        exec_surprisal_var      Execution-token surprisal variance
+        plan_surprisal_mean     Mean planning-token surprisal
+        plan_surprisal_var      Planning-token surprisal variance
+        exec_entropy_mean       Alias for exec_surprisal_mean (backward compat)
+        exec_entropy_var        Alias for exec_surprisal_var
+        plan_entropy_mean       Alias for plan_surprisal_mean
+        plan_entropy_var        Alias for plan_surprisal_var
 
     emergence/steps.jsonl: compact per-step summaries for emergence
     analysis (step, mean_reward, correct_count, total_count, condition).
@@ -793,7 +817,8 @@ LOGGING
         train/                  loss, reported_loss, loss_is_placeholder,
                                 rewards/*, sepa_*, step_time_s, ...
         train/backend/          reports_sync_loss, preserves_token_advantages
-        train/entropy/          exec_mean, exec_var, plan_mean, plan_var
+        train/surprisal/        exec_mean, exec_var, plan_mean, plan_var
+        train/entropy/          backward-compat aliases for train/surprisal/
         train/backpressure/     action, regime, p_star, sigma, ...
 
 ADVANTAGE PIPELINE
@@ -805,7 +830,7 @@ ADVANTAGE PIPELINE
         Episode-level advantage (GRPO or MaxRL)
             |
             v
-        Token-level expansion (GTPO entropy weighting)
+        Token-level expansion (GTPO token-surprisal weighting)
             |
             v
         Optional transform (HICRA or SEPA)
@@ -825,8 +850,8 @@ ADVANTAGE PIPELINE
         is mostly wrong. Dampens signal on easy problems.
 
     GTPO
-        Entropy-weighted token-level credit assignment.
-        High-entropy tokens receive more credit. Controlled by
+        Token-surprisal-weighted token-level credit assignment.
+        High-surprisal tokens receive more credit. Controlled by
         gtpo_beta (0.0 disables, 0.1 default).
 
     HICRA
@@ -836,9 +861,9 @@ ADVANTAGE PIPELINE
         or semantic similarity.
 
     SEPA
-        Selective Entropy Pooling of Attention.
-        Pools execution-token advantages toward their mean, reducing
-        entropy variance on execution tokens while preserving diverse
+        Selective Surprisal Pooling of Attention.
+        Pools execution-token surprisals toward their mean, reducing
+        surprisal variance on execution tokens while preserving diverse
         planning behavior. Lambda ramps 0->1 over training, gated by
         a correct_rate threshold.
 
@@ -881,9 +906,11 @@ VALIDATION
         top_p not in (0,1]      "top_p must be in (0, 1]"
         bad advantage_mode      "Invalid advantage_mode"
         bad transform_mode      "Invalid transform_mode"
+        bad uncertainty_kind     "Unknown uncertainty kind"
         bad env provider        "Invalid environment_provider"
         env id missing          "environment_id is required when provider is set"
         bad env args JSON       "environment_args must be valid JSON"
+        strict_advantages=false "disallowed for prime_rl"
 
     Warnings (non-fatal):
 
@@ -965,10 +992,10 @@ METRICS GUIDE
 
     Secondary metrics (understand mechanism):
 
-        exec_entropy_var        SEPA should reduce this (pooling effect).
-        plan_entropy_var        Should stay high (diverse thinking).
-        exec_entropy_mean       Should decrease (model gets confident).
-        plan_entropy_mean       Should stay high (model keeps thinking).
+        exec_surprisal_var      SEPA should reduce this (pooling effect).
+        plan_surprisal_var      Should stay high (diverse thinking).
+        exec_surprisal_mean     Should decrease (model gets confident).
+        plan_surprisal_mean     Should stay high (model keeps thinking).
         sepa_lambda             Ramps 0->1 over training.
         sepa_gate_open          When the correctness gate opened.
 
@@ -1023,6 +1050,7 @@ ARCHITECTURE
     +-- config.py                TrainConfig dataclass, TOML loader
     +-- trainer.py               Main training loop
     +-- advantages.py            GRPO, MaxRL, GTPO, HICRA, SEPA
+    +-- flow.py                  Pre-flight: flow construction and synthetic trace
     +-- sepa.py                  SEPA scheduler (linear / auto)
     +-- rewards.py               match, math, judge, custom rewards
     +-- backpressure.py          USL+Roofline adaptive batch sizing
@@ -1123,13 +1151,13 @@ GLOSSARY
             A_i = r_i - mean(r).
     MaxRL   Inverse success-rate reweighting. A_i = (r_i - mean(r)) /
             (mean(r) + eps).
-    GTPO    Generalized Token-level Policy Optimization. Entropy-weighted
-            credit assignment at the token level.
+    GTPO    Generalized Token-level Policy Optimization. Token-surprisal-
+            weighted credit assignment at the token level.
     HICRA   Hierarchical Credit Assignment. Planning token amplification
             via a learned mask.
-    SEPA    Selective Entropy Pooling of Attention. Pools execution-token
-            advantages to reduce entropy variance while preserving
-            planning diversity.
+    SEPA    Selective Surprisal Pooling of Attention. Pools execution-token
+            surprisals to reduce variance while preserving planning
+            diversity.
     LoRA    Low-Rank Adaptation. Parameter-efficient fine-tuning via
             rank-decomposed weight updates.
     SVD     Singular Value Decomposition. Used by LoRA-Squeeze for rank
