@@ -28,7 +28,7 @@ lora_rank = 128
 [training]
 batch_size = 8
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 temperature = 0.7
 lr = 4e-5
 save_every = 20
