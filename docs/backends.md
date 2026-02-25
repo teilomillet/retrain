@@ -14,13 +14,14 @@ retrain supports three training backends: **local** (PyTorch/PEFT on your GPUs),
 
 - `reports_sync_loss=false` means the backend returns a placeholder loss value by design.
 - `preserves_token_advantages=false` means token-level advantages are aggregated before backend transport.
-- Uncertainty kinds (e.g. `surprisal`, `shannon_entropy`) are discovered from backend data,
-  not declared statically. The advantage pipeline inspects what data the backend provides
-  (logprobs, token distributions) and raises a diagnostic error if the required data for the
-  configured `uncertainty_kind` is absent. Today all backends provide only per-token logprobs,
-  so `surprisal` is the only usable kind. When a backend returns full token distributions,
-  `shannon_entropy` becomes available automatically. `flow.trace()` catches mismatches at
-  preflight via the synthetic probe.
+- Uncertainty kinds (e.g. `surprisal`, `predictive_variance`, `shannon_entropy`) are discovered
+  from backend data, not declared statically. The advantage pipeline inspects what data the
+  backend provides (logprobs, token distributions) and raises a diagnostic error if the required
+  data for the configured `uncertainty_kind` is absent. Today all backends provide only per-token
+  logprobs, so `surprisal` and `predictive_variance` (which derives `p*(1-p)` from logprobs)
+  are the usable built-in kinds. When a backend returns full token distributions,
+  `shannon_entropy` becomes available automatically. Custom kinds can be provided via dotted
+  plugin paths. `flow.trace()` catches mismatches at preflight via the synthetic probe.
 - Dotted-path custom plugins use conservative defaults and are reported as `source=plugin/default`.
   Unless overridden by plugin capability hooks, this default is `preserves_token_advantages=false`,
   so token-varying flows fail preflight instead of silently degrading.

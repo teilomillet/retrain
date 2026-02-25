@@ -7,6 +7,8 @@ import pytest
 from retrain.advantages import (
     MAX_ENTROPY,
     TransformSpec,
+    UncertaintyContext,
+    UncertaintySpec,
     apply_entropy_mask,
     apply_gtpo_weighting,
     apply_hicra,
@@ -18,7 +20,12 @@ from retrain.advantages import (
     compute_entropy_stats,
     compute_grpo_advantages,
     compute_maxrl_advantages,
+    get_uncertainty_spec,
     identify_planning_tokens,
+    is_valid_uncertainty_kind_name,
+    register_uncertainty_kind,
+    _BUILTIN_UNCERTAINTY_SPECS,
+    _UNCERTAINTY_SPEC_CACHE,
 )
 
 
@@ -528,7 +535,7 @@ class TestComposablePipeline:
         assert "token_distributions_G=absent" in str(exc_info.value)
 
     def test_uncertainty_kind_varentropy_not_implemented(self):
-        with pytest.raises(ValueError, match="uncertainty_kind='varentropy'") as exc_info:
+        with pytest.raises(ValueError, match="Unknown uncertainty_kind 'varentropy'"):
             compute_composable_advantages(
                 rewards_G=[1.0, 0.0],
                 logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
@@ -537,7 +544,6 @@ class TestComposablePipeline:
                 transform_mode="gtpo",
                 transform_params={"uncertainty_kind": "varentropy"},
             )
-        assert "token_distributions_G=absent" in str(exc_info.value)
 
     def test_uncertainty_kind_entropy_alias_maps_to_shannon(self):
         with pytest.raises(ValueError, match="uncertainty_kind='shannon_entropy'") as exc_info:
@@ -588,3 +594,114 @@ class TestNumericGuards:
         for ta in result.token_advs:
             assert all(math.isfinite(a) for a in ta)
         assert math.isfinite(result.stats.exec_mean)
+
+
+# ---------------------------------------------------------------------------
+# Uncertainty registry
+# ---------------------------------------------------------------------------
+
+class TestUncertaintyRegistry:
+    def test_builtin_spec_lookup(self):
+        spec = get_uncertainty_spec("surprisal")
+        assert isinstance(spec, UncertaintySpec)
+        assert spec.name == "surprisal"
+        assert spec.needs_distributions is False
+
+        spec_pv = get_uncertainty_spec("predictive_variance")
+        assert spec_pv.name == "predictive_variance"
+        assert spec_pv.needs_distributions is False
+
+        spec_se = get_uncertainty_spec("shannon_entropy")
+        assert spec_se.name == "shannon_entropy"
+        assert spec_se.needs_distributions is True
+
+    def test_unknown_raises(self):
+        with pytest.raises(ValueError, match="Unknown uncertainty_kind"):
+            get_uncertainty_spec("not_a_real_kind")
+
+    def test_is_valid_aliases(self):
+        assert is_valid_uncertainty_kind_name("surprisal") is True
+        assert is_valid_uncertainty_kind_name("neg_logprob") is True
+        assert is_valid_uncertainty_kind_name("pred_var") is True
+        assert is_valid_uncertainty_kind_name("bernoulli_variance") is True
+
+    def test_is_valid_builtins(self):
+        assert is_valid_uncertainty_kind_name("predictive_variance") is True
+        assert is_valid_uncertainty_kind_name("shannon_entropy") is True
+
+    def test_is_valid_dotted_paths(self):
+        assert is_valid_uncertainty_kind_name("my_module.my_uncertainty") is True
+        assert is_valid_uncertainty_kind_name("nope") is False
+
+    def test_register_and_get_roundtrip(self):
+        def _custom_compute(ctx):
+            return [0.42] * len(ctx.logprobs)
+
+        register_uncertainty_kind("test_custom_unc", _custom_compute)
+        try:
+            spec = get_uncertainty_spec("test_custom_unc")
+            assert spec.name == "test_custom_unc"
+            ctx = UncertaintyContext(logprobs=[-0.5, -0.3])
+            assert spec.compute(ctx) == [0.42, 0.42]
+        finally:
+            _BUILTIN_UNCERTAINTY_SPECS.pop("test_custom_unc", None)
+            _UNCERTAINTY_SPEC_CACHE.pop("test_custom_unc", None)
+
+    def test_register_dotted_name_rejected(self):
+        with pytest.raises(ValueError, match="cannot contain '\\.'"):
+            register_uncertainty_kind("my.dotted.name", lambda ctx: [])
+
+
+# ---------------------------------------------------------------------------
+# Predictive variance signal
+# ---------------------------------------------------------------------------
+
+class TestPredictiveVariance:
+    def test_value_correctness(self):
+        """p * (1 - p) for known logprobs."""
+        logprobs = [math.log(0.5), math.log(0.9), math.log(0.1)]
+        ctx = UncertaintyContext(logprobs=logprobs)
+        spec = get_uncertainty_spec("predictive_variance")
+        values = spec.compute(ctx)
+
+        assert values[0] == pytest.approx(0.5 * 0.5, abs=1e-9)
+        assert values[1] == pytest.approx(0.9 * 0.1, abs=1e-9)
+        assert values[2] == pytest.approx(0.1 * 0.9, abs=1e-9)
+
+    def test_extreme_logprobs(self):
+        """Very negative logprobs clamp p near 0, yielding near-zero variance."""
+        ctx = UncertaintyContext(logprobs=[-100.0, 0.0])
+        spec = get_uncertainty_spec("predictive_variance")
+        values = spec.compute(ctx)
+
+        assert values[0] == pytest.approx(0.0, abs=1e-6)
+        assert values[1] == pytest.approx(0.0, abs=1e-9)  # p=1 -> 1*(1-1)=0
+
+    def test_pipeline_integration(self):
+        """Full pipeline with predictive_variance through compute_composable_advantages."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+            transform_params={"uncertainty_kind": "predictive_variance"},
+        )
+        assert len(result.token_advs) == 2
+        assert result.has_stats
+        for ta in result.token_advs:
+            assert all(math.isfinite(a) for a in ta)
+
+    def test_pipeline_with_sepa(self):
+        """Predictive variance works with SEPA transforms."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[1, 0], [0, 1]],
+            advantage_mode="grpo",
+            transform_mode="gtpo_sepa",
+            sepa_lambda=0.5,
+            transform_params={"uncertainty_kind": "predictive_variance"},
+        )
+        assert len(result.token_advs) == 2
+        assert result.has_stats

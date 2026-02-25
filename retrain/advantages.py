@@ -31,6 +31,9 @@ _UNCERTAINTY_KIND_ALIASES = {
     "token_entropy": "shannon_entropy",
     "shannon_entropy": "shannon_entropy",
     "varentropy": "varentropy",
+    "predictive_variance": "predictive_variance",
+    "pred_var": "predictive_variance",
+    "bernoulli_variance": "predictive_variance",
 }
 _UNCERTAINTY_KIND_PARAM_KEYS = (
     "uncertainty_kind",
@@ -167,6 +170,32 @@ class AlgorithmOutput:
     has_stats: bool = False
     stats: EntropyStats = field(default_factory=EntropyStats)
     extra_metrics: dict[str, float] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Uncertainty specs (pluggable token-uncertainty signals)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UncertaintyContext:
+    """Input context for uncertainty compute functions."""
+
+    logprobs: list[float]
+    token_distributions: list[list[float]] | None = None
+    planning_mask: list[int] | None = None
+    params: Mapping[str, object] = field(default_factory=dict)
+
+
+UncertaintyComputeFn = Callable[[UncertaintyContext], list[float]]
+
+
+@dataclass(frozen=True)
+class UncertaintySpec:
+    """Behavioral contract for uncertainty signals."""
+
+    name: str
+    compute: UncertaintyComputeFn
+    needs_distributions: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1074,6 +1103,145 @@ def get_transform_spec(transform_mode: str) -> TransformSpec:
     return spec
 
 
+# ---------------------------------------------------------------------------
+# 4c. Uncertainty kind registry (built-ins + dotted-path plugins)
+# ---------------------------------------------------------------------------
+
+
+def _compute_surprisal(ctx: UncertaintyContext) -> list[float]:
+    """Sampled-token surprisal: -logprob (clamped)."""
+    return [min(-lp, MAX_SURPRISAL) for lp in ctx.logprobs]
+
+
+def _compute_shannon_entropy(ctx: UncertaintyContext) -> list[float]:
+    """Full-distribution Shannon entropy: -sum(p * log(p))."""
+    if ctx.token_distributions is None:
+        raise ValueError(
+            "shannon_entropy requires per-position token distributions."
+        )
+    result: list[float] = []
+    for dist in ctx.token_distributions:
+        h = -sum(p * math.log(p) for p in dist if p > 0)
+        result.append(min(h, MAX_SURPRISAL))
+    return result
+
+
+def _compute_predictive_variance(ctx: UncertaintyContext) -> list[float]:
+    """Bernoulli predictive variance: p * (1 - p) where p = exp(logprob)."""
+    result: list[float] = []
+    for lp in ctx.logprobs:
+        p = math.exp(max(lp, -MAX_SURPRISAL))
+        p = max(0.0, min(1.0, p))
+        result.append(p * (1.0 - p))
+    return result
+
+
+_BUILTIN_UNCERTAINTY_SPECS: dict[str, UncertaintySpec] = {
+    "surprisal": UncertaintySpec(
+        name="surprisal",
+        compute=_compute_surprisal,
+    ),
+    "shannon_entropy": UncertaintySpec(
+        name="shannon_entropy",
+        compute=_compute_shannon_entropy,
+        needs_distributions=True,
+    ),
+    "predictive_variance": UncertaintySpec(
+        name="predictive_variance",
+        compute=_compute_predictive_variance,
+    ),
+}
+
+_UNCERTAINTY_SPEC_CACHE: dict[str, UncertaintySpec] = {}
+
+
+def register_uncertainty_kind(
+    name: str, spec_or_fn: UncertaintySpec | UncertaintyComputeFn
+) -> None:
+    """Register or replace a short-name uncertainty kind at runtime."""
+    if not name or "." in name:
+        raise ValueError(
+            "Uncertainty kind name must be non-empty and cannot contain '.'. "
+            "Use dotted paths directly in TOML for external plugins."
+        )
+    if isinstance(spec_or_fn, UncertaintySpec):
+        spec = spec_or_fn
+    elif callable(spec_or_fn):
+        spec = UncertaintySpec(name=name, compute=spec_or_fn)
+    else:
+        raise TypeError(
+            f"Uncertainty registration for '{name}' must be UncertaintySpec "
+            f"or callable, got {type(spec_or_fn).__name__}."
+        )
+    _BUILTIN_UNCERTAINTY_SPECS[name] = spec
+    _UNCERTAINTY_SPEC_CACHE.pop(name, None)
+
+
+def get_builtin_uncertainty_kinds() -> list[str]:
+    """Return sorted built-in uncertainty kind names."""
+    return sorted(_BUILTIN_UNCERTAINTY_SPECS)
+
+
+def is_valid_uncertainty_kind_name(kind: str) -> bool:
+    """True for aliases, builtins, or dotted plugin paths (`module.attr`)."""
+    if kind in _UNCERTAINTY_KIND_ALIASES:
+        return True
+    if kind in _BUILTIN_UNCERTAINTY_SPECS:
+        return True
+    module_path, _, attr_name = kind.rpartition(".")
+    return bool(module_path and attr_name)
+
+
+def _load_custom_uncertainty_spec(dotted_path: str) -> UncertaintySpec:
+    resolved = resolve_dotted_attribute(
+        dotted_path,
+        selector="uncertainty_kind",
+        expected="UncertaintySpec, compute callable, or zero-arg factory",
+    )
+    obj = resolved.obj
+
+    if isinstance(obj, UncertaintySpec):
+        return obj
+    if callable(obj):
+        if _callable_takes_no_positional_args(obj):
+            built = obj()
+            if isinstance(built, UncertaintySpec):
+                return built
+            if callable(built):
+                return UncertaintySpec(name=dotted_path, compute=built)
+            raise TypeError(
+                f"uncertainty_kind '{dotted_path}' factory returned "
+                f"{type(built).__name__}, expected UncertaintySpec or callable."
+            )
+        return UncertaintySpec(name=dotted_path, compute=obj)
+
+    raise TypeError(
+        f"uncertainty_kind '{dotted_path}' must resolve to UncertaintySpec "
+        f"or callable, got {type(obj).__name__}."
+    )
+
+
+def get_uncertainty_spec(kind: str) -> UncertaintySpec:
+    """Resolve an uncertainty kind to a behavior spec."""
+    cached = _UNCERTAINTY_SPEC_CACHE.get(kind)
+    if cached is not None:
+        return cached
+
+    spec = _BUILTIN_UNCERTAINTY_SPECS.get(kind)
+    if spec is None:
+        if "." in kind:
+            spec = _load_custom_uncertainty_spec(kind)
+        else:
+            raise ValueError(
+                f"Unknown uncertainty_kind '{kind}'. "
+                f"Built-in options: {get_builtin_uncertainty_kinds()}. "
+                "For custom uncertainty signals use dotted path format "
+                "(e.g. 'my_module.my_uncertainty')."
+            )
+    _UNCERTAINTY_SPEC_CACHE[kind] = spec
+    return spec
+
+
 def _resolve_uncertainty_kind(params: Mapping[str, object]) -> str:
     """Resolve uncertainty metric for GTPO-family transforms.
 
@@ -1094,14 +1262,22 @@ def canonicalize_uncertainty_kind(raw_value: object) -> str:
             f"{_UNCERTAINTY_KIND_PARAM_KEYS[0]} must be a string; "
             f"got {type(raw_value).__name__}."
         )
+    # Check aliases first.
     canonical = _UNCERTAINTY_KIND_ALIASES.get(raw_value.strip().lower())
-    if canonical is None:
-        allowed = sorted(_UNCERTAINTY_KIND_ALIASES)
-        raise ValueError(
-            f"Unknown uncertainty kind '{raw_value}'. "
-            f"Supported values: {allowed}."
-        )
-    return canonical
+    if canonical is not None:
+        return canonical
+    # Accept runtime-registered builtins.
+    stripped = raw_value.strip()
+    if stripped in _BUILTIN_UNCERTAINTY_SPECS:
+        return stripped
+    # Accept dotted plugin paths.
+    if "." in stripped:
+        return stripped
+    allowed = sorted(set(_UNCERTAINTY_KIND_ALIASES) | set(_BUILTIN_UNCERTAINTY_SPECS))
+    raise ValueError(
+        f"Unknown uncertainty kind '{raw_value}'. "
+        f"Supported values: {allowed}."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1327,6 +1503,15 @@ def compute_composable_advantages(
         return AdvantageResult(all_token_advs, False, EntropyStats())
 
     uncertainty_kind = _resolve_uncertainty_kind(merged_transform_params)
+    uncertainty_spec = get_uncertainty_spec(uncertainty_kind)
+
+    if uncertainty_spec.needs_distributions and token_distributions_G is None:
+        _raise_missing_data(
+            uncertainty_kind,
+            has_logprobs=True,
+            has_distributions=False,
+            n_episodes=len(logprobs_G),
+        )
 
     # GTPO-based transforms need per-token uncertainty values.
     # The pipeline is agnostic to the kind — the backend determines what's
@@ -1341,30 +1526,13 @@ def compute_composable_advantages(
         advantage = advantages_G[idx]
         planning_mask = planning_masks_G[idx]
 
-        if uncertainty_kind == "surprisal":
-            # Sampled-token surprisal: -logprob (clamped)
-            surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
-        elif uncertainty_kind == "shannon_entropy":
-            if token_distributions_G is None:
-                _raise_missing_data(
-                    uncertainty_kind,
-                    has_logprobs=True,
-                    has_distributions=False,
-                    n_episodes=len(logprobs_G),
-                )
-            # Full-distribution Shannon entropy: −Σ pᵢ log(pᵢ).
-            dists = token_distributions_G[idx]
-            surprisals = []
-            for dist in dists:
-                h = -sum(p * math.log(p) for p in dist if p > 0)
-                surprisals.append(min(h, MAX_SURPRISAL))
-        else:
-            _raise_missing_data(
-                uncertainty_kind,
-                has_logprobs=True,
-                has_distributions=token_distributions_G is not None,
-                n_episodes=len(logprobs_G),
-            )
+        ctx = UncertaintyContext(
+            logprobs=logprobs,
+            token_distributions=token_distributions_G[idx] if token_distributions_G else None,
+            planning_mask=planning_mask,
+            params=merged_transform_params,
+        )
+        surprisals = uncertainty_spec.compute(ctx)
 
         # Store raw surprisals before any transform (for surprisal masking)
         all_raw_surprisals.append(list(surprisals))

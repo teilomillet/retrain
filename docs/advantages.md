@@ -117,10 +117,15 @@ The `uncertainty_kind` config controls which entropy proxy is used:
 
 ```toml
 [algorithm]
-uncertainty_kind = "surprisal"   # default (only available kind today)
+uncertainty_kind = "surprisal"   # default; also: predictive_variance, shannon_entropy
 ```
 
-Today, backends only provide per-token logprobs, so `surprisal` (`-logprob` of the sampled token) is used as the entropy proxy. `shannon_entropy` (true per-position entropy: −Σ pᵢ log pᵢ) and `varentropy` are parsed but require full token distributions that backends don't yet return — `flow.trace()` catches the mismatch with a diagnostic error.
+Built-in uncertainty signals:
+- **`surprisal`** (default) — sampled-token `-logprob`. Requires only logprobs. Noisy for tail samples where the model was confident but the sampler drew unluckily.
+- **`predictive_variance`** — Bernoulli variance `p * (1 - p)` where `p = exp(logprob)`. Free from existing logprobs, peaks at genuine uncertainty (`p ≈ 0.5`), decays for both confident and tail-sample tokens. Aliases: `pred_var`, `bernoulli_variance`.
+- **`shannon_entropy`** — true per-position entropy `−Σ pᵢ log pᵢ`. Requires full token distributions that backends don't yet return — `flow.trace()` catches the mismatch with a diagnostic error.
+
+Custom uncertainty signals can be provided via dotted plugin paths (e.g. `my_module.my_uncertainty`).
 
 Controlled by `beta`:
 

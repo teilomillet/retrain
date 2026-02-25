@@ -173,7 +173,7 @@ class TestTrace:
         assert not result.ok
         errors = [i for i in result.issues if i.severity == "error"]
         assert any(
-            "uncertainty_kind='varentropy'" in e.message and e.category == "probe"
+            "varentropy" in e.message and e.category == "probe"
             for e in errors
         )
 

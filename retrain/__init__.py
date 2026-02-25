@@ -11,11 +11,14 @@ from retrain.advantages import (
     TransformContext as TransformContext,
     TransformOutput as TransformOutput,
     TransformSpec as TransformSpec,
+    UncertaintyContext as UncertaintyContext,
+    UncertaintySpec as UncertaintySpec,
     entropy_mask_post_process as entropy_mask_post_process,
     surprisal_mask_post_process as surprisal_mask_post_process,
     register_advantage_mode as register_advantage_mode,
     register_algorithm_mode as register_algorithm_mode,
     register_transform_mode as register_transform_mode,
+    register_uncertainty_kind as register_uncertainty_kind,
 )
 from retrain.flow import (
     TraceIssue as TraceIssue,

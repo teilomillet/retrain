@@ -294,9 +294,11 @@ CONFIGURATION
     uncertainty_kind = "surprisal"
         Token uncertainty signal for GTPO-family transforms.
         "surprisal" uses sampled-token -logprob (requires only logprobs).
-        "shannon_entropy" and "varentropy" are parsed but require full
-        token distributions that backends don't yet provide — flow.trace()
-        catches the mismatch with a diagnostic error.
+        "predictive_variance" uses p*(1-p) where p=exp(logprob) — free
+        from existing logprobs, peaks at genuine uncertainty.
+        "shannon_entropy" requires full token distributions that backends
+        don't yet provide — flow.trace() catches the mismatch.
+        Or a dotted plugin path (e.g. "my_module.my_uncertainty").
 
     surprisal_mask_rho = 0.0
         Float in [0.0, 1.0]. Fraction of tokens to keep by surprisal
