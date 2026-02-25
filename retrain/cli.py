@@ -1252,6 +1252,8 @@ def _check_environment(config: "TrainConfig") -> None:  # noqa: F821
 
 def _run_status(args: list[str]) -> None:
     """Scan log directories and print run/campaign status."""
+    import time as _time
+
     from retrain.status import (
         format_campaign,
         format_run,
@@ -1260,44 +1262,75 @@ def _run_status(args: list[str]) -> None:
 
     fmt = "text"
     root = "logs"
+    show_all = False
+    watch = False
+    positional: list[str] = []
     for arg in args:
         if arg == "--json":
             fmt = "json"
+        elif arg == "--all":
+            show_all = True
+        elif arg == "--active":
+            show_all = False
+        elif arg == "--watch":
+            watch = True
         elif arg.startswith("--"):
             print(f"Unknown status flag: {arg}", file=sys.stderr)
             sys.exit(1)
         else:
-            root = arg
+            positional.append(arg)
+
+    if positional:
+        root = positional[0]
 
     root_path = Path(root)
     if not root_path.is_dir():
         print(f"No log directory found: {root}")
         sys.exit(1)
 
-    runs, campaigns = scan_all(root_path)
+    _active_statuses = {"running", "partial"}
 
-    if fmt == "json":
-        payload = {
-            "root": str(root_path),
-            "runs": [r.to_dict() for r in runs],
-            "campaigns": [c.to_dict() for c in campaigns],
-        }
-        print(json.dumps(payload, indent=2))
-        return
+    while True:
+        runs, campaigns = scan_all(root_path)
 
-    if not runs and not campaigns:
-        print(f"No runs or campaigns found in {root}")
-        return
+        if not show_all:
+            campaigns = [c for c in campaigns if c.status in _active_statuses]
 
-    if campaigns:
-        for camp in campaigns:
-            print(format_campaign(camp))
-            print()
+        if fmt == "json":
+            payload = {
+                "root": str(root_path),
+                "runs": [r.to_dict() for r in runs],
+                "campaigns": [c.to_dict() for c in campaigns],
+            }
+            print(json.dumps(payload, indent=2))
+            if not watch:
+                return
+        else:
+            if not runs and not campaigns:
+                if show_all:
+                    print(f"No runs or campaigns found in {root}")
+                else:
+                    print(f"No active campaigns in {root}  (use --all to see everything)")
+            else:
+                if campaigns:
+                    for camp in campaigns:
+                        print(format_campaign(camp))
+                        print()
 
-    if runs:
-        print("Standalone runs:")
-        for run in runs:
-            print(format_run(run))
+                if runs:
+                    print("Standalone runs:")
+                    for run in runs:
+                        print(format_run(run))
+
+        if not watch:
+            return
+
+        try:
+            _time.sleep(5)
+            # Clear screen for refresh
+            print("\033[2J\033[H", end="")
+        except KeyboardInterrupt:
+            return
 
 
 def _explain_single(config_path: str | None, fmt: str) -> None:
