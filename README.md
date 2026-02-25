@@ -101,7 +101,7 @@ Minimal switchboard in TOML:
 
 ```toml
 [backend]
-backend = "tinker"                     # local | tinker
+backend = "tinker"                     # local | tinker | prime_rl
 
 [algorithm]
 transform_mode = "gtpo_sepa"           # or dotted plugin path

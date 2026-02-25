@@ -86,6 +86,13 @@ class TrainConfig:
     backend: str = "local"
     devices: str = "gpu:0"
     adapter_path: str = "/tmp/retrain_adapter"
+    prime_rl_transport: str = "filesystem"
+    prime_rl_zmq_host: str = "localhost"
+    prime_rl_zmq_port: int = 5555
+    prime_rl_zmq_hwm: int = 10
+    prime_rl_strict_advantages: bool = True
+    prime_rl_sync_wait_s: int = 30
+    prime_rl_sync_poll_s: float = 0.2
 
     # Model
     model: str = "Qwen/Qwen3-4B-Instruct-2507"
@@ -203,6 +210,26 @@ class TrainConfig:
             errors.append(
                 "entropy_mask_rho must be in [0.0, 1.0]. Try: entropy_mask_rho = 0.2"
             )
+        if self.prime_rl_transport not in {"filesystem", "zmq"}:
+            errors.append(
+                "prime_rl_transport must be 'filesystem' or 'zmq'. "
+                "Try: prime_rl_transport = 'filesystem'"
+            )
+        if self.prime_rl_zmq_port <= 0 or self.prime_rl_zmq_port > 65535:
+            errors.append(
+                "prime_rl_zmq_port must be in [1, 65535]. "
+                "Try: prime_rl_zmq_port = 5555"
+            )
+        if self.prime_rl_zmq_hwm <= 0:
+            errors.append("prime_rl_zmq_hwm must be > 0. Try: prime_rl_zmq_hwm = 10")
+        if self.prime_rl_sync_wait_s < 0:
+            errors.append(
+                "prime_rl_sync_wait_s must be >= 0. Try: prime_rl_sync_wait_s = 30"
+            )
+        if self.prime_rl_sync_poll_s <= 0:
+            errors.append(
+                "prime_rl_sync_poll_s must be > 0. Try: prime_rl_sync_poll_s = 0.2"
+            )
 
         if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
             errors.append(
@@ -289,6 +316,13 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "backend": "backend",
         "devices": "devices",
         "adapter_path": "adapter_path",
+        "prime_rl_transport": "prime_rl_transport",
+        "prime_rl_zmq_host": "prime_rl_zmq_host",
+        "prime_rl_zmq_port": "prime_rl_zmq_port",
+        "prime_rl_zmq_hwm": "prime_rl_zmq_hwm",
+        "prime_rl_strict_advantages": "prime_rl_strict_advantages",
+        "prime_rl_sync_wait_s": "prime_rl_sync_wait_s",
+        "prime_rl_sync_poll_s": "prime_rl_sync_poll_s",
     },
     "model": {
         "model": "model",

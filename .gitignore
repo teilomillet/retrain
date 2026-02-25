@@ -45,3 +45,6 @@ site/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Local release tooling
+scripts/release_smoke.sh

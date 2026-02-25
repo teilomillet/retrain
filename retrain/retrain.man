@@ -148,6 +148,13 @@ OPTIONS
         --planning-model
         --planning-threshold
         --prefix-caching
+        --prime-rl-strict-advantages
+        --prime-rl-sync-poll-s
+        --prime-rl-sync-wait-s
+        --prime-rl-transport
+        --prime-rl-zmq-host
+        --prime-rl-zmq-hwm
+        --prime-rl-zmq-port
         --resume-from
         --reward-custom-function
         --reward-custom-module
@@ -255,10 +262,11 @@ CONFIGURATION
   [backend]
 
     backend = "local"
-        "local" or "tinker". Supports dotted-path plugins.
+        "local", "tinker", or "prime_rl". Supports dotted-path plugins.
         See PLUGINS for custom backend authoring.
         "local" requires torch (pip install retrain[local]).
         "tinker" requires Tinker SDK (pip install retrain[tinker]).
+        "prime_rl" requires PRIME-RL (pip install prime-rl).
 
     devices = "gpu:0"
         Comma-separated device specs: "gpu:0", "gpu:0,gpu:1", "cpu".

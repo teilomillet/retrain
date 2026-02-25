@@ -5,6 +5,8 @@
 [campaign]
 seeds = [42, 101, 202]
 max_steps = 100
+parallel = true
+max_workers = 3
 
 [[campaign.conditions]]
 advantage_mode = "maxrl"

@@ -177,6 +177,31 @@ def _create_tinker(config: TrainConfig) -> Any:
     )
 
 
+@backend.register("prime_rl")
+def _create_prime_rl(config: TrainConfig) -> Any:
+    try:
+        from retrain.prime_rl_backend import PrimeRLTrainHelper
+    except ImportError:
+        raise RuntimeError(
+            "Backend 'prime_rl' requires PRIME-RL.\n"
+            "Install it with: pip install prime-rl"
+        ) from None
+
+    inference_url = config.inference_url or config.base_url or "http://localhost:8000"
+    return PrimeRLTrainHelper(
+        model_name=config.model,
+        output_dir=config.adapter_path,
+        inference_url=inference_url,
+        transport_type=config.prime_rl_transport,
+        zmq_host=config.prime_rl_zmq_host,
+        zmq_port=config.prime_rl_zmq_port,
+        zmq_hwm=config.prime_rl_zmq_hwm,
+        strict_advantages=config.prime_rl_strict_advantages,
+        sync_wait_s=config.prime_rl_sync_wait_s,
+        sync_poll_s=config.prime_rl_sync_poll_s,
+    )
+
+
 # -- inference_engine (for doctor diagnostics) -----------------------------
 
 @inference_engine.register("pytorch")
@@ -306,6 +331,7 @@ def _bp_usl(config: TrainConfig) -> Any:
 _DEPENDENCY_MAP: dict[str, tuple[str, str]] = {
     "local": ("torch", "pip install retrain[local]"),
     "tinker": ("tinker", "pip install retrain[tinker]"),
+    "prime_rl": ("prime_rl", "pip install prime-rl"),
     "math": ("math_verify", "pip install retrain[verifiers]"),
     "judge": ("verifiers", "pip install retrain[verifiers]"),
     "semantic": ("sentence_transformers", "pip install retrain[semantic]"),

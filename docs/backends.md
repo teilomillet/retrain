@@ -1,6 +1,6 @@
 # Backends
 
-retrain supports two training backends: **local** (PyTorch/PEFT on your GPUs) and **tinker** (remote GPU service).
+retrain supports three training backends: **local** (PyTorch/PEFT on your GPUs), **tinker** (remote GPU service), and **prime_rl** (external PRIME-RL trainer + inference).
 
 ## Local backend
 
@@ -116,6 +116,31 @@ The tokenizer and dataset still load locally (for prompt encoding and reward sco
 | Weight sync | In-memory or disk | Server-managed |
 | Checkpoints | Saved to `adapter_path` | Saved on Tinker service |
 | Setup | `pip install -e .` + CUDA GPU | `pip install -e ".[tinker]"` + service URL |
+
+## PRIME-RL backend (experimental)
+
+Uses a running PRIME-RL stack for training + inference while keeping retrain's
+trainer loop, rewards, and logging.
+
+```toml
+[backend]
+backend = "prime_rl"
+adapter_path = "/path/to/prime_rl/output_dir"   # MUST match PRIME-RL trainer output_dir
+prime_rl_transport = "filesystem"                # or "zmq"
+prime_rl_strict_advantages = true
+
+[inference]
+url = "http://localhost:8000"                    # PRIME-RL inference endpoint
+```
+
+Notes:
+
+- retrain sends PRIME-RL `TrainingBatch` messages through PRIME-RL transport.
+- `checkpoint()` syncs inference from PRIME-RL broadcast checkpoints via `/update_weights`.
+- PRIME-RL transport expects one scalar advantage per sample.
+  If you use token-varying transforms (for example GTPO/HICRA/SEPA), keep
+  `prime_rl_strict_advantages = true` to fail fast, or set it to `false` to
+  aggregate completion-token advantages by mean.
 
 ## Device allocation
 

@@ -211,6 +211,13 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-8)
         assert c.lora_alpha == 0
         assert c.lora_dropout == pytest.approx(0.0)
+        assert c.prime_rl_transport == "filesystem"
+        assert c.prime_rl_zmq_host == "localhost"
+        assert c.prime_rl_zmq_port == 5555
+        assert c.prime_rl_zmq_hwm == 10
+        assert c.prime_rl_strict_advantages is True
+        assert c.prime_rl_sync_wait_s == 30
+        assert c.prime_rl_sync_poll_s == pytest.approx(0.2)
         assert c.environment_provider == ""
         assert c.environment_id == ""
         assert c.environment_args == ""
@@ -222,7 +229,15 @@ wandb_run_name = "run-1"
         toml.write_text(
             '[training]\ntop_p = 0.9\n\n'
             '[optimizer]\nbeta1 = 0.85\nbeta2 = 0.99\neps = 1e-6\n\n'
-            '[lora]\nalpha = 64\ndropout = 0.05\n'
+            '[lora]\nalpha = 64\ndropout = 0.05\n\n'
+            '[backend]\n'
+            'prime_rl_transport = "zmq"\n'
+            'prime_rl_zmq_host = "127.0.0.1"\n'
+            'prime_rl_zmq_port = 7777\n'
+            'prime_rl_zmq_hwm = 32\n'
+            'prime_rl_strict_advantages = false\n'
+            'prime_rl_sync_wait_s = 5\n'
+            'prime_rl_sync_poll_s = 0.5\n'
         )
         c = load_config(str(toml))
         assert c.top_p == pytest.approx(0.9)
@@ -231,6 +246,13 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-6)
         assert c.lora_alpha == 64
         assert c.lora_dropout == pytest.approx(0.05)
+        assert c.prime_rl_transport == "zmq"
+        assert c.prime_rl_zmq_host == "127.0.0.1"
+        assert c.prime_rl_zmq_port == 7777
+        assert c.prime_rl_zmq_hwm == 32
+        assert c.prime_rl_strict_advantages is False
+        assert c.prime_rl_sync_wait_s == 5
+        assert c.prime_rl_sync_poll_s == pytest.approx(0.5)
 
     def test_environment_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"

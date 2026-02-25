@@ -114,6 +114,7 @@ class TestBuiltinNames:
     def test_backend_names(self):
         assert "local" in backend.builtin_names
         assert "tinker" in backend.builtin_names
+        assert "prime_rl" in backend.builtin_names
 
     def test_reward_names(self):
         assert set(reward.builtin_names) >= {"match", "math", "judge", "custom"}
@@ -191,6 +192,34 @@ class TestBuiltinCreation:
         mock_cls.assert_called_once()
         assert mock_cls.call_args[0][1] == "http://model-base-url"
 
+    def test_prime_rl_uses_inference_url_before_base_url(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(PrimeRLTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="prime_rl",
+            inference_url="http://prime-inference",
+            base_url="http://model-base-url",
+            adapter_path="/tmp/prime-output",
+        )
+        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+            backend.create("prime_rl", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["inference_url"] == "http://prime-inference"
+        assert mock_cls.call_args.kwargs["output_dir"] == "/tmp/prime-output"
+
+    def test_prime_rl_falls_back_to_model_base_url(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(PrimeRLTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="prime_rl",
+            inference_url="",
+            base_url="http://model-base-url",
+        )
+        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+            backend.create("prime_rl", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["inference_url"] == "http://model-base-url"
+
 
 # ---------------------------------------------------------------------------
 # check_environment
@@ -200,7 +229,7 @@ class TestCheckEnvironment:
     def test_full_scan_returns_all_known(self):
         results = check_environment(config=None)
         names = {r[0] for r in results}
-        assert names >= {"local", "tinker", "math", "judge", "semantic"}
+        assert names >= {"local", "tinker", "prime_rl", "math", "judge", "semantic"}
 
     def test_config_scoped_check(self):
         config = TrainConfig(backend="local", reward_type="match",
@@ -231,6 +260,7 @@ class TestBackwardCompat:
         # These should not raise
         TrainConfig(backend="local")
         TrainConfig(backend="tinker")
+        TrainConfig(backend="prime_rl")
         TrainConfig(reward_type="match")
         TrainConfig(reward_type="math")
         TrainConfig(planning_detector="regex")
