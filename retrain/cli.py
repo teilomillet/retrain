@@ -180,6 +180,13 @@ _TOPIC_TO_SECTION = {
     "squeeze": "SQUEEZE MODE",
     "inference": "INFERENCE ENGINES",
     "validation": "VALIDATION",
+    "diff": "DIFF MODE",
+    "logging": "LOGGING",
+    "examples": "EXAMPLES",
+    "advantages": "ADVANTAGE PIPELINE",
+    "metrics": "METRICS GUIDE",
+    "architecture": "ARCHITECTURE",
+    "files": "FILES",
 }
 
 _AUTO_BLOCK_NAMES = (
