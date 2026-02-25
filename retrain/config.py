@@ -13,8 +13,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 _VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
-_VALID_TRANSFORM_MODES = {"none", "gtpo", "gtpo_hicra", "gtpo_sepa"}
-_VALID_PLANNING_DETECTORS = {"regex", "semantic"}
+_VALID_TRANSFORM_MODES = {"none", "gtpo", "gtpo_hicra", "gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"}
 
 
 @dataclass
@@ -143,6 +142,9 @@ class TrainConfig:
     kv_cache_dtype: str = "auto"
     prefix_caching: bool = True
 
+    # Data source
+    data_source: str = "math"
+
     # Reward / verifier
     reward_type: str = "match"
     reward_judge_model: str = ""
@@ -170,11 +172,6 @@ class TrainConfig:
             raise ValueError(
                 f"Invalid transform_mode '{self.transform_mode}'. "
                 f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)}"
-            )
-        if self.planning_detector not in _VALID_PLANNING_DETECTORS:
-            raise ValueError(
-                f"Invalid planning_detector '{self.planning_detector}'. "
-                f"Must be one of: {sorted(_VALID_PLANNING_DETECTORS)}"
             )
 
 
@@ -247,6 +244,9 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "detector": "planning_detector",
         "model": "planning_model",
         "threshold": "planning_threshold",
+    },
+    "data": {
+        "source": "data_source",
     },
     "reward": {
         "type": "reward_type",

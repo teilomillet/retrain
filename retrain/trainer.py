@@ -16,17 +16,13 @@ from retrain.advantages import (
     EntropyStats,
     compute_composable_advantages,
 )
-from retrain.planning import create_planning_detector
 from retrain.backpressure import (
     BackPressureDecision,
-    NoOpBackPressure,
     StepObservation,
-    USLBackPressure,
 )
 from retrain.config import TrainConfig
-from retrain.data import MathDataSource
 from retrain.logging_utils import JsonlLogger
-from retrain.rewards import create_reward
+from retrain.registry import get_registry
 from retrain.sepa import SEPAController
 
 
@@ -80,49 +76,7 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 0. Init backend (fail fast, before loading anything else)
     # -----------------------------------------------------------------------
-    if config.backend == "tinker":
-        try:
-            from retrain.tinker_backend import TinkerTrainHelper
-
-            helper = TinkerTrainHelper(
-                config.model,
-                config.inference_url,
-                config.lora_rank,
-                optim_beta1=config.optim_beta1,
-                optim_beta2=config.optim_beta2,
-                optim_eps=config.optim_eps,
-            )
-        except ImportError:
-            raise RuntimeError(
-                "Backend 'tinker' requires the tinker SDK.\n"
-                "Install it with: uv add tinker"
-            )
-    elif config.backend == "local":
-        try:
-            from retrain.local_train_helper import LocalTrainHelper
-
-            helper = LocalTrainHelper(
-                config.model,
-                config.adapter_path,
-                config.devices,
-                config.lora_rank,
-                config.inference_engine,
-                config.inference_url,
-                lora_alpha=config.lora_alpha,
-                lora_dropout=config.lora_dropout,
-                optim_beta1=config.optim_beta1,
-                optim_beta2=config.optim_beta2,
-                optim_eps=config.optim_eps,
-            )
-        except ImportError:
-            raise RuntimeError(
-                "Backend 'local' requires PyTorch.\n"
-                "Install it with: uv add torch"
-            )
-    else:
-        raise ValueError(
-            f"Unknown backend '{config.backend}'. Use 'local' or 'tinker'."
-        )
+    helper = get_registry("backend").create(config.backend, config)
 
     # -----------------------------------------------------------------------
     # 1. Setup directories + loggers
@@ -171,14 +125,14 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 2b. Planning detector
     # -----------------------------------------------------------------------
-    detector = create_planning_detector(config)
+    detector = get_registry("planning_detector").create(config.planning_detector, config)
     print(f"Planning detector: {config.planning_detector}")
 
     # -----------------------------------------------------------------------
     # 3. Load dataset
     # -----------------------------------------------------------------------
     print("Loading dataset...")
-    examples = MathDataSource(config.max_examples).load()
+    examples = get_registry("data_source").create(config.data_source, config).load()
     if not examples:
         raise RuntimeError("Dataset is empty — cannot train with zero examples.")
     print(f"Loaded {len(examples)} examples")
@@ -212,19 +166,8 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 6. Back pressure
     # -----------------------------------------------------------------------
-    if config.bp_enabled:
-        backpressure: NoOpBackPressure | USLBackPressure = USLBackPressure(
-            warmup_steps=config.bp_warmup_steps,
-            ema_decay=config.bp_ema_decay,
-            throttle_margin=config.bp_throttle_margin,
-            increase_margin=config.bp_increase_margin,
-            min_batch_size=config.bp_min_batch_size,
-            max_batch_size=config.bp_max_batch_size,
-            peak_gflops=config.bp_peak_gflops,
-            peak_bw_gb_s=config.bp_peak_bw_gb_s,
-        )
-    else:
-        backpressure = NoOpBackPressure()
+    bp_name = "usl" if config.bp_enabled else "noop"
+    backpressure = get_registry("backpressure").create(bp_name, config)
 
     # -----------------------------------------------------------------------
     # 8. Optional wandb
@@ -277,14 +220,14 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 9. Training loop
     # -----------------------------------------------------------------------
-    reward_fn = create_reward(config)
+    reward_fn = get_registry("reward").create(config.reward_type, config)
     example_idx = 0
     total_correct = 0
     total_completions = 0
     sepa_lambda_val = 0.0
     current_batch_size = config.batch_size
     current_group_size = config.group_size
-    needs_planning = config.transform_mode in ("gtpo_hicra", "gtpo_sepa")
+    needs_planning = config.transform_mode in ("gtpo_hicra", "gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c")
     start_step = 0
 
     # -----------------------------------------------------------------------
@@ -384,7 +327,7 @@ def train(config: TrainConfig) -> str | None:
         all_datum_advantages: list[list[float]] = []
 
         # Resolve SEPA lambda once per step (before group loop)
-        if config.transform_mode == "gtpo_sepa":
+        if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"):
             sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
         for f_idx, group in enumerate(all_group_sequences):
@@ -486,7 +429,7 @@ def train(config: TrainConfig) -> str | None:
             batch_correct / len(batch_rewards) if batch_rewards else 0.0
         )
 
-        if config.transform_mode == "gtpo_sepa":
+        if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"):
             sepa_controller.observe_correct_rate(correct_rate)
 
             if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
@@ -576,7 +519,7 @@ def train(config: TrainConfig) -> str | None:
         condition_label = f"{config.advantage_mode}+{config.transform_mode}"
         sepa_gate = (
             sepa_controller.gate_open()
-            if config.transform_mode == "gtpo_sepa"
+            if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c")
             else False
         )
 

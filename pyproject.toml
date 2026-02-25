@@ -9,21 +9,21 @@ description = "RLVR training framework for LLMs"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "torch>=2.4.0",
     "transformers>=4.44.0",
     "datasets>=2.20.0",
-    "wandb>=0.17.0",
     "peft>=0.12.0",
     "safetensors>=0.4.0",
     "requests>=2.31.0",
-    "verifiers>=0.1.0",
-    "tinker>=0.13.1",
 ]
 
 [project.optional-dependencies]
-tinker = ["tinker>=0.1.0"]
-semantic = ["sentence-transformers>=3.0"]
-dev = ["pytest>=8.0.0"]
+local = ["torch>=2.4.0"]
+tinker = ["tinker>=0.13.1"]
+verifiers = ["verifiers>=0.1.0"]
+semantic = ["sentence-transformers>=5.2.3"]
+wandb = ["wandb>=0.17.0"]
+all = ["retrain[local,tinker,verifiers,semantic,wandb]"]
+dev = ["retrain[all]", "pytest>=8.0.0"]
 
 [project.scripts]
 retrain = "retrain.cli:main"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from retrain.rewards import extract_boxed
 
@@ -12,6 +13,13 @@ class Example:
     """A single training example: prompt + reference answer."""
     prompt: str
     reference: str
+
+
+@runtime_checkable
+class DataSource(Protocol):
+    """Any object that can load training examples."""
+
+    def load(self) -> list[Example]: ...
 
 
 _DEFAULT_SUBJECTS = [
