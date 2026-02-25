@@ -91,6 +91,7 @@ def _print_top_help(cli_name: str) -> None:
     print(f"  {cli_name} man --topic quickstart")
     print(f"  {cli_name} man --path")
     print(f"  {cli_name} man --sync")
+    print(f"  {cli_name} man --check")
     print()
     print("Tip: read docs/configuration.md for full TOML reference.")
 
@@ -186,6 +187,7 @@ def _render_commands_block(cli_name: str) -> list[str]:
         "        --path            prints the manual file path.",
         "        --list-topics     lists supported topic names.",
         "        --sync            refreshes auto-generated manual blocks.",
+        "        --check           exits non-zero if auto blocks are stale.",
         "        --json            outputs JSON (full manual or single topic).",
     ]
 
@@ -303,6 +305,23 @@ def _sync_manual_file(cli_name: str) -> tuple[Path, bool]:
     return path, changed
 
 
+def _check_manual_file(cli_name: str) -> tuple[Path, bool]:
+    """Check whether auto-generated manual blocks are up to date."""
+    path = _manual_path()
+    original = path.read_text() if path.is_file() else _load_manual_text(cli_name)
+
+    updated = original
+    rendered = {
+        "COMMANDS": _render_commands_block(cli_name),
+        "OPTIONS": _render_options_block(),
+        "QUICKSTART": _render_quickstart_block(cli_name),
+        "ENVIRONMENT": _render_environment_block(cli_name),
+    }
+    for name in _AUTO_BLOCK_NAMES:
+        updated = _replace_auto_block(updated, name, rendered[name])
+    return path, updated == original
+
+
 def _run_man(args: list[str]) -> None:
     """Print manual text (or JSON view) from bundled editable file."""
     fmt = "text"
@@ -310,6 +329,7 @@ def _run_man(args: list[str]) -> None:
     show_path = False
     list_topics = False
     sync = False
+    check = False
     i = 0
     while i < len(args):
         arg = args[i]
@@ -321,6 +341,8 @@ def _run_man(args: list[str]) -> None:
             list_topics = True
         elif arg == "--sync":
             sync = True
+        elif arg == "--check":
+            check = True
         elif arg in ("--format", "-f"):
             i += 1
             if i >= len(args):
@@ -347,6 +369,10 @@ def _run_man(args: list[str]) -> None:
         sys.exit(1)
 
     cli_name = _resolve_cli_name()
+    if sync and check:
+        print("Flags --sync and --check cannot be used together.", file=sys.stderr)
+        sys.exit(1)
+
     manual_path = _manual_path()
     if sync:
         try:
@@ -357,6 +383,21 @@ def _run_man(args: list[str]) -> None:
         status = "updated" if changed else "already up to date"
         print(f"{manual_path} ({status})")
         return
+
+    if check:
+        try:
+            manual_path, up_to_date = _check_manual_file(cli_name)
+        except ValueError as exc:
+            print(f"Manual check failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if up_to_date:
+            print(f"{manual_path} (up to date)")
+            return
+        print(
+            f"{manual_path} (out of date). Run: {cli_name} man --sync",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     manual_text = _load_manual_text(cli_name)
 

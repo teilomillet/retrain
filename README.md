@@ -29,6 +29,8 @@ retrain man --format json --topic quickstart
 retrain man --path
 # refresh auto-generated manual sections
 retrain man --sync
+# check manual drift (CI-friendly, non-writing)
+retrain man --check
 
 # 1. Drop a config
 cp retrain.toml my_run.toml
@@ -39,6 +41,9 @@ retrain my_run.toml
 # 3. Override from CLI
 retrain my_run.toml --seed 42 --wandb-project my-project
 ```
+
+Contributor note: run `retrain man --check` in CI to detect stale auto-generated
+manual blocks, and `retrain man --sync` locally to update them.
 
 ## Configuration
 

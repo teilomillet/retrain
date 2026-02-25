@@ -7,7 +7,7 @@ SYNOPSIS
     retrain [config.toml] [--flag value ...]
     retrain doctor
     retrain init
-    retrain man [--topic TOPIC] [--path] [--list-topics] [--sync] [--json]
+    retrain man [--topic TOPIC] [--path] [--list-topics] [--sync] [--check] [--json]
 
 DESCRIPTION
     retrain runs Reinforcement Learning with Verifiable Rewards (RLVR)
@@ -47,6 +47,7 @@ COMMANDS
         --path            prints the manual file path.
         --list-topics     lists supported topic names.
         --sync            refreshes auto-generated manual blocks.
+        --check           exits non-zero if auto blocks are stale.
         --json            outputs JSON (full manual or single topic).
 <<END:AUTO:COMMANDS>>
 
