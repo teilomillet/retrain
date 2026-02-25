@@ -206,6 +206,13 @@ class TestBuiltinCreation:
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://prime-inference"
         assert mock_cls.call_args.kwargs["output_dir"] == "/tmp/prime-output"
+        assert mock_cls.call_args.kwargs["transport_type"] == "filesystem"
+        assert mock_cls.call_args.kwargs["zmq_host"] == "localhost"
+        assert mock_cls.call_args.kwargs["zmq_port"] == 5555
+        assert mock_cls.call_args.kwargs["zmq_hwm"] == 10
+        assert mock_cls.call_args.kwargs["strict_advantages"] is True
+        assert mock_cls.call_args.kwargs["sync_wait_s"] == 30
+        assert mock_cls.call_args.kwargs["sync_poll_s"] == pytest.approx(0.2)
 
     def test_prime_rl_falls_back_to_model_base_url(self):
         mock_cls = MagicMock(return_value=object())
@@ -219,6 +226,32 @@ class TestBuiltinCreation:
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://model-base-url"
+
+    def test_prime_rl_uses_backend_options(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(PrimeRLTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="prime_rl",
+            backend_options={
+                "transport": "zmq",
+                "zmq_host": "127.0.0.1",
+                "zmq_port": 7777,
+                "zmq_hwm": 32,
+                "strict_advantages": False,
+                "sync_wait_s": 5,
+                "sync_poll_s": 0.5,
+            },
+        )
+        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+            backend.create("prime_rl", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["transport_type"] == "zmq"
+        assert mock_cls.call_args.kwargs["zmq_host"] == "127.0.0.1"
+        assert mock_cls.call_args.kwargs["zmq_port"] == 7777
+        assert mock_cls.call_args.kwargs["zmq_hwm"] == 32
+        assert mock_cls.call_args.kwargs["strict_advantages"] is False
+        assert mock_cls.call_args.kwargs["sync_wait_s"] == 5
+        assert mock_cls.call_args.kwargs["sync_poll_s"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------

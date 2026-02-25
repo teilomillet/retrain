@@ -344,7 +344,7 @@ class PrimeRLTrainHelper:
                 "PRIME-RL backend received non-uniform token advantages in one sample. "
                 "PRIME-RL transport accepts one scalar advantage per sample. "
                 "Use transform_mode='none' to keep uniform per-token advantages, "
-                "or set [backend] prime_rl_strict_advantages = false to aggregate "
+                "or set [backend.options] strict_advantages = false to aggregate "
                 "token advantages by mean."
             )
         return float(sum(values) / len(values))
@@ -439,4 +439,3 @@ class PrimeRLTrainHelper:
             return data
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(f"PRIME-RL request failed at {url}: {exc}") from exc
-

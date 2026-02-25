@@ -92,7 +92,7 @@ COMMANDS
 
 OPTIONS
 <<AUTO:OPTIONS>>
-    Every TrainConfig field is exposed as a --kebab-case CLI flag.
+    TrainConfig fields are exposed as --kebab-case CLI flags.
     Flags override TOML values.
 
     Common examples:
@@ -100,6 +100,7 @@ OPTIONS
         retrain config.toml --lr 1e-4 --batch-size 16
         retrain config.toml --advantage-mode grpo
         retrain config.toml --inference-engine vllm --inference-url http://localhost:8000
+        retrain config.toml --backend prime_rl --backend-opt transport=zmq --backend-opt zmq_port=7777
 
     All flags (sorted):
         --adapter-path
@@ -148,13 +149,6 @@ OPTIONS
         --planning-model
         --planning-threshold
         --prefix-caching
-        --prime-rl-strict-advantages
-        --prime-rl-sync-poll-s
-        --prime-rl-sync-wait-s
-        --prime-rl-transport
-        --prime-rl-zmq-host
-        --prime-rl-zmq-hwm
-        --prime-rl-zmq-port
         --resume-from
         --reward-custom-function
         --reward-custom-module
@@ -177,7 +171,8 @@ OPTIONS
         --wandb-tags
         --weight-decay
 
-    Special alias:
+    Special flags:
+        --backend-opt K=V    backend-specific option override (repeatable).
         --resume VALUE    alias for --resume-from VALUE
 
     Unknown flags produce an error with close-match suggestions.
@@ -276,6 +271,18 @@ CONFIGURATION
     adapter_path = "/tmp/retrain_adapter"
         Filesystem path for LoRA adapter checkpoints.
         Warning if starts with /tmp (checkpoints may be lost).
+
+  [backend.options]
+
+    Backend-specific key/value options table.
+    For backend = "prime_rl":
+        transport = "filesystem"   # or "zmq"
+        zmq_host = "localhost"
+        zmq_port = 5555
+        zmq_hwm = 10
+        strict_advantages = true
+        sync_wait_s = 30
+        sync_poll_s = 0.2
 
   [model]
 
@@ -998,11 +1005,11 @@ PLUGINS
     Set [backend].backend to a dotted path. Must implement the
     TrainHelper protocol:
 
-        setup(config)           Initialize model and optimizer.
-        generate(prompts)       Sample completions with current adapter.
-        train_step(datums)      Run one training step, return loss.
-        save_checkpoint(name)   Persist adapter weights.
-        load_checkpoint(name)   Restore adapter weights.
+        checkpoint(name)        Prepare backend state for sampling.
+        sample(...)             Sample completions with current adapter.
+        train_step(...)         Run one training step, return loss.
+        save_adapter(path,name) Persist adapter weights/state.
+        load_state(name)        Restore adapter weights/state.
 
   3. Inference engine plugin
 

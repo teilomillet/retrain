@@ -19,6 +19,7 @@ from retrain.advantages import (
     get_builtin_transform_modes,
     is_valid_transform_mode_name,
 )
+from retrain.backend_definitions import normalize_backend_options
 
 _VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
 _VALID_TRANSFORM_MODES = set(get_builtin_transform_modes())
@@ -86,13 +87,7 @@ class TrainConfig:
     backend: str = "local"
     devices: str = "gpu:0"
     adapter_path: str = "/tmp/retrain_adapter"
-    prime_rl_transport: str = "filesystem"
-    prime_rl_zmq_host: str = "localhost"
-    prime_rl_zmq_port: int = 5555
-    prime_rl_zmq_hwm: int = 10
-    prime_rl_strict_advantages: bool = True
-    prime_rl_sync_wait_s: int = 30
-    prime_rl_sync_poll_s: float = 0.2
+    backend_options: dict[str, object] = field(default_factory=dict)
 
     # Model
     model: str = "Qwen/Qwen3-4B-Instruct-2507"
@@ -210,26 +205,6 @@ class TrainConfig:
             errors.append(
                 "entropy_mask_rho must be in [0.0, 1.0]. Try: entropy_mask_rho = 0.2"
             )
-        if self.prime_rl_transport not in {"filesystem", "zmq"}:
-            errors.append(
-                "prime_rl_transport must be 'filesystem' or 'zmq'. "
-                "Try: prime_rl_transport = 'filesystem'"
-            )
-        if self.prime_rl_zmq_port <= 0 or self.prime_rl_zmq_port > 65535:
-            errors.append(
-                "prime_rl_zmq_port must be in [1, 65535]. "
-                "Try: prime_rl_zmq_port = 5555"
-            )
-        if self.prime_rl_zmq_hwm <= 0:
-            errors.append("prime_rl_zmq_hwm must be > 0. Try: prime_rl_zmq_hwm = 10")
-        if self.prime_rl_sync_wait_s < 0:
-            errors.append(
-                "prime_rl_sync_wait_s must be >= 0. Try: prime_rl_sync_wait_s = 30"
-            )
-        if self.prime_rl_sync_poll_s <= 0:
-            errors.append(
-                "prime_rl_sync_poll_s must be > 0. Try: prime_rl_sync_poll_s = 0.2"
-            )
 
         if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
             errors.append(
@@ -267,6 +242,20 @@ class TrainConfig:
                         "environment_args must decode to a JSON object "
                         "when environment_provider is set."
                     )
+
+        if not isinstance(self.backend_options, dict):
+            errors.append(
+                "backend_options must be a mapping. "
+                "Use [backend.options] in TOML or --backend-opt key=value."
+            )
+        else:
+            try:
+                self.backend_options = normalize_backend_options(
+                    self.backend,
+                    self.backend_options,
+                )
+            except ValueError as exc:
+                errors.append(str(exc))
 
         if errors:
             raise ValueError("\n".join(errors))
@@ -316,13 +305,6 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "backend": "backend",
         "devices": "devices",
         "adapter_path": "adapter_path",
-        "prime_rl_transport": "prime_rl_transport",
-        "prime_rl_zmq_host": "prime_rl_zmq_host",
-        "prime_rl_zmq_port": "prime_rl_zmq_port",
-        "prime_rl_zmq_hwm": "prime_rl_zmq_hwm",
-        "prime_rl_strict_advantages": "prime_rl_strict_advantages",
-        "prime_rl_sync_wait_s": "prime_rl_sync_wait_s",
-        "prime_rl_sync_poll_s": "prime_rl_sync_poll_s",
     },
     "model": {
         "model": "model",
@@ -417,14 +399,95 @@ _TOML_MAP: dict[str, dict[str, str]] = {
 _FIELD_TYPES: dict[str, type] = typing.get_type_hints(TrainConfig)
 
 
-def _coerce_value(field_name: str, raw: str) -> object:
+_LEGACY_PRIME_RL_KEYS: dict[str, str] = {
+    "prime_rl_transport": "transport",
+    "prime_rl_zmq_host": "zmq_host",
+    "prime_rl_zmq_port": "zmq_port",
+    "prime_rl_zmq_hwm": "zmq_hwm",
+    "prime_rl_strict_advantages": "strict_advantages",
+    "prime_rl_sync_wait_s": "sync_wait_s",
+    "prime_rl_sync_poll_s": "sync_poll_s",
+}
+
+
+def _toml_literal(value: object) -> str:
+    """Render a python value as a TOML literal for migration hints."""
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(value)
+
+
+def _migration_error_for_legacy_prime_rl_keys(backend_sec: dict[str, object]) -> ValueError:
+    """Build a concrete rewrite message for legacy PRIME-RL backend keys."""
+    lines = [
+        "Legacy PRIME-RL keys are no longer supported in [backend].",
+        "Move them under [backend.options].",
+        "",
+        "Rewrite this section as:",
+        "[backend]",
+        f'backend = {_toml_literal(backend_sec.get("backend", "prime_rl"))}',
+    ]
+    if "devices" in backend_sec:
+        lines.append(f'devices = {_toml_literal(backend_sec["devices"])}')
+    if "adapter_path" in backend_sec:
+        lines.append(f'adapter_path = {_toml_literal(backend_sec["adapter_path"])}')
+    lines.append("")
+    lines.append("[backend.options]")
+    for old_key, new_key in _LEGACY_PRIME_RL_KEYS.items():
+        if old_key in backend_sec:
+            lines.append(f"{new_key} = {_toml_literal(backend_sec[old_key])}")
+    return ValueError("\n".join(lines))
+
+
+def _extract_backend_options(backend_sec: object) -> dict[str, object] | None:
+    """Extract [backend.options] table when present."""
+    if backend_sec is None:
+        return None
+    if not isinstance(backend_sec, dict):
+        return None
+
+    legacy_hits = sorted(k for k in backend_sec if k in _LEGACY_PRIME_RL_KEYS)
+    if legacy_hits:
+        raise _migration_error_for_legacy_prime_rl_keys(backend_sec)
+
+    raw_options = backend_sec.get("options")
+    if raw_options is None:
+        return None
+    if not isinstance(raw_options, dict):
+        raise ValueError(
+            "Invalid [backend].options value. "
+            "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
+        )
+    return dict(raw_options)
+
+
+def _coerce_value(field_name: str, raw: object) -> object:
     """Coerce a CLI string value to the type expected by *field_name*."""
+    if field_name == "backend_options":
+        if not isinstance(raw, dict):
+            raise ValueError(
+                "backend_options override must be a mapping of key=value options."
+            )
+        return dict(raw)
+
     ftype = _FIELD_TYPES[field_name]
     if ftype is bool:
+        if isinstance(raw, bool):
+            return raw
+        if not isinstance(raw, str):
+            raise ValueError(f"Expected string for {field_name}, got {type(raw).__name__}")
         return raw.lower() in ("1", "true", "yes")
     if ftype is int:
+        if isinstance(raw, int):
+            return raw
         return int(raw)
     if ftype is float:
+        if isinstance(raw, float):
+            return raw
         return float(raw)
     return raw
 
@@ -432,12 +495,27 @@ def _coerce_value(field_name: str, raw: str) -> object:
 # Build CLI flag map: --kebab-case → snake_case field name
 _CLI_FLAG_MAP: dict[str, str] = {}
 for _f in fields(TrainConfig):
+    if _f.name == "backend_options":
+        continue
     _CLI_FLAG_MAP["--" + _f.name.replace("_", "-")] = _f.name
 # Explicit alias
 _CLI_FLAG_MAP["--resume"] = "resume_from"
 
 
-def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, str]]:
+def _parse_backend_opt(raw_value: str) -> tuple[str, str]:
+    """Parse one backend option override from CLI key=value format."""
+    if "=" not in raw_value:
+        raise ValueError(
+            "Flag --backend-opt requires key=value (example: --backend-opt transport=zmq)."
+        )
+    key, value = raw_value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise ValueError("Flag --backend-opt requires a non-empty key (key=value).")
+    return key, value
+
+
+def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, object]]:
     """Parse CLI args into (config_path, overrides).
 
     Supports ``--kebab-case value`` and ``--kebab-case=value``.
@@ -445,7 +523,8 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, str]]:
     Unknown flags produce a helpful error with close-match suggestions.
     """
     config_path: str | None = None
-    overrides: dict[str, str] = {}
+    overrides: dict[str, object] = {}
+    backend_opt_overrides: dict[str, object] = {}
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -462,8 +541,29 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, str]]:
             flag = arg
             value = None
 
+        if flag == "--backend-opt":
+            if value is None:
+                i += 1
+                if i >= len(argv):
+                    print("Flag --backend-opt requires a value.", file=sys.stderr)
+                    sys.exit(1)
+                value = argv[i]
+            try:
+                key, opt_value = _parse_backend_opt(value)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                sys.exit(1)
+            backend_opt_overrides[key] = opt_value
+            i += 1
+            continue
+
         if flag not in _CLI_FLAG_MAP:
-            close = difflib.get_close_matches(flag, _CLI_FLAG_MAP.keys(), n=1, cutoff=0.6)
+            close = difflib.get_close_matches(
+                flag,
+                list(_CLI_FLAG_MAP.keys()) + ["--backend-opt"],
+                n=1,
+                cutoff=0.6,
+            )
             hint = f" Did you mean: {close[0]}?" if close else ""
             print(f"Unknown flag: {flag}.{hint}", file=sys.stderr)
             sys.exit(1)
@@ -478,10 +578,16 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, str]]:
         overrides[_CLI_FLAG_MAP[flag]] = value
         i += 1
 
+    if backend_opt_overrides:
+        overrides["backend_options"] = backend_opt_overrides
+
     return config_path, overrides
 
 
-def load_config(path: str | None = None, overrides: dict[str, str] | None = None) -> TrainConfig:
+def load_config(
+    path: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> TrainConfig:
     """Load config from a TOML file.
 
     If path is None, looks for retrain.toml in cwd.
@@ -508,6 +614,10 @@ def load_config(path: str | None = None, overrides: dict[str, str] | None = None
     if path is not None:
         with open(path, "rb") as f:
             data = tomllib.load(f)
+
+        backend_options = _extract_backend_options(data.get("backend"))
+        if backend_options is not None:
+            setattr(config, "backend_options", backend_options)
 
         for section, mapping in _TOML_MAP.items():
             sec = data.get(section)
@@ -538,6 +648,11 @@ def load_config(path: str | None = None, overrides: dict[str, str] | None = None
     # Apply CLI overrides
     if overrides:
         for field_name, raw_value in overrides.items():
+            if field_name == "backend_options":
+                merged = dict(getattr(config, "backend_options", {}))
+                merged.update(_coerce_value(field_name, raw_value))
+                setattr(config, field_name, merged)
+                continue
             setattr(config, field_name, _coerce_value(field_name, raw_value))
 
     # Validate after all overrides

@@ -15,6 +15,10 @@ from __future__ import annotations
 import importlib
 from typing import Any, Callable
 
+from retrain.backend_definitions import (
+    get_backend_dependency_map,
+    get_builtin_backend_definitions,
+)
 from retrain.config import TrainConfig
 
 
@@ -132,74 +136,8 @@ def get_registry(name: str) -> Registry:
 
 # -- backend ---------------------------------------------------------------
 
-@backend.register("local")
-def _create_local(config: TrainConfig) -> Any:
-    try:
-        from retrain.local_train_helper import LocalTrainHelper
-    except ImportError:
-        raise RuntimeError(
-            "Backend 'local' requires PyTorch.\n"
-            "Install it with: pip install retrain[local]"
-        ) from None
-    return LocalTrainHelper(
-        config.model,
-        config.adapter_path,
-        config.devices,
-        config.lora_rank,
-        config.inference_engine,
-        config.inference_url,
-        lora_alpha=config.lora_alpha,
-        lora_dropout=config.lora_dropout,
-        optim_beta1=config.optim_beta1,
-        optim_beta2=config.optim_beta2,
-        optim_eps=config.optim_eps,
-    )
-
-
-@backend.register("tinker")
-def _create_tinker(config: TrainConfig) -> Any:
-    try:
-        from retrain.tinker_backend import TinkerTrainHelper
-    except ImportError:
-        raise RuntimeError(
-            "Backend 'tinker' requires the tinker SDK.\n"
-            "Install it with: pip install retrain[tinker]"
-        ) from None
-    # Prefer [inference].url, but keep [model].base_url as backward-compatible fallback.
-    tinker_url = config.inference_url or config.base_url
-    return TinkerTrainHelper(
-        config.model,
-        tinker_url,
-        config.lora_rank,
-        optim_beta1=config.optim_beta1,
-        optim_beta2=config.optim_beta2,
-        optim_eps=config.optim_eps,
-    )
-
-
-@backend.register("prime_rl")
-def _create_prime_rl(config: TrainConfig) -> Any:
-    try:
-        from retrain.prime_rl_backend import PrimeRLTrainHelper
-    except ImportError:
-        raise RuntimeError(
-            "Backend 'prime_rl' requires PRIME-RL.\n"
-            "Install it with: pip install prime-rl"
-        ) from None
-
-    inference_url = config.inference_url or config.base_url or "http://localhost:8000"
-    return PrimeRLTrainHelper(
-        model_name=config.model,
-        output_dir=config.adapter_path,
-        inference_url=inference_url,
-        transport_type=config.prime_rl_transport,
-        zmq_host=config.prime_rl_zmq_host,
-        zmq_port=config.prime_rl_zmq_port,
-        zmq_hwm=config.prime_rl_zmq_hwm,
-        strict_advantages=config.prime_rl_strict_advantages,
-        sync_wait_s=config.prime_rl_sync_wait_s,
-        sync_poll_s=config.prime_rl_sync_poll_s,
-    )
+for _backend_name, _backend_definition in get_builtin_backend_definitions().items():
+    backend.register(_backend_name)(_backend_definition.factory)
 
 
 # -- inference_engine (for doctor diagnostics) -----------------------------
@@ -329,9 +267,7 @@ def _bp_usl(config: TrainConfig) -> Any:
 # ---------------------------------------------------------------------------
 
 _DEPENDENCY_MAP: dict[str, tuple[str, str]] = {
-    "local": ("torch", "pip install retrain[local]"),
-    "tinker": ("tinker", "pip install retrain[tinker]"),
-    "prime_rl": ("prime_rl", "pip install prime-rl"),
+    **get_backend_dependency_map(),
     "math": ("math_verify", "pip install retrain[verifiers]"),
     "judge": ("verifiers", "pip install retrain[verifiers]"),
     "semantic": ("sentence_transformers", "pip install retrain[semantic]"),

@@ -138,6 +138,7 @@ class TestManCommand:
         synced = manual.read_text()
         assert "--sync            refreshes auto-generated manual blocks." in synced
         assert "--check           exits non-zero if auto blocks are stale." in synced
+        assert "--backend-opt K=V    backend-specific option override" in synced
         assert "primeintellect/gsm8k" in synced
 
     def test_man_check_passes_when_up_to_date(self, tmp_path, monkeypatch, capsys):

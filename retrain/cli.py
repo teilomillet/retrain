@@ -346,7 +346,7 @@ def _render_options_block() -> list[str]:
     # Keep only canonical flags for readability; skip alias here and add below.
     canonical = sorted(k for k in _CLI_FLAG_MAP if k != "--resume")
     lines = [
-        "    Every TrainConfig field is exposed as a --kebab-case CLI flag.",
+        "    TrainConfig fields are exposed as --kebab-case CLI flags.",
         "    Flags override TOML values.",
         "",
         "    Common examples:",
@@ -354,6 +354,7 @@ def _render_options_block() -> list[str]:
         "        retrain config.toml --lr 1e-4 --batch-size 16",
         "        retrain config.toml --advantage-mode grpo",
         "        retrain config.toml --inference-engine vllm --inference-url http://localhost:8000",
+        "        retrain config.toml --backend prime_rl --backend-opt transport=zmq --backend-opt zmq_port=7777",
         "",
         "    All flags (sorted):",
     ]
@@ -363,7 +364,8 @@ def _render_options_block() -> list[str]:
     lines.extend(
         [
             "",
-            "    Special alias:",
+            "    Special flags:",
+            "        --backend-opt K=V    backend-specific option override (repeatable).",
             "        --resume VALUE    alias for --resume-from VALUE",
             "",
             "    Unknown flags produce an error with close-match suggestions.",

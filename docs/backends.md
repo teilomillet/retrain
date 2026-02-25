@@ -126,8 +126,10 @@ trainer loop, rewards, and logging.
 [backend]
 backend = "prime_rl"
 adapter_path = "/path/to/prime_rl/output_dir"   # MUST match PRIME-RL trainer output_dir
-prime_rl_transport = "filesystem"                # or "zmq"
-prime_rl_strict_advantages = true
+
+[backend.options]
+transport = "filesystem"                         # or "zmq"
+strict_advantages = true
 
 [inference]
 url = "http://localhost:8000"                    # PRIME-RL inference endpoint
@@ -137,9 +139,11 @@ Notes:
 
 - retrain sends PRIME-RL `TrainingBatch` messages through PRIME-RL transport.
 - `checkpoint()` syncs inference from PRIME-RL broadcast checkpoints via `/update_weights`.
+- Optional PRIME-RL settings live under `[backend.options]`: `zmq_host`, `zmq_port`,
+  `zmq_hwm`, `sync_wait_s`, and `sync_poll_s`.
 - PRIME-RL transport expects one scalar advantage per sample.
   If you use token-varying transforms (for example GTPO/HICRA/SEPA), keep
-  `prime_rl_strict_advantages = true` to fail fast, or set it to `false` to
+  `strict_advantages = true` to fail fast, or set it to `false` to
   aggregate completion-token advantages by mean.
 
 ## Device allocation

@@ -1,6 +1,5 @@
 """Tests for retrain.config — TrainConfig and TOML loading."""
 
-import tempfile
 import warnings
 from pathlib import Path
 
@@ -211,13 +210,7 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-8)
         assert c.lora_alpha == 0
         assert c.lora_dropout == pytest.approx(0.0)
-        assert c.prime_rl_transport == "filesystem"
-        assert c.prime_rl_zmq_host == "localhost"
-        assert c.prime_rl_zmq_port == 5555
-        assert c.prime_rl_zmq_hwm == 10
-        assert c.prime_rl_strict_advantages is True
-        assert c.prime_rl_sync_wait_s == 30
-        assert c.prime_rl_sync_poll_s == pytest.approx(0.2)
+        assert c.backend_options == {}
         assert c.environment_provider == ""
         assert c.environment_id == ""
         assert c.environment_args == ""
@@ -231,13 +224,16 @@ wandb_run_name = "run-1"
             '[optimizer]\nbeta1 = 0.85\nbeta2 = 0.99\neps = 1e-6\n\n'
             '[lora]\nalpha = 64\ndropout = 0.05\n\n'
             '[backend]\n'
-            'prime_rl_transport = "zmq"\n'
-            'prime_rl_zmq_host = "127.0.0.1"\n'
-            'prime_rl_zmq_port = 7777\n'
-            'prime_rl_zmq_hwm = 32\n'
-            'prime_rl_strict_advantages = false\n'
-            'prime_rl_sync_wait_s = 5\n'
-            'prime_rl_sync_poll_s = 0.5\n'
+            'backend = "prime_rl"\n'
+            '\n'
+            '[backend.options]\n'
+            'transport = "zmq"\n'
+            'zmq_host = "127.0.0.1"\n'
+            'zmq_port = 7777\n'
+            'zmq_hwm = 32\n'
+            'strict_advantages = false\n'
+            'sync_wait_s = 5\n'
+            'sync_poll_s = 0.5\n'
         )
         c = load_config(str(toml))
         assert c.top_p == pytest.approx(0.9)
@@ -246,13 +242,31 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-6)
         assert c.lora_alpha == 64
         assert c.lora_dropout == pytest.approx(0.05)
-        assert c.prime_rl_transport == "zmq"
-        assert c.prime_rl_zmq_host == "127.0.0.1"
-        assert c.prime_rl_zmq_port == 7777
-        assert c.prime_rl_zmq_hwm == 32
-        assert c.prime_rl_strict_advantages is False
-        assert c.prime_rl_sync_wait_s == 5
-        assert c.prime_rl_sync_poll_s == pytest.approx(0.5)
+        assert c.backend_options == {
+            "transport": "zmq",
+            "zmq_host": "127.0.0.1",
+            "zmq_port": 7777,
+            "zmq_hwm": 32,
+            "strict_advantages": False,
+            "sync_wait_s": 5,
+            "sync_poll_s": pytest.approx(0.5),
+        }
+
+    def test_legacy_prime_rl_backend_keys_raise_with_migration_hint(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[backend]\n'
+            'backend = "prime_rl"\n'
+            'prime_rl_transport = "zmq"\n'
+        )
+        with pytest.raises(ValueError, match="Legacy PRIME-RL keys"):
+            load_config(str(toml))
+
+    def test_backend_options_must_be_table(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[backend]\noptions = "bad"\n')
+        with pytest.raises(ValueError, match="Invalid \\[backend\\]\\.options value"):
+            load_config(str(toml))
 
     def test_environment_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
@@ -343,6 +357,34 @@ class TestValidation:
                 environment_args='["not","an","object"]',
             )
 
+    def test_backend_options_unknown_key_raises(self):
+        with pytest.raises(ValueError, match="Unknown \\[backend\\.options\\] key"):
+            TrainConfig(
+                backend="prime_rl",
+                backend_options={"tranport": "filesystem"},
+            )
+
+    def test_backend_options_choice_validation_raises(self):
+        with pytest.raises(ValueError, match="must be one of"):
+            TrainConfig(
+                backend="prime_rl",
+                backend_options={"transport": "http"},
+            )
+
+    def test_backend_options_range_validation_raises(self):
+        with pytest.raises(ValueError, match="must be in \\[1, 65535\\]"):
+            TrainConfig(
+                backend="prime_rl",
+                backend_options={"zmq_port": 0},
+            )
+
+    def test_backend_options_accepts_dotted_plugin_backend(self):
+        c = TrainConfig(
+            backend="my_backend.Factory",
+            backend_options={"custom_flag": "x", "num_workers": 4},
+        )
+        assert c.backend_options == {"custom_flag": "x", "num_workers": 4}
+
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -377,6 +419,25 @@ class TestCLIParsing:
         _, overrides = parse_cli_overrides(["--batch-size", "4"])
         assert overrides == {"batch_size": "4"}
 
+    def test_backend_opt_repeated(self):
+        _, overrides = parse_cli_overrides(
+            [
+                "--backend-opt",
+                "transport=zmq",
+                "--backend-opt=zmq_port=7777",
+            ]
+        )
+        assert overrides == {
+            "backend_options": {
+                "transport": "zmq",
+                "zmq_port": "7777",
+            }
+        }
+
+    def test_backend_opt_requires_key_value(self):
+        with pytest.raises(SystemExit):
+            parse_cli_overrides(["--backend-opt", "transport"])
+
     def test_overrides_applied_to_config(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text("[training]\nmax_steps = 200\n")
@@ -395,6 +456,23 @@ class TestCLIParsing:
         toml.write_text("")
         c = load_config(str(toml), overrides={"bp_enabled": "true"})
         assert c.bp_enabled is True
+
+    def test_backend_opt_cli_beats_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[backend]\n'
+            'backend = "prime_rl"\n'
+            '\n'
+            '[backend.options]\n'
+            'transport = "filesystem"\n'
+            'zmq_port = 5555\n'
+        )
+        c = load_config(
+            str(toml),
+            overrides={"backend_options": {"transport": "zmq", "zmq_port": "7777"}},
+        )
+        assert c.backend_options["transport"] == "zmq"
+        assert c.backend_options["zmq_port"] == 7777
 
     def test_missing_value_exits(self):
         with pytest.raises(SystemExit):
