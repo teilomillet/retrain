@@ -222,7 +222,8 @@ def _print_top_help(cli_name: str) -> None:
         "[--output-dir DIR] [--with-test]"
     )
     print(f"  {cli_name} plugins [--json] [config.toml]")
-    print(f"  {cli_name} status [logdir] [--json]")
+    print(f"  {cli_name} status [logdir] [--json] [--all] [--watch]")
+    print(f"  {cli_name} top [logdir]")
     print(f"  {cli_name} explain [config.toml] [--json]")
     print(f"  {cli_name} diff <run_a> <run_b> [--json]")
     print(f"  {cli_name} trace [config.toml] [--json]")
@@ -1259,6 +1260,7 @@ def _run_status(args: list[str]) -> None:
     from retrain.status import (
         format_campaign,
         format_run,
+        format_summary_banner,
         scan_all,
     )
 
@@ -1291,12 +1293,21 @@ def _run_status(args: list[str]) -> None:
         sys.exit(1)
 
     _active_statuses = {"running", "partial"}
+    _dead_hide_seconds = 86400  # hide dead campaigns after 24h
 
     while True:
+        now = _time.time()
         runs, campaigns = scan_all(root_path)
 
+        # Banner uses ALL campaigns (before filtering)
+        banner = format_summary_banner(campaigns)
+
         if not show_all:
-            campaigns = [c for c in campaigns if c.status in _active_statuses]
+            campaigns = [
+                c for c in campaigns
+                if c.status in _active_statuses
+                or (c.status == "dead" and c.last_activity > now - _dead_hide_seconds)
+            ]
 
         if fmt == "json":
             payload = {
@@ -1308,6 +1319,8 @@ def _run_status(args: list[str]) -> None:
             if not watch:
                 return
         else:
+            print(banner)
+            print()
             if not runs and not campaigns:
                 if show_all:
                     print(f"No runs or campaigns found in {root}")
@@ -1333,6 +1346,17 @@ def _run_status(args: list[str]) -> None:
             print("\033[2J\033[H", end="")
         except KeyboardInterrupt:
             return
+
+
+def _run_top(args: list[str]) -> None:
+    """Live dashboard: alias for ``retrain status --watch --active``."""
+    status_args = ["--watch", "--active"]
+    # Accept optional positional logdir
+    for arg in args:
+        if not arg.startswith("-"):
+            status_args.append(arg)
+            break
+    _run_status(status_args)
 
 
 def _explain_single(config_path: str | None, fmt: str) -> None:
@@ -1892,6 +1916,10 @@ def main() -> None:
 
     if args and args[0] == "status":
         _run_status(args[1:])
+        sys.exit(0)
+
+    if args and args[0] == "top":
+        _run_top(args[1:])
         sys.exit(0)
 
     if args and args[0] == "explain":

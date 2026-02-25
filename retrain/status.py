@@ -39,13 +39,25 @@ def is_pid_alive(pid: int) -> bool:
 def campaign_status(
     runs: list[RunSummary],
     num_runs: int,
+    runner_alive: bool = False,
 ) -> str:
     """Derive a campaign-level status from its runs.
 
     Returns one of: ``"running"``, ``"done"``, ``"dead"``, ``"partial"``.
+
+    When *runner_alive* is True, non-completed runs that have metrics are
+    considered active even if their metrics file is stale (slow steps).
     """
     completed = sum(1 for r in runs if r.completed)
     active = sum(1 for r in runs if not r.completed and not r.stale and r.step >= 0)
+
+    # If the campaign runner is alive, stale-but-not-completed runs with
+    # metrics are still active (slow steps on large models).
+    if runner_alive:
+        active += sum(
+            1 for r in runs
+            if not r.completed and r.stale and r.step >= 0
+        )
 
     if completed == num_runs and num_runs > 0:
         return "done"
@@ -97,6 +109,9 @@ class CampaignSummary:
     status: str = ""
     campaign_toml: str = ""
     timestamp: str = ""
+    runner_pid: int = 0
+    runner_alive: bool = False
+    last_activity: float = 0.0  # epoch timestamp of most recent metrics write
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -131,20 +146,26 @@ def _truncate_condition(label: str, max_width: int = _COND_MAX_WIDTH) -> str:
     return "..." + label[-(max_width - 3):]
 
 
-def _read_pid_from_stdout(run_dir: Path) -> int:
-    """Try to extract a child PID from the run's stdout.log.
+def _read_run_pid(run_dir: Path) -> int:
+    """Read the run's PID, preferring ``run.pid`` file over log parsing.
 
-    The campaign runner prints lines like:
-        [1/6] cond_s42 started (pid=12345)
-    but that goes to the campaign runner's own stdout, not the run's logs.
-    Instead, we look for the run's own PID from its stderr.log header if present.
+    Falls back to scanning stderr/stdout logs for ``(pid=NNNN)`` patterns
+    so that old campaigns (before ``run.pid`` was written) still work.
     """
+    # Preferred: dedicated PID file written by campaign runner after Popen
+    pid_path = run_dir / "run.pid"
+    if pid_path.is_file():
+        try:
+            return int(pid_path.read_text().strip())
+        except (ValueError, OSError):
+            pass
+
+    # Fallback: parse logs for old campaigns
     for log_name in ("stderr.log", "stdout.log"):
         log_path = run_dir / log_name
         if not log_path.is_file():
             continue
         try:
-            # Only read the first few KB to find a PID line
             with open(log_path) as f:
                 head = f.read(4096)
             m = re.search(r"\(pid=(\d+)\)", head)
@@ -213,7 +234,7 @@ def scan_run(run_dir: Path) -> RunSummary | None:
             pass
 
     # Try to read PID and check liveness
-    pid = _read_pid_from_stdout(run_dir)
+    pid = _read_run_pid(run_dir)
     if pid:
         summary.pid = pid
         summary.alive = is_pid_alive(pid)
@@ -235,6 +256,9 @@ def scan_campaign(campaign_dir: Path) -> CampaignSummary | None:
     except (json.JSONDecodeError, OSError):
         return None
 
+    runner_pid = int(manifest.get("runner_pid", 0))
+    runner_alive = is_pid_alive(runner_pid) if runner_pid else False
+
     summary = CampaignSummary(
         path=str(campaign_dir),
         conditions=manifest.get("conditions", []),
@@ -243,6 +267,8 @@ def scan_campaign(campaign_dir: Path) -> CampaignSummary | None:
         num_runs=manifest.get("num_runs", 0),
         campaign_toml=manifest.get("campaign_toml", ""),
         timestamp=manifest.get("timestamp", ""),
+        runner_pid=runner_pid,
+        runner_alive=runner_alive,
     )
 
     # Build matrix and scan individual runs
@@ -253,11 +279,21 @@ def scan_campaign(campaign_dir: Path) -> CampaignSummary | None:
     runs_meta = manifest.get("runs", [])
     completed = 0
     failed = 0
+    last_activity = 0.0
     for run_meta in runs_meta:
         log_dir = run_meta.get("log_dir", "")
         if not log_dir:
             continue
         run_path = Path(log_dir)
+        # Track latest metrics mtime for last_activity
+        metrics_path = run_path / "metrics.jsonl"
+        if metrics_path.is_file():
+            try:
+                mt = metrics_path.stat().st_mtime
+                if mt > last_activity:
+                    last_activity = mt
+            except OSError:
+                pass
         run_summary = scan_run(run_path)
         if run_summary is not None:
             # Propagate campaign-level max_steps to the run when not completed
@@ -274,7 +310,8 @@ def scan_campaign(campaign_dir: Path) -> CampaignSummary | None:
     summary.completed = completed
     summary.failed = failed
     summary.matrix = matrix
-    summary.status = campaign_status(summary.runs, summary.num_runs)
+    summary.last_activity = last_activity
+    summary.status = campaign_status(summary.runs, summary.num_runs, runner_alive)
     return summary
 
 
@@ -325,19 +362,75 @@ def scan_all(root: Path) -> tuple[list[RunSummary], list[CampaignSummary]]:
     return runs, campaigns
 
 
-def _run_cell(run: RunSummary | None, max_steps: int) -> str:
-    """Format a single matrix cell showing step progress."""
+def _run_cell(
+    run: RunSummary | None, max_steps: int, runner_alive: bool = False,
+) -> str:
+    """Format a single matrix cell showing step progress.
+
+    When *runner_alive* is True (or the run's own PID is alive), a stale
+    run is shown as ``step/max`` instead of ``step ✗`` because the process
+    is still running — the step just takes longer than the staleness window.
+    """
     if run is None:
         return "\u2014"  # em-dash
     effective_max = run.max_steps if run.max_steps > 0 else max_steps
     step = run.step + 1 if run.step >= 0 else 0  # step is 0-indexed in metrics
     if run.completed:
         return f"{step} \u2713"
-    if run.stale:
+    if run.stale and not run.alive and not runner_alive:
         return f"{step} \u2717"
     if effective_max > 0:
         return f"{step}/{effective_max}"
     return str(step)
+
+
+def format_summary_banner(campaigns: list[CampaignSummary]) -> str:
+    """One-line aggregate summary of all campaigns and runs.
+
+    Counts pending runs from matrix (None entries).  Run classification:
+    - done:    run.completed
+    - active:  not completed and not stale; OR stale but alive (own or runner)
+    - dead:    stale, not alive, not completed
+    - pending: no metrics yet (None in matrix)
+    """
+    # Campaign-level counts
+    camp_counts: dict[str, int] = {}
+    for c in campaigns:
+        camp_counts[c.status] = camp_counts.get(c.status, 0) + 1
+
+    # Run-level counts across all campaigns
+    r_done = 0
+    r_active = 0
+    r_dead = 0
+    r_pending = 0
+    for c in campaigns:
+        for cond, seeds in c.matrix.items():
+            for seed, run in seeds.items():
+                if run is None:
+                    r_pending += 1
+                elif run.completed:
+                    r_done += 1
+                elif run.stale and not run.alive and not c.runner_alive:
+                    r_dead += 1
+                else:
+                    r_active += 1
+
+    # Build campaign part — show non-zero counts in a fixed order
+    camp_parts: list[str] = []
+    for label in ("running", "partial", "done", "dead"):
+        n = camp_counts.get(label, 0)
+        if n:
+            camp_parts.append(f"{n} {label}")
+
+    # Build run part — always show in fixed order, skip zeros
+    run_parts: list[str] = []
+    for n, label in [(r_active, "active"), (r_dead, "dead"), (r_done, "done"), (r_pending, "pending")]:
+        if n:
+            run_parts.append(f"{n} {label}")
+
+    camp_str = ", ".join(camp_parts) if camp_parts else "0 campaigns"
+    run_str = ", ".join(run_parts) if run_parts else "0 runs"
+    return f"Campaigns: {camp_str}  |  Runs: {run_str}"
 
 
 def format_run(run: RunSummary) -> str:
@@ -387,7 +480,7 @@ def format_campaign(camp: CampaignSummary) -> str:
             cells = []
             for s in camp.seeds:
                 run = camp.matrix.get(cond, {}).get(s)
-                cell = _run_cell(run, camp.max_steps)
+                cell = _run_cell(run, camp.max_steps, camp.runner_alive)
                 cells.append(f"{cell:>{cell_width}s}")
             display_cond = _truncate_condition(cond)
             lines.append(f"  {display_cond:>{cond_width}s}  " + "  ".join(cells))
