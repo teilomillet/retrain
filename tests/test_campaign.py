@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from retrain.campaign import (
+    CampaignCondition,
     DEFAULT_CONDITIONS,
     _config_to_toml,
     _parse_campaign_conditions,
@@ -19,12 +20,10 @@ from retrain.config import TrainConfig, load_config
 
 class TestParseCampaignConditions:
     def test_defaults_when_conditions_missing(self):
-        assert _parse_campaign_conditions(None, "campaign.toml") == list(
-            DEFAULT_CONDITIONS
-        )
-        assert _parse_campaign_conditions([], "campaign.toml") == list(
-            DEFAULT_CONDITIONS
-        )
+        defaults = _parse_campaign_conditions(None, "campaign.toml")
+        assert [c.as_legacy_tuple() for c in defaults] == list(DEFAULT_CONDITIONS)
+        defaults_empty = _parse_campaign_conditions([], "campaign.toml")
+        assert [c.as_legacy_tuple() for c in defaults_empty] == list(DEFAULT_CONDITIONS)
 
     def test_valid_conditions_with_new_modes(self):
         conditions = _parse_campaign_conditions(
@@ -40,7 +39,7 @@ class TestParseCampaignConditions:
             ],
             "campaign.toml",
         )
-        assert conditions == [
+        assert [c.as_legacy_tuple() for c in conditions] == [
             ("maxrl", "gtpo_sepa_amp"),
             ("maxrl", "gtpo_sepa_amp_c"),
         ]
@@ -55,7 +54,9 @@ class TestParseCampaignConditions:
             ],
             "campaign.toml",
         )
-        assert conditions == [("maxrl", "my_transforms.make_transform_spec")]
+        assert [c.as_legacy_tuple() for c in conditions] == [
+            ("maxrl", "my_transforms.make_transform_spec"),
+        ]
 
     def test_dotted_advantage_mode_is_accepted(self):
         conditions = _parse_campaign_conditions(
@@ -67,7 +68,24 @@ class TestParseCampaignConditions:
             ],
             "campaign.toml",
         )
-        assert conditions == [("my_advantages.hipa_like_advantages", "gtpo")]
+        assert [c.as_legacy_tuple() for c in conditions] == [
+            ("my_advantages.hipa_like_advantages", "gtpo"),
+        ]
+
+    def test_condition_with_overrides(self):
+        conditions = _parse_campaign_conditions(
+            [
+                {
+                    "advantage_mode": "maxrl",
+                    "transform_mode": "gtpo_sepa",
+                    "uncertainty_kind": "predictive_variance",
+                },
+            ],
+            "campaign.toml",
+        )
+        assert len(conditions) == 1
+        assert conditions[0].overrides == {"uncertainty_kind": "predictive_variance"}
+        assert conditions[0].label == "maxrl+gtpo_sepa/uncertainty_kind=predictive_variance"
 
     def test_non_list_conditions_raises(self):
         with pytest.raises(ValueError, match="campaign.conditions must be a list"):

@@ -1415,7 +1415,7 @@ def _explain_campaign(config_path: str, fmt: str) -> None:
     max_steps = campaign.get("max_steps", 500)
     raw_conditions = campaign.get("conditions", None)
     conditions = _parse_campaign_conditions(raw_conditions, config_path)
-    condition_labels = [f"{a}+{t}" for a, t in conditions]
+    condition_labels = [c.label for c in conditions]
     total_runs = len(conditions) * len(seeds)
     backend_sec = data.get("backend", {})
     backend_name = "local"

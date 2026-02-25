@@ -37,7 +37,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from dataclasses import MISSING, fields
+from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -103,18 +103,46 @@ def _config_to_toml(cfg: TrainConfig) -> str:
     return "\n".join(lines) + "\n" if lines else "\n"
 
 
+_CONDITION_EXTRA_KEYS = frozenset({"advantage_mode", "transform_mode"})
+
+
+@dataclass(frozen=True)
+class CampaignCondition:
+    """A single campaign condition: required modes + optional overrides."""
+
+    advantage_mode: str
+    transform_mode: str
+    overrides: dict[str, object] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        base = f"{self.advantage_mode}+{self.transform_mode}"
+        if not self.overrides:
+            return base
+        suffix = ",".join(
+            f"{k}={v}" for k, v in sorted(self.overrides.items())
+        )
+        return f"{base}/{suffix}"
+
+    def as_legacy_tuple(self) -> tuple[str, str]:
+        return (self.advantage_mode, self.transform_mode)
+
+
 def _parse_campaign_conditions(
     raw_conditions: object, campaign_path: str
-) -> list[tuple[str, str]]:
+) -> list[CampaignCondition]:
     """Parse campaign conditions and fail fast on malformed entries."""
     if not raw_conditions:
-        return list(DEFAULT_CONDITIONS)
+        return [
+            CampaignCondition(advantage_mode=a, transform_mode=t)
+            for a, t in DEFAULT_CONDITIONS
+        ]
     if not isinstance(raw_conditions, list):
         raise ValueError(
             f"campaign.conditions must be a list in {campaign_path}"
         )
 
-    conditions: list[tuple[str, str]] = []
+    conditions: list[CampaignCondition] = []
     for idx, condition in enumerate(raw_conditions):
         if not isinstance(condition, dict):
             raise ValueError(
@@ -132,14 +160,29 @@ def _parse_campaign_conditions(
                 f"campaign.conditions[{idx}].transform_mode must be a non-empty string in {campaign_path}"
             )
 
+        overrides = {
+            k: v for k, v in condition.items()
+            if k not in _CONDITION_EXTRA_KEYS
+        }
+
         try:
-            TrainConfig(advantage_mode=adv_mode, transform_mode=tx_mode)
+            TrainConfig(
+                advantage_mode=adv_mode,
+                transform_mode=tx_mode,
+                **overrides,
+            )
         except ValueError as exc:
             raise ValueError(
                 f"Invalid campaign condition at index {idx} in {campaign_path}: {exc}"
             ) from exc
 
-        conditions.append((adv_mode, tx_mode))
+        conditions.append(
+            CampaignCondition(
+                advantage_mode=adv_mode,
+                transform_mode=tx_mode,
+                overrides=overrides,
+            )
+        )
 
     return conditions
 
@@ -275,6 +318,8 @@ def _write_run_configs(
         cfg.seed = run["seed"]
         cfg.max_steps = max_steps
         cfg.log_dir = run["log_dir"]
+        for key, value in run.get("overrides", {}).items():
+            setattr(cfg, key, value)
 
         condition = run["condition"]
         if cfg.wandb_project:
@@ -383,6 +428,8 @@ def _run_sequential(
             cfg.seed = run["seed"]
             cfg.max_steps = max_steps
             cfg.log_dir = run["log_dir"]
+            for key, value in run.get("overrides", {}).items():
+                setattr(cfg, key, value)
 
             # Set wandb fields if configured
             condition = run["condition"]
@@ -446,15 +493,16 @@ def run_campaign(campaign_path: str) -> None:
 
     # Build run list
     runs: list[dict] = []
-    for adv_mode, tx_mode in conditions:
-        condition = f"{adv_mode}+{tx_mode}"
+    for cond in conditions:
+        condition = cond.label
         for seed in seeds:
             run_name = f"{condition}_s{seed}"
             log_dir = str(campaign_dir / "runs" / run_name)
             runs.append({
                 "condition": condition,
-                "advantage_mode": adv_mode,
-                "transform_mode": tx_mode,
+                "advantage_mode": cond.advantage_mode,
+                "transform_mode": cond.transform_mode,
+                "overrides": cond.overrides,
                 "seed": seed,
                 "run_name": run_name,
                 "log_dir": log_dir,
@@ -464,7 +512,7 @@ def run_campaign(campaign_path: str) -> None:
     manifest = {
         "timestamp": timestamp,
         "campaign_toml": campaign_path,
-        "conditions": [f"{a}+{t}" for a, t in conditions],
+        "conditions": [c.label for c in conditions],
         "seeds": seeds,
         "max_steps": max_steps,
         "parallel": parallel,
@@ -477,7 +525,7 @@ def run_campaign(campaign_path: str) -> None:
     # Summary
     mode_str = "parallel" if parallel else "sequential"
     print(f"Campaign: {len(conditions)} conditions x {len(seeds)} seeds = {len(runs)} runs ({mode_str})")
-    print(f"  conditions: {', '.join(f'{a}+{t}' for a, t in conditions)}")
+    print(f"  conditions: {', '.join(c.label for c in conditions)}")
     print(f"  seeds:      {seeds}")
     print(f"  max_steps:  {max_steps}")
     print(f"  output:     {campaign_dir}")
