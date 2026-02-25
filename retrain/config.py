@@ -12,8 +12,13 @@ import typing
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from retrain.advantages import (
+    get_builtin_transform_modes,
+    is_valid_transform_mode_name,
+)
+
 _VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
-_VALID_TRANSFORM_MODES = {"none", "gtpo", "gtpo_hicra", "gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"}
+_VALID_TRANSFORM_MODES = set(get_builtin_transform_modes())
 
 
 @dataclass
@@ -169,10 +174,12 @@ class TrainConfig:
                 f"Must be one of: {sorted(_VALID_ADVANTAGE_MODES)}"
             )
         if self.transform_mode not in _VALID_TRANSFORM_MODES:
-            raise ValueError(
-                f"Invalid transform_mode '{self.transform_mode}'. "
-                f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)}"
-            )
+            if not is_valid_transform_mode_name(self.transform_mode):
+                raise ValueError(
+                    f"Invalid transform_mode '{self.transform_mode}'. "
+                    f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)} "
+                    "or a dotted plugin path (e.g. 'my_module.make_transform_spec')."
+                )
 
 
 # TOML section -> config field mapping

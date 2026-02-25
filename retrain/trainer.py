@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 from retrain.advantages import (
     EntropyStats,
     compute_composable_advantages,
+    get_transform_spec,
 )
 from retrain.backpressure import (
     BackPressureDecision,
@@ -227,7 +228,9 @@ def train(config: TrainConfig) -> str | None:
     sepa_lambda_val = 0.0
     current_batch_size = config.batch_size
     current_group_size = config.group_size
-    needs_planning = config.transform_mode in ("gtpo_hicra", "gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c")
+    transform_spec = get_transform_spec(config.transform_mode)
+    needs_planning = transform_spec.needs_planning
+    uses_sepa_controller = transform_spec.uses_sepa_controller
     start_step = 0
 
     # -----------------------------------------------------------------------
@@ -327,7 +330,7 @@ def train(config: TrainConfig) -> str | None:
         all_datum_advantages: list[list[float]] = []
 
         # Resolve SEPA lambda once per step (before group loop)
-        if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"):
+        if uses_sepa_controller:
             sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
         for f_idx, group in enumerate(all_group_sequences):
@@ -429,7 +432,7 @@ def train(config: TrainConfig) -> str | None:
             batch_correct / len(batch_rewards) if batch_rewards else 0.0
         )
 
-        if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c"):
+        if uses_sepa_controller:
             sepa_controller.observe_correct_rate(correct_rate)
 
             if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
@@ -519,7 +522,7 @@ def train(config: TrainConfig) -> str | None:
         condition_label = f"{config.advantage_mode}+{config.transform_mode}"
         sepa_gate = (
             sepa_controller.gate_open()
-            if config.transform_mode in ("gtpo_sepa", "gtpo_sepa_amp", "gtpo_sepa_amp_c")
+            if uses_sepa_controller
             else False
         )
 

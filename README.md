@@ -35,6 +35,34 @@ retrain my_run.toml --seed 42 --wandb-project my-project
 
 All configuration lives in a TOML file. See [`retrain.toml`](retrain.toml) for the default config, or run `retrain help` for the full reference.
 
+### Custom Transform (TOML-first)
+
+You can select a custom advantage transform directly from TOML using a dotted Python path:
+
+```toml
+[algorithm]
+advantage_mode = "maxrl"
+transform_mode = "my_transforms.make_transform_spec"
+```
+
+Then add an importable Python module (for example `my_transforms.py`) that returns a `TransformSpec`:
+
+```python
+from retrain.advantages import TransformSpec
+
+def _entropy_transform(entropies, planning_mask, sepa_lambda):
+    return [e if m else e + sepa_lambda for e, m in zip(entropies, planning_mask)]
+
+def make_transform_spec():
+    return TransformSpec(
+        name="entropy_shift",
+        use_gtpo=True,
+        needs_planning=True,
+        uses_sepa_controller=True,
+        entropy_transform=_entropy_transform,
+    )
+```
+
 ## Documentation
 
 Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
@@ -47,4 +75,3 @@ Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [LoRA-Squeeze](https://retrain.readthedocs.io/squeeze/)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
-

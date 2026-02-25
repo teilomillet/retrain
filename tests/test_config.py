@@ -242,7 +242,14 @@ class TestValidation:
 
     def test_valid_modes_accepted(self):
         for am in ("grpo", "maxrl"):
-            for tm in ("none", "gtpo", "gtpo_hicra", "gtpo_sepa"):
+            for tm in (
+                "none",
+                "gtpo",
+                "gtpo_hicra",
+                "gtpo_sepa",
+                "gtpo_sepa_amp",
+                "gtpo_sepa_amp_c",
+            ):
                 c = TrainConfig(advantage_mode=am, transform_mode=tm)
                 assert c.advantage_mode == am
                 assert c.transform_mode == tm
@@ -252,3 +259,11 @@ class TestValidation:
         toml.write_text('[algorithm]\nadvantage_mode = "wrong"\n')
         with pytest.raises(ValueError, match="Invalid advantage_mode"):
             load_config(str(toml))
+
+    def test_dotted_transform_mode_accepted(self):
+        c = TrainConfig(transform_mode="custom_transforms.make_transform_spec")
+        assert c.transform_mode == "custom_transforms.make_transform_spec"
+
+    def test_malformed_dotted_transform_mode_rejected(self):
+        with pytest.raises(ValueError, match="Invalid transform_mode"):
+            TrainConfig(transform_mode="custom_transforms.")

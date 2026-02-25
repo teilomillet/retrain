@@ -50,6 +50,47 @@ DEFAULT_CONDITIONS: list[tuple[str, str]] = [
 DEFAULT_SEEDS: list[int] = [42, 101, 202, 303, 404, 505, 606, 707]
 
 
+def _parse_campaign_conditions(
+    raw_conditions: object, campaign_path: str
+) -> list[tuple[str, str]]:
+    """Parse campaign conditions and fail fast on malformed entries."""
+    if not raw_conditions:
+        return list(DEFAULT_CONDITIONS)
+    if not isinstance(raw_conditions, list):
+        raise ValueError(
+            f"campaign.conditions must be a list in {campaign_path}"
+        )
+
+    conditions: list[tuple[str, str]] = []
+    for idx, condition in enumerate(raw_conditions):
+        if not isinstance(condition, dict):
+            raise ValueError(
+                f"campaign.conditions[{idx}] must be a table in {campaign_path}"
+            )
+
+        adv_mode = condition.get("advantage_mode")
+        tx_mode = condition.get("transform_mode")
+        if not isinstance(adv_mode, str) or not adv_mode:
+            raise ValueError(
+                f"campaign.conditions[{idx}].advantage_mode must be a non-empty string in {campaign_path}"
+            )
+        if not isinstance(tx_mode, str) or not tx_mode:
+            raise ValueError(
+                f"campaign.conditions[{idx}].transform_mode must be a non-empty string in {campaign_path}"
+            )
+
+        try:
+            TrainConfig(advantage_mode=adv_mode, transform_mode=tx_mode)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid campaign condition at index {idx} in {campaign_path}: {exc}"
+            ) from exc
+
+        conditions.append((adv_mode, tx_mode))
+
+    return conditions
+
+
 def _auto_squeeze(
     adapter_path: str,
     squeeze_cfg: dict,
@@ -179,13 +220,7 @@ def run_campaign(campaign_path: str) -> None:
 
     # Conditions
     raw_conditions = campaign.get("conditions", None)
-    if raw_conditions:
-        conditions = [
-            (c["advantage_mode"], c["transform_mode"])
-            for c in raw_conditions
-        ]
-    else:
-        conditions = list(DEFAULT_CONDITIONS)
+    conditions = _parse_campaign_conditions(raw_conditions, campaign_path)
 
     # Load the same TOML as a base training config (non-campaign sections)
     base_config = load_config(campaign_path)

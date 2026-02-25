@@ -5,9 +5,11 @@ Ports the core functions from src/advantages.mojo into pure Python.
 
 from __future__ import annotations
 
+import importlib
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 # Cap entropy values to prevent inf from poisoning downstream math.
 # Real per-token entropy (-logprob) rarely exceeds ~15; 50 is a safe upper bound.
@@ -35,6 +37,29 @@ class AdvantageResult:
     token_advs: list[list[float]] = field(default_factory=list)
     has_stats: bool = False
     stats: EntropyStats = field(default_factory=EntropyStats)
+
+
+# ---------------------------------------------------------------------------
+# Transform specs (TOML-selectable, plugin-friendly)
+# ---------------------------------------------------------------------------
+
+EntropyTransformFn = Callable[[list[float], list[int], float], list[float]]
+
+
+@dataclass(frozen=True)
+class TransformSpec:
+    """Behavioral contract for transform modes.
+
+    `entropy_transform` can be overridden by custom plugins loaded from
+    dotted-path names in TOML (e.g. `my_module.make_transform_spec`).
+    """
+
+    name: str
+    use_gtpo: bool = True
+    needs_planning: bool = False
+    uses_sepa_controller: bool = False
+    apply_hicra: bool = False
+    entropy_transform: EntropyTransformFn | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +238,105 @@ def apply_sepa_amplification_clamped(
 
 
 # ---------------------------------------------------------------------------
+# 4b. Transform mode registry (built-ins + dotted-path plugins)
+# ---------------------------------------------------------------------------
+
+_BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
+    "none": TransformSpec(name="none", use_gtpo=False),
+    "gtpo": TransformSpec(name="gtpo"),
+    "gtpo_hicra": TransformSpec(
+        name="gtpo_hicra", needs_planning=True, apply_hicra=True
+    ),
+    "gtpo_sepa": TransformSpec(
+        name="gtpo_sepa",
+        needs_planning=True,
+        uses_sepa_controller=True,
+        entropy_transform=apply_sepa_pooling,
+    ),
+    "gtpo_sepa_amp": TransformSpec(
+        name="gtpo_sepa_amp",
+        needs_planning=True,
+        uses_sepa_controller=True,
+        entropy_transform=apply_sepa_amplification,
+    ),
+    "gtpo_sepa_amp_c": TransformSpec(
+        name="gtpo_sepa_amp_c",
+        needs_planning=True,
+        uses_sepa_controller=True,
+        entropy_transform=apply_sepa_amplification_clamped,
+    ),
+}
+
+_TRANSFORM_SPEC_CACHE: dict[str, TransformSpec] = {}
+
+
+def get_builtin_transform_modes() -> list[str]:
+    """Return sorted built-in transform mode names."""
+    return sorted(_BUILTIN_TRANSFORM_SPECS)
+
+
+def is_valid_transform_mode_name(transform_mode: str) -> bool:
+    """True for built-ins or dotted plugin paths (`module.attr`)."""
+    if transform_mode in _BUILTIN_TRANSFORM_SPECS:
+        return True
+    module_path, _, attr_name = transform_mode.rpartition(".")
+    return bool(module_path and attr_name)
+
+
+def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
+    module_path, _, attr_name = dotted_path.rpartition(".")
+    if not module_path or not attr_name:
+        raise ValueError(
+            f"Invalid transform plugin path '{dotted_path}'. "
+            "Expected format: 'module.attr'"
+        )
+
+    try:
+        mod = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            f"Could not import module '{module_path}' "
+            f"for transform plugin '{dotted_path}': {exc}"
+        ) from exc
+
+    obj = getattr(mod, attr_name, None)
+    if obj is None:
+        raise AttributeError(
+            f"Module '{module_path}' has no attribute '{attr_name}' "
+            f"for transform plugin '{dotted_path}'."
+        )
+
+    spec = obj() if callable(obj) else obj
+    if not isinstance(spec, TransformSpec):
+        raise TypeError(
+            f"Transform plugin '{dotted_path}' must resolve to TransformSpec, "
+            f"got {type(spec).__name__}."
+        )
+    return spec
+
+
+def get_transform_spec(transform_mode: str) -> TransformSpec:
+    """Resolve a transform mode to a behavior spec."""
+    cached = _TRANSFORM_SPEC_CACHE.get(transform_mode)
+    if cached is not None:
+        return cached
+
+    spec = _BUILTIN_TRANSFORM_SPECS.get(transform_mode)
+    if spec is None:
+        if "." in transform_mode:
+            spec = _load_custom_transform_spec(transform_mode)
+        else:
+            raise ValueError(
+                f"Unknown transform_mode '{transform_mode}'. "
+                f"Built-in options: {get_builtin_transform_modes()}. "
+                "For custom transforms use dotted path format "
+                "(e.g. 'my_module.make_transform_spec')."
+            )
+    _TRANSFORM_SPEC_CACHE[transform_mode] = spec
+    return spec
+
+
+# ---------------------------------------------------------------------------
 # 5. Entropy statistics
 # ---------------------------------------------------------------------------
 
@@ -356,6 +480,8 @@ def compute_composable_advantages(
     sepa_lambda: float = 0.0,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
+    transform_spec = get_transform_spec(transform_mode)
+
     # Step 1: Episode-level advantages
     if advantage_mode == "maxrl":
         advantages_G = compute_maxrl_advantages(rewards_G)
@@ -363,7 +489,7 @@ def compute_composable_advantages(
         advantages_G = compute_grpo_advantages(rewards_G)
 
     # Step 2: Token-level expansion
-    if transform_mode == "none":
+    if not transform_spec.use_gtpo:
         all_token_advs = [
             [advantages_G[i]] * len(logprobs_G[i])
             for i in range(len(logprobs_G))
@@ -390,19 +516,17 @@ def compute_composable_advantages(
             else:
                 all_exec_entropies.append(e)
 
-        # SEPA pooling / amplification
-        if transform_mode == "gtpo_sepa" and sepa_lambda > 0.0:
-            entropies = apply_sepa_pooling(entropies, planning_mask, sepa_lambda)
-        elif transform_mode == "gtpo_sepa_amp" and sepa_lambda > 0.0:
-            entropies = apply_sepa_amplification(entropies, planning_mask, sepa_lambda)
-        elif transform_mode == "gtpo_sepa_amp_c" and sepa_lambda > 0.0:
-            entropies = apply_sepa_amplification_clamped(entropies, planning_mask, sepa_lambda)
+        # Optional entropy transform (SEPA variants or custom plugin)
+        if transform_spec.entropy_transform is not None:
+            entropies = transform_spec.entropy_transform(
+                entropies, planning_mask, sepa_lambda
+            )
 
         # GTPO weighting
         token_advs = apply_gtpo_weighting(advantage, entropies, beta=gtpo_beta)
 
         # HICRA amplification
-        if transform_mode == "gtpo_hicra":
+        if transform_spec.apply_hicra:
             token_advs = apply_hicra(token_advs, planning_mask, alpha=hicra_alpha)
 
         all_token_advs.append(token_advs)

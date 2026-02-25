@@ -8,6 +8,8 @@ from retrain.advantages import (
     MAX_ENTROPY,
     apply_gtpo_weighting,
     apply_hicra,
+    apply_sepa_amplification,
+    apply_sepa_amplification_clamped,
     apply_sepa_pooling,
     compute_composable_advantages,
     compute_entropy_stats,
@@ -165,6 +167,36 @@ class TestSEPAPooling:
 
 
 # ---------------------------------------------------------------------------
+# SEPA amplification
+# ---------------------------------------------------------------------------
+
+class TestSEPAAmplification:
+    def test_exec_tokens_amplified_away_from_mean(self):
+        entropies = [0.1, 0.5, 0.9]
+        mask = [1, 0, 0]  # first is planning, rest are execution
+        result = apply_sepa_amplification(entropies, mask, lambda_t=1.0)
+
+        # Planning token unchanged.
+        assert result[0] == pytest.approx(0.1)
+        # Execution mean is 0.7, so values move away from 0.7.
+        assert result[1] == pytest.approx(0.3)  # 2*0.5 - 0.7
+        assert result[2] == pytest.approx(1.1)  # 2*0.9 - 0.7
+
+    def test_clamped_variant_floors_negative_values(self):
+        entropies = [0.05, 0.95]
+        mask = [0, 0]
+        result = apply_sepa_amplification_clamped(entropies, mask, lambda_t=1.0)
+        assert result[0] == pytest.approx(0.0)  # 2*0.05 - 0.5 = -0.4 -> 0
+        assert result[1] == pytest.approx(1.4)  # 2*0.95 - 0.5
+
+    def test_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="Length mismatch"):
+            apply_sepa_amplification([0.1], [0, 1], lambda_t=0.5)
+        with pytest.raises(ValueError, match="Length mismatch"):
+            apply_sepa_amplification_clamped([0.1], [0, 1], lambda_t=0.5)
+
+
+# ---------------------------------------------------------------------------
 # Entropy stats
 # ---------------------------------------------------------------------------
 
@@ -273,7 +305,14 @@ class TestComposablePipeline:
         logprobs = [[-0.5, -0.3, -0.1], [-0.8, -0.6, -0.4], [-0.2, -0.7, -0.9]]
         masks = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 
-        for mode in ("none", "gtpo", "gtpo_hicra", "gtpo_sepa"):
+        for mode in (
+            "none",
+            "gtpo",
+            "gtpo_hicra",
+            "gtpo_sepa",
+            "gtpo_sepa_amp",
+            "gtpo_sepa_amp_c",
+        ):
             result = compute_composable_advantages(
                 rewards, logprobs, masks,
                 advantage_mode="grpo",
