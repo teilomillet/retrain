@@ -187,6 +187,8 @@ _TOPIC_TO_SECTION = {
     "metrics": "METRICS GUIDE",
     "architecture": "ARCHITECTURE",
     "files": "FILES",
+    "plugins": "PLUGINS",
+    "glossary": "GLOSSARY",
 }
 
 _AUTO_BLOCK_NAMES = (
@@ -510,8 +512,8 @@ def _run_man(args: list[str]) -> None:
             sys.exit(1)
         i += 1
 
-    if fmt not in ("text", "json"):
-        print(f"Unsupported format '{fmt}'. Use text|json.", file=sys.stderr)
+    if fmt not in ("text", "json", "troff", "html"):
+        print(f"Unsupported format '{fmt}'. Use text|json|troff|html.", file=sys.stderr)
         sys.exit(1)
 
     cli_name = _resolve_cli_name()
@@ -567,6 +569,15 @@ def _run_man(args: list[str]) -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+
+    if fmt in ("troff", "html"):
+        from retrain.man_export import parse_manual, to_html, to_troff
+
+        source = section_text if section_text is not None else manual_text
+        sections = parse_manual(source)
+        formatter = to_troff if fmt == "troff" else to_html
+        print(formatter(sections).rstrip())
+        return
 
     if fmt == "json":
         if section_text is None:

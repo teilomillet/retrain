@@ -47,6 +47,8 @@ COMMANDS
     retrain campaign.toml
         Runs campaign mode when [campaign] exists in TOML.
         Generates conditions x seeds matrix of training runs.
+        Set parallel = true in [campaign] for concurrent execution.
+        max_workers limits concurrent subprocess count.
 
     retrain squeeze.toml
         Runs squeeze mode when [squeeze] exists in TOML.
@@ -234,13 +236,27 @@ CONFIGURATION
         gtpo_sepa       GTPO + SEPA selective entropy pooling (default).
         gtpo_sepa_amp   GTPO + SEPA with amplification variant.
         gtpo_sepa_amp_c GTPO + SEPA amplification with clamping.
+        entropy_mask    Yue et al. entropy masking. Zeros out advantages
+                        on low-entropy tokens, keeping only the top-rho
+                        fraction by entropy rank. Controlled by
+                        entropy_mask_rho. Uses GTPO weighting.
 
         Or a dotted plugin path (e.g. "my_module.make_spec").
+        See PLUGINS for the full plugin authoring guide.
+
+    entropy_mask_rho = 0.0
+        Float in [0.0, 1.0]. Fraction of tokens to keep by entropy
+        rank when transform_mode = "entropy_mask". Tokens in the
+        top-rho fraction (highest entropy) keep their advantages;
+        the rest are zeroed. 0.0 masks all tokens (no training
+        signal); 1.0 keeps all tokens (no masking). Typical
+        values: 0.1-0.5. Only used with the entropy_mask transform.
 
   [backend]
 
     backend = "local"
         "local" or "tinker". Supports dotted-path plugins.
+        See PLUGINS for custom backend authoring.
         "local" requires torch (pip install retrain[local]).
         "tinker" requires Tinker SDK (pip install retrain[tinker]).
 
@@ -352,7 +368,7 @@ CONFIGURATION
 
     engine = "pytorch"
         "pytorch", "max", "vllm", "sglang", "mlx", "openai".
-        Supports dotted-path plugins.
+        Supports dotted-path plugins. See PLUGINS.
 
     url = ""
         Server URL. Defaults per engine when empty:
@@ -407,7 +423,8 @@ CONFIGURATION
   [planning]
 
     detector = "regex"
-        "regex" or "semantic".
+        "regex" or "semantic". Supports dotted-path plugins.
+        See PLUGINS.
         "semantic" requires sentence-transformers
         (pip install retrain[semantic]).
 
@@ -422,7 +439,7 @@ CONFIGURATION
 
     source = "math"
         "math" loads EleutherAI/hendrycks_math.
-        Supports dotted-path plugins.
+        Supports dotted-path plugins. See PLUGINS.
 
   [environment]
 
@@ -514,6 +531,10 @@ CAMPAIGN MODE
                         Default: [42, 101, 202, 303, 404, 505, 606, 707].
         max_steps       Override for all runs. Default: 500.
         conditions      Array of tables with advantage_mode + transform_mode.
+        parallel        Boolean. When true, runs execute as concurrent
+                        subprocesses instead of sequentially.
+        max_workers     Integer. Maximum concurrent subprocesses when
+                        parallel = true. 0 (default) = all runs at once.
 
     Default conditions (when omitted):
         ("grpo", "none"), ("maxrl", "none"), ("maxrl", "gtpo"),
@@ -549,6 +570,32 @@ CAMPAIGN MODE
 
     wandb integration: each run gets name {condition}_s{seed}, group
     {condition}, and tags {condition},seed{seed}.
+
+  Parallel execution
+
+    By default campaigns run sequentially. Set parallel = true for
+    concurrent execution via subprocesses:
+
+        [campaign]
+        parallel = true
+        max_workers = 4
+
+    Each subprocess runs `python -m retrain.cli <config>`. Per-run
+    stdout/stderr are captured to {run_dir}/stdout.log and stderr.log.
+    Ctrl-C gracefully terminates all active processes. When max_workers
+    is 0 or omitted, all runs launch at once.
+
+  Status matrix
+
+    `retrain status` displays a condition x seed matrix for campaigns:
+
+                       condition      s42     s101     s202     s303
+        ----------------------------------------------------------
+                       grpo+none    62.5%    58.3%    61.0%       —
+                  maxrl+gtpo_sepa    75.2%    72.1%    74.8%    73.5%
+
+    Each cell shows the final correct_rate for that run. An em-dash
+    (—) indicates a run that has not started or has no metrics yet.
 
 SQUEEZE MODE
     A TOML with [squeeze] (and no [campaign]) runs LoRA rank analysis.
@@ -721,6 +768,32 @@ ADVANTAGE PIPELINE
         planning behavior. Lambda ramps 0->1 over training, gated by
         a correct_rate threshold.
 
+  Post-Process Hooks
+
+    After GTPO weighting and optional HICRA/SEPA transforms, a
+    TransformSpec may define a post_process hook for final adjustments.
+    The built-in entropy_mask transform uses this mechanism.
+
+    Signature (PostProcessFn):
+
+        (all_token_advs, all_raw_entropies, params) -> (modified_advs, extra_metrics)
+
+    Arguments:
+        all_token_advs      list[list[float]]   Token advantages per sequence.
+        all_raw_entropies   list[list[float]]   Original entropies (pre-transform).
+        params              dict[str, Any]      From TrainConfig.post_process_params.
+
+    Returns:
+        modified_advs       list[list[float]]   Same shape as input (validated).
+        extra_metrics       dict[str, float]    Auto-logged to JSONL and wandb.
+
+    Shape validation: the hook must return the same number of sequences
+    and tokens per sequence. A ValueError is raised on mismatch.
+
+    The entropy_mask hook returns two extra metrics:
+        entropy_mask_threshold    Entropy cutoff value used
+        entropy_mask_fraction     Fraction of tokens that were zeroed
+
 VALIDATION
     Hard errors (batched, raised at config load):
 
@@ -886,6 +959,96 @@ ARCHITECTURE
     +-- tinker_backend.py        Remote GPU backend (Tinker API)
     +-- data.py                  MATH dataset loader
     +-- logging_utils.py         JSONL logger
+
+PLUGINS
+    retrain supports six plugin types. Each is specified as a dotted
+    Python import path in TOML (e.g. "my_package.my_module.factory").
+
+  1. Transform plugin
+
+    Set transform_mode to a dotted path. The function must return a
+    TransformSpec:
+
+        def make_spec() -> TransformSpec:
+            return TransformSpec(
+                name="my_transform",
+                use_gtpo=True,
+                post_process=my_hook,
+            )
+
+    TransformSpec fields:
+        name                str             Display name for logging.
+        use_gtpo            bool            Apply GTPO entropy weighting.
+        needs_planning      bool            Require planning token detection.
+        uses_sepa_controller bool           Activate SEPA scheduler.
+        apply_hicra         bool            Apply HICRA amplification.
+        entropy_transform   EntropyTransformFn | None   Custom entropy transform.
+        post_process        PostProcessFn | None        Final advantage hook.
+
+  2. Backend plugin
+
+    Set [backend].backend to a dotted path. Must implement the
+    TrainHelper protocol:
+
+        setup(config)           Initialize model and optimizer.
+        generate(prompts)       Sample completions with current adapter.
+        train_step(datums)      Run one training step, return loss.
+        save_checkpoint(name)   Persist adapter weights.
+        load_checkpoint(name)   Restore adapter weights.
+
+  3. Inference engine plugin
+
+    Set [inference].engine to a dotted path. Must subclass
+    InferenceEngine with:
+
+        generate(prompts, config) -> list[Completion]
+        load_adapter(path)        -> None
+
+  4. Reward plugin
+
+    Set reward_type = "custom", then specify:
+        custom_module    = "my_package.rewards"
+        custom_function  = "score"
+
+    Function signature:
+        (response: str, reference: str) -> float
+
+  5. Data source plugin
+
+    Set [data].source to a dotted path. Must expose:
+
+        load() -> list[Example]
+
+    Each Example has prompt (str) and reference (str) fields.
+
+  6. Planning detector plugin
+
+    Set [planning].detector to a dotted path. Must expose:
+
+        detect(tokens: list[str]) -> list[int]
+
+    Returns a list of 0/1 mask values (1 = planning token).
+
+GLOSSARY
+    RLVR    Reinforcement Learning with Verifiable Rewards. Training
+            paradigm where rewards come from programmatic verification.
+    GRPO    Group Relative Policy Optimization. Episode-level advantage
+            A_i = r_i - mean(r).
+    MaxRL   Inverse success-rate reweighting. A_i = (r_i - mean(r)) /
+            (mean(r) + eps).
+    GTPO    Generalized Token-level Policy Optimization. Entropy-weighted
+            credit assignment at the token level.
+    HICRA   Hierarchical Credit Assignment. Planning token amplification
+            via a learned mask.
+    SEPA    Selective Entropy Pooling of Attention. Pools execution-token
+            advantages to reduce entropy variance while preserving
+            planning diversity.
+    LoRA    Low-Rank Adaptation. Parameter-efficient fine-tuning via
+            rank-decomposed weight updates.
+    SVD     Singular Value Decomposition. Used by LoRA-Squeeze for rank
+            analysis.
+    USL     Unified Scaling Law. Theoretical basis for the backpressure
+            adaptive batch sizing controller.
 
 SEE ALSO
     docs/getting-started.md      Installation and first-run guide

@@ -96,6 +96,8 @@ class TestManCommand:
         assert "squeeze" in captured.out
         assert "inference" in captured.out
         assert "validation" in captured.out
+        assert "plugins" in captured.out
+        assert "glossary" in captured.out
 
     def test_man_topic_configuration(self, capsys):
         _run_man(["--topic", "configuration"])
@@ -217,6 +219,37 @@ class TestManCommand:
         captured = capsys.readouterr()
         assert "Manual check failed" in captured.err
         assert "Missing block markers for COMMANDS" in captured.err
+
+    def test_man_troff_format(self, capsys):
+        _run_man(["--format", "troff"])
+        out = capsys.readouterr().out
+        assert ".TH" in out
+        assert ".SH" in out
+
+    def test_man_html_format(self, capsys):
+        _run_man(["--format", "html"])
+        out = capsys.readouterr().out
+        assert "<!DOCTYPE html>" in out
+        assert "<h2" in out
+
+    def test_man_topic_html(self, capsys):
+        _run_man(["--format", "html", "--topic", "quickstart"])
+        out = capsys.readouterr().out
+        assert "<!DOCTYPE html>" in out
+        assert "QUICKSTART" in out
+
+    def test_man_topic_plugins(self, capsys):
+        _run_man(["--topic", "plugins"])
+        out = capsys.readouterr().out
+        assert "PLUGINS" in out
+        assert "TransformSpec" in out
+
+    def test_man_topic_glossary(self, capsys):
+        _run_man(["--topic", "glossary"])
+        out = capsys.readouterr().out
+        assert "GLOSSARY" in out
+        assert "RLVR" in out
+        assert "GRPO" in out
 
     def test_man_sync_and_check_together_exits(self):
         with pytest.raises(SystemExit) as exc_info:
