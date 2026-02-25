@@ -1,6 +1,6 @@
 # retrain
 
-`retrain` is a TOML-first RLVR (Reinforcement Learning with Verifiable Rewards) trainer for LLMs.
+`retrain` is a TOML-first RLVR (Reinforcement Learning with Verifiable Rewards) trainer for LLMs, built to make experiments easier to run, compare, and repeat.
 
 If you are new, start with install -> explore commands -> run a tiny config.
 
@@ -33,7 +33,6 @@ Use these first to understand what exists before you train:
 retrain --help
 retrain man
 retrain man --topic quickstart
-retrain man --topic capacity
 retrain man --list-topics
 retrain backends
 retrain doctor
@@ -108,8 +107,20 @@ retrain init --template campaign
 retrain init --interactive
 ```
 
+## retrain Workflow
+
+The normal retrain loop is:
+
+1. Define TOML config (`retrain.toml` or `campaign.toml`)
+2. Dry-run with `retrain explain ...`
+3. Train with `retrain ...`
+4. Inspect with `retrain status logs`
+
+Use `retrain man --topic capacity` only when you are sizing longer runs.
+
 ## Why retrain
 
+- Experiment-first workflow: config -> explain -> run -> compare
 - Composable advantage pipeline: GRPO/MaxRL + GTPO/HICRA/SEPA
 - Pluggable backends and inference engines
 - Pluggable rewards (match, math, judge, custom)

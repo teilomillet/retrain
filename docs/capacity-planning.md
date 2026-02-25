@@ -2,6 +2,7 @@
 
 This page is about planning **retrain** runs, not generic infra sizing.
 Use it when deciding batch/group/token settings and campaign worker counts.
+Capacity guidance is here to keep experiments easy as they scale.
 
 ## Where capacity shows up in retrain
 

@@ -1,5 +1,7 @@
 # Getting Started
 
+Goal: run your first retrain experiment quickly, then scale it safely.
+
 ## Prerequisites
 
 === "Local backend (default)"

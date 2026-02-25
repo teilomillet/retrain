@@ -20,6 +20,8 @@ DESCRIPTION
     Verifiable Rewards (RLVR). It takes a TOML config file, loads a
     model with a LoRA adapter, samples completions, scores them against
     verifiable rewards, computes advantages, and updates the adapter.
+    It is designed to make experiments easier to run, compare, and
+    repeat.
 
     The workflow is TOML-first: every hyperparameter and switch lives in
     a config section. CLI flags override any TOML value. A single TOML
@@ -29,6 +31,8 @@ DESCRIPTION
     Key design choices:
 
         One command       retrain config.toml runs the full pipeline.
+        Experiment-first  Config -> explain -> run -> compare, with
+                          reproducible logs and condition labels.
         Composable        Mix GRPO/MaxRL advantages with GTPO/HICRA/SEPA
                           transforms. The 5-condition ablation from the
                           SEPA paper is first-class.

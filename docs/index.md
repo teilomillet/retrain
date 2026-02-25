@@ -1,6 +1,6 @@
 # retrain
 
-RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLMs. Train reasoning models on MATH with composable advantage functions and adaptive scheduling.
+RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLMs. retrain is designed to make experiments easier: define a TOML, run training, and compare outcomes with repeatable logs.
 
 !!! info "Hardware"
     **Local backend:** One CUDA GPU with **16+ GB VRAM** (RTX 4090, A100, H100).
@@ -10,6 +10,7 @@ RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLM
 ## Why retrain?
 
 - **One command** -- `retrain retrain.toml` runs the full pipeline: load model, sample completions, score with verifiable rewards, compute advantages, train with LoRA.
+- **Experiment-first** -- built for rapid iteration and reproducible comparisons across configs, seeds, and conditions.
 - **Composable algorithms** -- mix and match GRPO/MaxRL advantages with GTPO/HICRA/SEPA transforms. The [5 conditions](campaigns.md) from the SEPA paper are first-class.
 - **Pluggable everything** -- inference engines, reward functions, and backends are all swappable via TOML config.
 - **Production-ready** -- wandb logging, campaign sweeps, checkpoint resume, adaptive batch sizing.
