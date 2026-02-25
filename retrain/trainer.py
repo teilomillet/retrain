@@ -481,7 +481,7 @@ def train(config: TrainConfig) -> str | None:
                     prompt=prompt_obj,
                     answer=answer,
                     task=task,
-                    info=cast(dict[str, object] | str | None, info),
+                    info=info,
                     num_rollouts=current_group_size,
                     max_tokens=config.max_tokens,
                     temperature=config.temperature,
@@ -662,7 +662,7 @@ def train(config: TrainConfig) -> str | None:
                         prompt=prompt_obj,
                         answer=answer,
                         task=task,
-                        info=cast(dict[str, object] | str | None, info),
+                        info=info,
                         completion_texts=completion_texts_G,
                     )
 

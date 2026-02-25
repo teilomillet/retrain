@@ -53,11 +53,11 @@ class PrimeRLTrainHelper:
     ) -> None:
         """Create PRIME-RL transport sender and inference client."""
         try:
-            from prime_rl.configs.shared import (  # ty: ignore[unresolved-import]
+            from prime_rl.configs.shared import (
                 FileSystemTransportConfig,
                 ZMQTransportConfig,
             )
-            from prime_rl.transport import (  # ty: ignore[unresolved-import]
+            from prime_rl.transport import (
                 TrainingBatch,
                 TrainingSample,
                 setup_training_batch_sender,
