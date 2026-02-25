@@ -294,6 +294,8 @@ def _render_commands_block(cli_name: str) -> list[str]:
         f"    {cli_name} campaign.toml",
         "        Runs campaign mode when [campaign] exists in TOML.",
         "        Generates conditions x seeds matrix of training runs.",
+        "        Set parallel = true in [campaign] for concurrent execution.",
+        "        max_workers limits concurrent subprocess count.",
         "",
         f"    {cli_name} squeeze.toml",
         "        Runs squeeze mode when [squeeze] exists in TOML.",
