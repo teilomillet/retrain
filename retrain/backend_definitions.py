@@ -239,7 +239,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
 
 _PLUGIN_DEFAULT_CAPABILITIES = BackendCapabilities(
     reports_sync_loss=True,
-    preserves_token_advantages=True,
+    preserves_token_advantages=False,
     supports_checkpoint_resume=True,
     resume_runtime_dependent=False,
 )
@@ -450,7 +450,7 @@ def _option_type_name(value_type: type) -> str:
     return getattr(value_type, "__name__", str(value_type))
 
 
-def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, bool]:
+def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, object]:
     return {
         "reports_sync_loss": caps.reports_sync_loss,
         "preserves_token_advantages": caps.preserves_token_advantages,

@@ -14,9 +14,29 @@ from typing import Callable
 
 from retrain.plugin_resolver import get_plugin_runtime, resolve_dotted_attribute
 
-# Cap entropy values to prevent inf from poisoning downstream math.
-# Real per-token entropy (-logprob) rarely exceeds ~15; 50 is a safe upper bound.
-MAX_ENTROPY = 50.0
+# Cap token surprisal values to prevent inf from poisoning downstream math.
+# Real per-token surprisal (-logprob of sampled token) rarely exceeds ~15;
+# 50 is a safe upper bound.
+MAX_SURPRISAL = 50.0
+MAX_ENTROPY = MAX_SURPRISAL  # backward-compat alias
+
+_UNCERTAINTY_KIND_ALIASES = {
+    "surprisal": "surprisal",
+    "token_surprisal": "surprisal",
+    "neg_logprob": "surprisal",
+    "negative_logprob": "surprisal",
+    "nll": "surprisal",
+    "shannon": "shannon_entropy",
+    "entropy": "shannon_entropy",
+    "token_entropy": "shannon_entropy",
+    "shannon_entropy": "shannon_entropy",
+    "varentropy": "varentropy",
+}
+_UNCERTAINTY_KIND_PARAM_KEYS = (
+    "uncertainty_kind",
+    "uncertainty_metric",
+    "token_uncertainty",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +45,13 @@ MAX_ENTROPY = 50.0
 
 @dataclass
 class EntropyStats:
-    """Summary statistics for execution vs planning entropy distributions."""
+    """Summary stats for execution vs planning token-surprisal distributions.
+
+    Note:
+    Field names retain `entropy` for backward compatibility with existing logs
+    and dashboards. Values are sampled-token surprisal (-logprob), not full
+    Shannon entropy.
+    """
     exec_mean: float = 0.0
     exec_var: float = 0.0
     exec_count: float = 0.0
@@ -71,12 +97,13 @@ class TransformContext:
     step: int = 0
     gtpo_beta: float = 0.1
     hicra_alpha: float = 0.2
+    token_distributions_G: list[list[list[float]]] | None = None
 
-    def gtpo(self, advantage: float, entropies: list[float], beta: float | None = None) -> list[float]:
+    def gtpo(self, advantage: float, surprisals: list[float], beta: float | None = None) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_gtpo_weighting(
             advantage,
-            entropies,
+            surprisals,
             beta=self.gtpo_beta if beta is None else beta,
         )
 
@@ -88,18 +115,18 @@ class TransformContext:
             alpha=self.hicra_alpha if alpha is None else alpha,
         )
 
-    def sepa_pool(self, entropies: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
+    def sepa_pool(self, surprisals: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_sepa_pooling(
-            entropies,
+            surprisals,
             planning_mask,
             self.sepa_lambda if lambda_t is None else lambda_t,
         )
 
-    def sepa_amp(self, entropies: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
+    def sepa_amp(self, surprisals: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_sepa_amplification(
-            entropies,
+            surprisals,
             planning_mask,
             self.sepa_lambda if lambda_t is None else lambda_t,
         )
@@ -129,6 +156,7 @@ class AlgorithmContext:
     sepa_lambda: float = 0.0
     gtpo_beta: float = 0.1
     hicra_alpha: float = 0.2
+    token_distributions_G: list[list[list[float]]] | None = None
 
 
 @dataclass
@@ -543,8 +571,9 @@ def _make_builtin_algorithm_spec(
             rewards_G=ctx.rewards_G,
             logprobs_G=ctx.logprobs_G,
             planning_masks_G=ctx.planning_masks_G,
-            advantage_mode=str(ctx.params.get("advantage_mode", advantage_mode)),
-            transform_mode=str(ctx.params.get("transform_mode", transform_mode)),
+            # Built-in algorithm modes are fixed recipes by design.
+            advantage_mode=advantage_mode,
+            transform_mode=transform_mode,
             gtpo_beta=ctx.gtpo_beta,
             hicra_alpha=ctx.hicra_alpha,
             sepa_lambda=ctx.sepa_lambda,
@@ -708,22 +737,22 @@ def get_algorithm_spec(algorithm_mode: str) -> AlgorithmSpec:
 
 
 def apply_gtpo_weighting(
-    advantage: float, entropies: list[float], beta: float = 0.1
+    advantage: float, surprisals: list[float], beta: float = 0.1
 ) -> list[float]:
-    """Entropy-weighted token-level advantages."""
-    n = len(entropies)
+    """Surprisal-weighted token-level advantages."""
+    n = len(surprisals)
     if n == 0:
         return []
     if beta == 0.0:
         return [advantage] * n
 
-    entropies = [min(e, MAX_ENTROPY) for e in entropies]
-    mean_h = sum(entropies) / n
+    surprisals = [min(e, MAX_SURPRISAL) for e in surprisals]
+    mean_h = sum(surprisals) / n
     if mean_h < 1e-7:
         return [advantage] * n
 
     result = []
-    for h in entropies:
+    for h in surprisals:
         h_norm = h / (mean_h + 1e-8)
         weight = max(0.0, 1.0 + beta * (h_norm - 1.0))
         result.append(advantage * weight)
@@ -787,27 +816,27 @@ def apply_entropy_mask(
     ]
 
 
-def entropy_mask_post_process(
+def surprisal_mask_post_process(
     all_token_advs: list[list[float]],
-    all_raw_entropies: list[list[float]],
+    all_raw_surprisals: list[list[float]],
     params: Mapping[str, object],
 ) -> tuple[list[list[float]], dict[str, float]]:
-    """Post-process hook: Yue et al. entropy masking."""
-    raw_rho = params.get("entropy_mask_rho", 0.0)
+    """Post-process hook: Yue et al. surprisal masking."""
+    raw_rho = params.get("surprisal_mask_rho", params.get("entropy_mask_rho", 0.0))
     rho = float(raw_rho) if isinstance(raw_rho, int | float) else 0.0
     if rho <= 0.0:
         return all_token_advs, {}
 
-    flat_entropies = [e for seq in all_raw_entropies for e in seq]
-    threshold = compute_entropy_mask_threshold(flat_entropies, rho)
+    flat_surprisals = [e for seq in all_raw_surprisals for e in seq]
+    threshold = compute_entropy_mask_threshold(flat_surprisals, rho)
 
     total_tokens = 0
     masked_tokens = 0
     for idx in range(len(all_token_advs)):
         all_token_advs[idx] = apply_entropy_mask(
-            all_token_advs[idx], all_raw_entropies[idx], threshold
+            all_token_advs[idx], all_raw_surprisals[idx], threshold
         )
-        for e in all_raw_entropies[idx]:
+        for e in all_raw_surprisals[idx]:
             total_tokens += 1
             if e < threshold:
                 masked_tokens += 1
@@ -819,95 +848,98 @@ def entropy_mask_post_process(
     }
 
 
+entropy_mask_post_process = surprisal_mask_post_process  # backward-compat alias
+
+
 # ---------------------------------------------------------------------------
 # 4. SEPA selective entropy pooling
 # ---------------------------------------------------------------------------
 
 
 def apply_sepa_pooling(
-    entropies: list[float], planning_mask: list[int], lambda_t: float
+    surprisals: list[float], planning_mask: list[int], lambda_t: float
 ) -> list[float]:
-    """Pull execution token entropies toward their mean."""
-    if len(entropies) != len(planning_mask):
+    """Pull execution token surprisals toward their mean."""
+    if len(surprisals) != len(planning_mask):
         raise ValueError(
-            f"Length mismatch: entropies ({len(entropies)}) "
+            f"Length mismatch: surprisals ({len(surprisals)}) "
             f"vs planning_mask ({len(planning_mask)})"
         )
     lam = max(0.0, min(1.0, lambda_t))
     if lam == 0.0:
-        return list(entropies)
+        return list(surprisals)
 
-    entropies = [min(e, MAX_ENTROPY) for e in entropies]
-    exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
+    surprisals = [min(e, MAX_SURPRISAL) for e in surprisals]
+    exec_vals = [e for e, m in zip(surprisals, planning_mask) if m == 0]
     if not exec_vals:
-        return list(entropies)
+        return list(surprisals)
     mean_h_exec = sum(exec_vals) / len(exec_vals)
 
     return [
         e if m else lam * mean_h_exec + (1.0 - lam) * e
-        for e, m in zip(entropies, planning_mask)
+        for e, m in zip(surprisals, planning_mask)
     ]
 
 
 def apply_sepa_amplification(
-    entropies: list[float], planning_mask: list[int], lambda_t: float
+    surprisals: list[float], planning_mask: list[int], lambda_t: float
 ) -> list[float]:
-    """Push execution token entropies away from their mean.
+    """Push execution token surprisals away from their mean.
 
     h'_t = h_t + λ·(h_t - μ_exec) = (1+λ)·h_t - λ·μ_exec
 
-    High-entropy execution tokens get pushed higher (more GTPO gradient
-    weight), low-entropy ones get pushed lower. Planning tokens are
+    High-surprisal execution tokens get pushed higher (more GTPO gradient
+    weight), low-surprisal ones get pushed lower. Planning tokens are
     left untouched.
     """
-    if len(entropies) != len(planning_mask):
+    if len(surprisals) != len(planning_mask):
         raise ValueError(
-            f"Length mismatch: entropies ({len(entropies)}) "
+            f"Length mismatch: surprisals ({len(surprisals)}) "
             f"vs planning_mask ({len(planning_mask)})"
         )
     lam = max(0.0, min(1.0, lambda_t))
     if lam == 0.0:
-        return list(entropies)
+        return list(surprisals)
 
-    entropies = [min(e, MAX_ENTROPY) for e in entropies]
-    exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
+    surprisals = [min(e, MAX_SURPRISAL) for e in surprisals]
+    exec_vals = [e for e, m in zip(surprisals, planning_mask) if m == 0]
     if not exec_vals:
-        return list(entropies)
+        return list(surprisals)
     mean_h_exec = sum(exec_vals) / len(exec_vals)
 
     return [
         e if m else (1.0 + lam) * e - lam * mean_h_exec
-        for e, m in zip(entropies, planning_mask)
+        for e, m in zip(surprisals, planning_mask)
     ]
 
 
 def apply_sepa_amplification_clamped(
-    entropies: list[float], planning_mask: list[int], lambda_t: float
+    surprisals: list[float], planning_mask: list[int], lambda_t: float
 ) -> list[float]:
-    """Push execution token entropies away from their mean, clamped to >= 0.
+    """Push execution token surprisals away from their mean, clamped to >= 0.
 
     Same as apply_sepa_amplification but floors results at zero so no token
-    gets a negative entropy value.  Keeps amplification purely soft —
-    low-entropy tokens shrink toward zero but never flip sign.
+    gets a negative surprisal value.  Keeps amplification purely soft —
+    low-surprisal tokens shrink toward zero but never flip sign.
     """
-    if len(entropies) != len(planning_mask):
+    if len(surprisals) != len(planning_mask):
         raise ValueError(
-            f"Length mismatch: entropies ({len(entropies)}) "
+            f"Length mismatch: surprisals ({len(surprisals)}) "
             f"vs planning_mask ({len(planning_mask)})"
         )
     lam = max(0.0, min(1.0, lambda_t))
     if lam == 0.0:
-        return list(entropies)
+        return list(surprisals)
 
-    entropies = [min(e, MAX_ENTROPY) for e in entropies]
-    exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
+    surprisals = [min(e, MAX_SURPRISAL) for e in surprisals]
+    exec_vals = [e for e, m in zip(surprisals, planning_mask) if m == 0]
     if not exec_vals:
-        return list(entropies)
+        return list(surprisals)
     mean_h_exec = sum(exec_vals) / len(exec_vals)
 
     return [
         e if m else max(0.0, (1.0 + lam) * e - lam * mean_h_exec)
-        for e, m in zip(entropies, planning_mask)
+        for e, m in zip(surprisals, planning_mask)
     ]
 
 
@@ -918,7 +950,7 @@ def apply_sepa_amplification_clamped(
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
     "none": TransformSpec(name="none", use_gtpo=False),
     "gtpo": TransformSpec(name="gtpo"),
-    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=entropy_mask_post_process),
+    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=surprisal_mask_post_process),
     "gtpo_hicra": TransformSpec(
         name="gtpo_hicra", needs_planning=True, apply_hicra=True
     ),
@@ -1042,37 +1074,70 @@ def get_transform_spec(transform_mode: str) -> TransformSpec:
     return spec
 
 
+def _resolve_uncertainty_kind(params: Mapping[str, object]) -> str:
+    """Resolve uncertainty metric for GTPO-family transforms.
+
+    Default is sampled-token surprisal (`-logprob`).
+    """
+    raw_value: object = "surprisal"
+    for key in _UNCERTAINTY_KIND_PARAM_KEYS:
+        if key in params:
+            raw_value = params[key]
+            break
+    return canonicalize_uncertainty_kind(raw_value)
+
+
+def canonicalize_uncertainty_kind(raw_value: object) -> str:
+    """Normalize a user-facing uncertainty-kind setting."""
+    if not isinstance(raw_value, str):
+        raise ValueError(
+            f"{_UNCERTAINTY_KIND_PARAM_KEYS[0]} must be a string; "
+            f"got {type(raw_value).__name__}."
+        )
+    canonical = _UNCERTAINTY_KIND_ALIASES.get(raw_value.strip().lower())
+    if canonical is None:
+        allowed = sorted(_UNCERTAINTY_KIND_ALIASES)
+        raise ValueError(
+            f"Unknown uncertainty kind '{raw_value}'. "
+            f"Supported values: {allowed}."
+        )
+    return canonical
+
+
 # ---------------------------------------------------------------------------
 # 5. Entropy statistics
 # ---------------------------------------------------------------------------
 
 
-def compute_entropy_stats(
-    exec_entropies: list[float], plan_entropies: list[float]
+def compute_surprisal_stats(
+    exec_surprisals: list[float], plan_surprisals: list[float]
 ) -> EntropyStats:
-    """Compute summary stats for execution vs planning entropy."""
+    """Compute summary stats for execution vs planning token surprisal."""
     stats = EntropyStats()
 
-    exec_entropies = [min(e, MAX_ENTROPY) for e in exec_entropies]
-    plan_entropies = [min(e, MAX_ENTROPY) for e in plan_entropies]
+    exec_surprisals = [min(e, MAX_SURPRISAL) for e in exec_surprisals]
+    plan_surprisals = [min(e, MAX_SURPRISAL) for e in plan_surprisals]
 
-    if exec_entropies:
-        n = len(exec_entropies)
-        mean_e = sum(exec_entropies) / n
-        var_e = sum((e - mean_e) ** 2 for e in exec_entropies) / n
+    if exec_surprisals:
+        n = len(exec_surprisals)
+        mean_e = sum(exec_surprisals) / n
+        var_e = sum((e - mean_e) ** 2 for e in exec_surprisals) / n
         stats.exec_mean = mean_e
         stats.exec_var = var_e
         stats.exec_count = float(n)
 
-    if plan_entropies:
-        n = len(plan_entropies)
-        mean_p = sum(plan_entropies) / n
-        var_p = sum((p - mean_p) ** 2 for p in plan_entropies) / n
+    if plan_surprisals:
+        n = len(plan_surprisals)
+        mean_p = sum(plan_surprisals) / n
+        var_p = sum((p - mean_p) ** 2 for p in plan_surprisals) / n
         stats.plan_mean = mean_p
         stats.plan_var = var_p
         stats.plan_count = float(n)
 
     return stats
+
+
+compute_entropy_stats = compute_surprisal_stats  # backward-compat alias
 
 
 # ---------------------------------------------------------------------------
@@ -1169,6 +1234,27 @@ def identify_planning_tokens(
     return mask
 
 
+def _raise_missing_data(
+    uncertainty_kind: str,
+    *,
+    has_logprobs: bool,
+    has_distributions: bool,
+    n_episodes: int = 0,
+) -> None:
+    """Raise a diagnostic ValueError when required data is absent."""
+    logprobs_status = f"provided ({n_episodes} episodes)" if has_logprobs else "absent"
+    distributions_status = (
+        f"provided ({n_episodes} episodes)" if has_distributions else "absent"
+    )
+    raise ValueError(
+        f"uncertainty_kind='{uncertainty_kind}' requires per-position token distributions.\n"
+        f"Data received: logprobs_G={logprobs_status}, "
+        f"token_distributions_G={distributions_status}.\n"
+        f"Use uncertainty_kind='surprisal' (requires only logprobs) or use a backend "
+        f"that returns full token distributions."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Composable advantage pipeline
 # ---------------------------------------------------------------------------
@@ -1188,6 +1274,7 @@ def compute_composable_advantages(
     transform_params: Mapping[str, object] | None = None,
     step: int = 0,
     post_process_params: Mapping[str, object] | None = None,
+    token_distributions_G: list[list[list[float]]] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
     advantage_spec = get_advantage_spec(advantage_mode)
@@ -1239,38 +1326,64 @@ def compute_composable_advantages(
         )
         return AdvantageResult(all_token_advs, False, EntropyStats())
 
-    # GTPO-based transforms need entropies
+    uncertainty_kind = _resolve_uncertainty_kind(merged_transform_params)
+
+    # GTPO-based transforms need per-token uncertainty values.
+    # The pipeline is agnostic to the kind — the backend determines what's
+    # available, and the user picks via uncertainty_kind.
     all_token_advs = []
-    all_exec_entropies: list[float] = []
-    all_plan_entropies: list[float] = []
-    all_raw_entropies: list[list[float]] = []  # for entropy masking
+    all_exec_surprisals: list[float] = []
+    all_plan_surprisals: list[float] = []
+    all_raw_surprisals: list[list[float]] = []  # for surprisal_mask compatibility
 
     for idx in range(len(logprobs_G)):
         logprobs = logprobs_G[idx]
         advantage = advantages_G[idx]
         planning_mask = planning_masks_G[idx]
 
-        # Entropy proxy: -logprob (clamped to avoid inf)
-        entropies = [min(-lp, MAX_ENTROPY) for lp in logprobs]
+        if uncertainty_kind == "surprisal":
+            # Sampled-token surprisal: -logprob (clamped)
+            surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
+        elif uncertainty_kind == "shannon_entropy":
+            if token_distributions_G is None:
+                _raise_missing_data(
+                    uncertainty_kind,
+                    has_logprobs=True,
+                    has_distributions=False,
+                    n_episodes=len(logprobs_G),
+                )
+            # Full-distribution Shannon entropy: −Σ pᵢ log(pᵢ).
+            dists = token_distributions_G[idx]
+            surprisals = []
+            for dist in dists:
+                h = -sum(p * math.log(p) for p in dist if p > 0)
+                surprisals.append(min(h, MAX_SURPRISAL))
+        else:
+            _raise_missing_data(
+                uncertainty_kind,
+                has_logprobs=True,
+                has_distributions=token_distributions_G is not None,
+                n_episodes=len(logprobs_G),
+            )
 
-        # Store raw entropies before any transform (for entropy masking)
-        all_raw_entropies.append(list(entropies))
+        # Store raw surprisals before any transform (for surprisal masking)
+        all_raw_surprisals.append(list(surprisals))
 
-        # Collect entropy stats
-        for j, e in enumerate(entropies):
+        # Collect surprisal stats
+        for j, e in enumerate(surprisals):
             if planning_mask[j]:
-                all_plan_entropies.append(e)
+                all_plan_surprisals.append(e)
             else:
-                all_exec_entropies.append(e)
+                all_exec_surprisals.append(e)
 
-        # Optional entropy transform (SEPA variants or custom plugin)
+        # Optional surprisal transform (SEPA variants or custom plugin)
         if transform_spec.entropy_transform is not None:
-            entropies = transform_spec.entropy_transform(
-                entropies, planning_mask, sepa_lambda
+            surprisals = transform_spec.entropy_transform(
+                surprisals, planning_mask, sepa_lambda
             )
 
         # GTPO weighting
-        token_advs = apply_gtpo_weighting(advantage, entropies, beta=gtpo_beta)
+        token_advs = apply_gtpo_weighting(advantage, surprisals, beta=gtpo_beta)
 
         # HICRA amplification
         if transform_spec.apply_hicra:
@@ -1278,13 +1391,13 @@ def compute_composable_advantages(
 
         all_token_advs.append(token_advs)
 
-    # Post-process hook (e.g. entropy masking)
+    # Post-process hook (e.g. surprisal masking)
     extra_metrics: dict[str, float] = {}
     n_seqs = len(all_token_advs)
     seq_lens = [len(seq) for seq in all_token_advs]
     if transform_spec.post_process is not None:
         all_token_advs, extra_metrics = transform_spec.post_process(
-            all_token_advs, all_raw_entropies, merged_transform_params
+            all_token_advs, all_raw_surprisals, merged_transform_params
         )
         # Validate hook output shape
         if len(all_token_advs) != n_seqs:
@@ -1304,7 +1417,7 @@ def compute_composable_advantages(
         expected_lens=expected_lens,
         mode_name=f"transform_mode '{transform_spec.name}'",
     )
-    stats = compute_entropy_stats(all_exec_entropies, all_plan_entropies)
+    stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
     return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra_metrics)
 
 
@@ -1319,6 +1432,7 @@ def compute_algorithm_advantages(
     hicra_alpha: float = 0.2,
     sepa_lambda: float = 0.0,
     step: int = 0,
+    token_distributions_G: list[list[list[float]]] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages through a full algorithm plugin."""
     spec = get_algorithm_spec(algorithm_mode)
@@ -1331,6 +1445,7 @@ def compute_algorithm_advantages(
         sepa_lambda=sepa_lambda,
         gtpo_beta=gtpo_beta,
         hicra_alpha=hicra_alpha,
+        token_distributions_G=token_distributions_G,
     )
     try:
         raw_output = spec.compute(ctx)

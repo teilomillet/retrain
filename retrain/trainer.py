@@ -17,21 +17,20 @@ from retrain.advantages import (
     EntropyStats,
     compute_algorithm_advantages,
     compute_composable_advantages,
-    get_algorithm_spec,
-    get_transform_spec,
 )
 from retrain.backpressure import (
-    BackPressureDecision,
     StepObservation,
 )
-from retrain.backend_definitions import (
-    backend_capability_source,
-    resolve_backend_capabilities,
-)
 from retrain.config import TrainConfig
+from retrain.flow import (
+    TrainingFlow,
+    _UNIFORMITY_EPS,
+    _condition_label,
+    build_flow,
+)
 from retrain.logging_utils import JsonlLogger
 from retrain.registry import get_registry
-from retrain.sepa import SEPAController, SEPAStateDict
+from retrain.sepa import SEPAStateDict
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
@@ -46,13 +45,7 @@ from retrain.verifiers_bridge import (
 
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
-
-
-def _condition_label(config: TrainConfig) -> str:
-    """Human-readable algorithm condition label."""
-    if config.algorithm_mode:
-        return config.algorithm_mode
-    return f"{config.advantage_mode}+{config.transform_mode}"
+_PROMPT_PAD_EPS = 1e-9
 
 
 class TrainerState(TypedDict):
@@ -147,6 +140,36 @@ def _format_loss_for_display(loss_value: float, reports_sync_loss: bool) -> str:
     return f"{formatted} (placeholder)"
 
 
+def _assert_uniform_completion_advantages_for_non_preserving_backend(
+    all_logprobs: list[list[float]],
+    all_advantages: list[list[float]],
+    *,
+    backend_name: str,
+    eps: float = _UNIFORMITY_EPS,
+) -> None:
+    """Runtime guard: non-preserving backends must receive scalar completion advantages."""
+    for sample_idx, (logprobs, advantages) in enumerate(zip(all_logprobs, all_advantages)):
+        n = min(len(logprobs), len(advantages))
+        if n <= 1:
+            continue
+        prompt_len = 0
+        for lp, adv in zip(logprobs[:n], advantages[:n]):
+            if abs(lp) <= _PROMPT_PAD_EPS and abs(adv) <= _PROMPT_PAD_EPS:
+                prompt_len += 1
+            else:
+                break
+        completion = advantages[prompt_len:n]
+        if len(completion) <= 1:
+            continue
+        lo = min(completion)
+        hi = max(completion)
+        if (hi - lo) > eps:
+            raise RuntimeError(
+                f"backend='{backend_name}' does not preserve token-level advantages, "
+                f"but sample {sample_idx} contains non-uniform completion advantages."
+            )
+
+
 def _save_trainer_state(
     path: Path,
     *,
@@ -202,10 +225,20 @@ def _load_trainer_state(resume_dir: str) -> TrainerState:
     }
 
 
-def train(config: TrainConfig) -> str | None:
+def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     """Main training loop -- fully self-contained. Returns final adapter path."""
 
     _print_config_summary(config)
+
+    # -----------------------------------------------------------------------
+    # 0a. Build and validate flow
+    # -----------------------------------------------------------------------
+    if flow is None:
+        flow = build_flow(config, gpu=True)
+        trace_result = flow.trace()
+        if not trace_result.ok:
+            msgs = [i.message for i in trace_result.issues if i.severity == "error"]
+            raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
 
     # -----------------------------------------------------------------------
     # 0. Setup directories + loggers
@@ -264,13 +297,13 @@ def train(config: TrainConfig) -> str | None:
         print(f"Loaded {len(examples)} examples")
 
     # -----------------------------------------------------------------------
-    # 3. Init backend (after data preflight)
+    # 3. Use flow-resolved backend + capabilities
     # -----------------------------------------------------------------------
-    helper = get_registry("backend").create(config.backend, config)
-    backend_caps = resolve_backend_capabilities(config.backend, config.backend_options)
+    helper = flow.backend
+    backend_caps = flow.backend_capabilities
     _print_backend_capability_summary(
         config.backend,
-        backend_capability_source(config.backend, config.backend_options),
+        flow.backend_capability_source,
         backend_caps.reports_sync_loss,
         backend_caps.preserves_token_advantages,
         backend_caps.supports_checkpoint_resume,
@@ -296,7 +329,7 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 4b. Planning detector
     # -----------------------------------------------------------------------
-    detector = get_registry("planning_detector").create(config.planning_detector, config)
+    detector = flow.planning_detector
     print(f"Planning detector: {config.planning_detector}")
 
     # -----------------------------------------------------------------------
@@ -311,18 +344,13 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 5. SEPA controller
     # -----------------------------------------------------------------------
-    sepa_controller = SEPAController(
-        sepa_steps=config.sepa_steps,
-        sepa_schedule=config.sepa_schedule,
-        sepa_delay_steps=config.sepa_delay_steps,
-        sepa_correct_rate_gate=config.sepa_correct_rate_gate,
-    )
+    sepa_controller = flow.sepa_controller
+    assert sepa_controller is not None
 
     # -----------------------------------------------------------------------
     # 6. Back pressure
     # -----------------------------------------------------------------------
-    bp_name = "usl" if config.bp_enabled else "noop"
-    backpressure = get_registry("backpressure").create(bp_name, config)
+    backpressure = flow.backpressure
 
     # -----------------------------------------------------------------------
     # 8. Optional wandb
@@ -343,6 +371,7 @@ def train(config: TrainConfig) -> str | None:
             "algorithm_mode": config.algorithm_mode,
             "advantage_mode": config.advantage_mode,
             "transform_mode": config.transform_mode,
+            "uncertainty_kind": config.uncertainty_kind,
             "condition": condition_label,
             "model": config.model,
             "lora_rank": config.lora_rank,
@@ -385,19 +414,14 @@ def train(config: TrainConfig) -> str | None:
     sepa_lambda_val = 0.0
     current_batch_size = config.batch_size
     current_group_size = config.group_size
+    needs_planning = flow.needs_planning
+    uses_sepa_controller = flow.uses_sepa_controller
     if config.algorithm_mode:
-        spec = get_algorithm_spec(config.algorithm_mode)
-        needs_planning = spec.needs_planning
-        uses_sepa_controller = spec.uses_sepa_controller
         print(
             "Algorithm mode active: "
             f"{config.algorithm_mode}. "
             "Ignoring advantage_mode/transform_mode composition."
         )
-    else:
-        transform_spec = get_transform_spec(config.transform_mode)
-        needs_planning = transform_spec.needs_planning
-        uses_sepa_controller = transform_spec.uses_sepa_controller
     start_step = 0
 
     # -----------------------------------------------------------------------
@@ -472,7 +496,7 @@ def train(config: TrainConfig) -> str | None:
         batch_correct = 0
         batch_max_token_hits = 0
         batch_total_completions = 0
-        batch_entropy_stats: list[EntropyStats] = []
+        batch_surprisal_stats: list[EntropyStats] = []
         batch_adv_results: list = []
         all_logprobs_sepa: list[list[float]] = []
         all_planning_masks_sepa: list[list[int]] = []
@@ -578,6 +602,7 @@ def train(config: TrainConfig) -> str | None:
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
                         step=batch_idx,
+                        token_distributions_G=None,
                     )
                 else:
                     adv_result = compute_composable_advantages(
@@ -593,10 +618,11 @@ def train(config: TrainConfig) -> str | None:
                         transform_params=config.transform_params,
                         step=batch_idx,
                         post_process_params=config.post_process_params,
+                        token_distributions_G=None,
                     )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
-                    batch_entropy_stats.append(adv_result.stats)
+                    batch_surprisal_stats.append(adv_result.stats)
                 if adv_result.extra_metrics:
                     batch_adv_results.append(adv_result)
 
@@ -740,6 +766,7 @@ def train(config: TrainConfig) -> str | None:
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
                         step=batch_idx,
+                        token_distributions_G=None,
                     )
                 else:
                     adv_result = compute_composable_advantages(
@@ -755,10 +782,11 @@ def train(config: TrainConfig) -> str | None:
                         transform_params=config.transform_params,
                         step=batch_idx,
                         post_process_params=config.post_process_params,
+                        token_distributions_G=None,
                     )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
-                    batch_entropy_stats.append(adv_result.stats)
+                    batch_surprisal_stats.append(adv_result.stats)
                 if adv_result.extra_metrics:
                     batch_adv_results.append(adv_result)
 
@@ -824,6 +852,13 @@ def train(config: TrainConfig) -> str | None:
 
         print(f"Step {batch_idx}: submitting {num_datums} datums for training...")
 
+        if not backend_caps.preserves_token_advantages:
+            _assert_uniform_completion_advantages_for_non_preserving_backend(
+                all_datum_logprobs,
+                all_datum_advantages,
+                backend_name=config.backend,
+            )
+
         train_start = time.perf_counter()
         loss_value = helper.train_step(
             all_datum_tokens,
@@ -874,12 +909,12 @@ def train(config: TrainConfig) -> str | None:
 
         # Aggregate entropy stats
         step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
-        if batch_entropy_stats:
-            n_stats = len(batch_entropy_stats)
-            step_exec_mean = sum(s.exec_mean for s in batch_entropy_stats) / n_stats
-            step_exec_var = sum(s.exec_var for s in batch_entropy_stats) / n_stats
-            step_plan_mean = sum(s.plan_mean for s in batch_entropy_stats) / n_stats
-            step_plan_var = sum(s.plan_var for s in batch_entropy_stats) / n_stats
+        if batch_surprisal_stats:
+            n_stats = len(batch_surprisal_stats)
+            step_exec_mean = sum(s.exec_mean for s in batch_surprisal_stats) / n_stats
+            step_exec_var = sum(s.exec_var for s in batch_surprisal_stats) / n_stats
+            step_plan_mean = sum(s.plan_mean for s in batch_surprisal_stats) / n_stats
+            step_plan_var = sum(s.plan_var for s in batch_surprisal_stats) / n_stats
 
         condition_label = _condition_label(config)
         sepa_gate = (
@@ -893,6 +928,7 @@ def train(config: TrainConfig) -> str | None:
             "algorithm_mode": config.algorithm_mode,
             "advantage_mode": config.advantage_mode,
             "transform_mode": config.transform_mode,
+            "uncertainty_kind": config.uncertainty_kind,
             "condition": condition_label,
             "backend_reports_sync_loss": backend_caps.reports_sync_loss,
             "backend_preserves_token_advantages": backend_caps.preserves_token_advantages,
@@ -918,11 +954,16 @@ def train(config: TrainConfig) -> str | None:
             "bp_utilization": bp_decision.utilization,
             "bp_throughput": bp_decision.throughput,
         }
-        if batch_entropy_stats:
+        if batch_surprisal_stats:
             metrics["exec_entropy_mean"] = step_exec_mean
             metrics["exec_entropy_var"] = step_exec_var
             metrics["plan_entropy_mean"] = step_plan_mean
             metrics["plan_entropy_var"] = step_plan_var
+            # Preferred names: these values are sampled-token surprisal.
+            metrics["exec_surprisal_mean"] = step_exec_mean
+            metrics["exec_surprisal_var"] = step_exec_var
+            metrics["plan_surprisal_mean"] = step_plan_mean
+            metrics["plan_surprisal_var"] = step_plan_var
         if batch_adv_results:
             all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
             for k in all_extra_keys:
@@ -950,6 +991,7 @@ def train(config: TrainConfig) -> str | None:
             wandb_metrics: dict[str, int | float | str] = {
                 "train/loss": loss_value,
                 "train/reported_loss": loss_value,
+                "train/uncertainty_kind": config.uncertainty_kind,
                 "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
                 "train/rewards/mean_reward": mean_reward,
                 "train/rewards/correct_rate": correct_rate,
@@ -969,6 +1011,10 @@ def train(config: TrainConfig) -> str | None:
                 "train/entropy/exec_var": step_exec_var,
                 "train/entropy/plan_mean": step_plan_mean,
                 "train/entropy/plan_var": step_plan_var,
+                "train/surprisal/exec_mean": step_exec_mean,
+                "train/surprisal/exec_var": step_exec_var,
+                "train/surprisal/plan_mean": step_plan_mean,
+                "train/surprisal/plan_var": step_plan_var,
                 "train/backpressure/action": bp_decision.action,
                 "train/backpressure/regime": bp_decision.regime,
                 "train/backpressure/p_star": bp_decision.p_star,
@@ -990,12 +1036,17 @@ def train(config: TrainConfig) -> str | None:
             "correct_count": batch_correct,
             "total_count": len(batch_rewards),
             "condition": condition_label,
+            "uncertainty_kind": config.uncertainty_kind,
         }
-        if batch_entropy_stats:
+        if batch_surprisal_stats:
             step_entry["exec_entropy_mean"] = step_exec_mean
             step_entry["exec_entropy_var"] = step_exec_var
             step_entry["plan_entropy_mean"] = step_plan_mean
             step_entry["plan_entropy_var"] = step_plan_var
+            step_entry["exec_surprisal_mean"] = step_exec_mean
+            step_entry["exec_surprisal_var"] = step_exec_var
+            step_entry["plan_surprisal_mean"] = step_plan_mean
+            step_entry["plan_surprisal_var"] = step_plan_var
         steps_logger.log(step_entry)
 
         # Periodic checkpoint

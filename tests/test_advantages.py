@@ -505,6 +505,52 @@ class TestComposablePipeline:
         for i in range(2):
             assert all(a == pytest.approx(grpo_advs[i]) for a in result.token_advs[i])
 
+    def test_uncertainty_kind_default_is_surprisal(self):
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+        )
+        assert result.has_stats
+
+    def test_uncertainty_kind_shannon_entropy_not_implemented(self):
+        with pytest.raises(ValueError, match="uncertainty_kind='shannon_entropy'") as exc_info:
+            compute_composable_advantages(
+                rewards_G=[1.0, 0.0],
+                logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                planning_masks_G=[[0, 0], [0, 0]],
+                advantage_mode="grpo",
+                transform_mode="gtpo",
+                transform_params={"uncertainty_kind": "shannon_entropy"},
+            )
+        assert "token_distributions_G=absent" in str(exc_info.value)
+
+    def test_uncertainty_kind_varentropy_not_implemented(self):
+        with pytest.raises(ValueError, match="uncertainty_kind='varentropy'") as exc_info:
+            compute_composable_advantages(
+                rewards_G=[1.0, 0.0],
+                logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                planning_masks_G=[[0, 0], [0, 0]],
+                advantage_mode="grpo",
+                transform_mode="gtpo",
+                transform_params={"uncertainty_kind": "varentropy"},
+            )
+        assert "token_distributions_G=absent" in str(exc_info.value)
+
+    def test_uncertainty_kind_entropy_alias_maps_to_shannon(self):
+        with pytest.raises(ValueError, match="uncertainty_kind='shannon_entropy'") as exc_info:
+            compute_composable_advantages(
+                rewards_G=[1.0, 0.0],
+                logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                planning_masks_G=[[0, 0], [0, 0]],
+                advantage_mode="grpo",
+                transform_mode="gtpo",
+                transform_params={"uncertainty_kind": "entropy"},
+            )
+        assert "token_distributions_G=absent" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # Numeric guard tests (inf entropy)

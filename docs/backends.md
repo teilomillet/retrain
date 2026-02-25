@@ -14,7 +14,16 @@ retrain supports three training backends: **local** (PyTorch/PEFT on your GPUs),
 
 - `reports_sync_loss=false` means the backend returns a placeholder loss value by design.
 - `preserves_token_advantages=false` means token-level advantages are aggregated before backend transport.
+- Uncertainty kinds (e.g. `surprisal`, `shannon_entropy`) are discovered from backend data,
+  not declared statically. The advantage pipeline inspects what data the backend provides
+  (logprobs, token distributions) and raises a diagnostic error if the required data for the
+  configured `uncertainty_kind` is absent. Today all backends provide only per-token logprobs,
+  so `surprisal` is the only usable kind. When a backend returns full token distributions,
+  `shannon_entropy` becomes available automatically. `flow.trace()` catches mismatches at
+  preflight via the synthetic probe.
 - Dotted-path custom plugins use conservative defaults and are reported as `source=plugin/default`.
+  Unless overridden by plugin capability hooks, this default is `preserves_token_advantages=false`,
+  so token-varying flows fail preflight instead of silently degrading.
 
 Inspect backend metadata directly:
 
@@ -182,9 +191,14 @@ Notes:
 - Optional PRIME-RL settings live under `[backend.options]`: `zmq_host`, `zmq_port`,
   `zmq_hwm`, `sync_wait_s`, and `sync_poll_s`.
 - PRIME-RL transport expects one scalar advantage per sample.
-  If you use token-varying transforms (for example GTPO/HICRA/SEPA), keep
-  `strict_advantages = true` to fail fast, or set it to `false` to
-  aggregate completion-token advantages by mean.
+  retrain now rejects built-in token-varying modes on `prime_rl` (for example
+  `transform_mode=gtpo|gtpo_hicra|gtpo_sepa` and
+  `algorithm_mode=maxrl_gtpo|maxrl_gtpo_hicra|maxrl_gtpo_sepa`) to avoid
+  silent credit-assignment loss.
+  For any backend that reports `preserves_token_advantages=false` (including
+  future/custom backends), trainer preflight constructs and probes the configured
+  advantage flow and fails before training starts if token-varying advantages are detected.
+  `strict_advantages=false` is disallowed to prevent silent aggregation.
 - PRIME-RL `train_step()` reports a placeholder loss (`0.0`) because optimization
   runs asynchronously inside the PRIME-RL runtime.
 
