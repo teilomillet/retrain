@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Mapping
 from pathlib import Path
+from typing import TypedDict, cast
 
 from transformers import AutoTokenizer
 
@@ -27,7 +29,8 @@ from retrain.backend_definitions import (
 from retrain.config import TrainConfig
 from retrain.logging_utils import JsonlLogger
 from retrain.registry import get_registry
-from retrain.sepa import SEPAController
+from retrain.sepa import SEPAController, SEPAStateDict
+from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
@@ -41,6 +44,40 @@ from retrain.verifiers_bridge import (
 
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
+
+
+class TrainerState(TypedDict):
+    """Serialized trainer state stored in checkpoint directories."""
+
+    step: int
+    example_idx: int
+    total_correct: int
+    total_completions: int
+    current_batch_size: int
+    current_group_size: int
+    checkpoint_name: str
+    sepa: SEPAStateDict
+
+
+def _require_int_field(payload: Mapping[str, object], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"Trainer state field '{key}' must be an integer.")
+    return value
+
+
+def _optional_str_field(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key, "")
+    if not isinstance(value, str):
+        raise ValueError(f"Trainer state field '{key}' must be a string.")
+    return value
+
+
+def _optional_sepa_state(payload: Mapping[str, object]) -> SEPAStateDict:
+    value = payload.get("sepa", {})
+    if not isinstance(value, dict):
+        raise ValueError("Trainer state field 'sepa' must be an object.")
+    return cast(SEPAStateDict, value)
 
 
 def _print_config_summary(config: TrainConfig) -> None:
@@ -111,7 +148,7 @@ def _save_trainer_state(
     current_batch_size: int,
     current_group_size: int,
     checkpoint_name: str,
-    sepa_state: dict[str, object],
+    sepa_state: SEPAStateDict,
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
     state = {
@@ -129,7 +166,7 @@ def _save_trainer_state(
     tmp.rename(path / _TRAINER_STATE_FILE)
 
 
-def _load_trainer_state(resume_dir: str) -> dict[str, object]:
+def _load_trainer_state(resume_dir: str) -> TrainerState:
     """Load trainer state from a checkpoint directory."""
     p = Path(resume_dir)
     state_file = p / _TRAINER_STATE_FILE
@@ -138,7 +175,22 @@ def _load_trainer_state(resume_dir: str) -> dict[str, object]:
             f"No {_TRAINER_STATE_FILE} found in {resume_dir}. "
             f"Cannot resume without trainer state."
         )
-    return json.loads(state_file.read_text())
+    payload = json.loads(state_file.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"Invalid trainer state file {state_file}: expected JSON object."
+        )
+    payload_map = cast(Mapping[str, object], payload)
+    return {
+        "step": _require_int_field(payload_map, "step"),
+        "example_idx": _require_int_field(payload_map, "example_idx"),
+        "total_correct": _require_int_field(payload_map, "total_correct"),
+        "total_completions": _require_int_field(payload_map, "total_completions"),
+        "current_batch_size": _require_int_field(payload_map, "current_batch_size"),
+        "current_group_size": _require_int_field(payload_map, "current_group_size"),
+        "checkpoint_name": _optional_str_field(payload_map, "checkpoint_name"),
+        "sepa": _optional_sepa_state(payload_map),
+    }
 
 
 def train(config: TrainConfig) -> str | None:
@@ -278,37 +330,34 @@ def train(config: TrainConfig) -> str | None:
             if config.wandb_tags
             else None
         )
-        wandb_kwargs: dict[str, object] = {
-            "project": config.wandb_project,
-            "name": run_name,
-            "config": {
-                "advantage_mode": config.advantage_mode,
-                "transform_mode": config.transform_mode,
-                "condition": condition_label,
-                "model": config.model,
-                "lora_rank": config.lora_rank,
-                "lr": config.lr,
-                "batch_size": config.batch_size,
-                "group_size": config.group_size,
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
-                "gtpo_beta": config.gtpo_beta,
-                "hicra_alpha": config.hicra_alpha,
-                "sepa_steps": config.sepa_steps,
-                "sepa_delay_steps": config.sepa_delay_steps,
-                "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
-                "max_steps": config.max_steps,
-                "backend": config.backend,
-                "seed": config.seed,
-            },
+        wandb_config: dict[str, str | int | float] = {
+            "advantage_mode": config.advantage_mode,
+            "transform_mode": config.transform_mode,
+            "condition": condition_label,
+            "model": config.model,
+            "lora_rank": config.lora_rank,
+            "lr": config.lr,
+            "batch_size": config.batch_size,
+            "group_size": config.group_size,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "gtpo_beta": config.gtpo_beta,
+            "hicra_alpha": config.hicra_alpha,
+            "sepa_steps": config.sepa_steps,
+            "sepa_delay_steps": config.sepa_delay_steps,
+            "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
+            "max_steps": config.max_steps,
+            "backend": config.backend,
+            "seed": config.seed,
         }
-        if config.wandb_entity:
-            wandb_kwargs["entity"] = config.wandb_entity
-        if config.wandb_group:
-            wandb_kwargs["group"] = config.wandb_group
-        if wandb_tags:
-            wandb_kwargs["tags"] = wandb_tags
-        wandb_run = wandb.init(**wandb_kwargs)
+        wandb_run = wandb.init(
+            project=config.wandb_project,
+            name=run_name,
+            config=wandb_config,
+            entity=config.wandb_entity or None,
+            group=config.wandb_group or None,
+            tags=wandb_tags,
+        )
         print(f"Wandb initialized: {config.wandb_project}/{run_name}")
 
     # -----------------------------------------------------------------------
@@ -380,12 +429,12 @@ def train(config: TrainConfig) -> str | None:
         helper.checkpoint(f"step_{batch_idx}")
 
         # 10b. Select prompts
-        batch_prompt_objs: list[str | list[dict[str, object]]] = []
+        batch_prompt_objs: list[PromptLike] = []
         batch_prompt_previews: list[str] = []
         batch_prompt_ids: list[list[int]] = []
         batch_answers: list[str] = []
         batch_tasks: list[str] = []
-        batch_infos: list[dict[str, object] | str | None] = []
+        batch_infos: list[ExampleInfoLike] = []
 
         for _ in range(current_batch_size):
             ex_idx = example_idx % len(examples)
@@ -432,7 +481,7 @@ def train(config: TrainConfig) -> str | None:
                     prompt=prompt_obj,
                     answer=answer,
                     task=task,
-                    info=info,
+                    info=cast(dict[str, object] | str | None, info),
                     num_rollouts=current_group_size,
                     max_tokens=config.max_tokens,
                     temperature=config.temperature,
@@ -613,7 +662,7 @@ def train(config: TrainConfig) -> str | None:
                         prompt=prompt_obj,
                         answer=answer,
                         task=task,
-                        info=info,
+                        info=cast(dict[str, object] | str | None, info),
                         completion_texts=completion_texts_G,
                     )
 
@@ -845,7 +894,7 @@ def train(config: TrainConfig) -> str | None:
 
         # Wandb
         if wandb_enabled and wandb_run is not None:
-            wandb_metrics: dict[str, object] = {
+            wandb_metrics: dict[str, int | float | str] = {
                 "train/loss": loss_value,
                 "train/reported_loss": loss_value,
                 "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
