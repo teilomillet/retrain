@@ -1292,8 +1292,7 @@ def _run_status(args: list[str]) -> None:
         print(f"No log directory found: {root}")
         sys.exit(1)
 
-    _active_statuses = {"running", "partial"}
-    _dead_hide_seconds = 86400  # hide dead campaigns after 24h
+    _stale_hide_seconds = 86400  # hide dead/stale-partial campaigns after 24h
 
     while True:
         now = _time.time()
@@ -1303,11 +1302,16 @@ def _run_status(args: list[str]) -> None:
         banner = format_summary_banner(campaigns)
 
         if not show_all:
-            campaigns = [
-                c for c in campaigns
-                if c.status in _active_statuses
-                or (c.status == "dead" and c.last_activity > now - _dead_hide_seconds)
-            ]
+
+            def _is_visible(c: type(campaigns[0])) -> bool:
+                if c.status == "running":
+                    return True
+                if c.status in ("dead", "partial", "done"):
+                    # Show only if there was recent activity
+                    return c.last_activity > now - _stale_hide_seconds
+                return True
+
+            campaigns = [c for c in campaigns if _is_visible(c)]
 
         if fmt == "json":
             payload = {
