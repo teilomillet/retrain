@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import subprocess
 import sys
 import time
@@ -308,6 +309,7 @@ def _write_run_configs(
     base_config: TrainConfig,
     max_steps: int,
     config_dir: Path,
+    throttle_dir: str = "",
 ) -> None:
     """Write per-run TOML config files for parallel execution."""
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -318,6 +320,8 @@ def _write_run_configs(
         cfg.seed = run["seed"]
         cfg.max_steps = max_steps
         cfg.log_dir = run["log_dir"]
+        if throttle_dir:
+            cfg.tinker_throttle_dir = throttle_dir
         for key, value in run.get("overrides", {}).items():
             setattr(cfg, key, value)
 
@@ -366,6 +370,7 @@ def _run_parallel(
                     stdout=stdout_f,
                     stderr=stderr_f,
                 )
+                (log_path / "run.pid").write_text(str(proc.pid))
                 print(f"[{finished}/{total}] {run['run_name']} started (pid={proc.pid})")
                 active.append((proc, run, time.monotonic(), stdout_f, stderr_f))
                 if stagger_seconds > 0 and pending and len(active) < max_workers:
@@ -517,6 +522,7 @@ def run_campaign(campaign_path: str) -> None:
         "max_steps": max_steps,
         "parallel": parallel,
         "num_runs": len(runs),
+        "runner_pid": os.getpid(),
         "runs": runs,
     }
     manifest_path = campaign_dir / "manifest.json"
@@ -544,7 +550,12 @@ def run_campaign(campaign_path: str) -> None:
     if parallel:
         # Write per-run config files
         config_dir = campaign_dir / "configs"
-        _write_run_configs(runs, base_config, max_steps, config_dir)
+        throttle_dir = ""
+        if base_config.backend == "tinker":
+            throttle_path = campaign_dir / "tinker_throttle"
+            throttle_path.mkdir(parents=True, exist_ok=True)
+            throttle_dir = str(throttle_path)
+        _write_run_configs(runs, base_config, max_steps, config_dir, throttle_dir)
 
         effective_workers = max_workers if max_workers > 0 else len(runs)
         runs = _run_parallel(runs, config_dir, effective_workers, stagger_seconds)

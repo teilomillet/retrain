@@ -109,7 +109,7 @@ class TrainConfig:
     max_steps: int = 500
     batch_size: int = 8
     group_size: int = 16
-    max_tokens: int = 2048
+    max_tokens: int = 10240
     temperature: float = 0.7
     top_p: float = 0.95
     lr: float = 4e-5
@@ -180,6 +180,10 @@ class TrainConfig:
     reward_judge_model: str = ""
     reward_custom_module: str = ""
     reward_custom_function: str = "score"
+
+    # Tinker throttle (cross-process concurrency limiter)
+    tinker_throttle_dir: str = ""
+    tinker_max_concurrent: int = 4
 
     # Resume
     resume_from: str = ""
@@ -409,6 +413,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "backend": "backend",
         "devices": "devices",
         "adapter_path": "adapter_path",
+        "throttle_dir": "tinker_throttle_dir",
+        "max_concurrent": "tinker_max_concurrent",
     },
     "model": {
         "model": "model",

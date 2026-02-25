@@ -19,7 +19,7 @@ class TestDefaults:
         assert c.max_steps == 500
         assert c.batch_size == 8
         assert c.group_size == 16
-        assert c.max_tokens == 2048
+        assert c.max_tokens == 10240
         assert c.temperature == pytest.approx(0.7)
         assert c.lr == pytest.approx(4e-5)
         assert c.weight_decay == pytest.approx(0.0)

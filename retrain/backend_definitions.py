@@ -100,6 +100,8 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         optim_beta1=config.optim_beta1,
         optim_beta2=config.optim_beta2,
         optim_eps=config.optim_eps,
+        throttle_dir=config.tinker_throttle_dir,
+        max_concurrent=config.tinker_max_concurrent,
     )
 
 
