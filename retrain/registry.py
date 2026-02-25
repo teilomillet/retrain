@@ -15,20 +15,28 @@ from __future__ import annotations
 import importlib
 import os
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Generic, Literal, TypeVar, cast, overload
 
+from retrain.backends import TrainHelper
 from retrain.backend_definitions import (
     get_backend_dependency_map,
     get_builtin_backend_definitions,
 )
+from retrain.backpressure import BackPressure
 from retrain.config import TrainConfig
+from retrain.data import DataSource
+from retrain.planning import PlanningDetector
+from retrain.rewards import RewardFunction
+
+
+T = TypeVar("T")
 
 
 # ---------------------------------------------------------------------------
 # Registry class
 # ---------------------------------------------------------------------------
 
-class Registry:
+class Registry(Generic[T]):
     """Dict-based registry for a single component type.
 
     Stores *lazy factory functions* ``(config: TrainConfig) -> object`` keyed
@@ -37,20 +45,22 @@ class Registry:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self._factories: dict[str, Callable[[TrainConfig], object]] = {}
+        self._factories: dict[str, Callable[[TrainConfig], T]] = {}
 
     # -- public API --------------------------------------------------------
 
-    def register(self, name: str) -> Callable:
+    def register(
+        self, name: str
+    ) -> Callable[[Callable[[TrainConfig], T]], Callable[[TrainConfig], T]]:
         """Decorator to register a lazy factory under *name*."""
         def decorator(
-            fn: Callable[[TrainConfig], object],
-        ) -> Callable[[TrainConfig], object]:
+            fn: Callable[[TrainConfig], T],
+        ) -> Callable[[TrainConfig], T]:
             self._factories[name] = fn
             return fn
         return decorator
 
-    def create(self, name: str, config: TrainConfig) -> object:
+    def create(self, name: str, config: TrainConfig) -> T:
         """Look up *name* and call its factory with *config*.
 
         Falls back to dotted-path import when *name* contains a ``.``.
@@ -79,7 +89,7 @@ class Registry:
     # -- internals ---------------------------------------------------------
 
     @staticmethod
-    def _import_dotted(dotted: str, config: TrainConfig) -> object:
+    def _import_dotted(dotted: str, config: TrainConfig) -> T:
         """Import ``module.attr`` and call ``attr(config)``."""
         module_path, _, attr_name = dotted.rpartition(".")
         if not module_path or not attr_name:
@@ -94,26 +104,40 @@ class Registry:
                 f"Could not import module '{module_path}' "
                 f"for dotted path '{dotted}': {exc}"
             ) from exc
-        cls = getattr(mod, attr_name, None)
-        if cls is None:
+        factory = getattr(mod, attr_name, None)
+        if factory is None:
             raise AttributeError(
                 f"Module '{module_path}' has no attribute '{attr_name}'."
             )
-        return cls(config)
+        if not callable(factory):
+            raise TypeError(
+                f"Dotted import target '{dotted}' is not callable."
+            )
+        typed_factory = cast(Callable[[TrainConfig], T], factory)
+        return typed_factory(config)
 
 
 # ---------------------------------------------------------------------------
 # Six global registries
 # ---------------------------------------------------------------------------
 
-backend = Registry("backend")
-inference_engine = Registry("inference_engine")
-reward = Registry("reward")
-planning_detector = Registry("planning_detector")
-data_source = Registry("data_source")
-backpressure = Registry("backpressure")
+backend = Registry[TrainHelper]("backend")
+inference_engine = Registry[None]("inference_engine")
+reward = Registry[RewardFunction]("reward")
+planning_detector = Registry[PlanningDetector]("planning_detector")
+data_source = Registry[DataSource]("data_source")
+backpressure = Registry[BackPressure]("backpressure")
 
-_ALL_REGISTRIES: dict[str, Registry] = {
+KnownRegistry = (
+    Registry[TrainHelper]
+    | Registry[None]
+    | Registry[RewardFunction]
+    | Registry[PlanningDetector]
+    | Registry[DataSource]
+    | Registry[BackPressure]
+)
+
+_ALL_REGISTRIES: dict[str, KnownRegistry] = {
     "backend": backend,
     "inference_engine": inference_engine,
     "reward": reward,
@@ -123,7 +147,31 @@ _ALL_REGISTRIES: dict[str, Registry] = {
 }
 
 
-def get_registry(name: str) -> Registry:
+@overload
+def get_registry(name: Literal["backend"]) -> Registry[TrainHelper]: ...
+
+
+@overload
+def get_registry(name: Literal["inference_engine"]) -> Registry[None]: ...
+
+
+@overload
+def get_registry(name: Literal["reward"]) -> Registry[RewardFunction]: ...
+
+
+@overload
+def get_registry(name: Literal["planning_detector"]) -> Registry[PlanningDetector]: ...
+
+
+@overload
+def get_registry(name: Literal["data_source"]) -> Registry[DataSource]: ...
+
+
+@overload
+def get_registry(name: Literal["backpressure"]) -> Registry[BackPressure]: ...
+
+
+def get_registry(name: str) -> KnownRegistry:
     """Return the named registry, or raise ``KeyError``."""
     try:
         return _ALL_REGISTRIES[name]
@@ -174,13 +222,13 @@ def _ie_openai(config: TrainConfig) -> None:
 # -- reward ----------------------------------------------------------------
 
 @reward.register("match")
-def _reward_match(config: TrainConfig) -> object:
+def _reward_match(config: TrainConfig) -> RewardFunction:
     from retrain.rewards import BoxedMathReward
     return BoxedMathReward()
 
 
 @reward.register("math")
-def _reward_math(config: TrainConfig) -> object:
+def _reward_math(config: TrainConfig) -> RewardFunction:
     try:
         from retrain.rewards import VerifiersMathReward
         return VerifiersMathReward()
@@ -192,7 +240,7 @@ def _reward_math(config: TrainConfig) -> object:
 
 
 @reward.register("judge")
-def _reward_judge(config: TrainConfig) -> object:
+def _reward_judge(config: TrainConfig) -> RewardFunction:
     try:
         from retrain.rewards import VerifiersJudgeReward
         model = config.reward_judge_model or "gpt-4o-mini"
@@ -205,7 +253,7 @@ def _reward_judge(config: TrainConfig) -> object:
 
 
 @reward.register("custom")
-def _reward_custom(config: TrainConfig) -> object:
+def _reward_custom(config: TrainConfig) -> RewardFunction:
     from retrain.rewards import CustomReward
     if not config.reward_custom_module:
         raise ValueError(
@@ -220,14 +268,14 @@ def _reward_custom(config: TrainConfig) -> object:
 # -- planning_detector ----------------------------------------------------
 
 @planning_detector.register("regex")
-def _detector_regex(config: TrainConfig) -> object:
+def _detector_regex(config: TrainConfig) -> PlanningDetector:
     from retrain.planning import create_planning_detector
     # Reuse existing factory for regex — it handles strategic_grams parsing
     return create_planning_detector(config)
 
 
 @planning_detector.register("semantic")
-def _detector_semantic(config: TrainConfig) -> object:
+def _detector_semantic(config: TrainConfig) -> PlanningDetector:
     from retrain.planning import SemanticPlanningDetector
     return SemanticPlanningDetector(
         model_name=config.planning_model,
@@ -238,7 +286,7 @@ def _detector_semantic(config: TrainConfig) -> object:
 # -- data_source -----------------------------------------------------------
 
 @data_source.register("math")
-def _data_math(config: TrainConfig) -> object:
+def _data_math(config: TrainConfig) -> DataSource:
     from retrain.data import MathDataSource
     return MathDataSource(config.max_examples)
 
@@ -246,13 +294,13 @@ def _data_math(config: TrainConfig) -> object:
 # -- backpressure ----------------------------------------------------------
 
 @backpressure.register("noop")
-def _bp_noop(config: TrainConfig) -> object:
+def _bp_noop(config: TrainConfig) -> BackPressure:
     from retrain.backpressure import NoOpBackPressure
     return NoOpBackPressure()
 
 
 @backpressure.register("usl")
-def _bp_usl(config: TrainConfig) -> object:
+def _bp_usl(config: TrainConfig) -> BackPressure:
     from retrain.backpressure import USLBackPressure
     return USLBackPressure(
         warmup_steps=config.bp_warmup_steps,

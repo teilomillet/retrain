@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from retrain.type_defs import SampleBatch
+
 
 @runtime_checkable
 class TrainHelper(Protocol):
@@ -23,7 +25,7 @@ class TrainHelper(Protocol):
         max_tokens: int,
         temperature: float,
         top_p: float,
-    ) -> list: ...
+    ) -> SampleBatch: ...
 
     def train_step(
         self,
