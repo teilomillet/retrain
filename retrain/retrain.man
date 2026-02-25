@@ -1,0 +1,528 @@
+RETRAIN(1)
+
+NAME
+    retrain - TOML-first RLVR trainer for LLMs
+
+SYNOPSIS
+    retrain [config.toml] [--flag value ...]
+    retrain doctor
+    retrain init
+    retrain man [--topic TOPIC] [--path] [--list-topics] [--sync] [--json]
+
+DESCRIPTION
+    retrain runs Reinforcement Learning with Verifiable Rewards (RLVR)
+    training from a TOML config file. The workflow is intentionally
+    TOML-first: every knob lives in a config section.
+
+    Key design principles:
+    - backend switch in [backend]
+    - algorithm switch in [algorithm]
+    - environment switch in [environment]
+    - AI agents can read this file directly (grep-friendly) via:
+      retrain man --path
+
+COMMANDS
+<<AUTO:COMMANDS>>
+    retrain [config.toml]
+        Run one training job.
+        If config.toml is omitted, uses ./retrain.toml when present.
+
+    retrain campaign.toml
+        Runs campaign mode when [campaign] exists in TOML.
+        Generates conditions x seeds matrix of training runs.
+
+    retrain squeeze.toml
+        Runs squeeze mode when [squeeze] exists in TOML.
+        Analyzes LoRA rank via SVD and optionally compresses.
+
+    retrain doctor
+        Checks optional dependencies for configured components.
+
+    retrain init
+        Writes a starter retrain.toml in the current directory.
+
+    retrain man
+        Shows this manual.
+        --topic <name>    prints one section.
+        --path            prints the manual file path.
+        --list-topics     lists supported topic names.
+        --sync            refreshes auto-generated manual blocks.
+        --json            outputs JSON (full manual or single topic).
+<<END:AUTO:COMMANDS>>
+
+OPTIONS
+<<AUTO:OPTIONS>>
+    Every TrainConfig field is exposed as a --kebab-case CLI flag.
+    Flags override TOML values.
+
+    Common examples:
+        retrain config.toml --seed 42 --max-steps 50
+        retrain config.toml --lr 1e-4 --batch-size 16
+        retrain config.toml --advantage-mode grpo
+        retrain config.toml --inference-engine vllm --inference-url http://localhost:8000
+
+    All flags (sorted):
+        --adapter-path
+        --advantage-mode
+        --attention-kernel
+        --backend
+        --base-url
+        --batch-size
+        --bp-ema-decay
+        --bp-enabled
+        --bp-increase-margin
+        --bp-max-batch-size
+        --bp-min-batch-size
+        --bp-peak-bw-gb-s
+        --bp-peak-gflops
+        --bp-throttle-margin
+        --bp-warmup-steps
+        --data-source
+        --devices
+        --environment-args
+        --environment-auto-install
+        --environment-id
+        --environment-max-turns
+        --environment-provider
+        --group-size
+        --gtpo-beta
+        --hicra-alpha
+        --inference-dtype
+        --inference-engine
+        --inference-url
+        --kv-cache-dtype
+        --log-dir
+        --lora-alpha
+        --lora-dropout
+        --lora-rank
+        --lr
+        --max-examples
+        --max-steps
+        --max-tokens
+        --model
+        --optim-beta1
+        --optim-beta2
+        --optim-eps
+        --planning-detector
+        --planning-model
+        --planning-threshold
+        --prefix-caching
+        --resume-from
+        --reward-custom-function
+        --reward-custom-module
+        --reward-judge-model
+        --reward-type
+        --save-every
+        --seed
+        --sepa-correct-rate-gate
+        --sepa-delay-steps
+        --sepa-schedule
+        --sepa-steps
+        --strategic-grams
+        --temperature
+        --top-p
+        --transform-mode
+        --wandb-entity
+        --wandb-group
+        --wandb-project
+        --wandb-run-name
+        --wandb-tags
+        --weight-decay
+
+    Special alias:
+        --resume VALUE    alias for --resume-from VALUE
+
+    Unknown flags produce an error with close-match suggestions.
+<<END:AUTO:OPTIONS>>
+
+CONFIGURATION
+    All fields are set in TOML sections. Defaults shown below.
+
+  [algorithm]
+
+    advantage_mode = "maxrl"
+        "grpo" or "maxrl". Hard error if invalid.
+
+    transform_mode = "gtpo_sepa"
+        Built-in: "none", "gtpo", "gtpo_hicra", "gtpo_sepa",
+        "gtpo_sepa_amp", "gtpo_sepa_amp_c".
+        Or a dotted plugin path (e.g. "my_module.make_spec").
+
+  [backend]
+
+    backend = "local"
+        "local" or "tinker". Supports dotted-path plugins.
+        "local" requires torch (pip install retrain[local]).
+        "tinker" requires Tinker SDK (pip install retrain[tinker]).
+
+    devices = "gpu:0"
+        Comma-separated device specs: "gpu:0", "gpu:0,gpu:1", "cpu".
+        gpu:N maps to cuda:N. Multiple CUDA devices enable split mode
+        (first for inference, last for training).
+
+    adapter_path = "/tmp/retrain_adapter"
+        Filesystem path for LoRA adapter checkpoints.
+        Warning if starts with /tmp (checkpoints may be lost).
+
+  [model]
+
+    model = "Qwen/Qwen3-4B-Instruct-2507"
+        Any HuggingFace model ID.
+
+    base_url = ""
+        Backward-compatible fallback for inference URL when
+        [inference].url is not set.
+
+    lora_rank = 32
+        Must be > 0. Also used as fallback source_rank for [squeeze].
+
+  [training]
+
+    seed = -1
+        -1 = no seed (random). >= 0 sets deterministic seed.
+
+    max_steps = 500
+        Must be > 0.
+
+    batch_size = 8
+        Must be > 0. Number of prompts per training step.
+
+    group_size = 16
+        Must be > 0. Completions sampled per prompt.
+
+    max_tokens = 2048
+        Must be > 0. Maximum new tokens per completion.
+
+    temperature = 0.7
+        Must be >= 0. Warning if > 2.0.
+
+    top_p = 0.95
+        Must be in (0, 1].
+
+    lr = 4e-5
+        Must be > 0. Learning rate.
+
+    weight_decay = 0.0
+        Warning if negative.
+
+    max_examples = 0
+        0 = no limit. Positive integer caps dataset size.
+
+    save_every = 20
+        Warning if 0 (disables periodic checkpoints).
+
+  [optimizer]
+
+    beta1 = 0.9
+        Adam beta1.
+
+    beta2 = 0.95
+        Adam beta2.
+
+    eps = 1e-8
+        Adam epsilon.
+
+  [lora]
+
+    alpha = 0
+        0 = auto (rank * 2). LoRA scaling factor.
+
+    dropout = 0.0
+        LoRA dropout probability.
+
+  [gtpo]
+
+    beta = 0.1
+        Entropy-weighted credit assignment strength.
+        0.0 disables entropy weighting (uniform advantages).
+
+  [hicra]
+
+    alpha = 0.2
+        Planning token amplification factor.
+        A_HICRA(t) = A(t) + alpha * |A(t)| * mask(t).
+        0.0 disables HICRA. Used with transform_mode = "gtpo_hicra".
+
+  [sepa]
+
+    steps = 500
+        Total steps for lambda ramp from 0 to 1. Must be >= 0.
+
+    schedule = "linear"
+        "linear" or "auto". Auto adapts based on execution-token
+        entropy variance decay with linear as fallback floor.
+
+    delay_steps = 50
+        Steps to delay before beginning the SEPA ramp. Must be >= 0.
+
+    correct_rate_gate = 0.1
+        SEPA stays disabled until model achieves this correct rate.
+        Must be in [0, 1]. 0.0 disables the gate. Sticky-open once met.
+
+  [inference]
+
+    engine = "pytorch"
+        "pytorch", "max", "vllm", "sglang", "mlx", "openai".
+        Supports dotted-path plugins.
+
+    url = ""
+        Server URL. Defaults per engine when empty:
+        vllm -> http://localhost:8000
+        sglang -> http://localhost:30000
+        mlx -> http://localhost:8080
+        openai -> http://localhost:8000
+        pytorch -> not used (local inference).
+        max -> empty = in-process; set URL for max serve.
+
+    attention_kernel = "default"
+        Attention kernel selection.
+
+    dtype = "auto"
+        Model dtype for inference.
+
+    kv_cache_dtype = "auto"
+        KV cache dtype.
+
+    prefix_caching = true
+        Enable/disable prefix caching.
+
+  [backpressure]
+
+    enabled = false
+        Enable USL+Roofline adaptive batch sizing.
+
+    warmup_steps = 10
+        Steps before controller starts. Must be >= 0.
+
+    ema_decay = 0.9
+        EMA smoothing for throughput. Must be in [0, 1].
+
+    throttle_margin = 0.85
+        Safe operating point fraction. Must be in (0, 1].
+
+    increase_margin = 0.5
+        Hysteresis gap for increase trigger. Must be in (0, 1].
+
+    min_batch_size = 1
+        Must be >= 1.
+
+    max_batch_size = 64
+        Must be >= min_batch_size.
+
+    peak_gflops = 0.0
+        Hardware peak GFLOPS. 0.0 disables roofline hints.
+
+    peak_bw_gb_s = 0.0
+        Hardware peak memory bandwidth (GB/s). 0.0 disables roofline.
+
+  [planning]
+
+    detector = "regex"
+        "regex" or "semantic".
+        "semantic" requires sentence-transformers
+        (pip install retrain[semantic]).
+
+    model = "all-MiniLM-L6-v2"
+        Sentence-transformer model for "semantic" detector.
+
+    threshold = 0.02
+        For "semantic": plan_sim > exec_sim + threshold AND
+        plan_sim > 0.25 to classify as planning.
+
+  [data]
+
+    source = "math"
+        "math" loads EleutherAI/hendrycks_math.
+        Supports dotted-path plugins.
+
+  [environment]
+
+    provider = ""
+        "" (disabled) or "verifiers". Hard error if invalid.
+
+    id = ""
+        Required when provider is set. Hub environment ID.
+        Examples: "primeintellect/gsm8k", "primeintellect/wordle".
+
+    args = ""
+        JSON object or TOML inline table: args = { split = "train" }.
+        Must be valid JSON decoding to a dict when provider is set.
+
+    max_turns = -1
+        -1 = no limit. Positive integer caps multi-turn rollouts.
+
+    auto_install = false
+        Auto-download Hub environments via verifiers SDK.
+
+  [reward]
+
+    type = "match"
+        "match": boxed string-match.
+        "math": symbolic equivalence (pip install retrain[verifiers]).
+        "judge": LLM-based (pip install retrain[verifiers]).
+        "custom": user-provided module.
+
+    judge_model = ""
+        Model for judge reward. Defaults to "gpt-4o-mini" if empty.
+
+    custom_module = ""
+        Python module path. Required when type = "custom".
+
+    custom_function = "score"
+        Function name in custom_module.
+        Signature: (response: str, reference: str) -> float.
+
+  [resume]
+
+    from = ""
+        Checkpoint name to resume from. Empty = no resume.
+        CLI alias: --resume.
+
+  [logging]
+
+    log_dir = "logs/train"
+        Directory for JSONL training logs.
+
+    wandb_project = ""
+        W&B project. Empty disables wandb.
+
+    wandb_run_name = ""
+        W&B run name.
+
+    wandb_entity = ""
+        W&B entity (team/user).
+
+    wandb_group = ""
+        W&B group (used by campaign for condition grouping).
+
+    wandb_tags = ""
+        W&B tags (comma-separated).
+
+    strategic_grams = ""
+        JSON array or comma-separated planning phrases for the regex
+        detector. Empty = 18 built-in phrases.
+
+CAMPAIGN MODE
+    A TOML with a [campaign] section runs campaign mode:
+    conditions x seeds matrix of training runs.
+
+    [campaign]
+    seeds = [42, 101, 202, 303, 404, 505, 606, 707]
+    max_steps = 500
+
+    [[campaign.conditions]]
+    advantage_mode = "grpo"
+    transform_mode = "none"
+
+    [[campaign.conditions]]
+    advantage_mode = "maxrl"
+    transform_mode = "gtpo_sepa"
+
+    Fields:
+        seeds           List of ints. Default: [42, 101, 202, 303, 404, 505, 606, 707].
+        max_steps       Override for all runs. Default: 500.
+        conditions      Array of tables with advantage_mode + transform_mode.
+
+    Default conditions (when omitted):
+        ("grpo", "none"), ("maxrl", "none"), ("maxrl", "gtpo"),
+        ("maxrl", "gtpo_hicra"), ("maxrl", "gtpo_sepa").
+
+    If the TOML also has [squeeze], auto-squeeze runs after the first
+    completed training run.
+
+SQUEEZE MODE
+    A TOML with [squeeze] (and no [campaign]) runs LoRA rank analysis.
+
+    [squeeze]
+    adapter_path = "adapters/my_run"
+    target_ranks = [4, 8, 16]
+    min_variance_retention = 0.95
+
+    Fields:
+        adapter_path            Required. Path to PEFT adapter.
+                                Supports tinker:// URIs.
+        source_rank = 0         0 = fallback to [model].lora_rank.
+        target_ranks = []       [] = auto power-of-2 sequence.
+        min_variance_retention = 0.95
+                                Threshold for recommended rank.
+        output_path = ""        Non-empty: compress and save.
+        compress_to = 0         0 = use recommended rank.
+        device = "cpu"          Torch device for SVD.
+
+INFERENCE ENGINES
+    Engine      Type     Default URL                  Notes
+    -------     ------   -------------------------    ----------------------------
+    pytorch     local    (none, local inference)       Default. Works on CPU/GPU/Mac.
+    max         hybrid   (empty = in-process)          Set url for max serve (multi-GPU).
+    vllm        server   http://localhost:8000         Supports /v1/load_lora_adapter.
+    sglang      server   http://localhost:30000        Supports /v1/load_lora_adapter.
+    mlx         server   http://localhost:8080         Apple Silicon. Adapter via request.
+    openai      server   http://localhost:8000         Any OpenAI-compatible endpoint.
+
+    All engines support dotted-path plugins for custom implementations.
+
+VALIDATION
+    Hard errors (batched, raised at config load):
+
+        batch_size <= 0         "batch_size must be > 0"
+        group_size <= 0         "group_size must be > 0"
+        max_steps <= 0          "max_steps must be > 0"
+        max_tokens <= 0         "max_tokens must be > 0"
+        lora_rank <= 0          "lora_rank must be > 0"
+        lr <= 0                 "lr must be > 0"
+        temperature < 0         "temperature must be >= 0"
+        top_p not in (0,1]      "top_p must be in (0, 1]"
+        bad advantage_mode      "Invalid advantage_mode"
+        bad transform_mode      "Invalid transform_mode"
+        bad env provider        "Invalid environment_provider"
+        env id missing          "environment_id is required when provider is set"
+        bad env args JSON       "environment_args must be valid JSON"
+
+    Warnings (non-fatal):
+
+        adapter_path /tmp       "checkpoints may be lost on reboot"
+        temperature > 2.0       "unusually high"
+        save_every == 0         "disables periodic checkpoints"
+        weight_decay < 0        "negative -- this is unusual"
+
+QUICKSTART
+<<AUTO:QUICKSTART>>
+    cp retrain.toml my_run.toml
+    retrain my_run.toml
+    retrain my_run.toml --seed 42 --max-steps 50
+<<END:AUTO:QUICKSTART>>
+
+ENVIRONMENT
+<<AUTO:ENVIRONMENT>>
+    retrain uses verifiers environments for RLVR training data.
+    Set [environment].provider = "verifiers" and specify a Hub ID.
+
+    Trainable verifiers examples:
+        primeintellect/gsm8k
+        primeintellect/wordle
+        primeintellect/hendrycks-math
+
+    Caveat:
+        Some hub environments are eval-only and do not expose training
+        datasets. In that case retrain fails fast with actionable guidance.
+<<END:AUTO:ENVIRONMENT>>
+
+TROUBLESHOOTING
+    1) Run "retrain doctor" for dependency problems.
+    2) If env auto-install fails, verify environment ID and permissions.
+    3) If "no informative datums" appears, rewards may be uniform in
+       sampled groups.
+
+EXIT STATUS
+    0   Success.
+    1   Error (invalid config, missing deps, training failure).
+
+FILES
+    retrain.toml                 Default config in current working directory
+    docs/configuration.md        Full config reference
+    retrain/retrain.man          This manual source
+
+SEE ALSO
+    docs/getting-started.md
+    docs/configuration.md
+    README.md

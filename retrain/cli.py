@@ -6,6 +6,7 @@ Usage:
     retrain campaign.toml    # campaign (if TOML has [campaign] section)
     retrain init             # generate a starter retrain.toml
     retrain doctor           # check installed dependencies for all components
+    retrain man              # human/agent-friendly manual
     retrain --seed 42 --lr 1e-4   # override config values from CLI
 
 A TOML with a [campaign] section runs multiple conditions × seeds.
@@ -14,6 +15,7 @@ A TOML without it runs a single training job. Same command either way.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tomllib
@@ -52,15 +54,370 @@ log_dir = "logs/train"
 """
 
 
-def _run_init() -> None:
+_TOPIC_TO_SECTION = {
+    "quickstart": "QUICKSTART",
+    "environment": "ENVIRONMENT",
+    "environments": "ENVIRONMENT",
+    "troubleshooting": "TROUBLESHOOTING",
+    "commands": "COMMANDS",
+    "options": "OPTIONS",
+    "configuration": "CONFIGURATION",
+    "campaign": "CAMPAIGN MODE",
+    "squeeze": "SQUEEZE MODE",
+    "inference": "INFERENCE ENGINES",
+    "validation": "VALIDATION",
+}
+
+_AUTO_BLOCK_NAMES = (
+    "COMMANDS",
+    "OPTIONS",
+    "QUICKSTART",
+    "ENVIRONMENT",
+)
+
+
+def _print_top_help(cli_name: str) -> None:
+    """Print concise top-level help with strong manual discoverability."""
+    print(f"{cli_name} — TOML-first RLVR trainer")
+    print()
+    print("Usage:")
+    print(f"  {cli_name} [config.toml] [--flag value ...]")
+    print(f"  {cli_name} doctor")
+    print(f"  {cli_name} init")
+    print(f"  {cli_name} man")
+    print()
+    print("Manual:")
+    print(f"  {cli_name} man")
+    print(f"  {cli_name} man --topic quickstart")
+    print(f"  {cli_name} man --path")
+    print(f"  {cli_name} man --sync")
+    print()
+    print("Tip: read docs/configuration.md for full TOML reference.")
+
+
+def _resolve_cli_name() -> str:
+    """Best-effort CLI binary name for help text."""
+    name = Path(sys.argv[0]).name.strip()
+    if (
+        not name
+        or name in {"python", "python3", "pytest", "py.test"}
+        or name.endswith(".py")
+        or "pytest" in name
+    ):
+        return "retrain"
+    return name
+
+
+def _manual_path() -> Path:
+    """Location of the editable bundled manual file."""
+    return Path(__file__).with_name("retrain.man")
+
+
+def _load_manual_text(cli_name: str) -> str:
+    """Load manual text and substitute runtime command name."""
+    path = _manual_path()
+    if not path.is_file():
+        # Backward-compat fallback for older installs.
+        legacy = Path(__file__).with_name("vauban.man")
+        if legacy.is_file():
+            path = legacy
+    if path.is_file():
+        text = path.read_text()
+    else:
+        text = (
+            "RETRAIN(1)\n\nNAME\n"
+            "    retrain - manual file missing (reinstall package)\n"
+        )
+    return text.replace("{{CLI}}", cli_name).rstrip() + "\n"
+
+
+def _is_manual_heading(line: str) -> bool:
+    s = line.strip()
+    if not s or s != line:
+        return False
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-()")
+    return all(ch in allowed for ch in s) and any(ch.isalpha() for ch in s)
+
+
+def _extract_manual_section(manual_text: str, heading: str) -> str | None:
+    """Extract one heading section from manual text."""
+    wanted = heading.strip().upper()
+    lines = manual_text.splitlines()
+
+    start = None
+    for i, line in enumerate(lines):
+        if _is_manual_heading(line) and line.strip().upper() == wanted:
+            start = i
+            break
+    if start is None:
+        return None
+
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if _is_manual_heading(lines[i]) and lines[i].strip().upper() != wanted:
+            end = i
+            break
+    return "\n".join(lines[start:end]).rstrip() + "\n"
+
+
+def _render_commands_block(cli_name: str) -> list[str]:
+    return [
+        f"    {cli_name} [config.toml]",
+        "        Run one training job.",
+        "        If config.toml is omitted, uses ./retrain.toml when present.",
+        "",
+        f"    {cli_name} campaign.toml",
+        "        Runs campaign mode when [campaign] exists in TOML.",
+        "        Generates conditions x seeds matrix of training runs.",
+        "",
+        f"    {cli_name} squeeze.toml",
+        "        Runs squeeze mode when [squeeze] exists in TOML.",
+        "        Analyzes LoRA rank via SVD and optionally compresses.",
+        "",
+        f"    {cli_name} doctor",
+        "        Checks optional dependencies for configured components.",
+        "",
+        f"    {cli_name} init",
+        "        Writes a starter retrain.toml in the current directory.",
+        "",
+        f"    {cli_name} man",
+        "        Shows this manual.",
+        "        --topic <name>    prints one section.",
+        "        --path            prints the manual file path.",
+        "        --list-topics     lists supported topic names.",
+        "        --sync            refreshes auto-generated manual blocks.",
+        "        --json            outputs JSON (full manual or single topic).",
+    ]
+
+
+def _render_options_block() -> list[str]:
+    from retrain.config import _CLI_FLAG_MAP
+
+    # Keep only canonical flags for readability; skip alias here and add below.
+    canonical = sorted(k for k in _CLI_FLAG_MAP if k != "--resume")
+    lines = [
+        "    Every TrainConfig field is exposed as a --kebab-case CLI flag.",
+        "    Flags override TOML values.",
+        "",
+        "    Common examples:",
+        "        retrain config.toml --seed 42 --max-steps 50",
+        "        retrain config.toml --lr 1e-4 --batch-size 16",
+        "        retrain config.toml --advantage-mode grpo",
+        "        retrain config.toml --inference-engine vllm --inference-url http://localhost:8000",
+        "",
+        "    All flags (sorted):",
+    ]
+    for flag in canonical:
+        lines.append(f"        {flag}")
+
+    lines.extend(
+        [
+            "",
+            "    Special alias:",
+            "        --resume VALUE    alias for --resume-from VALUE",
+            "",
+            "    Unknown flags produce an error with close-match suggestions.",
+        ]
+    )
+    return lines
+
+
+def _render_quickstart_block(cli_name: str) -> list[str]:
+    return [
+        "    cp retrain.toml my_run.toml",
+        f"    {cli_name} my_run.toml",
+        f"    {cli_name} my_run.toml --seed 42 --max-steps 50",
+    ]
+
+
+def _render_environment_block(cli_name: str) -> list[str]:
+    from retrain.verifiers_bridge import _FALLBACK_TRAINING_ENVS
+
+    lines = [
+        f"    {cli_name} uses verifiers environments for RLVR training data.",
+        "    Set [environment].provider = \"verifiers\" and specify a Hub ID.",
+        "",
+        "    Trainable verifiers examples:",
+    ]
+    for env_id in _FALLBACK_TRAINING_ENVS:
+        lines.append(f"        {env_id}")
+    lines.extend(
+        [
+            "",
+            "    Caveat:",
+            "        Some hub environments are eval-only and do not expose training",
+            f"        datasets. In that case {cli_name} fails fast with actionable guidance.",
+        ]
+    )
+    return lines
+
+
+def _replace_auto_block(text: str, name: str, rendered_lines: list[str]) -> str:
+    start = f"<<AUTO:{name}>>"
+    end = f"<<END:AUTO:{name}>>"
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == start:
+            replaced = True
+            out.append(line)
+            out.extend(rendered_lines)
+            i += 1
+            while i < len(lines) and lines[i].strip() != end:
+                i += 1
+            if i >= len(lines):
+                raise ValueError(f"Missing block end marker: {end}")
+            out.append(lines[i])
+            i += 1
+            continue
+        out.append(line)
+        i += 1
+
+    if not replaced:
+        raise ValueError(f"Missing block markers for {name}: {start} ... {end}")
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _sync_manual_file(cli_name: str) -> tuple[Path, bool]:
+    """Refresh auto-generated blocks in the editable manual."""
+    path = _manual_path()
+    original = path.read_text() if path.is_file() else _load_manual_text(cli_name)
+
+    updated = original
+    rendered = {
+        "COMMANDS": _render_commands_block(cli_name),
+        "OPTIONS": _render_options_block(),
+        "QUICKSTART": _render_quickstart_block(cli_name),
+        "ENVIRONMENT": _render_environment_block(cli_name),
+    }
+    for name in _AUTO_BLOCK_NAMES:
+        updated = _replace_auto_block(updated, name, rendered[name])
+
+    changed = updated != original
+    if changed:
+        path.write_text(updated)
+    return path, changed
+
+
+def _run_man(args: list[str]) -> None:
+    """Print manual text (or JSON view) from bundled editable file."""
+    fmt = "text"
+    topic: str | None = None
+    show_path = False
+    list_topics = False
+    sync = False
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--json":
+            fmt = "json"
+        elif arg == "--path":
+            show_path = True
+        elif arg == "--list-topics":
+            list_topics = True
+        elif arg == "--sync":
+            sync = True
+        elif arg in ("--format", "-f"):
+            i += 1
+            if i >= len(args):
+                print("Flag --format requires a value: text|json", file=sys.stderr)
+                sys.exit(1)
+            fmt = args[i]
+        elif arg.startswith("--format="):
+            fmt = arg.split("=", 1)[1]
+        elif arg in ("--topic", "-t"):
+            i += 1
+            if i >= len(args):
+                print("Flag --topic requires a value.", file=sys.stderr)
+                sys.exit(1)
+            topic = args[i]
+        elif arg.startswith("--topic="):
+            topic = arg.split("=", 1)[1]
+        else:
+            print(f"Unknown man flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        i += 1
+
+    if fmt not in ("text", "json"):
+        print(f"Unsupported format '{fmt}'. Use text|json.", file=sys.stderr)
+        sys.exit(1)
+
+    cli_name = _resolve_cli_name()
+    manual_path = _manual_path()
+    if sync:
+        try:
+            manual_path, changed = _sync_manual_file(cli_name)
+        except ValueError as exc:
+            print(f"Manual sync failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+        status = "updated" if changed else "already up to date"
+        print(f"{manual_path} ({status})")
+        return
+
+    manual_text = _load_manual_text(cli_name)
+
+    if show_path:
+        print(str(manual_path))
+        return
+
+    if list_topics:
+        for name in sorted(_TOPIC_TO_SECTION):
+            print(name)
+        return
+
+    section_name: str | None = None
+    section_text: str | None = None
+    if topic is not None:
+        section_name = _TOPIC_TO_SECTION.get(topic.lower(), topic.upper())
+        section_text = _extract_manual_section(manual_text, section_name)
+        if section_text is None:
+            print(
+                f"Unknown topic '{topic}'. Available: {sorted(_TOPIC_TO_SECTION)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if fmt == "json":
+        if section_text is None:
+            payload = {
+                "tool": cli_name,
+                "path": str(manual_path),
+                "topics": sorted(_TOPIC_TO_SECTION),
+                "manual": manual_text,
+            }
+        else:
+            payload = {
+                "tool": cli_name,
+                "path": str(manual_path),
+                "topic": topic,
+                "section": section_name,
+                "content": section_text,
+            }
+        print(json.dumps(payload, indent=2))
+        return
+
+    if section_text is None:
+        print(manual_text.rstrip())
+    else:
+        print(section_text.rstrip())
+
+
+def _run_init(cli_name: str | None = None) -> None:
     """Generate a starter retrain.toml in the current directory."""
+    if not cli_name:
+        cli_name = _resolve_cli_name()
     dest = Path("retrain.toml")
     if dest.exists():
         print(f"retrain.toml already exists — refusing to overwrite.")
         sys.exit(1)
     dest.write_text(_STARTER_TOML)
     print(f"Created retrain.toml with conservative defaults.")
-    print("Edit it, then run: retrain")
+    print(f"Edit it, then run: {cli_name}")
+    print(f"Need guidance? Run: {cli_name} man")
 
 
 def _load_dotenv() -> None:
@@ -136,9 +493,14 @@ def main() -> None:
     _load_dotenv()
 
     args = sys.argv[1:]
+    cli_name = _resolve_cli_name()
 
     if args and args[0] in ("-h", "--help", "help"):
-        print(__doc__)
+        _print_top_help(cli_name)
+        sys.exit(0)
+
+    if args and args[0] in ("man", "manual"):
+        _run_man(args[1:])
         sys.exit(0)
 
     if args and args[0] == "doctor":
@@ -146,7 +508,7 @@ def main() -> None:
         sys.exit(0)
 
     if args and args[0] == "init":
-        _run_init()
+        _run_init(cli_name=cli_name)
         sys.exit(0)
 
     # Parse CLI overrides
@@ -160,9 +522,11 @@ def main() -> None:
             config_path = "retrain.toml"
         elif not overrides:
             print("No retrain.toml found. Create one with:")
-            print("  retrain init")
+            print(f"  {cli_name} init")
             print("Or pass a path:")
-            print("  retrain path/to/config.toml")
+            print(f"  {cli_name} path/to/config.toml")
+            print("Manual:")
+            print(f"  {cli_name} man")
             sys.exit(1)
         # else: overrides-only mode, use defaults
 

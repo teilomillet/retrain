@@ -21,6 +21,15 @@ pip install -e .
 ## Quick start
 
 ```bash
+# 0. Inspect CLI manual (human or agent-friendly)
+retrain man
+# show a specific section in machine-readable form
+retrain man --format json --topic quickstart
+# grep/edit the source manual directly
+retrain man --path
+# refresh auto-generated manual sections
+retrain man --sync
+
 # 1. Drop a config
 cp retrain.toml my_run.toml
 
