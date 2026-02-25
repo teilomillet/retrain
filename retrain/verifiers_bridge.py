@@ -14,10 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+import types
+from typing import TYPE_CHECKING, Protocol, cast
 
 from retrain.data import Example
+from retrain.type_defs import ExampleInfoLike, JSONObject, PromptLike
 
 if TYPE_CHECKING:
     from retrain.backends import TrainHelper
@@ -31,7 +34,52 @@ _FALLBACK_TRAINING_ENVS = (
 )
 
 
-def _require_verifiers() -> Any:
+StateDict = dict[str, object]
+
+
+class _Rubric(Protocol):
+    async def score_group(self, states: list[StateDict]) -> object: ...
+
+
+class _DatasetEnvironment(Protocol):
+    env_id: str
+
+    def get_dataset(self, *, n: int, seed: int | None) -> Iterable[Mapping[str, object]]: ...
+
+
+class _SingleTurnEnvironment(Protocol):
+    message_type: str
+    rubric: _Rubric
+
+
+class _MultiTurnEnvironment(Protocol):
+    message_type: str
+    rubric: _Rubric
+
+    async def init_state(
+        self,
+        *,
+        input: dict[str, object],
+        client: object,
+        model: str,
+        sampling_args: object,
+    ) -> StateDict: ...
+
+    async def setup_state(self, state: StateDict) -> StateDict: ...
+    async def is_completed(self, state: StateDict) -> bool: ...
+    async def get_prompt_messages(self, state: StateDict) -> PromptLike: ...
+    async def add_trajectory_step(self, state: StateDict, step: object) -> object: ...
+    async def render_completion(self, state: StateDict) -> object: ...
+
+
+class _Tokenizer(Protocol):
+    def encode(self, text: str) -> object: ...
+    def batch_decode(
+        self, token_ids: list[list[int]], *, skip_special_tokens: bool = True
+    ) -> list[str]: ...
+
+
+def _require_verifiers() -> types.ModuleType:
     try:
         import verifiers as vf
     except ModuleNotFoundError:
@@ -42,12 +90,64 @@ def _require_verifiers() -> Any:
     return vf
 
 
-def parse_environment_args(raw: str | dict[str, Any] | None) -> dict[str, Any]:
+def _coerce_prompt(raw: object) -> PromptLike:
+    if isinstance(raw, str):
+        return raw
+    if not isinstance(raw, list):
+        return str(raw)
+    messages: list[dict[str, object]] = []
+    for msg in raw:
+        if isinstance(msg, Mapping):
+            messages.append(dict(cast(Mapping[str, object], msg)))
+        else:
+            messages.append({"role": "", "content": str(msg)})
+    return messages
+
+
+def _coerce_example_info(raw: object) -> ExampleInfoLike:
+    if raw is None or isinstance(raw, str):
+        return raw
+    if isinstance(raw, Mapping):
+        return cast(ExampleInfoLike, dict(cast(Mapping[str, object], raw)))
+    return str(raw)
+
+
+def _coerce_int_ids(raw: object) -> list[int]:
+    if not isinstance(raw, list):
+        raise TypeError(f"Expected list of token ids, got {type(raw).__name__}")
+    return [_coerce_int(tok) for tok in raw]
+
+
+def _coerce_int(raw: object) -> int:
+    try:
+        return int(cast(int | str | float, raw))
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Expected int-like value, got {raw!r}.") from exc
+
+
+def _coerce_reward(raw: object) -> float:
+    if raw is None:
+        return 0.0
+    try:
+        return float(cast(int | float | str, raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coerce_example_id(raw: object) -> int | str:
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int | str):
+        return raw
+    return str(raw)
+
+
+def parse_environment_args(raw: str | JSONObject | None) -> JSONObject:
     """Parse [environment].args from TOML/CLI into a dict."""
     if raw is None:
         return {}
     if isinstance(raw, dict):
-        return raw
+        return cast(JSONObject, raw)
     if not isinstance(raw, str):
         raise ValueError(
             f"[environment].args must be a JSON string/object, got {type(raw).__name__}"
@@ -62,7 +162,7 @@ def parse_environment_args(raw: str | dict[str, Any] | None) -> dict[str, Any]:
         ) from exc
     if not isinstance(parsed, dict):
         raise ValueError("[environment].args must decode to a JSON object.")
-    return parsed
+    return cast(JSONObject, parsed)
 
 
 def _hub_env_suggestions(env_id: str, limit: int = 5) -> list[str]:
@@ -111,7 +211,7 @@ def _format_hub_suggestions(env_id: str) -> str:
     return " Similar IDs: " + ", ".join(suggestions) + "."
 
 
-def load_verifiers_environment(config: "TrainConfig") -> Any:
+def load_verifiers_environment(config: "TrainConfig") -> object:
     """Load a verifiers environment from local install or Prime Hub package."""
     vf = _require_verifiers()
     env_id = config.environment_id
@@ -158,13 +258,14 @@ def load_verifiers_environment(config: "TrainConfig") -> Any:
         ) from exc
 
 
-def load_examples_from_environment(env: Any, config: "TrainConfig") -> list[Example]:
+def load_examples_from_environment(env: object, config: "TrainConfig") -> list[Example]:
     """Convert verifiers dataset rows into retrain Example objects."""
     n = config.max_examples if config.max_examples > 0 else -1
     seed = config.seed if config.seed >= 0 else None
     env_id = str(getattr(env, "env_id", config.environment_id or "unknown"))
+    dataset_env = cast(_DatasetEnvironment, env)
     try:
-        dataset = env.get_dataset(n=n, seed=seed)
+        dataset = dataset_env.get_dataset(n=n, seed=seed)
     except Exception as exc:
         msg = str(exc).lower()
         if "dataset is not set" in msg:
@@ -180,28 +281,29 @@ def load_examples_from_environment(env: Any, config: "TrainConfig") -> list[Exam
 
     examples: list[Example] = []
     for row in dataset:
-        prompt = row.get("prompt")
+        row_data = row
+        prompt = row_data.get("prompt")
         if prompt is None:
             # Fallback for raw pre-format datasets.
-            question = row.get("question", "")
+            question = row_data.get("question", "")
             prompt = str(question)
-        answer = row.get("answer", "")
-        task = row.get("task", getattr(env, "env_id", "") or "default")
-        info = row.get("info", None)
-        example_id = row.get("example_id", -1)
+        answer = row_data.get("answer", "")
+        task = row_data.get("task", getattr(env, "env_id", "") or "default")
+        info = row_data.get("info", None)
+        example_id = _coerce_example_id(row_data.get("example_id", -1))
         examples.append(
             Example(
-                prompt=prompt,
+                prompt=_coerce_prompt(prompt),
                 reference=str(answer),
                 task=str(task),
-                info=info,
+                info=_coerce_example_info(info),
                 example_id=example_id,
             )
         )
     return examples
 
 
-def prompt_preview(prompt: str | list[dict[str, Any]], max_chars: int = 200) -> str:
+def prompt_preview(prompt: PromptLike, max_chars: int = 200) -> str:
     """Render a compact text preview for logs."""
     if isinstance(prompt, str):
         text = prompt
@@ -216,33 +318,45 @@ def prompt_preview(prompt: str | list[dict[str, Any]], max_chars: int = 200) -> 
     return text[:max_chars]
 
 
-def encode_prompt_for_sampling(tokenizer: Any, prompt: str | list[dict[str, Any]]) -> list[int]:
+def encode_prompt_for_sampling(tokenizer: object, prompt: PromptLike) -> list[int]:
     """Encode a prompt object (string or chat messages) for model sampling."""
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    encode = getattr(tokenizer, "encode", None)
     if isinstance(prompt, str):
-        if hasattr(tokenizer, "apply_chat_template"):
+        if callable(apply_chat_template):
             messages = [{"role": "user", "content": prompt}]
-            ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
+            ids = apply_chat_template(messages, add_generation_prompt=True)
         else:
-            ids = tokenizer.encode(prompt)
+            if not callable(encode):
+                raise TypeError("Tokenizer must expose encode() for string prompts.")
+            ids = encode(prompt)
     else:
-        if hasattr(tokenizer, "apply_chat_template"):
-            ids = tokenizer.apply_chat_template(prompt, add_generation_prompt=True)
+        if callable(apply_chat_template):
+            ids = apply_chat_template(prompt, add_generation_prompt=True)
         else:
             text = "\n".join(str(msg.get("content", "")) for msg in prompt)
-            ids = tokenizer.encode(text)
+            if not callable(encode):
+                raise TypeError("Tokenizer must expose encode() for chat prompts.")
+            ids = encode(text)
 
+    if isinstance(ids, Mapping):
+        input_ids = ids.get("input_ids")
+        if input_ids is not None:
+            return _coerce_int_ids(input_ids)
     if hasattr(ids, "input_ids"):
-        ids = ids["input_ids"]
-    return list(ids)
+        return _coerce_int_ids(getattr(ids, "input_ids"))
+    return _coerce_int_ids(ids)
 
 
-def _completion_messages_for_env(env: Any, completion_text: str) -> Any:
+def _completion_messages_for_env(
+    env: _SingleTurnEnvironment, completion_text: str
+) -> list[dict[str, str]] | str:
     if getattr(env, "message_type", "chat") == "chat":
         return [{"role": "assistant", "content": completion_text}]
     return completion_text
 
 
-def _messages_to_text(messages: Any) -> str:
+def _messages_to_text(messages: object) -> str:
     if isinstance(messages, str):
         return messages
     if not isinstance(messages, list):
@@ -252,27 +366,29 @@ def _messages_to_text(messages: Any) -> str:
         if not isinstance(msg, dict):
             chunks.append(str(msg))
             continue
-        content = msg.get("content")
+        msg_data = cast(Mapping[str, object], msg)
+        content = msg_data.get("content")
         if content:
             chunks.append(str(content))
     return "\n".join(chunks)
 
 
 def score_singleturn_group(
-    env: Any,
+    env: object,
     *,
-    prompt: str | list[dict[str, Any]],
+    prompt: PromptLike,
     answer: str,
     task: str,
-    info: dict[str, Any] | str | None,
+    info: ExampleInfoLike,
     completion_texts: list[str],
 ) -> list[float]:
     """Score a group of single-turn completions with env rubric."""
     vf = _require_verifiers()
+    env_typed = cast(_SingleTurnEnvironment, env)
 
-    states: list[Any] = []
+    states: list[StateDict] = []
     for i, text in enumerate(completion_texts):
-        input_payload: dict[str, Any] = {
+        input_payload: dict[str, object] = {
             "prompt": prompt,
             "answer": answer,
             "task": task,
@@ -281,8 +397,8 @@ def score_singleturn_group(
         if info is not None:
             input_payload["info"] = info
 
-        state = vf.State(input=input_payload)
-        state["completion"] = _completion_messages_for_env(env, text)
+        state = cast(StateDict, vf.State(input=input_payload))
+        state["completion"] = _completion_messages_for_env(env_typed, text)
         state["trajectory"] = []
         state["reward"] = None
         state["advantage"] = None
@@ -293,8 +409,8 @@ def score_singleturn_group(
         state["timing"] = {"generation_ms": 0.0, "scoring_ms": 0.0, "total_ms": 0.0}
         states.append(state)
 
-    asyncio.run(env.rubric.score_group(states))
-    return [float(s.get("reward", 0.0) or 0.0) for s in states]
+    asyncio.run(env_typed.rubric.score_group(states))
+    return [_coerce_reward(s.get("reward")) for s in states]
 
 
 @dataclass
@@ -307,22 +423,22 @@ class VerifiersTurnSample:
     completion_text: str
 
 
-def is_multiturn_environment(env: Any) -> bool:
+def is_multiturn_environment(env: object) -> bool:
     """Whether env is a verifiers MultiTurnEnv."""
     vf = _require_verifiers()
     return isinstance(env, vf.MultiTurnEnv)
 
 
 def run_multiturn_group(
-    env: Any,
+    env: object,
     *,
     helper: "TrainHelper",
-    tokenizer: Any,
+    tokenizer: object,
     model_name: str,
-    prompt: str | list[dict[str, Any]],
+    prompt: PromptLike,
     answer: str,
     task: str,
-    info: dict[str, Any] | str | None,
+    info: ExampleInfoLike,
     num_rollouts: int,
     max_tokens: int,
     temperature: float,
@@ -333,11 +449,13 @@ def run_multiturn_group(
 
     async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str]]:
         vf = _require_verifiers()
-        states: list[Any] = []
+        env_typed = cast(_MultiTurnEnvironment, env)
+        tokenizer_typed = cast(_Tokenizer, tokenizer)
+        states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [[] for _ in range(num_rollouts)]
 
         for i in range(num_rollouts):
-            input_payload: dict[str, Any] = {
+            input_payload: dict[str, object] = {
                 "prompt": prompt,
                 "answer": answer,
                 "task": task,
@@ -345,22 +463,22 @@ def run_multiturn_group(
             }
             if info is not None:
                 input_payload["info"] = info
-            state = await env.init_state(
+            state = await env_typed.init_state(
                 input=input_payload,
                 client=None,  # retrain handles model calls through helper.sample()
                 model=model_name,
                 sampling_args=None,
             )
-            state = await env.setup_state(state)
+            state = await env_typed.setup_state(state)
             states.append(state)
 
         turn_count = 0
         while True:
-            active: list[tuple[int, Any, list[int]]] = []
+            active: list[tuple[int, PromptLike, list[int]]] = []
             for idx, state in enumerate(states):
-                if await env.is_completed(state):
+                if await env_typed.is_completed(state):
                     continue
-                prompt_messages = await env.get_prompt_messages(state)
+                prompt_messages = await env_typed.get_prompt_messages(state)
                 if state.get("final_env_response") is not None:
                     continue
                 prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
@@ -388,7 +506,7 @@ def run_multiturn_group(
             completion_logprobs_batch = [
                 [float(lp) for lp in group[0][1]] for group in sampled_groups
             ]
-            completion_texts = tokenizer.batch_decode(
+            completion_texts = tokenizer_typed.batch_decode(
                 completion_ids_batch, skip_special_tokens=True
             )
 
@@ -396,7 +514,7 @@ def run_multiturn_group(
                 completion_ids = completion_ids_batch[pos]
                 completion_logprobs = completion_logprobs_batch[pos]
                 completion_text = completion_texts[pos]
-                completion_messages = _completion_messages_for_env(env, completion_text)
+                completion_messages = _completion_messages_for_env(env_typed, completion_text)
 
                 tokens_payload = {
                     "prompt_ids": list(prompt_ids),
@@ -418,7 +536,7 @@ def run_multiturn_group(
                     trajectory_id=states[idx]["trajectory_id"],
                     extras={},
                 )
-                await env.add_trajectory_step(states[idx], trajectory_step)
+                await env_typed.add_trajectory_step(states[idx], trajectory_step)
                 per_rollout_turns[idx].append(
                     VerifiersTurnSample(
                         prompt_ids=list(prompt_ids),
@@ -431,10 +549,10 @@ def run_multiturn_group(
             turn_count += 1
 
         for state in states:
-            await env.render_completion(state)
-        await env.rubric.score_group(states)
+            await env_typed.render_completion(state)
+        await env_typed.rubric.score_group(states)
 
-        rewards = [float(s.get("reward", 0.0) or 0.0) for s in states]
+        rewards = [_coerce_reward(s.get("reward")) for s in states]
         completions_text = [_messages_to_text(s.get("completion")) for s in states]
         return rewards, per_rollout_turns, completions_text
 
