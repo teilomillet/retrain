@@ -21,8 +21,8 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import requests
 
@@ -121,7 +121,7 @@ class PrimeRLTrainHelper:
         results: list[list[tuple[list[int], list[float]]]] = []
 
         for prompt_ids in prompt_ids_list:
-            payload = {
+            payload: dict[str, object] = {
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": ""}],
                 "tokens": list(prompt_ids),
@@ -137,7 +137,12 @@ class PrimeRLTrainHelper:
                 "min_p": 0.0,
             }
             response = self._post_json(self._sample_url, payload)
-            choices = response.get("choices", [])
+            choices_obj = response.get("choices", [])
+            if not isinstance(choices_obj, list):
+                raise RuntimeError(
+                    "PRIME-RL inference returned malformed 'choices' payload."
+                )
+            choices = choices_obj
             if len(choices) != num_samples:
                 raise RuntimeError(
                     "PRIME-RL inference returned unexpected number of completions: "
@@ -174,7 +179,7 @@ class PrimeRLTrainHelper:
         )
         self._pending_checkpoint_step = None
 
-        examples: list[Any] = []
+        examples: list[object] = []
         for tokens, logprobs, advantages in zip(all_tokens, all_logprobs, all_advantages):
             sample = self._to_training_sample(tokens, logprobs, advantages)
             if sample is not None:
@@ -292,7 +297,7 @@ class PrimeRLTrainHelper:
         tokens: list[int],
         logprobs: list[float],
         advantages: list[float],
-    ) -> Any | None:
+    ) -> object | None:
         if not tokens:
             return None
         if not (len(tokens) == len(logprobs) == len(advantages)):
@@ -351,12 +356,12 @@ class PrimeRLTrainHelper:
 
     def _extract_completion(
         self,
-        choice: dict[str, Any],
+        choice: dict[str, object],
         prompt_ids: list[int],
     ) -> tuple[list[int], list[float]]:
         # Path 1: PRIME-RL/verifiers token payload.
         token_block = choice.get("tokens")
-        if isinstance(token_block, dict):
+        if isinstance(token_block, Mapping):
             ids = token_block.get("completion_ids")
             lps = token_block.get("completion_logprobs")
             if isinstance(ids, list) and isinstance(lps, list):
@@ -365,13 +370,13 @@ class PrimeRLTrainHelper:
         # Path 2: OpenAI logprobs.content with token_id.
         content = None
         logprobs_obj = choice.get("logprobs")
-        if isinstance(logprobs_obj, dict):
+        if isinstance(logprobs_obj, Mapping):
             content = logprobs_obj.get("content")
         if isinstance(content, list):
             ids: list[int] = []
             lps: list[float] = []
             for item in content:
-                if not isinstance(item, dict):
+                if not isinstance(item, Mapping):
                     continue
                 lp = item.get("logprob")
                 if lp is None:
@@ -384,7 +389,7 @@ class PrimeRLTrainHelper:
                 return ids, lps
 
         # Path 3: OpenAI logprobs token arrays.
-        if isinstance(logprobs_obj, dict):
+        if isinstance(logprobs_obj, Mapping):
             token_lps = logprobs_obj.get("token_logprobs")
             tokens = logprobs_obj.get("tokens")
             if isinstance(token_lps, list) and isinstance(tokens, list):
@@ -429,13 +434,13 @@ class PrimeRLTrainHelper:
         n = min(len(ids), len(lps))
         return ids[:n], lps[:n]
 
-    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         try:
             resp = self._session.post(url, json=payload, timeout=120)
             resp.raise_for_status()
             data = resp.json()
-            if not isinstance(data, dict):
+            if not isinstance(data, Mapping):
                 raise RuntimeError(f"Expected JSON object from {url}, got {type(data).__name__}")
-            return data
+            return dict(data)
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(f"PRIME-RL request failed at {url}: {exc}") from exc
