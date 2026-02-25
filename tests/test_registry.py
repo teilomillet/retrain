@@ -71,11 +71,13 @@ class TestRegistryCore:
         with patch("importlib.import_module") as mock_import:
             mock_mod = MagicMock()
             mock_mod.MyPlugin = mock_cls
-            mock_import.return_value = mock_mod
+            # First candidate may be prefixed by plugin search path.
+            mock_import.side_effect = [ModuleNotFoundError("no plugin prefix"), mock_mod]
 
             result = reg.create("mypkg.module.MyPlugin", config)
 
-        mock_import.assert_called_once_with("mypkg.module")
+        called_modules = [c.args[0] for c in mock_import.call_args_list]
+        assert "mypkg.module" in called_modules
         mock_cls.assert_called_once_with(config)
         assert result == "plugin_instance"
 

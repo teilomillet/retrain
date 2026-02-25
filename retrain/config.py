@@ -17,13 +17,16 @@ from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 
 from retrain.advantages import (
+    get_builtin_algorithm_modes,
+    get_builtin_advantage_modes,
     get_builtin_transform_modes,
+    is_valid_algorithm_mode_name,
+    is_valid_advantage_mode_name,
     is_valid_transform_mode_name,
 )
 from retrain.backend_definitions import normalize_backend_options
+from retrain.plugin_resolver import set_plugin_runtime
 
-_VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
-_VALID_TRANSFORM_MODES = set(get_builtin_transform_modes())
 _VALID_ENVIRONMENT_PROVIDERS = {"", "verifiers"}
 _DEFAULT_ADAPTER_PATH = "/tmp/retrain_adapter"
 
@@ -82,8 +85,12 @@ class TrainConfig:
     """All training hyperparameters."""
 
     # Algorithm selection
+    algorithm_mode: str = ""
     advantage_mode: str = "maxrl"
     transform_mode: str = "gtpo_sepa"
+    algorithm_params: dict[str, object] = field(default_factory=dict)
+    advantage_params: dict[str, object] = field(default_factory=dict)
+    transform_params: dict[str, object] = field(default_factory=dict)
 
     # Backend selection
     backend: str = "local"
@@ -183,6 +190,10 @@ class TrainConfig:
     wandb_group: str = ""
     wandb_tags: str = ""
 
+    # Plugin loading
+    plugins_search_paths: list[str] = field(default_factory=lambda: ["plugins"])
+    plugins_strict: bool = True
+
     def __post_init__(self) -> None:
         # --- Hard errors (batched) ---
         errors: list[str] = []
@@ -208,18 +219,47 @@ class TrainConfig:
                 "entropy_mask_rho must be in [0.0, 1.0]. Try: entropy_mask_rho = 0.2"
             )
 
-        if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
-            errors.append(
-                f"Invalid advantage_mode '{self.advantage_mode}'. "
-                f"Must be one of: {sorted(_VALID_ADVANTAGE_MODES)}"
-            )
-        if self.transform_mode not in _VALID_TRANSFORM_MODES:
+        valid_algorithm_modes = set(get_builtin_algorithm_modes())
+        if self.algorithm_mode:
+            if self.algorithm_mode not in valid_algorithm_modes:
+                if not is_valid_algorithm_mode_name(self.algorithm_mode):
+                    errors.append(
+                        f"Invalid algorithm_mode '{self.algorithm_mode}'. "
+                        f"Must be one of: {sorted(valid_algorithm_modes)} "
+                        "or a dotted plugin path (e.g. 'my_module.my_algorithm')."
+                    )
+
+        valid_advantage_modes = set(get_builtin_advantage_modes())
+        if self.advantage_mode not in valid_advantage_modes:
+            if not is_valid_advantage_mode_name(self.advantage_mode):
+                errors.append(
+                    f"Invalid advantage_mode '{self.advantage_mode}'. "
+                    f"Must be one of: {sorted(valid_advantage_modes)} "
+                    "or a dotted plugin path (e.g. 'my_module.my_advantage')."
+                )
+
+        valid_transform_modes = set(get_builtin_transform_modes())
+        if self.transform_mode not in valid_transform_modes:
             if not is_valid_transform_mode_name(self.transform_mode):
                 errors.append(
                     f"Invalid transform_mode '{self.transform_mode}'. "
-                    f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)} "
+                    f"Must be one of: {sorted(valid_transform_modes)} "
                     "or a dotted plugin path (e.g. 'my_module.make_transform_spec')."
                 )
+
+        for field_name in ("algorithm_params", "advantage_params", "transform_params"):
+            value = getattr(self, field_name)
+            if not isinstance(value, dict):
+                errors.append(
+                    f"{field_name} must be a mapping table."
+                )
+
+        if not isinstance(self.plugins_search_paths, list) or not all(
+            isinstance(p, str) and p.strip() for p in self.plugins_search_paths
+        ):
+            errors.append(
+                "plugins_search_paths must be a non-empty list of module prefixes."
+            )
         if self.environment_provider not in _VALID_ENVIRONMENT_PROVIDERS:
             errors.append(
                 f"Invalid environment_provider '{self.environment_provider}'. "
@@ -262,6 +302,9 @@ class TrainConfig:
         if errors:
             raise ValueError("\n".join(errors))
 
+        # Keep plugin runtime config synchronized for dotted-path resolution.
+        set_plugin_runtime(self.plugins_search_paths, self.plugins_strict)
+
         # --- Warnings (non-fatal) ---
         if (
             self.adapter_path.startswith("/tmp")
@@ -288,20 +331,43 @@ class TrainConfig:
             )
 
     @property
-    def post_process_params(self) -> dict[str, float]:
+    def post_process_params(self) -> dict[str, object]:
         """Build the params dict passed to TransformSpec.post_process hooks.
 
         Collects algorithm hyperparameters that post-process hooks may need.
         Hooks pick the keys they care about; unknown keys are ignored.
         """
-        return {
-            "entropy_mask_rho": self.entropy_mask_rho,
-        }
+        params = dict(self.transform_params)
+        params.setdefault("entropy_mask_rho", self.entropy_mask_rho)
+        return params
+
+    @property
+    def effective_advantage_params(self) -> dict[str, object]:
+        """Params passed to advantage plugins/callables."""
+        params = dict(self.advantage_params)
+        params.setdefault("algorithm_mode", self.algorithm_mode)
+        params.setdefault("advantage_mode", self.advantage_mode)
+        params.setdefault("transform_mode", self.transform_mode)
+        return params
+
+    @property
+    def effective_algorithm_params(self) -> dict[str, object]:
+        """Params passed to algorithm plugins/callables."""
+        params = dict(self.algorithm_params)
+        params.setdefault("advantage_mode", self.advantage_mode)
+        params.setdefault("transform_mode", self.transform_mode)
+        params.setdefault("advantage_params", dict(self.advantage_params))
+        params.setdefault("transform_params", dict(self.transform_params))
+        params.setdefault("entropy_mask_rho", self.entropy_mask_rho)
+        params.setdefault("gtpo_beta", self.gtpo_beta)
+        params.setdefault("hicra_alpha", self.hicra_alpha)
+        return params
 
 
 # TOML section -> config field mapping
 _TOML_MAP: dict[str, dict[str, str]] = {
     "algorithm": {
+        "algorithm_mode": "algorithm_mode",
         "advantage_mode": "advantage_mode",
         "transform_mode": "transform_mode",
         "entropy_mask_rho": "entropy_mask_rho",
@@ -397,6 +463,9 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "wandb_group": "wandb_group",
         "wandb_tags": "wandb_tags",
         "strategic_grams": "strategic_grams",
+    },
+    "plugins": {
+        "strict": "plugins_strict",
     },
 }
 
@@ -644,12 +713,33 @@ def _extract_backend_options(backend_sec: object) -> dict[str, object] | None:
 
 def _coerce_value(field_name: str, raw: object) -> object:
     """Coerce a CLI string value to the type expected by *field_name*."""
-    if field_name == "backend_options":
+    if field_name in (
+        "backend_options",
+        "algorithm_params",
+        "advantage_params",
+        "transform_params",
+    ):
         if not isinstance(raw, dict):
             raise ValueError(
-                "backend_options override must be a mapping of key=value options."
+                f"{field_name} override must be a mapping of key=value options."
             )
         return dict(raw)
+
+    if field_name == "plugins_search_paths":
+        if isinstance(raw, list):
+            return [str(v) for v in raw]
+        if isinstance(raw, str):
+            if not raw.strip():
+                return []
+            if raw.strip().startswith("["):
+                loaded = json.loads(raw)
+                if not isinstance(loaded, list):
+                    raise ValueError(
+                        "plugins_search_paths JSON override must decode to a list."
+                    )
+                return [str(v) for v in loaded]
+            return [p.strip() for p in raw.split(",") if p.strip()]
+        raise ValueError("plugins_search_paths override must be list or comma string.")
 
     ftype = _FIELD_TYPES[field_name]
     if ftype is bool:
@@ -672,7 +762,12 @@ def _coerce_value(field_name: str, raw: object) -> object:
 # Build CLI flag map: --kebab-case → snake_case field name
 _CLI_FLAG_MAP: dict[str, str] = {}
 for _f in fields(TrainConfig):
-    if _f.name == "backend_options":
+    if _f.name in (
+        "backend_options",
+        "algorithm_params",
+        "advantage_params",
+        "transform_params",
+    ):
         continue
     _CLI_FLAG_MAP["--" + _f.name.replace("_", "-")] = _f.name
 # Explicit alias
@@ -692,6 +787,36 @@ def _parse_backend_opt(raw_value: str) -> tuple[str, str]:
     return key, value
 
 
+def _parse_param_opt(raw_value: str, flag_name: str) -> tuple[str, object]:
+    """Parse one repeatable parameter override from key=value format."""
+    if "=" not in raw_value:
+        raise ValueError(
+            f"Flag {flag_name} requires key=value "
+            f"(example: {flag_name} alpha=0.2)."
+        )
+    key, value = raw_value.split("=", 1)
+    key = key.strip()
+    if not key:
+        raise ValueError(f"Flag {flag_name} requires a non-empty key (key=value).")
+
+    v = value.strip()
+    if not v:
+        return key, ""
+    if v.lower() in {"true", "false"}:
+        return key, v.lower() == "true"
+    if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")):
+        try:
+            return key, json.loads(v)
+        except json.JSONDecodeError:
+            pass
+    try:
+        if "." in v:
+            return key, float(v)
+        return key, int(v)
+    except ValueError:
+        return key, v
+
+
 def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, object]]:
     """Parse CLI args into (config_path, overrides).
 
@@ -702,6 +827,9 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, object]]
     config_path: str | None = None
     overrides: dict[str, object] = {}
     backend_opt_overrides: dict[str, object] = {}
+    algorithm_param_overrides: dict[str, object] = {}
+    advantage_param_overrides: dict[str, object] = {}
+    transform_param_overrides: dict[str, object] = {}
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -734,10 +862,37 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, object]]
             i += 1
             continue
 
+        if flag in ("--algorithm-param", "--advantage-param", "--transform-param"):
+            if value is None:
+                i += 1
+                if i >= len(argv):
+                    print(f"Flag {flag} requires a value.", file=sys.stderr)
+                    sys.exit(1)
+                value = argv[i]
+            try:
+                key, param_value = _parse_param_opt(value, flag)
+            except ValueError as exc:
+                print(str(exc), file=sys.stderr)
+                sys.exit(1)
+            if flag == "--algorithm-param":
+                algorithm_param_overrides[key] = param_value
+            elif flag == "--advantage-param":
+                advantage_param_overrides[key] = param_value
+            else:
+                transform_param_overrides[key] = param_value
+            i += 1
+            continue
+
         if flag not in _CLI_FLAG_MAP:
             close = difflib.get_close_matches(
                 flag,
-                list(_CLI_FLAG_MAP.keys()) + ["--backend-opt"],
+                list(_CLI_FLAG_MAP.keys())
+                + [
+                    "--backend-opt",
+                    "--algorithm-param",
+                    "--advantage-param",
+                    "--transform-param",
+                ],
                 n=1,
                 cutoff=0.6,
             )
@@ -757,6 +912,12 @@ def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, object]]
 
     if backend_opt_overrides:
         overrides["backend_options"] = backend_opt_overrides
+    if algorithm_param_overrides:
+        overrides["algorithm_params"] = algorithm_param_overrides
+    if advantage_param_overrides:
+        overrides["advantage_params"] = advantage_param_overrides
+    if transform_param_overrides:
+        overrides["transform_params"] = transform_param_overrides
 
     return config_path, overrides
 
@@ -796,6 +957,23 @@ def load_config(
         if backend_options is not None:
             setattr(config, "backend_options", backend_options)
 
+        plugins_sec = data.get("plugins")
+        if isinstance(plugins_sec, dict) and "search_paths" in plugins_sec:
+            raw_paths = plugins_sec["search_paths"]
+            if isinstance(raw_paths, list):
+                setattr(config, "plugins_search_paths", [str(v) for v in raw_paths])
+            elif isinstance(raw_paths, str):
+                setattr(
+                    config,
+                    "plugins_search_paths",
+                    [p.strip() for p in raw_paths.split(",") if p.strip()],
+                )
+            else:
+                raise ValueError(
+                    "Invalid [plugins].search_paths value. "
+                    "Use a TOML list of strings."
+                )
+
         for section, mapping in _TOML_MAP.items():
             sec = data.get(section)
             if sec is None:
@@ -822,11 +1000,35 @@ def load_config(
                     if s:
                         setattr(config, field_name, s)
 
+        algorithm_sec = data.get("algorithm")
+        if isinstance(algorithm_sec, dict):
+            for key, field_name in (
+                ("params", "algorithm_params"),
+                ("advantage_params", "advantage_params"),
+                ("transform_params", "transform_params"),
+            ):
+                if key not in algorithm_sec:
+                    continue
+                raw_map = algorithm_sec[key]
+                if not isinstance(raw_map, dict):
+                    raise ValueError(
+                        f"Invalid [algorithm].{key} value. "
+                        "Use a TOML table."
+                    )
+                setattr(config, field_name, dict(raw_map))
+
     # Apply CLI overrides
     if overrides:
         for field_name, raw_value in overrides.items():
-            if field_name == "backend_options":
+            if field_name in (
+                "backend_options",
+                "algorithm_params",
+                "advantage_params",
+                "transform_params",
+            ):
                 merged = dict(getattr(config, "backend_options", {}))
+                if field_name != "backend_options":
+                    merged = dict(getattr(config, field_name, {}))
                 merged.update(_coerce_value(field_name, raw_value))
                 setattr(config, field_name, merged)
                 continue

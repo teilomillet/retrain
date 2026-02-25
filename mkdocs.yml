@@ -47,6 +47,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Configuration: configuration.md
+  - Plugins: plugins.md
   - Algorithms:
     - Advantage Functions: advantages.md
     - SEPA: sepa.md

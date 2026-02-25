@@ -15,7 +15,9 @@ from transformers import AutoTokenizer
 
 from retrain.advantages import (
     EntropyStats,
+    compute_algorithm_advantages,
     compute_composable_advantages,
+    get_algorithm_spec,
     get_transform_spec,
 )
 from retrain.backpressure import (
@@ -44,6 +46,13 @@ from retrain.verifiers_bridge import (
 
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
+
+
+def _condition_label(config: TrainConfig) -> str:
+    """Human-readable algorithm condition label."""
+    if config.algorithm_mode:
+        return config.algorithm_mode
+    return f"{config.advantage_mode}+{config.transform_mode}"
 
 
 class TrainerState(TypedDict):
@@ -85,7 +94,7 @@ def _print_config_summary(config: TrainConfig) -> None:
     lines = [
         f"  model         : {config.model}",
         f"  backend       : {config.backend}",
-        f"  algorithm     : {config.advantage_mode}+{config.transform_mode}",
+        f"  algorithm     : {_condition_label(config)}",
         f"  batch_size    : {config.batch_size}",
         f"  group_size    : {config.group_size}",
         f"  max_steps     : {config.max_steps}",
@@ -323,7 +332,7 @@ def train(config: TrainConfig) -> str | None:
     if wandb_enabled:
         import wandb
 
-        condition_label = f"{config.advantage_mode}+{config.transform_mode}"
+        condition_label = _condition_label(config)
         run_name = config.wandb_run_name or condition_label
         wandb_tags = (
             [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
@@ -331,6 +340,7 @@ def train(config: TrainConfig) -> str | None:
             else None
         )
         wandb_config: dict[str, str | int | float] = {
+            "algorithm_mode": config.algorithm_mode,
             "advantage_mode": config.advantage_mode,
             "transform_mode": config.transform_mode,
             "condition": condition_label,
@@ -375,9 +385,19 @@ def train(config: TrainConfig) -> str | None:
     sepa_lambda_val = 0.0
     current_batch_size = config.batch_size
     current_group_size = config.group_size
-    transform_spec = get_transform_spec(config.transform_mode)
-    needs_planning = transform_spec.needs_planning
-    uses_sepa_controller = transform_spec.uses_sepa_controller
+    if config.algorithm_mode:
+        spec = get_algorithm_spec(config.algorithm_mode)
+        needs_planning = spec.needs_planning
+        uses_sepa_controller = spec.uses_sepa_controller
+        print(
+            "Algorithm mode active: "
+            f"{config.algorithm_mode}. "
+            "Ignoring advantage_mode/transform_mode composition."
+        )
+    else:
+        transform_spec = get_transform_spec(config.transform_mode)
+        needs_planning = transform_spec.needs_planning
+        uses_sepa_controller = transform_spec.uses_sepa_controller
     start_step = 0
 
     # -----------------------------------------------------------------------
@@ -547,17 +567,33 @@ def train(config: TrainConfig) -> str | None:
                         print("    -> skipped (all wrong)")
                     continue
 
-                adv_result = compute_composable_advantages(
-                    rewards_G,
-                    logprobs_G,
-                    planning_masks_G,
-                    advantage_mode=config.advantage_mode,
-                    transform_mode=config.transform_mode,
-                    gtpo_beta=config.gtpo_beta,
-                    hicra_alpha=config.hicra_alpha,
-                    sepa_lambda=sepa_lambda_val,
-                    post_process_params=config.post_process_params,
-                )
+                if config.algorithm_mode:
+                    adv_result = compute_algorithm_advantages(
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        algorithm_mode=config.algorithm_mode,
+                        params=config.effective_algorithm_params,
+                        gtpo_beta=config.gtpo_beta,
+                        hicra_alpha=config.hicra_alpha,
+                        sepa_lambda=sepa_lambda_val,
+                        step=batch_idx,
+                    )
+                else:
+                    adv_result = compute_composable_advantages(
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        advantage_mode=config.advantage_mode,
+                        transform_mode=config.transform_mode,
+                        gtpo_beta=config.gtpo_beta,
+                        hicra_alpha=config.hicra_alpha,
+                        sepa_lambda=sepa_lambda_val,
+                        advantage_params=config.effective_advantage_params,
+                        transform_params=config.transform_params,
+                        step=batch_idx,
+                        post_process_params=config.post_process_params,
+                    )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
                     batch_entropy_stats.append(adv_result.stats)
@@ -693,17 +729,33 @@ def train(config: TrainConfig) -> str | None:
                         print("    -> skipped (all wrong)")
                     continue
 
-                adv_result = compute_composable_advantages(
-                    rewards_G,
-                    logprobs_G,
-                    planning_masks_G,
-                    advantage_mode=config.advantage_mode,
-                    transform_mode=config.transform_mode,
-                    gtpo_beta=config.gtpo_beta,
-                    hicra_alpha=config.hicra_alpha,
-                    sepa_lambda=sepa_lambda_val,
-                    post_process_params=config.post_process_params,
-                )
+                if config.algorithm_mode:
+                    adv_result = compute_algorithm_advantages(
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        algorithm_mode=config.algorithm_mode,
+                        params=config.effective_algorithm_params,
+                        gtpo_beta=config.gtpo_beta,
+                        hicra_alpha=config.hicra_alpha,
+                        sepa_lambda=sepa_lambda_val,
+                        step=batch_idx,
+                    )
+                else:
+                    adv_result = compute_composable_advantages(
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        advantage_mode=config.advantage_mode,
+                        transform_mode=config.transform_mode,
+                        gtpo_beta=config.gtpo_beta,
+                        hicra_alpha=config.hicra_alpha,
+                        sepa_lambda=sepa_lambda_val,
+                        advantage_params=config.effective_advantage_params,
+                        transform_params=config.transform_params,
+                        step=batch_idx,
+                        post_process_params=config.post_process_params,
+                    )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
                     batch_entropy_stats.append(adv_result.stats)
@@ -829,7 +881,7 @@ def train(config: TrainConfig) -> str | None:
             step_plan_mean = sum(s.plan_mean for s in batch_entropy_stats) / n_stats
             step_plan_var = sum(s.plan_var for s in batch_entropy_stats) / n_stats
 
-        condition_label = f"{config.advantage_mode}+{config.transform_mode}"
+        condition_label = _condition_label(config)
         sepa_gate = (
             sepa_controller.gate_open()
             if uses_sepa_controller
@@ -838,6 +890,7 @@ def train(config: TrainConfig) -> str | None:
 
         metrics: dict = {
             "step": batch_idx,
+            "algorithm_mode": config.algorithm_mode,
             "advantage_mode": config.advantage_mode,
             "transform_mode": config.transform_mode,
             "condition": condition_label,
@@ -981,7 +1034,7 @@ def train(config: TrainConfig) -> str | None:
         100.0 * total_correct / total_completions if total_completions > 0 else 0.0
     )
     print(
-        f"Training complete. {config.advantage_mode}+{config.transform_mode}, "
+        f"Training complete. {_condition_label(config)}, "
         f"{config.max_steps} steps, running correct rate: {final_rate:.1f}%"
     )
     metrics_path = log_path / "metrics.jsonl"

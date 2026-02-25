@@ -80,6 +80,16 @@ COMMANDS
         --list            shows available templates.
         --interactive/-i  guided setup with prompts.
 
+    retrain init-plugin --kind KIND --name NAME [--output-dir DIR] [--with-test]
+        Scaffolds a student-friendly plugin module.
+        Kinds: transform, advantage, algorithm, reward, planning, data,
+               backend, inference, backpressure.
+        --with-test       also generates a smoke test template.
+
+    retrain plugins [--json] [config.toml]
+        Lists built-ins + discovered plugin modules.
+        If config.toml is provided, uses its [plugins] search_paths.
+
     retrain status [logdir] [--json]
         Scans log directories for run and campaign status.
         Defaults to ./logs when no path is given.
@@ -115,12 +125,14 @@ OPTIONS
         retrain config.toml --seed 42 --max-steps 50
         retrain config.toml --lr 1e-4 --batch-size 16
         retrain config.toml --advantage-mode grpo
+        retrain config.toml --advantage-param scale=2.0 --transform-param cap=0.1
         retrain config.toml --inference-engine vllm --inference-url http://localhost:8000
         retrain config.toml --backend prime_rl --backend-opt transport=zmq --backend-opt zmq_port=7777
 
     All flags (sorted):
         --adapter-path
         --advantage-mode
+        --algorithm-mode
         --attention-kernel
         --backend
         --base-url
@@ -164,6 +176,8 @@ OPTIONS
         --planning-detector
         --planning-model
         --planning-threshold
+        --plugins-search-paths
+        --plugins-strict
         --prefix-caching
         --resume-from
         --reward-custom-function
@@ -189,6 +203,9 @@ OPTIONS
 
     Special flags:
         --backend-opt K=V    backend-specific option override (repeatable).
+        --algorithm-param K=V algorithm plugin params (repeatable).
+        --advantage-param K=V advantage plugin params (repeatable).
+        --transform-param K=V transform plugin params (repeatable).
         --resume VALUE    alias for --resume-from VALUE
 
     Unknown flags produce an error with close-match suggestions.
@@ -233,7 +250,8 @@ CONFIGURATION
   [algorithm]
 
     advantage_mode = "maxrl"
-        "grpo" or "maxrl". Hard error if invalid.
+        Built-ins: "grpo" or "maxrl", or a dotted plugin path
+        (e.g. "my_module.my_advantage"). Hard error if invalid.
 
         grpo    Group Relative Policy Optimization. Centers rewards
                 around the group mean: A_i = r_i - mean(r).
@@ -1018,10 +1036,22 @@ ARCHITECTURE
     +-- logging_utils.py         JSONL logger
 
 PLUGINS
-    retrain supports six plugin types. Each is specified as a dotted
+    retrain supports seven plugin types. Each is specified as a dotted
     Python import path in TOML (e.g. "my_package.my_module.factory").
 
-  1. Transform plugin
+  1. Advantage plugin
+
+    Set advantage_mode to a dotted path. The target can be:
+
+        def my_advantage(rewards: list[float]) -> list[float]:
+            ...
+
+    Optional params:
+
+        def my_advantage(rewards: list[float], params: dict) -> list[float]:
+            ...
+
+  2. Transform plugin
 
     Set transform_mode to a dotted path. The function must return a
     TransformSpec:
@@ -1042,7 +1072,7 @@ PLUGINS
         entropy_transform   EntropyTransformFn | None   Custom entropy transform.
         post_process        PostProcessFn | None        Final advantage hook.
 
-  2. Backend plugin
+  3. Backend plugin
 
     Set [backend].backend to a dotted path. Must implement the
     TrainHelper protocol:
@@ -1053,7 +1083,7 @@ PLUGINS
         save_adapter(path,name) Persist adapter weights/state.
         load_state(name)        Restore adapter weights/state.
 
-  3. Inference engine plugin
+  4. Inference engine plugin
 
     Set [inference].engine to a dotted path. Must subclass
     InferenceEngine with:
@@ -1061,7 +1091,7 @@ PLUGINS
         generate(prompts, config) -> list[Completion]
         load_adapter(path)        -> None
 
-  4. Reward plugin
+  5. Reward plugin
 
     Set reward_type = "custom", then specify:
         custom_module    = "my_package.rewards"
@@ -1070,7 +1100,7 @@ PLUGINS
     Function signature:
         (response: str, reference: str) -> float
 
-  5. Data source plugin
+  6. Data source plugin
 
     Set [data].source to a dotted path. Must expose:
 
@@ -1078,7 +1108,7 @@ PLUGINS
 
     Each Example has prompt (str) and reference (str) fields.
 
-  6. Planning detector plugin
+  7. Planning detector plugin
 
     Set [planning].detector to a dotted path. Must expose:
 

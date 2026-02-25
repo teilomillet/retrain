@@ -57,6 +57,18 @@ class TestParseCampaignConditions:
         )
         assert conditions == [("maxrl", "my_transforms.make_transform_spec")]
 
+    def test_dotted_advantage_mode_is_accepted(self):
+        conditions = _parse_campaign_conditions(
+            [
+                {
+                    "advantage_mode": "my_advantages.hipa_like_advantages",
+                    "transform_mode": "gtpo",
+                }
+            ],
+            "campaign.toml",
+        )
+        assert conditions == [("my_advantages.hipa_like_advantages", "gtpo")]
+
     def test_non_list_conditions_raises(self):
         with pytest.raises(ValueError, match="campaign.conditions must be a list"):
             _parse_campaign_conditions({"advantage_mode": "grpo"}, "campaign.toml")

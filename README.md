@@ -43,6 +43,8 @@ Useful inspection commands while iterating:
 ```bash
 retrain explain retrain.toml   # dry-run: what this config would do
 retrain status logs            # summarize runs/campaigns under logs/
+retrain plugins                # list built-ins + discovered plugins
+retrain init-plugin --kind transform --name my_transform --with-test
 retrain man --json --topic quickstart
 retrain man --path             # editable bundled manual source
 ```
@@ -124,12 +126,19 @@ auto_install = true
 max_turns = 8
 ```
 
-Use a custom transform plugin from TOML:
+Use custom advantage + transform plugins from TOML:
 
 ```toml
 [algorithm]
-advantage_mode = "maxrl"
+advantage_mode = "my_advantages.hipa_like_advantages"
 transform_mode = "my_transforms.make_transform_spec"
+```
+
+Use a full algorithm plugin (overrides composable advantage+transform path):
+
+```toml
+[algorithm]
+algorithm_mode = "my_algorithms.my_algorithm"
 ```
 
 ## Documentation

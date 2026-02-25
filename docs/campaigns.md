@@ -68,8 +68,11 @@ Each condition is a table with two required keys:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `advantage_mode` | str | `grpo` or `maxrl` |
-| `transform_mode` | str | `none`, `gtpo`, `gtpo_hicra`, or `gtpo_sepa` |
+| `advantage_mode` | str | `grpo`, `maxrl`, or dotted plugin path (`my_module.my_advantage`) |
+| `transform_mode` | str | built-ins (`none`, `gtpo`, `gtpo_hicra`, `gtpo_sepa`, etc.) or dotted plugin path (`my_module.make_transform_spec`) |
+
+You can also use `algorithm_mode` in single-run configs to override the full
+pipeline; campaign defaults still use `advantage_mode + transform_mode`.
 
 If no conditions are specified, defaults to the 5-condition ablation:
 

@@ -56,7 +56,51 @@ Returns zero if the group mean is near zero (all wrong).
 advantage_mode = "maxrl"
 ```
 
+### Custom episode-level advantage
+
+Set `advantage_mode` to a dotted path. The target can be a plain function:
+
+```python
+def hipa_like_advantages(rewards):
+    if not rewards:
+        return []
+    mean_r = sum(rewards) / len(rewards)
+    return [2.0 * (r - mean_r) for r in rewards]
+```
+
+```toml
+[algorithm]
+advantage_mode = "my_advantages.hipa_like_advantages"
+```
+
+If your function needs extra knobs, accept a second `params` argument and pass
+`advantage_params` when calling `compute_composable_advantages(...)` in Python.
+
 ## Token-level transforms
+
+### Custom transform (context-style)
+
+Set `transform_mode` to a dotted path pointing to a function that accepts a
+`TransformContext` and returns `TransformOutput`.
+
+```python
+from retrain import TransformOutput
+
+def my_transform(ctx):
+    scale = float(ctx.params.get("scale", 1.0))
+    token_advs = []
+    for i, logprobs in enumerate(ctx.logprobs_G):
+        token_advs.append([ctx.episode_advantages[i] * scale for _ in logprobs])
+    return TransformOutput(token_advs=token_advs)
+```
+
+```toml
+[algorithm]
+transform_mode = "plugins.my_transform.my_transform"
+
+[algorithm.transform_params]
+scale = 2.0
+```
 
 ### GTPO
 
@@ -116,6 +160,18 @@ These are the 5 conditions used in campaign sweeps. See [Campaigns](campaigns.md
 
 !!! note
     GRPO can also be combined with `gtpo`, `gtpo_hicra`, or `gtpo_sepa`, but the standard conditions use MaxRL for the non-baseline transforms.
+
+## Full algorithm override
+
+Use `algorithm_mode` when you want to replace the full pipeline in one plugin:
+
+```toml
+[algorithm]
+algorithm_mode = "plugins.my_algorithm.my_algorithm"
+```
+
+When `algorithm_mode` is set, it takes precedence over `advantage_mode` and
+`transform_mode`.
 
 ## Planning tokens
 

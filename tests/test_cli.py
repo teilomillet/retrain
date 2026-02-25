@@ -14,8 +14,10 @@ from retrain.cli import (
     _run_doctor,
     _run_explain,
     _run_init,
+    _run_init_plugin,
     _run_init_interactive,
     _run_man,
+    _run_plugins,
 )
 from retrain.config import parse_cli_overrides
 
@@ -55,9 +57,28 @@ class TestTopHelp:
         assert "retrain man" in captured.out
         assert "retrain migrate-config" in captured.out
         assert "retrain backends" in captured.out
+        assert "retrain init-plugin" in captured.out
+        assert "retrain plugins" in captured.out
         assert "retrain man --path" in captured.out
         assert "retrain man --sync" in captured.out
         assert "retrain man --check" in captured.out
+
+
+class TestPluginCommands:
+    def test_plugins_command_json(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        plugin_dir = tmp_path / "plugins"
+        plugin_dir.mkdir()
+        (plugin_dir / "toy.py").write_text("def f():\n    return 1\n")
+        _run_plugins(["--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert "builtins" in payload
+        assert "advantage_mode" in payload["builtins"]
+
+    def test_init_plugin_command(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _run_init_plugin(["--kind", "transform", "--name", "student_transform"])
+        assert (tmp_path / "plugins" / "student_transform.py").is_file()
 
 
 class TestBackendsCommand:

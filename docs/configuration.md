@@ -30,8 +30,25 @@ base_url = ""              # Tinker service URL (tinker backend only)
 lora_rank = 32
 
 [algorithm]
-advantage_mode = "maxrl"   # grpo | maxrl
-transform_mode = "gtpo_sepa"  # none | gtpo | gtpo_hicra | gtpo_sepa
+algorithm_mode = ""        # optional full algorithm plugin (overrides composable path)
+advantage_mode = "maxrl"   # grpo | maxrl | my_module.my_advantage
+transform_mode = "gtpo_sepa"  # none | gtpo | ... | my_module.my_transform
+
+[algorithm.params]
+# used by algorithm_mode plugins
+# alpha = 0.1
+
+[algorithm.advantage_params]
+# used by advantage_mode plugins
+# scale = 2.0
+
+[algorithm.transform_params]
+# used by transform_mode plugins
+# cap = 0.2
+
+[plugins]
+search_paths = ["plugins"] # module prefixes searched before normal dotted imports
+strict = true              # fail fast on plugin load/shape errors
 
 [training]
 seed = -1                  # -1 = no seed
@@ -165,8 +182,22 @@ cat retrain.toml | retrain migrate-config --stdin --stdout
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `advantage_mode` | str | `"maxrl"` | Episode-level advantage: `grpo` or `maxrl` |
-| `transform_mode` | str | `"gtpo_sepa"` | Token-level transform: `none`, `gtpo`, `gtpo_hicra`, or `gtpo_sepa` |
+| `algorithm_mode` | str | `""` | Optional full algorithm selector. Built-ins (`grpo_none`, `maxrl_gtpo`, etc.) or dotted plugin path (`my_module.my_algorithm`). When set, it overrides composable `advantage_mode + transform_mode`. |
+| `advantage_mode` | str | `"maxrl"` | Episode-level advantage: built-ins (`grpo`, `maxrl`) or a dotted plugin path (`my_module.my_advantage`) |
+| `transform_mode` | str | `"gtpo_sepa"` | Token-level transform: built-ins (`none`, `gtpo`, `gtpo_hicra`, `gtpo_sepa`, …) or dotted plugin path (`my_module.my_transform`) |
+
+Nested plugin params tables under `[algorithm]`:
+
+- `[algorithm.params]` for `algorithm_mode`
+- `[algorithm.advantage_params]` for `advantage_mode`
+- `[algorithm.transform_params]` for `transform_mode`
+
+### `[plugins]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `search_paths` | list[str] | `["plugins"]` | Module prefixes searched before normal dotted import resolution |
+| `strict` | bool | `true` | If true, plugin load/shape errors fail fast |
 
 ### `[training]`
 
@@ -320,6 +351,7 @@ Any TOML field can be overridden from the command line using `--flag value`:
 ```bash
 retrain --seed 42 --lr 1e-4 --wandb-project my-run
 retrain config.toml --batch-size 4 --advantage-mode grpo
+retrain config.toml --transform-param cap=0.1 --advantage-param scale=2.0
 ```
 
 | Flag | Config field |
@@ -341,6 +373,12 @@ retrain config.toml --batch-size 4 --advantage-mode grpo
 | `--resume` | `resume_from` |
 
 The `--resume` flag is special: it sets `resume_from` and is not a direct TOML key.
+
+Repeatable plugin-param flags:
+
+- `--algorithm-param key=value`
+- `--advantage-param key=value`
+- `--transform-param key=value`
 
 CLI flags use `--kebab-case`, which maps to `snake_case` config fields.
 

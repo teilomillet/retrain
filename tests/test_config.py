@@ -298,12 +298,53 @@ wandb_run_name = "run-1"
         assert c.environment_id == "primeintellect/aime"
         assert c.environment_args == '{"split": "train", "seed": 7}'
 
+    def test_algorithm_params_tables_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[algorithm]\n'
+            'algorithm_mode = "custom_algorithms.my_algo"\n'
+            '\n[algorithm.params]\n'
+            "alpha = 0.2\n"
+            '\n[algorithm.advantage_params]\n'
+            "scale = 3\n"
+            '\n[algorithm.transform_params]\n'
+            "cap = 0.1\n"
+        )
+        c = load_config(str(toml))
+        assert c.algorithm_mode == "custom_algorithms.my_algo"
+        assert c.algorithm_params == {"alpha": pytest.approx(0.2)}
+        assert c.advantage_params == {"scale": 3}
+        assert c.transform_params == {"cap": pytest.approx(0.1)}
+
+    def test_plugins_section_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            "[plugins]\n"
+            'search_paths = ["plugins", "lab_plugins"]\n'
+            "strict = false\n"
+        )
+        c = load_config(str(toml))
+        assert c.plugins_search_paths == ["plugins", "lab_plugins"]
+        assert c.plugins_strict is False
+
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
 class TestValidation:
+    def test_algorithm_mode_builtin_accepted(self):
+        c = TrainConfig(algorithm_mode="maxrl_gtpo")
+        assert c.algorithm_mode == "maxrl_gtpo"
+
+    def test_dotted_algorithm_mode_accepted(self):
+        c = TrainConfig(algorithm_mode="custom_algorithms.my_algo")
+        assert c.algorithm_mode == "custom_algorithms.my_algo"
+
+    def test_invalid_algorithm_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid algorithm_mode"):
+            TrainConfig(algorithm_mode="bad")
+
     def test_invalid_advantage_mode_raises(self):
         with pytest.raises(ValueError, match="Invalid advantage_mode"):
             TrainConfig(advantage_mode="invalid")
@@ -332,6 +373,14 @@ class TestValidation:
         toml.write_text('[algorithm]\nadvantage_mode = "wrong"\n')
         with pytest.raises(ValueError, match="Invalid advantage_mode"):
             load_config(str(toml))
+
+    def test_dotted_advantage_mode_accepted(self):
+        c = TrainConfig(advantage_mode="custom_advantages.hipa_like_advantages")
+        assert c.advantage_mode == "custom_advantages.hipa_like_advantages"
+
+    def test_malformed_dotted_advantage_mode_rejected(self):
+        with pytest.raises(ValueError, match="Invalid advantage_mode"):
+            TrainConfig(advantage_mode="custom_advantages.")
 
     def test_dotted_transform_mode_accepted(self):
         c = TrainConfig(transform_mode="custom_transforms.make_transform_spec")
@@ -385,6 +434,10 @@ class TestValidation:
         )
         assert c.backend_options == {"custom_flag": "x", "num_workers": 4}
 
+    def test_plugin_search_paths_validation(self):
+        with pytest.raises(ValueError, match="plugins_search_paths"):
+            TrainConfig(plugins_search_paths=["", "ok"])
+
 
 # ---------------------------------------------------------------------------
 # CLI parsing
@@ -418,6 +471,21 @@ class TestCLIParsing:
     def test_kebab_to_snake(self):
         _, overrides = parse_cli_overrides(["--batch-size", "4"])
         assert overrides == {"batch_size": "4"}
+
+    def test_plugin_param_flags(self):
+        _, overrides = parse_cli_overrides(
+            [
+                "--algorithm-param",
+                "alpha=0.2",
+                "--advantage-param",
+                "scale=3",
+                "--transform-param",
+                "enabled=true",
+            ]
+        )
+        assert overrides["algorithm_params"] == {"alpha": pytest.approx(0.2)}
+        assert overrides["advantage_params"] == {"scale": 3}
+        assert overrides["transform_params"] == {"enabled": True}
 
     def test_backend_opt_repeated(self):
         _, overrides = parse_cli_overrides(

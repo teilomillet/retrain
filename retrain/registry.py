@@ -25,6 +25,7 @@ from retrain.backend_definitions import (
 from retrain.backpressure import BackPressure
 from retrain.config import TrainConfig
 from retrain.data import DataSource
+from retrain.plugin_resolver import resolve_dotted_attribute
 from retrain.planning import PlanningDetector
 from retrain.rewards import RewardFunction
 
@@ -91,24 +92,12 @@ class Registry(Generic[T]):
     @staticmethod
     def _import_dotted(dotted: str, config: TrainConfig) -> T:
         """Import ``module.attr`` and call ``attr(config)``."""
-        module_path, _, attr_name = dotted.rpartition(".")
-        if not module_path or not attr_name:
-            raise ValueError(
-                f"Invalid dotted import path '{dotted}'. "
-                f"Expected format: 'mypackage.module.ClassName'."
-            )
-        try:
-            mod = importlib.import_module(module_path)
-        except ModuleNotFoundError as exc:
-            raise ImportError(
-                f"Could not import module '{module_path}' "
-                f"for dotted path '{dotted}': {exc}"
-            ) from exc
-        factory = getattr(mod, attr_name, None)
-        if factory is None:
-            raise AttributeError(
-                f"Module '{module_path}' has no attribute '{attr_name}'."
-            )
+        resolved = resolve_dotted_attribute(
+            dotted,
+            selector="registry component",
+            expected="a callable factory(config)",
+        )
+        factory = resolved.obj
         if not callable(factory):
             raise TypeError(
                 f"Dotted import target '{dotted}' is not callable."

@@ -35,8 +35,8 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
 lora_rank = 32
 
 [algorithm]
-advantage_mode = "maxrl"     # grpo | maxrl
-transform_mode = "gtpo_sepa" # none | gtpo | gtpo_hicra | gtpo_sepa
+advantage_mode = "maxrl"     # grpo | maxrl | my_module.my_advantage
+transform_mode = "gtpo_sepa" # none | gtpo | ... | my_module.make_transform_spec
 
 [training]
 seed = -1                    # -1 = no seed
@@ -215,6 +215,11 @@ def _print_top_help(cli_name: str) -> None:
         "[--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]"
     )
     print(f"  {cli_name} init [--template NAME] [--list] [--interactive]")
+    print(
+        f"  {cli_name} init-plugin --kind KIND --name NAME "
+        "[--output-dir DIR] [--with-test]"
+    )
+    print(f"  {cli_name} plugins [--json] [config.toml]")
     print(f"  {cli_name} status [logdir] [--json]")
     print(f"  {cli_name} explain [config.toml] [--json]")
     print(f"  {cli_name} diff <run_a> <run_b> [--json]")
@@ -336,6 +341,16 @@ def _render_commands_block(cli_name: str) -> list[str]:
         "        --list            shows available templates.",
         "        --interactive/-i  guided setup with prompts.",
         "",
+        f"    {cli_name} init-plugin --kind KIND --name NAME [--output-dir DIR] [--with-test]",
+        "        Scaffolds a student-friendly plugin module.",
+        "        Kinds: transform, advantage, algorithm, reward, planning, data,",
+        "               backend, inference, backpressure.",
+        "        --with-test       also generates a smoke test template.",
+        "",
+        f"    {cli_name} plugins [--json] [config.toml]",
+        "        Lists built-ins + discovered plugin modules.",
+        "        If config.toml is provided, uses its [plugins] search_paths.",
+        "",
         f"    {cli_name} status [logdir] [--json]",
         "        Scans log directories for run and campaign status.",
         "        Defaults to ./logs when no path is given.",
@@ -376,6 +391,7 @@ def _render_options_block() -> list[str]:
         "        retrain config.toml --seed 42 --max-steps 50",
         "        retrain config.toml --lr 1e-4 --batch-size 16",
         "        retrain config.toml --advantage-mode grpo",
+        "        retrain config.toml --advantage-param scale=2.0 --transform-param cap=0.1",
         "        retrain config.toml --inference-engine vllm --inference-url http://localhost:8000",
         "        retrain config.toml --backend prime_rl --backend-opt transport=zmq --backend-opt zmq_port=7777",
         "",
@@ -389,6 +405,9 @@ def _render_options_block() -> list[str]:
             "",
             "    Special flags:",
             "        --backend-opt K=V    backend-specific option override (repeatable).",
+            "        --algorithm-param K=V algorithm plugin params (repeatable).",
+            "        --advantage-param K=V advantage plugin params (repeatable).",
+            "        --transform-param K=V transform plugin params (repeatable).",
             "        --resume VALUE    alias for --resume-from VALUE",
             "",
             "    Unknown flags produce an error with close-match suggestions.",
@@ -780,6 +799,282 @@ def _run_init(args: list[str] | None = None, cli_name: str | None = None) -> Non
     print(f"Need guidance? Run: {cli_name} man")
 
 
+_PLUGIN_KINDS = {
+    "transform",
+    "advantage",
+    "algorithm",
+    "reward",
+    "planning",
+    "data",
+    "backend",
+    "inference",
+    "backpressure",
+}
+
+
+def _sanitize_identifier(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    if not cleaned:
+        return "my_plugin"
+    if cleaned[0].isdigit():
+        cleaned = f"plugin_{cleaned}"
+    return cleaned
+
+
+def _plugin_template(kind: str, fn_name: str) -> tuple[str, str]:
+    """Return (module_content, toml_snippet) for plugin scaffolding."""
+    if kind == "transform":
+        return (
+            (
+                "from retrain import TransformOutput\n\n"
+                f"def {fn_name}(ctx):\n"
+                "    \"\"\"ctx contains episode_advantages/logprobs/planning masks/params.\"\"\"\n"
+                "    token_advs = []\n"
+                "    for i, logprobs in enumerate(ctx.logprobs_G):\n"
+                "        adv = ctx.episode_advantages[i]\n"
+                "        token_advs.append([adv for _ in logprobs])\n"
+                "    return TransformOutput(\n"
+                "        token_advs=token_advs,\n"
+                "        has_stats=False,\n"
+                "        needs_planning=False,\n"
+                "        uses_sepa_controller=False,\n"
+                "    )\n"
+            ),
+            (
+                "[algorithm]\n"
+                f'transform_mode = "plugins.{fn_name}.{fn_name}"\n'
+                "\n[algorithm.transform_params]\n"
+                "scale = 1.0\n"
+            ),
+        )
+    if kind == "advantage":
+        return (
+            (
+                f"def {fn_name}(rewards, params=None):\n"
+                "    \"\"\"Return one advantage per reward.\"\"\"\n"
+                "    if not rewards:\n"
+                "        return []\n"
+                "    scale = float((params or {}).get('scale', 1.0))\n"
+                "    mean_r = sum(rewards) / len(rewards)\n"
+                "    return [scale * (r - mean_r) for r in rewards]\n"
+            ),
+            (
+                "[algorithm]\n"
+                f'advantage_mode = "plugins.{fn_name}.{fn_name}"\n'
+                "\n[algorithm.advantage_params]\n"
+                "scale = 2.0\n"
+            ),
+        )
+    if kind == "algorithm":
+        return (
+            (
+                "from retrain import AlgorithmOutput\n\n"
+                f"def {fn_name}(ctx):\n"
+                "    \"\"\"Full algorithm hook: return token-level advantages directly.\"\"\"\n"
+                "    token_advs = []\n"
+                "    for rewards_idx, logprobs in enumerate(ctx.logprobs_G):\n"
+                "        reward = ctx.rewards_G[rewards_idx]\n"
+                "        token_advs.append([reward for _ in logprobs])\n"
+                "    return AlgorithmOutput(token_advs=token_advs, has_stats=False)\n"
+            ),
+            (
+                "[algorithm]\n"
+                f'algorithm_mode = "plugins.{fn_name}.{fn_name}"\n'
+                "\n[algorithm.params]\n"
+                "alpha = 0.1\n"
+            ),
+        )
+    if kind == "reward":
+        return (
+            (
+                f"class {fn_name.title().replace('_', '')}Reward:\n"
+                "    def score(self, response: str, reference: str) -> float:\n"
+                "        return float(response.strip() == reference.strip())\n\n"
+                f"def {fn_name}(config):\n"
+                f"    return {fn_name.title().replace('_', '')}Reward()\n"
+            ),
+            (
+                "[reward]\n"
+                'type = "custom"\n'
+                f'custom_module = "plugins.{fn_name}"\n'
+                f'custom_function = "{fn_name}"\n'
+            ),
+        )
+
+    generic = (
+        f"def {fn_name}(config):\n"
+        f"    raise NotImplementedError(\"Implement {kind} plugin contract here.\")\n"
+    )
+    return (
+        generic,
+        f"# Use dotted plugin path: plugins.{fn_name}.{fn_name}\n",
+    )
+
+
+def _run_init_plugin(args: list[str], cli_name: str | None = None) -> None:
+    """Scaffold a plugin module for students."""
+    if not cli_name:
+        cli_name = _resolve_cli_name()
+    kind = ""
+    name = ""
+    output_dir = "plugins"
+    with_test = False
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--with-test":
+            with_test = True
+        elif arg in ("--kind", "-k"):
+            i += 1
+            if i >= len(args):
+                print("Flag --kind requires a value.", file=sys.stderr)
+                sys.exit(1)
+            kind = args[i].strip().lower()
+        elif arg.startswith("--kind="):
+            kind = arg.split("=", 1)[1].strip().lower()
+        elif arg in ("--name", "-n"):
+            i += 1
+            if i >= len(args):
+                print("Flag --name requires a value.", file=sys.stderr)
+                sys.exit(1)
+            name = args[i].strip()
+        elif arg.startswith("--name="):
+            name = arg.split("=", 1)[1].strip()
+        elif arg in ("--output-dir", "-o"):
+            i += 1
+            if i >= len(args):
+                print("Flag --output-dir requires a value.", file=sys.stderr)
+                sys.exit(1)
+            output_dir = args[i].strip()
+        elif arg.startswith("--output-dir="):
+            output_dir = arg.split("=", 1)[1].strip()
+        else:
+            print(f"Unknown init-plugin flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        i += 1
+
+    if kind not in _PLUGIN_KINDS:
+        print(
+            f"Invalid --kind '{kind}'. "
+            f"Choose one of: {sorted(_PLUGIN_KINDS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not name:
+        print("Flag --name is required.", file=sys.stderr)
+        sys.exit(1)
+
+    module_name = _sanitize_identifier(name)
+    module_content, snippet = _plugin_template(kind, module_name)
+    out_dir = Path(output_dir)
+    plugin_path = out_dir / f"{module_name}.py"
+    test_path = Path("tests") / f"test_{module_name}_plugin.py"
+
+    if plugin_path.exists():
+        print(f"{plugin_path} already exists — refusing to overwrite.")
+        sys.exit(1)
+    if with_test and test_path.exists():
+        print(f"{test_path} already exists — refusing to overwrite.")
+        sys.exit(1)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plugin_path.write_text(module_content)
+    print(f"Created {plugin_path}")
+
+    if with_test:
+        test_path.parent.mkdir(parents=True, exist_ok=True)
+        test_path.write_text(
+            "import importlib\n\n"
+            f"def test_{module_name}_importable():\n"
+            f"    mod = importlib.import_module('plugins.{module_name}')\n"
+            f"    assert hasattr(mod, '{module_name}')\n"
+        )
+        print(f"Created {test_path}")
+
+    print("\nTOML snippet:")
+    print(snippet.rstrip())
+    print(f"\nRun it with: {cli_name} retrain.toml")
+
+
+def _run_plugins(args: list[str]) -> None:
+    """List built-in and discovered plugins."""
+    from retrain.advantages import (
+        get_builtin_algorithm_modes,
+        get_builtin_advantage_modes,
+        get_builtin_transform_modes,
+    )
+    from retrain.config import TrainConfig, load_config
+    from retrain.plugin_resolver import discover_plugin_modules, get_plugin_runtime
+    from retrain.registry import get_registry
+
+    fmt = "text"
+    config_path: str | None = None
+    for arg in args:
+        if arg == "--json":
+            fmt = "json"
+        elif arg.startswith("--"):
+            print(f"Unknown plugins flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            config_path = arg
+
+    if config_path:
+        cfg = load_config(config_path)
+    else:
+        cfg = TrainConfig()
+    runtime = get_plugin_runtime()
+    discovered = discover_plugin_modules(cfg.plugins_search_paths)
+
+    import importlib
+
+    discovered_entries: list[dict[str, str]] = []
+    for module_name in discovered:
+        try:
+            importlib.import_module(module_name)
+            status = "ok"
+        except Exception as exc:
+            status = f"error: {exc.__class__.__name__}"
+        discovered_entries.append({"module": module_name, "status": status})
+
+    payload: dict[str, object] = {
+        "runtime": {
+            "search_paths": list(runtime.search_paths),
+            "strict": runtime.strict,
+        },
+        "builtins": {
+            "algorithm_mode": get_builtin_algorithm_modes(),
+            "advantage_mode": get_builtin_advantage_modes(),
+            "transform_mode": get_builtin_transform_modes(),
+            "backend": get_registry("backend").builtin_names,
+            "inference_engine": get_registry("inference_engine").builtin_names,
+            "reward": get_registry("reward").builtin_names,
+            "planning_detector": get_registry("planning_detector").builtin_names,
+            "data_source": get_registry("data_source").builtin_names,
+            "backpressure": get_registry("backpressure").builtin_names,
+        },
+        "discovered": discovered_entries,
+    }
+
+    if fmt == "json":
+        print(json.dumps(payload, indent=2))
+        return
+
+    print("Plugin runtime:")
+    print(f"  search_paths: {', '.join(runtime.search_paths)}")
+    print(f"  strict      : {runtime.strict}")
+    print("\nBuilt-ins:")
+    for key, values in payload["builtins"].items():  # type: ignore[index]
+        print(f"  {key}: {', '.join(values)}")
+    print("\nDiscovered modules:")
+    if discovered_entries:
+        for item in discovered_entries:
+            print(f"  {item['module']}: {item['status']}")
+    else:
+        print("  (none)")
+
+
 def _load_dotenv() -> None:
     """Load .env file if present. Sets vars into os.environ."""
     env_path = Path(".env")
@@ -1009,7 +1304,11 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         warnings.simplefilter("always")
         config = load_config(config_path)
 
-    condition = f"{config.advantage_mode}+{config.transform_mode}"
+    condition = (
+        config.algorithm_mode
+        if config.algorithm_mode
+        else f"{config.advantage_mode}+{config.transform_mode}"
+    )
     datums_per_step = config.batch_size * config.group_size
     total_datums = datums_per_step * config.max_steps
     lora_alpha = config.lora_alpha if config.lora_alpha else config.lora_rank * 2
@@ -1029,6 +1328,7 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         "backend_options": dict(config.backend_options),
         "backend_capabilities": backend_capabilities,
         "condition": condition,
+        "algorithm_mode": config.algorithm_mode,
         "advantage_mode": config.advantage_mode,
         "transform_mode": config.transform_mode,
         "max_steps": config.max_steps,
@@ -1466,6 +1766,14 @@ def main() -> None:
 
     if args and args[0] == "init":
         _run_init(args=args[1:], cli_name=cli_name)
+        sys.exit(0)
+
+    if args and args[0] == "init-plugin":
+        _run_init_plugin(args=args[1:], cli_name=cli_name)
+        sys.exit(0)
+
+    if args and args[0] == "plugins":
+        _run_plugins(args[1:])
         sys.exit(0)
 
     if args and args[0] == "status":

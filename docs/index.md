@@ -54,6 +54,7 @@ retrain
 
 - [Getting Started](getting-started.md) -- install, configure, run
 - [Configuration](configuration.md) -- full TOML reference and CLI overrides
+- [Plugins](plugins.md) -- 60-second scaffold flow for custom algorithm/advantage/transform plugins
 - [Advantage Functions](advantages.md) -- GRPO, MaxRL, GTPO, HICRA pipeline
 - [SEPA](sepa.md) -- selective entropy pooling schedules
 - [Reward Functions](rewards.md) -- match, math, judge, custom
