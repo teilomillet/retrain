@@ -81,3 +81,42 @@ class TestTransformSpecs:
         assert len(custom.token_advs) == len(baseline.token_advs)
         assert custom.has_stats is True
         assert custom.token_advs != baseline.token_advs
+
+    def test_custom_plugin_with_post_process(self, tmp_path, monkeypatch):
+        """Custom plugin can register a post_process hook via dotted path."""
+        module_name = "custom_post_process_plugin"
+        plugin_file = Path(tmp_path) / f"{module_name}.py"
+        plugin_file.write_text(
+            "from retrain.advantages import TransformSpec\n"
+            "\n"
+            "def _clip_hook(all_token_advs, all_raw_entropies, params):\n"
+            "    cap = params.get('cap', 1.0)\n"
+            "    clipped = [[min(a, cap) for a in seq] for seq in all_token_advs]\n"
+            "    return clipped, {'clip_cap': cap}\n"
+            "\n"
+            "def make_transform_spec():\n"
+            "    return TransformSpec(\n"
+            "        name='custom_clip',\n"
+            "        use_gtpo=True,\n"
+            "        post_process=_clip_hook,\n"
+            "    )\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        mode = f"{module_name}.make_transform_spec"
+        spec = get_transform_spec(mode)
+        assert spec.post_process is not None
+
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode=mode,
+            post_process_params={"cap": 0.01},
+        )
+        assert result.extra_metrics == {"clip_cap": 0.01}
+        # All advantages should be clipped to 0.01
+        for seq in result.token_advs:
+            for a in seq:
+                assert a <= 0.01 + 1e-9

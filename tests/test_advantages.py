@@ -6,6 +6,7 @@ import pytest
 
 from retrain.advantages import (
     MAX_ENTROPY,
+    TransformSpec,
     apply_entropy_mask,
     apply_gtpo_weighting,
     apply_hicra,
@@ -296,11 +297,11 @@ class TestEntropyMask:
             advantage_mode="maxrl",
             transform_mode="entropy_mask",
             gtpo_beta=0.0,
-            entropy_mask_rho=0.5,
+            post_process_params={"entropy_mask_rho": 0.5},
         )
         assert len(result.token_advs) == 2
-        assert result.mask_threshold > 0.0
-        assert 0.0 < result.mask_fraction < 1.0
+        assert result.extra_metrics["entropy_mask_threshold"] > 0.0
+        assert 0.0 < result.extra_metrics["entropy_mask_fraction"] < 1.0
         # Some tokens should be zeroed
         all_advs = [a for seq in result.token_advs for a in seq]
         assert any(a == 0.0 for a in all_advs)
@@ -316,11 +317,57 @@ class TestEntropyMask:
             transform_mode="gtpo",
             gtpo_beta=0.1,
         )
-        result_no_mask = compute_composable_advantages(**kwargs, entropy_mask_rho=0.0)
-        result_with_mask = compute_composable_advantages(**kwargs, entropy_mask_rho=0.0)
+        result_no_mask = compute_composable_advantages(**kwargs, post_process_params={"entropy_mask_rho": 0.0})
+        result_with_mask = compute_composable_advantages(**kwargs, post_process_params={"entropy_mask_rho": 0.0})
         assert result_no_mask.token_advs == result_with_mask.token_advs
-        assert result_with_mask.mask_threshold == 0.0
-        assert result_with_mask.mask_fraction == 0.0
+        assert result_with_mask.extra_metrics == {}
+
+
+# ---------------------------------------------------------------------------
+# Post-process hooks
+# ---------------------------------------------------------------------------
+
+class TestPostProcessHooks:
+    def test_post_process_hook_called(self):
+        """Custom post_process hook is called and its metrics returned."""
+        calls: list[dict] = []
+
+        def _scale_hook(all_token_advs, all_raw_entropies, params):
+            calls.append({"params": params})
+            factor = params.get("factor", 1.0)
+            scaled = [[a * factor for a in seq] for seq in all_token_advs]
+            return scaled, {"scale_factor": factor}
+
+        from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+        spec = TransformSpec(name="test_hook", use_gtpo=True, post_process=_scale_hook)
+        _BUILTIN_TRANSFORM_SPECS["test_hook"] = spec
+        _TRANSFORM_SPEC_CACHE.pop("test_hook", None)
+        try:
+            result = compute_composable_advantages(
+                rewards_G=[1.0, 0.0],
+                logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                planning_masks_G=[[0, 0], [0, 0]],
+                advantage_mode="grpo",
+                transform_mode="test_hook",
+                post_process_params={"factor": 2.0},
+            )
+            assert len(calls) == 1
+            assert calls[0]["params"] == {"factor": 2.0}
+            assert result.extra_metrics == {"scale_factor": 2.0}
+        finally:
+            _BUILTIN_TRANSFORM_SPECS.pop("test_hook", None)
+            _TRANSFORM_SPEC_CACHE.pop("test_hook", None)
+
+    def test_post_process_none_is_noop(self):
+        """Specs without a hook produce empty extra_metrics."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+        )
+        assert result.extra_metrics == {}
 
 
 # ---------------------------------------------------------------------------

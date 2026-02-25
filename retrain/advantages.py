@@ -9,7 +9,7 @@ import importlib
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 # Cap entropy values to prevent inf from poisoning downstream math.
 # Real per-token entropy (-logprob) rarely exceeds ~15; 50 is a safe upper bound.
@@ -37,8 +37,7 @@ class AdvantageResult:
     token_advs: list[list[float]] = field(default_factory=list)
     has_stats: bool = False
     stats: EntropyStats = field(default_factory=EntropyStats)
-    mask_threshold: float = 0.0
-    mask_fraction: float = 0.0
+    extra_metrics: dict[str, float] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +46,11 @@ class AdvantageResult:
 
 EntropyTransformFn = Callable[[list[float], list[int], float], list[float]]
 
+PostProcessFn = Callable[
+    [list[list[float]], list[list[float]], dict[str, Any]],
+    tuple[list[list[float]], dict[str, float]],
+]
+
 
 @dataclass(frozen=True)
 class TransformSpec:
@@ -54,6 +58,8 @@ class TransformSpec:
 
     `entropy_transform` can be overridden by custom plugins loaded from
     dotted-path names in TOML (e.g. `my_module.make_transform_spec`).
+    `post_process` runs after GTPO weighting + HICRA, receives all token
+    advantages and raw entropies, returns modified advantages and metrics.
     """
 
     name: str
@@ -62,6 +68,7 @@ class TransformSpec:
     uses_sepa_controller: bool = False
     apply_hicra: bool = False
     entropy_transform: EntropyTransformFn | None = None
+    post_process: PostProcessFn | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +189,37 @@ def apply_entropy_mask(
     ]
 
 
+def entropy_mask_post_process(
+    all_token_advs: list[list[float]],
+    all_raw_entropies: list[list[float]],
+    params: dict[str, Any],
+) -> tuple[list[list[float]], dict[str, float]]:
+    """Post-process hook: Yue et al. entropy masking."""
+    rho = params.get("entropy_mask_rho", 0.0)
+    if rho <= 0.0:
+        return all_token_advs, {}
+
+    flat_entropies = [e for seq in all_raw_entropies for e in seq]
+    threshold = compute_entropy_mask_threshold(flat_entropies, rho)
+
+    total_tokens = 0
+    masked_tokens = 0
+    for idx in range(len(all_token_advs)):
+        all_token_advs[idx] = apply_entropy_mask(
+            all_token_advs[idx], all_raw_entropies[idx], threshold
+        )
+        for e in all_raw_entropies[idx]:
+            total_tokens += 1
+            if e < threshold:
+                masked_tokens += 1
+
+    fraction = masked_tokens / total_tokens if total_tokens > 0 else 0.0
+    return all_token_advs, {
+        "entropy_mask_threshold": threshold,
+        "entropy_mask_fraction": fraction,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 4. SEPA selective entropy pooling
 # ---------------------------------------------------------------------------
@@ -281,7 +319,7 @@ def apply_sepa_amplification_clamped(
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
     "none": TransformSpec(name="none", use_gtpo=False),
     "gtpo": TransformSpec(name="gtpo"),
-    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True),
+    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=entropy_mask_post_process),
     "gtpo_hicra": TransformSpec(
         name="gtpo_hicra", needs_planning=True, apply_hicra=True
     ),
@@ -516,7 +554,7 @@ def compute_composable_advantages(
     gtpo_beta: float = 0.1,
     hicra_alpha: float = 0.2,
     sepa_lambda: float = 0.0,
-    entropy_mask_rho: float = 0.0,
+    post_process_params: dict[str, Any] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
     transform_spec = get_transform_spec(transform_mode)
@@ -574,27 +612,12 @@ def compute_composable_advantages(
 
         all_token_advs.append(token_advs)
 
-    # Entropy masking (Yue et al.): zero out advantages for low-entropy tokens
-    mask_threshold = 0.0
-    mask_fraction = 0.0
-    if entropy_mask_rho > 0.0:
-        flat_entropies = [e for seq in all_raw_entropies for e in seq]
-        mask_threshold = compute_entropy_mask_threshold(flat_entropies, entropy_mask_rho)
-        total_tokens = 0
-        masked_tokens = 0
-        for idx in range(len(all_token_advs)):
-            all_token_advs[idx] = apply_entropy_mask(
-                all_token_advs[idx], all_raw_entropies[idx], mask_threshold
-            )
-            for e in all_raw_entropies[idx]:
-                total_tokens += 1
-                if e < mask_threshold:
-                    masked_tokens += 1
-        mask_fraction = masked_tokens / total_tokens if total_tokens > 0 else 0.0
+    # Post-process hook (e.g. entropy masking)
+    extra_metrics: dict[str, float] = {}
+    if transform_spec.post_process is not None:
+        all_token_advs, extra_metrics = transform_spec.post_process(
+            all_token_advs, all_raw_entropies, post_process_params or {}
+        )
 
     stats = compute_entropy_stats(all_exec_entropies, all_plan_entropies)
-    return AdvantageResult(
-        all_token_advs, True, stats,
-        mask_threshold=mask_threshold,
-        mask_fraction=mask_fraction,
-    )
+    return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra_metrics)

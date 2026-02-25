@@ -465,12 +465,12 @@ def train(config: TrainConfig) -> str | None:
                     gtpo_beta=config.gtpo_beta,
                     hicra_alpha=config.hicra_alpha,
                     sepa_lambda=sepa_lambda_val,
-                    entropy_mask_rho=config.entropy_mask_rho,
+                    post_process_params={"entropy_mask_rho": config.entropy_mask_rho},
                 )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
                     batch_entropy_stats.append(adv_result.stats)
-                if config.entropy_mask_rho > 0.0:
+                if adv_result.extra_metrics:
                     batch_adv_results.append(adv_result)
 
                 for s_idx in range(len(rewards_G)):
@@ -611,12 +611,12 @@ def train(config: TrainConfig) -> str | None:
                     gtpo_beta=config.gtpo_beta,
                     hicra_alpha=config.hicra_alpha,
                     sepa_lambda=sepa_lambda_val,
-                    entropy_mask_rho=config.entropy_mask_rho,
+                    post_process_params={"entropy_mask_rho": config.entropy_mask_rho},
                 )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
                     batch_entropy_stats.append(adv_result.stats)
-                if config.entropy_mask_rho > 0.0:
+                if adv_result.extra_metrics:
                     batch_adv_results.append(adv_result)
 
                 for s_idx in range(len(rewards_G)):
@@ -775,11 +775,11 @@ def train(config: TrainConfig) -> str | None:
             metrics["exec_entropy_var"] = step_exec_var
             metrics["plan_entropy_mean"] = step_plan_mean
             metrics["plan_entropy_var"] = step_plan_var
-        if config.entropy_mask_rho > 0.0 and batch_adv_results:
-            avg_threshold = sum(r.mask_threshold for r in batch_adv_results) / len(batch_adv_results)
-            avg_fraction = sum(r.mask_fraction for r in batch_adv_results) / len(batch_adv_results)
-            metrics["entropy_mask_threshold"] = avg_threshold
-            metrics["entropy_mask_fraction"] = avg_fraction
+        if batch_adv_results:
+            all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
+            for k in all_extra_keys:
+                vals = [r.extra_metrics[k] for r in batch_adv_results if k in r.extra_metrics]
+                metrics[k] = sum(vals) / len(vals)
         metrics_logger.log(metrics)
 
         print(
@@ -820,9 +820,9 @@ def train(config: TrainConfig) -> str | None:
                 "train/backpressure/throughput": bp_decision.throughput,
                 "train/backpressure/warmup": int(bp_warmup),
             }
-            if config.entropy_mask_rho > 0.0 and batch_adv_results:
-                wandb_metrics["train/entropy_mask/threshold"] = metrics.get("entropy_mask_threshold", 0.0)
-                wandb_metrics["train/entropy_mask/fraction"] = metrics.get("entropy_mask_fraction", 0.0)
+            if batch_adv_results:
+                for k in {k for r in batch_adv_results for k in r.extra_metrics}:
+                    wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
             wandb_run.log(wandb_metrics, step=batch_idx)
 
         # Step record for emergence analysis
