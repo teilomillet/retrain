@@ -8,7 +8,11 @@ this class handles when and how much to pool.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TypeAlias
+
+
+SEPAStateValue: TypeAlias = str | int | float | bool | None
+SEPAStateDict: TypeAlias = dict[str, SEPAStateValue]
 
 
 class SEPAController:
@@ -139,7 +143,7 @@ class SEPAController:
             if self._warmup_seen >= self.sepa_warmup:
                 self._var_0 = max(self._var_ema, self.eps)
 
-    def state_dict(self) -> dict[str, Any]:
+    def state_dict(self) -> SEPAStateDict:
         """Serialize scheduler state for checkpointing."""
         return {
             "sepa_steps": self.sepa_steps,
@@ -156,7 +160,7 @@ class SEPAController:
             "gate_open": self._gate_open,
         }
 
-    def load_state_dict(self, state: dict[str, Any]) -> None:
+    def load_state_dict(self, state: SEPAStateDict) -> None:
         """Restore scheduler state from checkpoint."""
         if not isinstance(state, dict):
             raise ValueError(f"state must be a dict, got {type(state)!r}.")
