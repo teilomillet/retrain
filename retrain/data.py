@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from retrain.rewards import extract_boxed
+from retrain.type_defs import ExampleInfoLike, PromptLike
 
 
 @dataclass
 class Example:
     """A single training example: prompt + reference answer."""
-    prompt: str | list[dict[str, Any]]
+    prompt: PromptLike
     reference: str
     task: str = "default"
-    info: dict[str, Any] | str | None = None
+    info: ExampleInfoLike = None
     example_id: int | str = -1
 
 
