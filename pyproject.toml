@@ -24,10 +24,23 @@ verifiers = ["verifiers>=0.1.0"]
 semantic = ["sentence-transformers>=5.2.3"]
 wandb = ["wandb>=0.17.0"]
 all = ["retrain[local,tinker,mlx,verifiers,semantic,wandb]"]
-dev = ["retrain[all]", "pytest>=8.0.0"]
+dev = ["retrain[all]", "pytest>=8.0.0", "ruff>=0.9.0", "ty>=0.0.14"]
 
 [project.scripts]
 retrain = "retrain.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["retrain"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["ANN401", "TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use precise aliases or protocols instead of typing.Any."
+"typing_extensions.Any".msg = "Use precise aliases or protocols instead of typing_extensions.Any."
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["prime_rl.configs.shared", "prime_rl.transport"]

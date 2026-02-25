@@ -1,4 +1,16 @@
-.PHONY: setup build test test-python test-mojo run clean all
+.PHONY: setup build test test-python test-mojo lint typecheck run clean all
+
+TYPECHECK_PATHS = \
+	retrain/type_defs.py \
+	retrain/data.py \
+	retrain/sepa.py \
+	retrain/advantages.py \
+	retrain/backend_definitions.py \
+	retrain/registry.py \
+	retrain/backends.py \
+	retrain/trainer.py \
+	retrain/prime_rl_backend.py \
+	retrain/verifiers_bridge.py
 
 all: setup build
 
@@ -26,6 +38,12 @@ test-mojo:
 	mojo run tests/test_main.mojo
 	mojo run tests/test_backend.mojo
 	mojo run tests/test_backpressure.mojo
+
+lint:
+	uv run ruff check retrain tests
+
+typecheck:
+	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
 
 run: retrain-tinker
 	./retrain-tinker
