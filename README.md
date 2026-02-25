@@ -70,7 +70,7 @@ Use a verifiers environment directly from TOML:
 ```toml
 [environment]
 provider = "verifiers"
-id = "primeintellect/aime"            # installed env id
+id = "primeintellect/gsm8k"           # installed env id
 args = { split = "train" }             # native TOML object
 auto_install = true                    # install from Prime Hub if missing
 max_turns = 8                          # only used for multi-turn envs
@@ -79,6 +79,9 @@ max_turns = 8                          # only used for multi-turn envs
 For single-turn envs, retrain scores with the environment rubric.
 For multi-turn envs (for example Wordle-style), retrain runs the env loop and
 samples each turn with the selected backend/model.
+Some Hub environments are eval-only and do not expose training datasets; in that
+case retrain now fails fast with guidance. Known trainable examples:
+`primeintellect/gsm8k`, `primeintellect/wordle`.
 
 Minimal switchboard in TOML:
 

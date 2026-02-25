@@ -61,7 +61,7 @@ source = "math"            # built-in data source (ignored when [environment] is
 
 [environment]
 provider = ""              # "" | "verifiers"
-id = ""                    # verifiers env id (e.g. primeintellect/aime)
+id = ""                    # verifiers env id (e.g. primeintellect/gsm8k)
 args = {}                  # env kwargs as TOML object (or JSON string)
 max_turns = -1             # cap turns for multi-turn envs; -1 = no override
 auto_install = false       # install Prime Hub env automatically if missing
@@ -170,10 +170,14 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `provider` | str | `""` | Optional environment provider. Use `"verifiers"` to load verifiers environments |
-| `id` | str | `""` | Environment ID (for example `primeintellect/aime` or `primeintellect/wordle`) |
+| `id` | str | `""` | Environment ID (for example `primeintellect/gsm8k` or `primeintellect/wordle`) |
 | `args` | table / str | `{}` | Environment kwargs. Prefer TOML table (`args = { split = "train" }`); JSON string is also accepted |
 | `max_turns` | int | `-1` | Multi-turn safety cap. `-1` means use environment defaults |
 | `auto_install` | bool | `false` | If true, auto-install missing Prime Hub environments before loading |
+
+!!! note
+    Not every Hub environment is trainable. Some are evaluation-only and do not expose a training dataset.
+    retrain will now fail fast with an actionable error in that case.
 
 ### `[planning]`
 
