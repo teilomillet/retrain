@@ -1,19 +1,17 @@
 # sepa-semantic: Does SEPA separate from baseline with semantic planning detection?
 #
-# Same design as sepa-ramp, but uses embedding-based planning token detection
-# instead of hardcoded strategic grams (which matched only 0.05% of tokens).
+# Baseline (grpo+none) doesn't use planning detection, so we reuse the
+# 3 baseline runs from sepa-ramp. Only the SEPA condition needs re-running
+# with the semantic detector.
 #
-# 2 conditions x 3 seeds x 100 steps = 6 runs
+# 1 condition x 3 seeds x 100 steps = 3 runs
+# Compare against: logs/campaign_20260222_085036/runs/grpo+none_s{42,101,202}
 #
 # Run: retrain campaigns/sepa-semantic.toml
 
 [campaign]
 seeds = [42, 101, 202]
 max_steps = 100
-
-[[campaign.conditions]]
-advantage_mode = "grpo"
-transform_mode = "none"
 
 [[campaign.conditions]]
 advantage_mode = "maxrl"

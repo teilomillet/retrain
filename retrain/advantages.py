@@ -150,6 +150,68 @@ def apply_sepa_pooling(
     ]
 
 
+def apply_sepa_amplification(
+    entropies: list[float], planning_mask: list[int], lambda_t: float
+) -> list[float]:
+    """Push execution token entropies away from their mean.
+
+    h'_t = h_t + λ·(h_t - μ_exec) = (1+λ)·h_t - λ·μ_exec
+
+    High-entropy execution tokens get pushed higher (more GTPO gradient
+    weight), low-entropy ones get pushed lower. Planning tokens are
+    left untouched.
+    """
+    if len(entropies) != len(planning_mask):
+        raise ValueError(
+            f"Length mismatch: entropies ({len(entropies)}) "
+            f"vs planning_mask ({len(planning_mask)})"
+        )
+    lam = max(0.0, min(1.0, lambda_t))
+    if lam == 0.0:
+        return list(entropies)
+
+    entropies = [min(e, MAX_ENTROPY) for e in entropies]
+    exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
+    if not exec_vals:
+        return list(entropies)
+    mean_h_exec = sum(exec_vals) / len(exec_vals)
+
+    return [
+        e if m else (1.0 + lam) * e - lam * mean_h_exec
+        for e, m in zip(entropies, planning_mask)
+    ]
+
+
+def apply_sepa_amplification_clamped(
+    entropies: list[float], planning_mask: list[int], lambda_t: float
+) -> list[float]:
+    """Push execution token entropies away from their mean, clamped to >= 0.
+
+    Same as apply_sepa_amplification but floors results at zero so no token
+    gets a negative entropy value.  Keeps amplification purely soft —
+    low-entropy tokens shrink toward zero but never flip sign.
+    """
+    if len(entropies) != len(planning_mask):
+        raise ValueError(
+            f"Length mismatch: entropies ({len(entropies)}) "
+            f"vs planning_mask ({len(planning_mask)})"
+        )
+    lam = max(0.0, min(1.0, lambda_t))
+    if lam == 0.0:
+        return list(entropies)
+
+    entropies = [min(e, MAX_ENTROPY) for e in entropies]
+    exec_vals = [e for e, m in zip(entropies, planning_mask) if m == 0]
+    if not exec_vals:
+        return list(entropies)
+    mean_h_exec = sum(exec_vals) / len(exec_vals)
+
+    return [
+        e if m else max(0.0, (1.0 + lam) * e - lam * mean_h_exec)
+        for e, m in zip(entropies, planning_mask)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 5. Entropy statistics
 # ---------------------------------------------------------------------------
@@ -328,9 +390,13 @@ def compute_composable_advantages(
             else:
                 all_exec_entropies.append(e)
 
-        # SEPA pooling
+        # SEPA pooling / amplification
         if transform_mode == "gtpo_sepa" and sepa_lambda > 0.0:
             entropies = apply_sepa_pooling(entropies, planning_mask, sepa_lambda)
+        elif transform_mode == "gtpo_sepa_amp" and sepa_lambda > 0.0:
+            entropies = apply_sepa_amplification(entropies, planning_mask, sepa_lambda)
+        elif transform_mode == "gtpo_sepa_amp_c" and sepa_lambda > 0.0:
+            entropies = apply_sepa_amplification_clamped(entropies, planning_mask, sepa_lambda)
 
         # GTPO weighting
         token_advs = apply_gtpo_weighting(advantage, entropies, beta=gtpo_beta)
