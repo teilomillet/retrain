@@ -399,6 +399,8 @@ def format_summary_banner(campaigns: list[CampaignSummary]) -> str:
         camp_counts[c.status] = camp_counts.get(c.status, 0) + 1
 
     # Run-level counts across all campaigns
+    # Only count pending from non-dead campaigns — dead campaigns' empty
+    # slots are debris, not genuinely waiting runs.
     r_done = 0
     r_active = 0
     r_dead = 0
@@ -407,7 +409,8 @@ def format_summary_banner(campaigns: list[CampaignSummary]) -> str:
         for cond, seeds in c.matrix.items():
             for seed, run in seeds.items():
                 if run is None:
-                    r_pending += 1
+                    if c.status != "dead":
+                        r_pending += 1
                 elif run.completed:
                     r_done += 1
                 elif run.stale and not run.alive and not c.runner_alive:

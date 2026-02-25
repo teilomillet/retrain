@@ -719,3 +719,14 @@ class TestFormatSummaryBanner:
         banner = format_summary_banner([c])
         assert "1 active" in banner
         assert "dead" not in banner
+
+    def test_dead_campaign_pending_not_counted(self):
+        """None slots in dead campaigns are debris, not pending."""
+        c = self._make_campaign("dead", {
+            "cond_a": {
+                42: None,
+                101: None,
+            },
+        })
+        banner = format_summary_banner([c])
+        assert "pending" not in banner
