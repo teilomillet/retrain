@@ -39,7 +39,7 @@ lora_rank = 128
 [training]
 batch_size = 8
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 lr = 4e-5
 save_every = 20
 
@@ -61,6 +61,9 @@ wandb_project = "sepa-pilot"
 |-----|------|---------|-------------|
 | `seeds` | list[int] | `[42, 101, 202, 303, 404, 505, 606, 707]` | RNG seeds for each run |
 | `max_steps` | int | `500` | Training steps per run (overrides `[training].max_steps`) |
+| `parallel` | bool | `false` | Run campaign conditions concurrently via subprocesses |
+| `max_workers` | int | `0` | Max concurrent subprocesses when `parallel = true`. `0` = launch all runs |
+| `stagger_seconds` | float | `0.0` | Delay between launching workers to reduce API bursts |
 
 ### `[[campaign.conditions]]`
 
@@ -142,9 +145,20 @@ Plus a **squeeze-analysis** run (if `[squeeze]` is configured) with the variance
 
 This makes it easy to compare conditions in the wandb dashboard: group by condition, then see variance across seeds.
 
+## Capacity planning
+
+Treat campaign sizing as a first-class part of experiment design:
+
+- `total_campaign_steps = num_conditions * num_seeds * max_steps`
+- `effective_parallelism = min(max_workers, total_runs)` when `parallel = true`, else `1`
+- `estimated_wall_time = total_campaign_steps * median_step_time / effective_parallelism`
+
+Use `retrain status` and run logs to update your `median_step_time` estimate after a short pilot.
+See [Capacity Planning](capacity-planning.md) for the full workflow.
+
 ## Compute budget
 
-Rough single-GPU estimates for Qwen3-4B with default settings (`batch_size=8, group_size=16`):
+Rough single-GPU estimates for Qwen3-4B with standard profile (`batch_size=8, group_size=16, max_tokens=10240`):
 
 | GPU | Per run (500 steps) | Full campaign (40 runs) |
 |-----|---------------------|------------------------|

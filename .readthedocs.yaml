@@ -5,5 +5,5 @@ build:
   tools:
     python: "3.12"
   commands:
-    - pip install mkdocs-material
-    - mkdocs build --site-dir $READTHEDOCS_OUTPUT/html
+    - pip install -e ".[docs]"
+    - mkdocs build --strict --site-dir $READTHEDOCS_OUTPUT/html

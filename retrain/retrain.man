@@ -381,8 +381,10 @@ CONFIGURATION
     group_size = 16
         Must be > 0. Completions sampled per prompt.
 
-    max_tokens = 2048
+    max_tokens = 10240
         Must be > 0. Maximum new tokens per completion.
+        The quickstart template intentionally uses 1024 for low-cost
+        smoke tests. Treat 10240 as the standard training default.
 
     temperature = 0.7
         Must be >= 0. Warning if > 2.0.
@@ -1014,6 +1016,38 @@ METRICS GUIDE
         num_datums              Drops = groups uninformative (all right/wrong).
         bp_regime               Stuck in "retrograde" = batch size too high.
 
+CAPACITY PLANNING
+    Capacity is a first-class part of experiment design. Use these
+    formulas before launching long runs:
+
+        concurrency = batch_size * group_size
+        total_campaign_steps = num_conditions * num_seeds * max_steps
+        estimated_wall_time = total_campaign_steps * median_step_time / effective_parallelism
+
+    Definitions:
+        median_step_time        Use median step_time_s from pilot runs.
+        effective_parallelism   min(max_workers, total_runs) when
+                                campaign.parallel = true; otherwise 1.
+
+    Profiles:
+        Standard (default)      batch_size=8, group_size=16, max_tokens=10240
+        Smoke test (quickstart) batch_size=2, group_size=8, max_tokens=1024
+
+    Calibration loop:
+        1) Run 20-50 pilot steps.
+        2) Measure median step_time_s.
+        3) Check max_token_hit_rate:
+           high -> truncation likely; increase max_tokens only if needed.
+           low  -> consider lowering max_tokens for cheaper runs.
+        4) Check backpressure metrics (bp_action, bp_regime, bp_p_star):
+           frequent throttle/retrograde means concurrency is too high.
+        5) Recompute estimated wall time and adjust max_workers.
+
+    Campaign worker knobs:
+        parallel        Enable concurrent subprocesses.
+        max_workers     Concurrency cap (0 = launch all runs).
+        stagger_seconds Launch delay between workers (helps with API bursts).
+
 TROUBLESHOOTING
     1) Run "retrain doctor" for dependency problems.
     2) If env auto-install fails, verify environment ID and permissions.
@@ -1045,6 +1079,7 @@ FILES
         manifest.json            Campaign metadata (in campaign dirs)
     retrain/retrain.man          This manual source file
     docs/configuration.md        Full TOML reference
+    docs/capacity-planning.md    Capacity formulas and planning workflow
     docs/getting-started.md      Installation and first-run guide
     docs/campaigns.md            Campaign sweep documentation
     docs/squeeze.md              LoRA-Squeeze documentation
@@ -1177,6 +1212,7 @@ GLOSSARY
 SEE ALSO
     docs/getting-started.md      Installation and first-run guide
     docs/configuration.md        Full TOML reference
+    docs/capacity-planning.md    Capacity formulas and worker planning
     docs/advantages.md           GRPO, MaxRL, GTPO, HICRA, SEPA
     docs/sepa.md                 Selective Entropy Pooling details
     docs/campaigns.md            Campaign sweep documentation

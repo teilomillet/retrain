@@ -18,7 +18,7 @@ jobs:
       - name: Install package and quality tooling
         run: |
           uv venv
-          uv pip install -e . pytest ruff ty
+          uv pip install -e ".[docs]" pytest ruff ty
       - name: Run ruff
         run: uv run ruff check retrain tests
       - name: Run staged ty checks
@@ -38,5 +38,7 @@ jobs:
             --output-format concise
       - name: Manual blocks are synced
         run: uv run retrain man --check
+      - name: Build docs (strict)
+        run: uv run mkdocs build --strict
       - name: Run tests
         run: uv run pytest -q

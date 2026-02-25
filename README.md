@@ -33,6 +33,7 @@ Use these first to understand what exists before you train:
 retrain --help
 retrain man
 retrain man --topic quickstart
+retrain man --topic capacity
 retrain man --list-topics
 retrain backends
 retrain doctor
@@ -52,6 +53,9 @@ retrain man --path             # editable bundled manual source
 ## Tiny TOML Demo
 
 Create `mini.toml`:
+
+`max_tokens = 1024` below is an intentional smoke-test profile.
+The standard default for full runs is `max_tokens = 10240`.
 
 ```toml
 [model]
@@ -150,8 +154,9 @@ Full docs: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [Advantage Functions](https://retrain.readthedocs.io/advantages/)
 - [SEPA Scheduling](https://retrain.readthedocs.io/sepa/)
 - [Campaigns](https://retrain.readthedocs.io/campaigns/)
+- [Capacity Planning](https://retrain.readthedocs.io/capacity-planning/)
 - [LoRA-Squeeze](https://retrain.readthedocs.io/squeeze/)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
 
-Contributor note: run `retrain man --check` in CI to detect stale auto-generated manual blocks, and `retrain man --sync` locally to refresh them.
+Contributor note: run `retrain man --check` in CI to detect stale auto-generated manual blocks, run `retrain man --sync` locally to refresh them, and run `uv run mkdocs build --strict` before publishing docs changes.

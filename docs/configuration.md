@@ -57,7 +57,7 @@ seed = -1                  # -1 = no seed
 max_steps = 500
 batch_size = 8
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 temperature = 0.7
 lr = 4e-5
 weight_decay = 0.0
@@ -211,12 +211,17 @@ Nested plugin params tables under `[algorithm]`:
 | `max_steps` | int | `500` | Total training steps |
 | `batch_size` | int | `8` | Number of prompts per step |
 | `group_size` | int | `16` | Completions sampled per prompt |
-| `max_tokens` | int | `2048` | Max new tokens per completion |
+| `max_tokens` | int | `10240` | Max new tokens per completion |
 | `temperature` | float | `0.7` | Sampling temperature |
 | `lr` | float | `4e-5` | Learning rate |
 | `weight_decay` | float | `0.0` | AdamW weight decay |
 | `max_examples` | int | `0` | Limit dataset size. `0` = use all |
 | `save_every` | int | `20` | Checkpoint frequency (steps) |
+
+!!! note
+    The quickstart template intentionally uses `max_tokens = 1024` for low-cost smoke tests.
+    Treat `10240` as the default for standard training and campaign planning.
+    See [Capacity Planning](capacity-planning.md) for sizing guidance.
 
 ### `[optimizer]`
 

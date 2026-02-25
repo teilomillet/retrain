@@ -46,6 +46,7 @@ retrain
 | **Reward functions** | String match, symbolic math (math_verify), LLM judge, custom |
 | **Back pressure** | USL model fits throughput curves, auto-adjusts batch size |
 | **Campaigns** | Sweep conditions x seeds from a single TOML with wandb groups |
+| **Capacity Planning** | Formula-driven sizing for memory, worker count, and wall time |
 | **LoRA-Squeeze** | Train at high rank, auto-analyze optimal rank via SVD after first run |
 | **Checkpoint resume** | Full trainer state (step, SEPA, optimizer) saved and restored |
 | **wandb integration** | Structured metric prefixes (`train/`, `train/entropy/`, `train/backpressure/`) |
@@ -60,6 +61,7 @@ retrain
 - [Reward Functions](rewards.md) -- match, math, judge, custom
 - [Inference Engines](inference-engines.md) -- engine selection and multi-GPU setup
 - [Back Pressure](backpressure.md) -- adaptive batch sizing
+- [Capacity Planning](capacity-planning.md) -- estimate memory, wall time, and worker parallelism
 - [Campaigns](campaigns.md) -- sweep orchestrator with auto-squeeze
 - [LoRA-Squeeze](squeeze.md) -- optimal rank analysis and compression
 - [Backends](backends.md) -- local vs Tinker

@@ -4,10 +4,11 @@
 
 === "Local backend (default)"
 
-    **Hardware:** A CUDA GPU with at least **16 GB VRAM** (e.g., RTX 4090, A100, H100). The default model (Qwen3-4B) loads in bf16 (~8 GB) plus LoRA adapter and KV cache overhead. With `batch_size=8, group_size=16, max_tokens=2048`, peak VRAM is ~14-16 GB on a single GPU.
+    **Hardware:** A CUDA GPU with at least **16 GB VRAM** for smoke tests. The default model (Qwen3-4B) loads in bf16 (~8 GB) plus LoRA adapter and KV cache overhead. The standard training profile (`batch_size=8, group_size=16, max_tokens=10240`) is capacity-heavy and may require substantially more memory.
 
     !!! tip "Low VRAM?"
-        Reduce `batch_size` and `group_size` to fit smaller GPUs. `batch_size=2, group_size=4` fits in ~10 GB.
+        Use the smoke-test profile first: `batch_size=2, group_size=4, max_tokens=1024`.
+        Then scale up with [Capacity Planning](capacity-planning.md).
 
     **Software:** Python 3.11+, CUDA 12.x, internet access for the first run (downloads model weights from HuggingFace and the MATH dataset).
 
@@ -156,7 +157,7 @@ Each step shows the condition label, loss, mean reward, correct rate, number of 
 
 ## Typical training times
 
-Times vary by hardware and config. Rough estimates for **Qwen3-4B** with default settings (`batch_size=8, group_size=16, max_tokens=2048`):
+Times vary by hardware and config. Rough estimates for **Qwen3-4B** with the standard profile (`batch_size=8, group_size=16, max_tokens=10240`) are shown below. Actual runtime depends heavily on realized generation length, not only `max_tokens`.
 
 === "Local backend"
 
@@ -183,6 +184,7 @@ Use `--max-steps 100` for a quick validation run.
 ## Next steps
 
 - [Configuration](configuration.md) -- tune hyperparameters, enable wandb, switch inference engines
+- [Capacity Planning](capacity-planning.md) -- estimate wall time, worker count, and memory before long runs
 - [Advantage Functions](advantages.md) -- understand GRPO vs MaxRL and the GTPO/HICRA/SEPA transforms
 - [Campaigns](campaigns.md) -- sweep conditions across seeds with auto-squeeze rank analysis
 - [Backends](backends.md) -- scale to multiple GPUs or use Tinker remote training

@@ -43,7 +43,7 @@ seed = -1                    # -1 = no seed
 max_steps = 100              # conservative default for first run
 batch_size = 4               # conservative default for first run
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 temperature = 0.7
 lr = 4e-5
 save_every = 20
@@ -75,7 +75,7 @@ seed = -1
 max_steps = 20
 batch_size = 2
 group_size = 8
-max_tokens = 1024
+max_tokens = 1024            # smoke-test profile (non-default)
 temperature = 0.7
 lr = 4e-5
 save_every = 0               # no checkpoints for a quick test
@@ -105,7 +105,7 @@ seed = 42
 max_steps = 500
 batch_size = 8
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 temperature = 0.7
 lr = 4e-5
 save_every = 50
@@ -149,7 +149,7 @@ lora_rank = 32
 [training]
 batch_size = 8
 group_size = 16
-max_tokens = 2048
+max_tokens = 10240
 temperature = 0.7
 lr = 4e-5
 
@@ -188,6 +188,8 @@ _TOPIC_TO_SECTION = {
     "examples": "EXAMPLES",
     "advantages": "ADVANTAGE PIPELINE",
     "metrics": "METRICS GUIDE",
+    "capacity": "CAPACITY PLANNING",
+    "capacity-planning": "CAPACITY PLANNING",
     "architecture": "ARCHITECTURE",
     "files": "FILES",
     "plugins": "PLUGINS",

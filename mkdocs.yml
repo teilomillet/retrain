@@ -56,7 +56,9 @@ nav:
     - Inference Engines: inference-engines.md
     - Back Pressure: backpressure.md
   - Operations:
+    - Capacity Planning: capacity-planning.md
     - Campaigns: campaigns.md
+    - LoRA-Squeeze: squeeze.md
     - Backends: backends.md
     - Logging & wandb: logging.md
   - Research Guide: research-guide.md
