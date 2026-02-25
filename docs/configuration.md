@@ -56,6 +56,16 @@ dtype = "auto"             # auto | bf16 | fp8 | fp4
 kv_cache_dtype = "auto"    # auto | bf16 | fp8 | int8
 prefix_caching = true      # share prompt KV across group completions
 
+[data]
+source = "math"            # built-in data source (ignored when [environment] is set)
+
+[environment]
+provider = ""              # "" | "verifiers"
+id = ""                    # verifiers env id (e.g. primeintellect/aime)
+args = {}                  # env kwargs as TOML object (or JSON string)
+max_turns = -1             # cap turns for multi-turn envs; -1 = no override
+auto_install = false       # install Prime Hub env automatically if missing
+
 [reward]
 type = "match"             # match | math | judge | custom
 judge_model = ""           # LLM for judge reward (e.g. "gpt-4o-mini")
@@ -133,6 +143,45 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `weight_decay` | float | `0.0` | AdamW weight decay |
 | `max_examples` | int | `0` | Limit dataset size. `0` = use all |
 | `save_every` | int | `20` | Checkpoint frequency (steps) |
+
+### `[optimizer]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `beta1` | float | `0.9` | AdamW beta1 |
+| `beta2` | float | `0.95` | AdamW beta2 |
+| `eps` | float | `1e-8` | AdamW epsilon |
+
+### `[lora]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `alpha` | int | `0` | LoRA alpha. `0` = auto (`rank * 2`) |
+| `dropout` | float | `0.0` | LoRA dropout rate |
+
+### `[data]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `source` | str | `"math"` | Dataset source. Selects which data loader to use |
+
+### `[environment]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `provider` | str | `""` | Optional environment provider. Use `"verifiers"` to load verifiers environments |
+| `id` | str | `""` | Environment ID (for example `primeintellect/aime` or `primeintellect/wordle`) |
+| `args` | table / str | `{}` | Environment kwargs. Prefer TOML table (`args = { split = "train" }`); JSON string is also accepted |
+| `max_turns` | int | `-1` | Multi-turn safety cap. `-1` means use environment defaults |
+| `auto_install` | bool | `false` | If true, auto-install missing Prime Hub environments before loading |
+
+### `[planning]`
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `detector` | str | `"regex"` | Planning token detector: `regex` or `semantic` |
+| `model` | str | `"all-MiniLM-L6-v2"` | Sentence-transformer model for semantic detector |
+| `threshold` | float | `0.02` | Planning detection threshold |
 
 ### `[gtpo]`
 
@@ -272,7 +321,9 @@ max_examples = 100   # only load first 100 problems
 ```
 
 !!! note
-    To train on a different dataset, you'll need to modify `retrain/data.py` and provide a class that returns `list[Example]` where each `Example` has a `prompt` (the problem text) and `reference` (the ground-truth answer for `\boxed{}` extraction).
+    To train on a different dataset, you can either:
+    1. Use a verifiers environment via `[environment]` (no code changes), or
+    2. Add a custom data source in `retrain/data.py` that returns `list[Example]`.
 
 ## Environment variables
 

@@ -25,10 +25,47 @@ from retrain.config import TrainConfig
 from retrain.logging_utils import JsonlLogger
 from retrain.registry import get_registry
 from retrain.sepa import SEPAController
+from retrain.verifiers_bridge import (
+    encode_prompt_for_sampling,
+    is_multiturn_environment,
+    load_examples_from_environment,
+    load_verifiers_environment,
+    prompt_preview,
+    run_multiturn_group,
+    score_singleturn_group,
+)
 
 
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
+
+
+def _print_config_summary(config: TrainConfig) -> None:
+    """Print a bordered summary of key config values at train start."""
+    lines = [
+        f"  model         : {config.model}",
+        f"  backend       : {config.backend}",
+        f"  algorithm     : {config.advantage_mode}+{config.transform_mode}",
+        f"  batch_size    : {config.batch_size}",
+        f"  group_size    : {config.group_size}",
+        f"  max_steps     : {config.max_steps}",
+        f"  lr            : {config.lr}",
+        f"  lora_rank     : {config.lora_rank}",
+        f"  max_tokens    : {config.max_tokens}",
+        f"  temperature   : {config.temperature}",
+        f"  seed          : {config.seed}",
+        f"  adapter_path  : {config.adapter_path}",
+    ]
+    if config.wandb_project:
+        lines.append(f"  wandb         : {config.wandb_project}")
+    if config.resume_from:
+        lines.append(f"  resume_from   : {config.resume_from}")
+    width = max(len(l) for l in lines) + 2
+    sep = "-" * width
+    print(sep)
+    for l in lines:
+        print(l)
+    print(sep)
 
 
 def _save_trainer_state(
@@ -73,6 +110,8 @@ def _load_trainer_state(resume_dir: str) -> dict[str, Any]:
 
 def train(config: TrainConfig) -> str | None:
     """Main training loop -- fully self-contained. Returns final adapter path."""
+
+    _print_config_summary(config)
 
     # -----------------------------------------------------------------------
     # 0. Init backend (fail fast, before loading anything else)
@@ -133,10 +172,20 @@ def train(config: TrainConfig) -> str | None:
     # 3. Load dataset
     # -----------------------------------------------------------------------
     print("Loading dataset...")
-    examples = get_registry("data_source").create(config.data_source, config).load()
+    verifiers_env = None
+    if config.environment_provider == "verifiers":
+        verifiers_env = load_verifiers_environment(config)
+        examples = load_examples_from_environment(verifiers_env, config)
+        print(
+            f"Loaded {len(examples)} examples from verifiers env "
+            f"'{config.environment_id}'"
+        )
+    else:
+        examples = get_registry("data_source").create(config.data_source, config).load()
     if not examples:
         raise RuntimeError("Dataset is empty — cannot train with zero examples.")
-    print(f"Loaded {len(examples)} examples")
+    if verifiers_env is None:
+        print(f"Loaded {len(examples)} examples")
 
     # -----------------------------------------------------------------------
     # 4. Pre-encode all prompts
@@ -144,14 +193,7 @@ def train(config: TrainConfig) -> str | None:
     print("Pre-encoding prompts...")
     pre_encoded_prompts: list[list[int]] = []
     for ex in examples:
-        if hasattr(tokenizer, "apply_chat_template"):
-            messages = [{"role": "user", "content": ex.prompt}]
-            ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True)
-        else:
-            ids = tokenizer.encode(ex.prompt)
-        if hasattr(ids, "input_ids"):
-            ids = ids["input_ids"]
-        pre_encoded_prompts.append(list(ids))
+        pre_encoded_prompts.append(encode_prompt_for_sampling(tokenizer, ex.prompt))
     print(f"Pre-encoded {len(pre_encoded_prompts)} prompts")
 
     # -----------------------------------------------------------------------
@@ -221,7 +263,12 @@ def train(config: TrainConfig) -> str | None:
     # -----------------------------------------------------------------------
     # 9. Training loop
     # -----------------------------------------------------------------------
-    reward_fn = get_registry("reward").create(config.reward_type, config)
+    reward_fn = None
+    if verifiers_env is None:
+        reward_fn = get_registry("reward").create(config.reward_type, config)
+    verifiers_multiturn = (
+        verifiers_env is not None and is_multiturn_environment(verifiers_env)
+    )
     example_idx = 0
     total_correct = 0
     total_completions = 0
@@ -282,40 +329,23 @@ def train(config: TrainConfig) -> str | None:
         helper.checkpoint(f"step_{batch_idx}")
 
         # 10b. Select prompts
-        batch_prompts: list[str] = []
+        batch_prompt_objs: list[str | list[dict[str, Any]]] = []
+        batch_prompt_previews: list[str] = []
         batch_prompt_ids: list[list[int]] = []
         batch_answers: list[str] = []
+        batch_tasks: list[str] = []
+        batch_infos: list[dict[str, Any] | str | None] = []
 
         for _ in range(current_batch_size):
             ex_idx = example_idx % len(examples)
             example_idx += 1
-            batch_prompts.append(examples[ex_idx].prompt)
+            ex = examples[ex_idx]
+            batch_prompt_objs.append(ex.prompt)
+            batch_prompt_previews.append(prompt_preview(ex.prompt))
             batch_prompt_ids.append(list(pre_encoded_prompts[ex_idx]))
-            batch_answers.append(examples[ex_idx].reference)
-
-        # 10c. Sample completions
-        sample_start = time.perf_counter()
-        all_group_sequences = helper.sample(
-            batch_prompt_ids,
-            current_group_size,
-            config.max_tokens,
-            config.temperature,
-            config.top_p,
-        )
-        sample_time = time.perf_counter() - sample_start
-
-        # Build flat token sequences for batch decode
-        all_token_seqs_flat: list[list[int]] = []
-        group_flat_offsets: list[int] = []
-
-        for group in all_group_sequences:
-            group_flat_offsets.append(len(all_token_seqs_flat))
-            for token_ids, _logprobs in group:
-                all_token_seqs_flat.append(list(token_ids))
-
-        all_decoded_texts = tokenizer.batch_decode(
-            all_token_seqs_flat, skip_special_tokens=True
-        )
+            batch_answers.append(ex.reference)
+            batch_tasks.append(ex.task)
+            batch_infos.append(ex.info)
 
         # 10d. Process groups, compute advantages
         batch_rewards: list[float] = []
@@ -333,97 +363,270 @@ def train(config: TrainConfig) -> str | None:
         if uses_sepa_controller:
             sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
-        for f_idx, group in enumerate(all_group_sequences):
-            prompt_ids = batch_prompt_ids[f_idx]
-            answer = batch_answers[f_idx]
-            ob_len = len(prompt_ids)
-            flat_offset = group_flat_offsets[f_idx]
-            n_seqs = len(group)
+        if verifiers_multiturn:
+            all_group_sequences: list[list[tuple[list[int], list[float]]]] = []
+            sample_start = time.perf_counter()
+            for f_idx in range(len(batch_prompt_ids)):
+                prompt_obj = batch_prompt_objs[f_idx]
+                answer = batch_answers[f_idx]
+                task = batch_tasks[f_idx]
+                info = batch_infos[f_idx]
 
-            # Compute rewards + planning masks
-            rewards_G: list[float] = []
-            logprobs_G: list[list[float]] = []
-            planning_masks_G: list[list[int]] = []
+                rewards_G, turns_G, completion_texts_G = run_multiturn_group(
+                    verifiers_env,
+                    helper=helper,
+                    tokenizer=tokenizer,
+                    model_name=config.model,
+                    prompt=prompt_obj,
+                    answer=answer,
+                    task=task,
+                    info=info,
+                    num_rollouts=current_group_size,
+                    max_tokens=config.max_tokens,
+                    temperature=config.temperature,
+                    top_p=config.top_p,
+                    max_turns_override=config.environment_max_turns,
+                )
 
-            for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
-                text = all_decoded_texts[flat_offset + s_idx]
-                reward = reward_fn.score(text, answer)
-                rewards_G.append(reward)
-                logprobs_G.append(list(seq_logprobs))
+                logprobs_G: list[list[float]] = []
+                planning_masks_G: list[list[int]] = []
+                turns_logprobs_G: list[list[list[float]]] = []
+                turns_token_ids_G: list[list[list[int]]] = []
+                turns_prompt_ids_G: list[list[list[int]]] = []
 
-                if needs_planning:
-                    token_strs = [
-                        vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
-                        for tid in seq_tokens
-                    ]
-                    planning_masks_G.append(detector.detect(token_strs))
-                else:
-                    planning_masks_G.append([0] * len(seq_tokens))
+                for turns in turns_G:
+                    seq_logprobs: list[float] = []
+                    seq_token_ids: list[int] = []
+                    seq_token_strs: list[str] = []
+                    turn_logprobs: list[list[float]] = []
+                    turn_token_ids: list[list[int]] = []
+                    turn_prompt_ids: list[list[int]] = []
+                    for turn in turns:
+                        turn_prompt_ids.append(list(turn.prompt_ids))
+                        turn_token_ids.append(list(turn.completion_ids))
+                        turn_logprobs.append(list(turn.completion_logprobs))
+                        seq_logprobs.extend(turn.completion_logprobs)
+                        seq_token_ids.extend(turn.completion_ids)
+                        for tid in turn.completion_ids:
+                            seq_token_strs.append(
+                                vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
+                            )
+                    logprobs_G.append(seq_logprobs)
+                    turns_logprobs_G.append(turn_logprobs)
+                    turns_token_ids_G.append(turn_token_ids)
+                    turns_prompt_ids_G.append(turn_prompt_ids)
+                    if needs_planning:
+                        planning_masks_G.append(detector.detect(seq_token_strs))
+                    else:
+                        planning_masks_G.append([0] * len(seq_logprobs))
 
-            # Accumulate for SEPA state update
-            all_logprobs_sepa.extend(logprobs_G)
-            all_planning_masks_sepa.extend(planning_masks_G)
+                    batch_total_completions += 1
+                    if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
+                        batch_max_token_hits += 1
 
-            for r in rewards_G:
-                batch_rewards.append(r)
-                if r > _CORRECT_THRESHOLD:
-                    batch_correct += 1
+                all_logprobs_sepa.extend(logprobs_G)
+                all_planning_masks_sepa.extend(planning_masks_G)
 
-            # Track max-token truncations
-            for seq_tokens, _ in group:
-                batch_total_completions += 1
-                if len(seq_tokens) >= config.max_tokens:
-                    batch_max_token_hits += 1
+                for r in rewards_G:
+                    batch_rewards.append(r)
+                    if r > _CORRECT_THRESHOLD:
+                        batch_correct += 1
 
-            group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
-            answer_preview = answer[:40] if len(answer) > 40 else answer
-            print(
-                f"  group: {group_correct}/{len(rewards_G)} correct "
-                f"| answer={answer_preview}"
+                group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
+                answer_preview = answer[:40] if len(answer) > 40 else answer
+                print(
+                    f"  group: {group_correct}/{len(rewards_G)} correct "
+                    f"| answer={answer_preview}"
+                )
+
+                if rewards_G and all(r == rewards_G[0] for r in rewards_G):
+                    if rewards_G[0] > _CORRECT_THRESHOLD:
+                        print("    -> skipped (all correct)")
+                    else:
+                        print("    -> skipped (all wrong)")
+                    continue
+
+                adv_result = compute_composable_advantages(
+                    rewards_G,
+                    logprobs_G,
+                    planning_masks_G,
+                    advantage_mode=config.advantage_mode,
+                    transform_mode=config.transform_mode,
+                    gtpo_beta=config.gtpo_beta,
+                    hicra_alpha=config.hicra_alpha,
+                    sepa_lambda=sepa_lambda_val,
+                )
+                all_token_advs_G = adv_result.token_advs
+                if adv_result.has_stats:
+                    batch_entropy_stats.append(adv_result.stats)
+
+                for s_idx in range(len(rewards_G)):
+                    turn_prompt_ids = turns_prompt_ids_G[s_idx]
+                    turn_token_ids = turns_token_ids_G[s_idx]
+                    turn_logprobs = turns_logprobs_G[s_idx]
+                    token_advs = all_token_advs_G[s_idx]
+                    offset = 0
+                    for t_idx in range(len(turn_token_ids)):
+                        seq_tokens = turn_token_ids[t_idx]
+                        seq_logprobs = turn_logprobs[t_idx]
+                        prompt_ids = turn_prompt_ids[t_idx]
+                        seq_advs = token_advs[offset : offset + len(seq_tokens)]
+                        offset += len(seq_tokens)
+                        full_tokens = list(prompt_ids) + list(seq_tokens)
+                        padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
+                        padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
+                        all_datum_tokens.append(full_tokens)
+                        all_datum_logprobs.append(padded_logprobs)
+                        all_datum_advantages.append(padded_advantages)
+
+                for s_idx, comp_text in enumerate(completion_texts_G):
+                    generations_logger.log({
+                        "step": batch_idx,
+                        "prompt": batch_prompt_previews[f_idx],
+                        "completion": comp_text[:500],
+                        "reward": rewards_G[s_idx],
+                        "num_tokens": len(logprobs_G[s_idx]),
+                    })
+            sample_time = time.perf_counter() - sample_start
+        else:
+            # 10c. Sample completions
+            sample_start = time.perf_counter()
+            all_group_sequences = helper.sample(
+                batch_prompt_ids,
+                current_group_size,
+                config.max_tokens,
+                config.temperature,
+                config.top_p,
+            )
+            sample_time = time.perf_counter() - sample_start
+
+            # Build flat token sequences for batch decode
+            all_token_seqs_flat: list[list[int]] = []
+            group_flat_offsets: list[int] = []
+
+            for group in all_group_sequences:
+                group_flat_offsets.append(len(all_token_seqs_flat))
+                for token_ids, _logprobs in group:
+                    all_token_seqs_flat.append(list(token_ids))
+
+            all_decoded_texts = tokenizer.batch_decode(
+                all_token_seqs_flat, skip_special_tokens=True
             )
 
-            # Skip uninformative groups
-            if rewards_G and all(r == rewards_G[0] for r in rewards_G):
-                if rewards_G[0] > _CORRECT_THRESHOLD:
-                    print("    -> skipped (all correct)")
+            for f_idx, group in enumerate(all_group_sequences):
+                prompt_ids = batch_prompt_ids[f_idx]
+                answer = batch_answers[f_idx]
+                task = batch_tasks[f_idx]
+                info = batch_infos[f_idx]
+                prompt_obj = batch_prompt_objs[f_idx]
+                ob_len = len(prompt_ids)
+                flat_offset = group_flat_offsets[f_idx]
+
+                rewards_G: list[float] = []
+                logprobs_G: list[list[float]] = []
+                planning_masks_G: list[list[int]] = []
+                completion_texts_G: list[str] = []
+                turns_prompt_ids_G: list[list[list[int]]] = []
+                turns_token_ids_G: list[list[list[int]]] = []
+                turns_logprobs_G: list[list[list[float]]] = []
+
+                for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
+                    text = all_decoded_texts[flat_offset + s_idx]
+                    completion_texts_G.append(text)
+                    logprobs = list(seq_logprobs)
+                    logprobs_G.append(logprobs)
+                    turns_prompt_ids_G.append([list(prompt_ids)])
+                    turns_token_ids_G.append([list(seq_tokens)])
+                    turns_logprobs_G.append([logprobs])
+
+                    if needs_planning:
+                        token_strs = [
+                            vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
+                            for tid in seq_tokens
+                        ]
+                        planning_masks_G.append(detector.detect(token_strs))
+                    else:
+                        planning_masks_G.append([0] * len(logprobs))
+
+                if verifiers_env is None:
+                    assert reward_fn is not None
+                    for text in completion_texts_G:
+                        rewards_G.append(reward_fn.score(text, answer))
                 else:
-                    print("    -> skipped (all wrong)")
-                continue
+                    rewards_G = score_singleturn_group(
+                        verifiers_env,
+                        prompt=prompt_obj,
+                        answer=answer,
+                        task=task,
+                        info=info,
+                        completion_texts=completion_texts_G,
+                    )
 
-            # Composable advantage pipeline
-            adv_result = compute_composable_advantages(
-                rewards_G,
-                logprobs_G,
-                planning_masks_G,
-                advantage_mode=config.advantage_mode,
-                transform_mode=config.transform_mode,
-                gtpo_beta=config.gtpo_beta,
-                hicra_alpha=config.hicra_alpha,
-                sepa_lambda=sepa_lambda_val,
-            )
-            all_token_advs_G = adv_result.token_advs
-            if adv_result.has_stats:
-                batch_entropy_stats.append(adv_result.stats)
+                all_logprobs_sepa.extend(logprobs_G)
+                all_planning_masks_sepa.extend(planning_masks_G)
 
-            # Build datums
-            for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
-                full_tokens = list(prompt_ids) + list(seq_tokens)
-                padded_logprobs = [0.0] * ob_len + list(seq_logprobs)
-                padded_advantages = [0.0] * ob_len + all_token_advs_G[s_idx]
-                all_datum_tokens.append(full_tokens)
-                all_datum_logprobs.append(padded_logprobs)
-                all_datum_advantages.append(padded_advantages)
+                for r in rewards_G:
+                    batch_rewards.append(r)
+                    if r > _CORRECT_THRESHOLD:
+                        batch_correct += 1
 
-            # Per-generation emergence logging
-            for s_idx, (seq_tokens, _) in enumerate(group):
-                comp_text = all_decoded_texts[flat_offset + s_idx]
-                generations_logger.log({
-                    "step": batch_idx,
-                    "prompt": batch_prompts[f_idx][:200],
-                    "completion": comp_text[:500],
-                    "reward": rewards_G[s_idx],
-                    "num_tokens": len(seq_tokens),
-                })
+                for seq_tokens, _ in group:
+                    batch_total_completions += 1
+                    if len(seq_tokens) >= config.max_tokens:
+                        batch_max_token_hits += 1
+
+                group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
+                answer_preview = answer[:40] if len(answer) > 40 else answer
+                print(
+                    f"  group: {group_correct}/{len(rewards_G)} correct "
+                    f"| answer={answer_preview}"
+                )
+
+                if rewards_G and all(r == rewards_G[0] for r in rewards_G):
+                    if rewards_G[0] > _CORRECT_THRESHOLD:
+                        print("    -> skipped (all correct)")
+                    else:
+                        print("    -> skipped (all wrong)")
+                    continue
+
+                adv_result = compute_composable_advantages(
+                    rewards_G,
+                    logprobs_G,
+                    planning_masks_G,
+                    advantage_mode=config.advantage_mode,
+                    transform_mode=config.transform_mode,
+                    gtpo_beta=config.gtpo_beta,
+                    hicra_alpha=config.hicra_alpha,
+                    sepa_lambda=sepa_lambda_val,
+                )
+                all_token_advs_G = adv_result.token_advs
+                if adv_result.has_stats:
+                    batch_entropy_stats.append(adv_result.stats)
+
+                for s_idx in range(len(rewards_G)):
+                    token_advs = all_token_advs_G[s_idx]
+                    offset = 0
+                    for t_idx in range(len(turns_token_ids_G[s_idx])):
+                        seq_tokens = turns_token_ids_G[s_idx][t_idx]
+                        seq_logprobs = turns_logprobs_G[s_idx][t_idx]
+                        turn_prompt_ids = turns_prompt_ids_G[s_idx][t_idx]
+                        seq_advs = token_advs[offset : offset + len(seq_tokens)]
+                        offset += len(seq_tokens)
+                        full_tokens = list(turn_prompt_ids) + list(seq_tokens)
+                        padded_logprobs = [0.0] * len(turn_prompt_ids) + list(seq_logprobs)
+                        padded_advantages = [0.0] * len(turn_prompt_ids) + list(seq_advs)
+                        all_datum_tokens.append(full_tokens)
+                        all_datum_logprobs.append(padded_logprobs)
+                        all_datum_advantages.append(padded_advantages)
+
+                for s_idx, comp_text in enumerate(completion_texts_G):
+                    generations_logger.log({
+                        "step": batch_idx,
+                        "prompt": batch_prompt_previews[f_idx],
+                        "completion": comp_text[:500],
+                        "reward": rewards_G[s_idx],
+                        "num_tokens": len(logprobs_G[s_idx]),
+                    })
 
         # 10e. SEPA state updates
         total_completions += len(batch_rewards)

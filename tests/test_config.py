@@ -1,11 +1,12 @@
 """Tests for retrain.config — TrainConfig and TOML loading."""
 
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
 
-from retrain.config import TrainConfig, load_config
+from retrain.config import TrainConfig, load_config, parse_cli_overrides
 
 
 class TestDefaults:
@@ -210,6 +211,11 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-8)
         assert c.lora_alpha == 0
         assert c.lora_dropout == pytest.approx(0.0)
+        assert c.environment_provider == ""
+        assert c.environment_id == ""
+        assert c.environment_args == ""
+        assert c.environment_max_turns == -1
+        assert c.environment_auto_install is False
 
     def test_new_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
@@ -225,6 +231,36 @@ wandb_run_name = "run-1"
         assert c.optim_eps == pytest.approx(1e-6)
         assert c.lora_alpha == 64
         assert c.lora_dropout == pytest.approx(0.05)
+
+    def test_environment_fields_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[environment]\n'
+            'provider = "verifiers"\n'
+            'id = "primeintellect/aime"\n'
+            'args = "{\\"split\\": \\"train\\"}"\n'
+            'max_turns = 8\n'
+            'auto_install = true\n'
+        )
+        c = load_config(str(toml))
+        assert c.environment_provider == "verifiers"
+        assert c.environment_id == "primeintellect/aime"
+        assert c.environment_args == '{"split": "train"}'
+        assert c.environment_max_turns == 8
+        assert c.environment_auto_install is True
+
+    def test_environment_args_table_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[environment]\n'
+            'provider = "verifiers"\n'
+            'id = "primeintellect/aime"\n'
+            'args = { split = "train", seed = 7 }\n'
+        )
+        c = load_config(str(toml))
+        assert c.environment_provider == "verifiers"
+        assert c.environment_id == "primeintellect/aime"
+        assert c.environment_args == '{"split": "train", "seed": 7}'
 
 
 # ---------------------------------------------------------------------------
@@ -267,3 +303,162 @@ class TestValidation:
     def test_malformed_dotted_transform_mode_rejected(self):
         with pytest.raises(ValueError, match="Invalid transform_mode"):
             TrainConfig(transform_mode="custom_transforms.")
+
+    def test_invalid_environment_provider_raises(self):
+        with pytest.raises(ValueError, match="Invalid environment_provider"):
+            TrainConfig(environment_provider="unknown")
+
+    def test_environment_provider_requires_id(self):
+        with pytest.raises(ValueError, match="environment_id is required"):
+            TrainConfig(environment_provider="verifiers", environment_id="")
+
+    def test_environment_args_must_be_object_when_provider_set(self):
+        with pytest.raises(ValueError, match="must decode to a JSON object"):
+            TrainConfig(
+                environment_provider="verifiers",
+                environment_id="primeintellect/aime",
+                environment_args='["not","an","object"]',
+            )
+
+
+# ---------------------------------------------------------------------------
+# CLI parsing
+# ---------------------------------------------------------------------------
+
+
+class TestCLIParsing:
+    def test_positional_and_flags(self):
+        path, overrides = parse_cli_overrides(["config.toml", "--seed", "42"])
+        assert path == "config.toml"
+        assert overrides == {"seed": "42"}
+
+    def test_flags_only(self):
+        path, overrides = parse_cli_overrides(["--seed", "42", "--lr", "1e-4"])
+        assert path is None
+        assert overrides == {"seed": "42", "lr": "1e-4"}
+
+    def test_flag_equals_syntax(self):
+        path, overrides = parse_cli_overrides(["--seed=42"])
+        assert path is None
+        assert overrides == {"seed": "42"}
+
+    def test_unknown_flag_exits(self):
+        with pytest.raises(SystemExit):
+            parse_cli_overrides(["--sead", "42"])
+
+    def test_resume_alias(self):
+        _, overrides = parse_cli_overrides(["--resume", "/path/to/logs"])
+        assert overrides == {"resume_from": "/path/to/logs"}
+
+    def test_kebab_to_snake(self):
+        _, overrides = parse_cli_overrides(["--batch-size", "4"])
+        assert overrides == {"batch_size": "4"}
+
+    def test_overrides_applied_to_config(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("[training]\nmax_steps = 200\n")
+        c = load_config(str(toml), overrides={"seed": "42"})
+        assert c.seed == 42
+        assert c.max_steps == 200
+
+    def test_cli_beats_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("[training]\nmax_steps = 200\n")
+        c = load_config(str(toml), overrides={"max_steps": "50"})
+        assert c.max_steps == 50
+
+    def test_bool_override(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("")
+        c = load_config(str(toml), overrides={"bp_enabled": "true"})
+        assert c.bp_enabled is True
+
+    def test_missing_value_exits(self):
+        with pytest.raises(SystemExit):
+            parse_cli_overrides(["--seed"])
+
+
+# ---------------------------------------------------------------------------
+# Numeric validation
+# ---------------------------------------------------------------------------
+
+
+class TestNumericValidation:
+    def test_batch_size_zero(self):
+        with pytest.raises(ValueError, match="batch_size must be > 0"):
+            TrainConfig(batch_size=0)
+
+    def test_group_size_zero(self):
+        with pytest.raises(ValueError, match="group_size must be > 0"):
+            TrainConfig(group_size=0)
+
+    def test_lr_zero(self):
+        with pytest.raises(ValueError, match="lr must be > 0"):
+            TrainConfig(lr=0)
+
+    def test_lr_negative(self):
+        with pytest.raises(ValueError, match="lr must be > 0"):
+            TrainConfig(lr=-1e-5)
+
+    def test_max_steps_zero(self):
+        with pytest.raises(ValueError, match="max_steps must be > 0"):
+            TrainConfig(max_steps=0)
+
+    def test_max_tokens_zero(self):
+        with pytest.raises(ValueError, match="max_tokens must be > 0"):
+            TrainConfig(max_tokens=0)
+
+    def test_lora_rank_zero(self):
+        with pytest.raises(ValueError, match="lora_rank must be > 0"):
+            TrainConfig(lora_rank=0)
+
+    def test_temperature_negative(self):
+        with pytest.raises(ValueError, match="temperature must be >= 0"):
+            TrainConfig(temperature=-0.1)
+
+    def test_temperature_zero_ok(self):
+        c = TrainConfig(temperature=0.0)
+        assert c.temperature == 0.0
+
+    def test_top_p_zero(self):
+        with pytest.raises(ValueError, match="top_p must be in"):
+            TrainConfig(top_p=0.0)
+
+    def test_top_p_above_one(self):
+        with pytest.raises(ValueError, match="top_p must be in"):
+            TrainConfig(top_p=1.1)
+
+    def test_multiple_errors_batched(self):
+        with pytest.raises(ValueError) as exc_info:
+            TrainConfig(batch_size=0, lr=-1)
+        msg = str(exc_info.value)
+        assert "batch_size" in msg
+        assert "lr" in msg
+
+
+# ---------------------------------------------------------------------------
+# Validation warnings
+# ---------------------------------------------------------------------------
+
+
+class TestValidationWarnings:
+    def test_tmp_adapter_warns(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(adapter_path="/tmp/foo")
+        msgs = [str(x.message) for x in w]
+        assert any("/tmp" in m for m in msgs)
+
+    def test_high_temperature_warns(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(temperature=3.0)
+        msgs = [str(x.message) for x in w]
+        assert any("unusually high" in m for m in msgs)
+
+    def test_save_every_zero_warns(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(save_every=0)
+        msgs = [str(x.message) for x in w]
+        assert any("disables periodic" in m for m in msgs)

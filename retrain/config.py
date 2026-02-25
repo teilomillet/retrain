@@ -6,10 +6,13 @@ src/config.mojo exactly.
 
 from __future__ import annotations
 
+import difflib
+import json
 import sys
 import tomllib
 import typing
-from dataclasses import dataclass, field, fields
+import warnings
+from dataclasses import MISSING, dataclass, field, fields
 from pathlib import Path
 
 from retrain.advantages import (
@@ -19,6 +22,7 @@ from retrain.advantages import (
 
 _VALID_ADVANTAGE_MODES = {"grpo", "maxrl"}
 _VALID_TRANSFORM_MODES = set(get_builtin_transform_modes())
+_VALID_ENVIRONMENT_PROVIDERS = {"", "verifiers"}
 
 
 @dataclass
@@ -150,6 +154,13 @@ class TrainConfig:
     # Data source
     data_source: str = "math"
 
+    # Environment bridge (optional; e.g. verifiers envs from Prime Intellect Hub)
+    environment_provider: str = ""
+    environment_id: str = ""
+    environment_args: str = ""
+    environment_max_turns: int = -1
+    environment_auto_install: bool = False
+
     # Reward / verifier
     reward_type: str = "match"
     reward_judge_model: str = ""
@@ -168,18 +179,87 @@ class TrainConfig:
     wandb_tags: str = ""
 
     def __post_init__(self) -> None:
+        # --- Hard errors (batched) ---
+        errors: list[str] = []
+
+        if self.batch_size <= 0:
+            errors.append("batch_size must be > 0. Try: batch_size = 4")
+        if self.group_size <= 0:
+            errors.append("group_size must be > 0. Try: group_size = 16")
+        if self.max_steps <= 0:
+            errors.append("max_steps must be > 0. Try: max_steps = 100")
+        if self.max_tokens <= 0:
+            errors.append("max_tokens must be > 0. Try: max_tokens = 2048")
+        if self.lora_rank <= 0:
+            errors.append("lora_rank must be > 0. Try: lora_rank = 32")
+        if self.lr <= 0:
+            errors.append("lr must be > 0. Try: lr = 4e-5")
+        if self.temperature < 0:
+            errors.append("temperature must be >= 0. Try: temperature = 0.7")
+        if self.top_p <= 0 or self.top_p > 1:
+            errors.append("top_p must be in (0, 1]. Try: top_p = 0.95")
+
         if self.advantage_mode not in _VALID_ADVANTAGE_MODES:
-            raise ValueError(
+            errors.append(
                 f"Invalid advantage_mode '{self.advantage_mode}'. "
                 f"Must be one of: {sorted(_VALID_ADVANTAGE_MODES)}"
             )
         if self.transform_mode not in _VALID_TRANSFORM_MODES:
             if not is_valid_transform_mode_name(self.transform_mode):
-                raise ValueError(
+                errors.append(
                     f"Invalid transform_mode '{self.transform_mode}'. "
                     f"Must be one of: {sorted(_VALID_TRANSFORM_MODES)} "
                     "or a dotted plugin path (e.g. 'my_module.make_transform_spec')."
                 )
+        if self.environment_provider not in _VALID_ENVIRONMENT_PROVIDERS:
+            errors.append(
+                f"Invalid environment_provider '{self.environment_provider}'. "
+                f"Must be one of: {sorted(_VALID_ENVIRONMENT_PROVIDERS)}"
+            )
+        if self.environment_provider and not self.environment_id:
+            errors.append(
+                "environment_id is required when environment_provider is set."
+            )
+        if self.environment_provider and self.environment_args:
+            try:
+                parsed_args = json.loads(self.environment_args)
+            except json.JSONDecodeError:
+                errors.append(
+                    "environment_args must be valid JSON when "
+                    "environment_provider is set. "
+                    "For TOML, prefer: [environment] args = { ... }"
+                )
+            else:
+                if not isinstance(parsed_args, dict):
+                    errors.append(
+                        "environment_args must decode to a JSON object "
+                        "when environment_provider is set."
+                    )
+
+        if errors:
+            raise ValueError("\n".join(errors))
+
+        # --- Warnings (non-fatal) ---
+        if self.adapter_path.startswith("/tmp"):
+            warnings.warn(
+                "adapter_path starts with /tmp — checkpoints may be lost on reboot.",
+                stacklevel=2,
+            )
+        if self.temperature > 2.0:
+            warnings.warn(
+                f"temperature={self.temperature} is unusually high.",
+                stacklevel=2,
+            )
+        if self.save_every == 0:
+            warnings.warn(
+                "save_every=0 disables periodic checkpoints.",
+                stacklevel=2,
+            )
+        if self.weight_decay < 0:
+            warnings.warn(
+                f"weight_decay={self.weight_decay} is negative — this is unusual.",
+                stacklevel=2,
+            )
 
 
 # TOML section -> config field mapping
@@ -255,6 +335,13 @@ _TOML_MAP: dict[str, dict[str, str]] = {
     "data": {
         "source": "data_source",
     },
+    "environment": {
+        "provider": "environment_provider",
+        "id": "environment_id",
+        "args": "environment_args",
+        "max_turns": "environment_max_turns",
+        "auto_install": "environment_auto_install",
+    },
     "reward": {
         "type": "reward_type",
         "judge_model": "reward_judge_model",
@@ -279,7 +366,71 @@ _TOML_MAP: dict[str, dict[str, str]] = {
 _FIELD_TYPES: dict[str, type] = typing.get_type_hints(TrainConfig)
 
 
-def load_config(path: str | None = None) -> TrainConfig:
+def _coerce_value(field_name: str, raw: str) -> object:
+    """Coerce a CLI string value to the type expected by *field_name*."""
+    ftype = _FIELD_TYPES[field_name]
+    if ftype is bool:
+        return raw.lower() in ("1", "true", "yes")
+    if ftype is int:
+        return int(raw)
+    if ftype is float:
+        return float(raw)
+    return raw
+
+
+# Build CLI flag map: --kebab-case → snake_case field name
+_CLI_FLAG_MAP: dict[str, str] = {}
+for _f in fields(TrainConfig):
+    _CLI_FLAG_MAP["--" + _f.name.replace("_", "-")] = _f.name
+# Explicit alias
+_CLI_FLAG_MAP["--resume"] = "resume_from"
+
+
+def parse_cli_overrides(argv: list[str]) -> tuple[str | None, dict[str, str]]:
+    """Parse CLI args into (config_path, overrides).
+
+    Supports ``--kebab-case value`` and ``--kebab-case=value``.
+    The first positional argument (not starting with ``--``) is the config path.
+    Unknown flags produce a helpful error with close-match suggestions.
+    """
+    config_path: str | None = None
+    overrides: dict[str, str] = {}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if not arg.startswith("--"):
+            if config_path is None:
+                config_path = arg
+            i += 1
+            continue
+
+        # Handle --flag=value
+        if "=" in arg:
+            flag, value = arg.split("=", 1)
+        else:
+            flag = arg
+            value = None
+
+        if flag not in _CLI_FLAG_MAP:
+            close = difflib.get_close_matches(flag, _CLI_FLAG_MAP.keys(), n=1, cutoff=0.6)
+            hint = f" Did you mean: {close[0]}?" if close else ""
+            print(f"Unknown flag: {flag}.{hint}", file=sys.stderr)
+            sys.exit(1)
+
+        if value is None:
+            i += 1
+            if i >= len(argv):
+                print(f"Flag {flag} requires a value.", file=sys.stderr)
+                sys.exit(1)
+            value = argv[i]
+
+        overrides[_CLI_FLAG_MAP[flag]] = value
+        i += 1
+
+    return config_path, overrides
+
+
+def load_config(path: str | None = None, overrides: dict[str, str] | None = None) -> TrainConfig:
     """Load config from a TOML file.
 
     If path is None, looks for retrain.toml in cwd.
@@ -287,39 +438,57 @@ def load_config(path: str | None = None) -> TrainConfig:
 
     Matches Mojo behavior: empty-string TOML values are ignored
     for string fields (keeps the default).
+
+    *overrides* (from CLI flags) are applied after TOML loading
+    but before validation.
     """
-    config = TrainConfig()
+    config = TrainConfig.__new__(TrainConfig)
+    # Initialise with defaults (skip __post_init__ until the end)
+    for f in fields(TrainConfig):
+        if f.default is not MISSING:
+            setattr(config, f.name, f.default)
+        elif f.default_factory is not MISSING:
+            setattr(config, f.name, f.default_factory())
 
     if path is None:
         if Path("retrain.toml").is_file():
             path = "retrain.toml"
-        else:
-            return config
 
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    if path is not None:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
 
-    for section, mapping in _TOML_MAP.items():
-        sec = data.get(section)
-        if sec is None:
-            continue
-        for toml_key, field_name in mapping.items():
-            if toml_key not in sec:
+        for section, mapping in _TOML_MAP.items():
+            sec = data.get(section)
+            if sec is None:
                 continue
-            val = sec[toml_key]
-            ftype = _FIELD_TYPES[field_name]
-            if ftype is bool:
-                setattr(config, field_name, bool(val))
-            elif ftype is int:
-                setattr(config, field_name, int(val))
-            elif ftype is float:
-                setattr(config, field_name, float(val))
-            else:
-                # Match Mojo: ignore empty-string values for string fields
-                s = str(val)
-                if s:
-                    setattr(config, field_name, s)
+            for toml_key, field_name in mapping.items():
+                if toml_key not in sec:
+                    continue
+                val = sec[toml_key]
+                ftype = _FIELD_TYPES[field_name]
+                if ftype is bool:
+                    setattr(config, field_name, bool(val))
+                elif ftype is int:
+                    setattr(config, field_name, int(val))
+                elif ftype is float:
+                    setattr(config, field_name, float(val))
+                else:
+                    if field_name == "environment_args" and isinstance(
+                        val, (dict, list, tuple)
+                    ):
+                        setattr(config, field_name, json.dumps(val))
+                        continue
+                    # Match Mojo: ignore empty-string values for string fields
+                    s = str(val)
+                    if s:
+                        setattr(config, field_name, s)
 
-    # Re-validate after TOML overrides
+    # Apply CLI overrides
+    if overrides:
+        for field_name, raw_value in overrides.items():
+            setattr(config, field_name, _coerce_value(field_name, raw_value))
+
+    # Validate after all overrides
     config.__post_init__()
     return config
