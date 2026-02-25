@@ -13,7 +13,7 @@ Rewards (per completion)
 Episode-level advantage (GRPO or MaxRL)
     │
     ▼
-Token-level expansion (GTPO token-surprisal weighting)
+Token-level expansion (GTPO entropy weighting)
     │
     ▼
 Optional transform (HICRA or SEPA)
@@ -104,23 +104,23 @@ scale = 2.0
 
 ### GTPO
 
-Group-relative Token-level Policy Optimization. Weights token advantages by normalized token surprisal (`-logprob` of the sampled token):
+Group-relative Token-level Policy Optimization. Weights token advantages by normalized per-token entropy:
 
 ```
 w(t) = max(0, 1 + beta * (H(t)/mean(H) - 1))
 A_token(t) = A_episode * w(t)
 ```
 
-High-surprisal tokens (where the sampled token was unlikely) get amplified. Low-surprisal tokens get dampened.
+High-entropy tokens (where the model is uncertain) get amplified. Low-entropy tokens (confident predictions) get dampened. This focuses learning on the tokens where the model's decision actually matters.
 
-`uncertainty_kind` controls semantics in TOML:
+The `uncertainty_kind` config controls which entropy proxy is used:
 
 ```toml
 [algorithm]
-uncertainty_kind = "surprisal"   # default
+uncertainty_kind = "surprisal"   # default (only available kind today)
 ```
 
-`shannon_entropy` and `varentropy` are parsed but fail fast today; they require full token distributions that current backend sample APIs do not expose.
+Today, backends only provide per-token logprobs, so `surprisal` (`-logprob` of the sampled token) is used as the entropy proxy. `shannon_entropy` (true per-position entropy: −Σ pᵢ log pᵢ) and `varentropy` are parsed but require full token distributions that backends don't yet return — `flow.trace()` catches the mismatch with a diagnostic error.
 
 Controlled by `beta`:
 

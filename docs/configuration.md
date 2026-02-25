@@ -65,7 +65,7 @@ max_examples = 0           # 0 = use all examples
 save_every = 20
 
 [gtpo]
-beta = 0.1                 # token-surprisal weighting strength
+beta = 0.1                 # entropy weighting strength
 
 [hicra]
 alpha = 0.2                # planning token amplification
@@ -265,7 +265,7 @@ Nested plugin params tables under `[algorithm]`:
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `beta` | float | `0.1` | Uncertainty weighting strength. `0` disables GTPO weighting |
+| `beta` | float | `0.1` | Entropy weighting strength. `0` disables GTPO weighting |
 
 ### `[hicra]`
 

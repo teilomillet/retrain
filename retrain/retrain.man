@@ -274,17 +274,19 @@ CONFIGURATION
 
         none            No transform. Episode advantages broadcast to
                         all tokens uniformly.
-        gtpo            Token-surprisal-weighted credit assignment.
-                        High-surprisal tokens get more credit.
-                        Controlled by gtpo_beta.
+        gtpo            Entropy-weighted credit assignment. High-entropy
+                        tokens get more credit. Currently uses surprisal
+                        as proxy; see uncertainty_kind. Controlled by
+                        gtpo_beta.
         gtpo_hicra      GTPO + HICRA planning token amplification.
         gtpo_sepa       GTPO + SEPA selective entropy pooling (default).
         gtpo_sepa_amp   GTPO + SEPA with amplification variant.
         gtpo_sepa_amp_c GTPO + SEPA amplification with clamping.
-        entropy_mask    Yue et al. surprisal masking. Zeros out advantages
-                        on low-surprisal tokens, keeping only the top-rho
-                        fraction by surprisal rank. Controlled by
-                        surprisal_mask_rho. Uses GTPO weighting.
+        entropy_mask    Yue et al. entropy masking. Zeros out advantages
+                        on low-entropy tokens, keeping only the top-rho
+                        fraction by entropy rank. Controlled by
+                        surprisal_mask_rho (legacy: entropy_mask_rho).
+                        Uses GTPO weighting.
 
         Or a dotted plugin path (e.g. "my_module.make_spec").
         See PLUGINS for the full plugin authoring guide.
@@ -420,8 +422,8 @@ CONFIGURATION
   [gtpo]
 
     beta = 0.1
-        Token-surprisal-weighted credit assignment strength.
-        0.0 disables weighting (uniform advantages).
+        Entropy-weighted credit assignment strength.
+        0.0 disables entropy weighting (uniform advantages).
 
   [hicra]
 
@@ -830,7 +832,7 @@ ADVANTAGE PIPELINE
         Episode-level advantage (GRPO or MaxRL)
             |
             v
-        Token-level expansion (GTPO token-surprisal weighting)
+        Token-level expansion (GTPO entropy weighting)
             |
             v
         Optional transform (HICRA or SEPA)
@@ -850,9 +852,10 @@ ADVANTAGE PIPELINE
         is mostly wrong. Dampens signal on easy problems.
 
     GTPO
-        Token-surprisal-weighted token-level credit assignment.
-        High-surprisal tokens receive more credit. Controlled by
-        gtpo_beta (0.0 disables, 0.1 default).
+        Entropy-weighted token-level credit assignment.
+        High-entropy tokens receive more credit. Currently uses
+        surprisal as entropy proxy; see uncertainty_kind.
+        Controlled by gtpo_beta (0.0 disables, 0.1 default).
 
     HICRA
         Planning token amplification.
@@ -1153,8 +1156,9 @@ GLOSSARY
             A_i = r_i - mean(r).
     MaxRL   Inverse success-rate reweighting. A_i = (r_i - mean(r)) /
             (mean(r) + eps).
-    GTPO    Generalized Token-level Policy Optimization. Token-surprisal-
-            weighted credit assignment at the token level.
+    GTPO    Generalized Token-level Policy Optimization. Entropy-weighted
+            credit assignment at the token level. Uses surprisal as
+            entropy proxy today; see uncertainty_kind.
     HICRA   Hierarchical Credit Assignment. Planning token amplification
             via a learned mask.
     SEPA    Selective Entropy Pooling of Attention. Pools execution-token
