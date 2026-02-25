@@ -943,6 +943,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             "num_datums": num_datums,
             "max_token_hit_rate": max_token_hit_rate,
             "step_time_s": step_time,
+            "sample_time_s": sample_time,
+            "train_time_s": train_time,
             "batch_size": current_batch_size,
             "group_size": current_group_size,
             "bp_warmup": bp_warmup,
