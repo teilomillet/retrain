@@ -11,7 +11,7 @@
 #   retrain campaigns/sepa-amplify-amp-c.toml &
 
 [campaign]
-seeds = [101, 202]  # s42 completed in campaign_20260224_225120
+seeds = [42, 101, 202]
 max_steps = 100
 
 [[campaign.conditions]]
