@@ -9,7 +9,8 @@ import importlib
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Mapping
+from typing import Callable
 
 # Cap entropy values to prevent inf from poisoning downstream math.
 # Real per-token entropy (-logprob) rarely exceeds ~15; 50 is a safe upper bound.
@@ -47,7 +48,7 @@ class AdvantageResult:
 EntropyTransformFn = Callable[[list[float], list[int], float], list[float]]
 
 PostProcessFn = Callable[
-    [list[list[float]], list[list[float]], dict[str, Any]],
+    [list[list[float]], list[list[float]], Mapping[str, object]],
     tuple[list[list[float]], dict[str, float]],
 ]
 
@@ -192,10 +193,11 @@ def apply_entropy_mask(
 def entropy_mask_post_process(
     all_token_advs: list[list[float]],
     all_raw_entropies: list[list[float]],
-    params: dict[str, Any],
+    params: Mapping[str, object],
 ) -> tuple[list[list[float]], dict[str, float]]:
     """Post-process hook: Yue et al. entropy masking."""
-    rho = params.get("entropy_mask_rho", 0.0)
+    raw_rho = params.get("entropy_mask_rho", 0.0)
+    rho = float(raw_rho) if isinstance(raw_rho, int | float) else 0.0
     if rho <= 0.0:
         return all_token_advs, {}
 
@@ -554,7 +556,7 @@ def compute_composable_advantages(
     gtpo_beta: float = 0.1,
     hicra_alpha: float = 0.2,
     sepa_lambda: float = 0.0,
-    post_process_params: dict[str, Any] | None = None,
+    post_process_params: Mapping[str, object] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
     transform_spec = get_transform_spec(transform_mode)
