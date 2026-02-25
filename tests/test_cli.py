@@ -1,11 +1,17 @@
-"""Tests for retrain.cli — init subcommand and flag suggestions."""
+"""Tests for retrain.cli — init, explain, and flag suggestions."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from retrain.cli import _print_top_help, _run_init, _run_man
+from retrain.cli import (
+    _INIT_TEMPLATES,
+    _print_top_help,
+    _run_explain,
+    _run_init,
+    _run_man,
+)
 from retrain.config import parse_cli_overrides
 
 
@@ -212,4 +218,142 @@ class TestManCommand:
     def test_man_sync_and_check_together_exits(self):
         with pytest.raises(SystemExit) as exc_info:
             _run_man(["--sync", "--check"])
+        assert exc_info.value.code == 1
+
+
+class TestInitTemplates:
+    def test_list_templates(self, capsys, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _run_init(args=["--list"])
+        captured = capsys.readouterr()
+        assert "default" in captured.out
+        assert "quickstart" in captured.out
+        assert "experiment" in captured.out
+        assert "campaign" in captured.out
+
+    def test_quickstart_template(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _run_init(args=["--template", "quickstart"])
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "max_steps = 20" in content
+        assert 'transform_mode = "none"' in content
+
+    def test_experiment_template(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _run_init(args=["--template", "experiment"])
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "max_steps = 500" in content
+        assert "seed = 42" in content
+        assert "[sepa]" in content
+
+    def test_campaign_template(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _run_init(args=["--template", "campaign"])
+        content = (tmp_path / "campaign.toml").read_text()
+        assert "[campaign]" in content
+        assert "[[campaign.conditions]]" in content
+
+    def test_unknown_template_exits(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            _run_init(args=["--template", "nope"])
+        assert exc_info.value.code == 1
+
+    def test_default_template_unchanged(self, tmp_path, monkeypatch):
+        """Default template produces same output as before."""
+        monkeypatch.chdir(tmp_path)
+        _run_init(args=["--template", "default"])
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "[model]" in content
+        assert "[training]" in content
+        assert "max_steps = 100" in content
+
+    def test_campaign_refuses_overwrite(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "campaign.toml").write_text("existing")
+        with pytest.raises(SystemExit) as exc_info:
+            _run_init(args=["--template", "campaign"])
+        assert exc_info.value.code == 1
+
+
+class TestExplainCommand:
+    def _write_single_toml(self, tmp_path: Path) -> Path:
+        p = tmp_path / "test.toml"
+        p.write_text(
+            "[model]\n"
+            'model = "Qwen/Qwen3-4B-Instruct-2507"\n'
+            "lora_rank = 32\n\n"
+            "[algorithm]\n"
+            'advantage_mode = "grpo"\n'
+            'transform_mode = "none"\n\n'
+            "[training]\n"
+            "max_steps = 50\n"
+            "batch_size = 4\n"
+            "group_size = 8\n\n"
+            "[backend]\n"
+            'adapter_path = "adapters/test"\n'
+        )
+        return p
+
+    def _write_campaign_toml(self, tmp_path: Path) -> Path:
+        p = tmp_path / "campaign.toml"
+        p.write_text(
+            "[campaign]\n"
+            "seeds = [42, 101]\n"
+            "max_steps = 100\n\n"
+            "[[campaign.conditions]]\n"
+            'advantage_mode = "grpo"\n'
+            'transform_mode = "none"\n\n'
+            "[[campaign.conditions]]\n"
+            'advantage_mode = "maxrl"\n'
+            'transform_mode = "gtpo_sepa"\n\n'
+            "[model]\n"
+            'model = "Qwen/Qwen3-4B-Instruct-2507"\n'
+            "lora_rank = 32\n"
+        )
+        return p
+
+    def test_explain_single_text(self, tmp_path, capsys):
+        p = self._write_single_toml(tmp_path)
+        _run_explain([str(p)])
+        out = capsys.readouterr().out
+        assert "grpo+none" in out
+        assert "50" in out
+        assert "batch_size" in out
+
+    def test_explain_single_json(self, tmp_path, capsys):
+        p = self._write_single_toml(tmp_path)
+        _run_explain(["--json", str(p)])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["mode"] == "single"
+        assert payload["condition"] == "grpo+none"
+        assert payload["max_steps"] == 50
+        assert payload["datums_per_step"] == 32  # 4 * 8
+
+    def test_explain_campaign_text(self, tmp_path, capsys):
+        p = self._write_campaign_toml(tmp_path)
+        _run_explain([str(p)])
+        out = capsys.readouterr().out
+        assert "campaign" in out
+        assert "grpo+none" in out
+        assert "maxrl+gtpo_sepa" in out
+        assert "4" in out  # total_runs = 2 conditions x 2 seeds
+
+    def test_explain_campaign_json(self, tmp_path, capsys):
+        p = self._write_campaign_toml(tmp_path)
+        _run_explain(["--json", str(p)])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["mode"] == "campaign"
+        assert payload["total_runs"] == 4
+        assert len(payload["conditions"]) == 2
+
+    def test_explain_no_config_exits(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit) as exc_info:
+            _run_explain([])
+        assert exc_info.value.code == 1
+
+    def test_explain_missing_file_exits(self):
+        with pytest.raises(SystemExit) as exc_info:
+            _run_explain(["/nonexistent/path.toml"])
         assert exc_info.value.code == 1

@@ -38,8 +38,21 @@ COMMANDS
     retrain doctor
         Checks optional dependencies for configured components.
 
-    retrain init
-        Writes a starter retrain.toml in the current directory.
+    retrain init [--template NAME] [--list]
+        Writes a starter config in the current directory.
+        Templates: default, quickstart, experiment, campaign.
+        --template NAME   selects a template (default: default).
+        --list            shows available templates.
+
+    retrain status [logdir] [--json]
+        Scans log directories for run and campaign status.
+        Defaults to ./logs when no path is given.
+        --json            machine-readable JSON output.
+
+    retrain explain [config.toml] [--json]
+        Dry-run preview: shows what a config would do.
+        Works for single runs, campaigns, and squeeze configs.
+        --json            machine-readable JSON output.
 
     retrain man
         Shows this manual.
@@ -80,6 +93,7 @@ OPTIONS
         --bp-warmup-steps
         --data-source
         --devices
+        --entropy-mask-rho
         --environment-args
         --environment-auto-install
         --environment-id
