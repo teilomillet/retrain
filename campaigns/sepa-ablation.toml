@@ -1,0 +1,46 @@
+# sepa-ablation: HICRA condition to isolate SEPA's specific effect
+#
+# We already have grpo+none (3 seeds) and maxrl+gtpo_sepa (3 seeds)
+# from sepa-ramp. This adds the HICRA condition for direct comparison.
+#
+# The key comparison: SEPA vs HICRA (same pipeline, different transform)
+# - Both use MaxRL + GTPO + planning tokens
+# - HICRA amplifies planning advantages
+# - SEPA pools execution entropy
+#
+# 1 condition x 3 seeds x 100 steps = 3 runs (~38k episodes)
+#
+# Run: retrain campaigns/sepa-ablation.toml
+
+[campaign]
+seeds = [42, 101, 202]
+max_steps = 100
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_hicra"
+
+# --- base training config (identical to sepa-ramp) ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[sepa]
+steps = 100
+schedule = "linear"
+delay_steps = 5
+
+[logging]
+wandb_project = "sepa-ramp"

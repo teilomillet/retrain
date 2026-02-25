@@ -180,6 +180,15 @@ def train(config: TrainConfig) -> str | None:
             f"Loaded {len(examples)} examples from verifiers env "
             f"'{config.environment_id}'"
         )
+        if config.data_source != "math":
+            print(
+                "NOTE: [data].source is ignored when [environment].provider is set."
+            )
+        if config.reward_type != "match":
+            print(
+                "NOTE: [reward] settings are ignored with [environment].provider="
+                "'verifiers'; the environment rubric is used."
+            )
     else:
         examples = get_registry("data_source").create(config.data_source, config).load()
     if not examples:

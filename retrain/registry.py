@@ -165,9 +165,11 @@ def _create_tinker(config: TrainConfig) -> Any:
             "Backend 'tinker' requires the tinker SDK.\n"
             "Install it with: pip install retrain[tinker]"
         ) from None
+    # Prefer [inference].url, but keep [model].base_url as backward-compatible fallback.
+    tinker_url = config.inference_url or config.base_url
     return TinkerTrainHelper(
         config.model,
-        config.inference_url,
+        tinker_url,
         config.lora_rank,
         optim_beta1=config.optim_beta1,
         optim_beta2=config.optim_beta2,
@@ -303,6 +305,7 @@ _DEPENDENCY_MAP: dict[str, tuple[str, str]] = {
     "math": ("math_verify", "pip install retrain[verifiers]"),
     "judge": ("verifiers", "pip install retrain[verifiers]"),
     "semantic": ("sentence_transformers", "pip install retrain[semantic]"),
+    "verifiers_env": ("verifiers", "pip install retrain[verifiers]"),
 }
 
 
@@ -323,6 +326,8 @@ def check_environment(
         for name in (config.backend, config.reward_type, config.planning_detector):
             if name in _DEPENDENCY_MAP:
                 names_to_check.append(name)
+        if config.environment_provider == "verifiers":
+            names_to_check.append("verifiers_env")
 
     results: list[tuple[str, str, str, bool]] = []
     for name in names_to_check:

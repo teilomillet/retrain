@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -151,6 +153,32 @@ class TestBuiltinCreation:
         config = TrainConfig(reward_type="custom", reward_custom_module="")
         with pytest.raises(ValueError, match="custom_module"):
             reward.create("custom", config)
+
+    def test_tinker_uses_inference_url_before_base_url(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(TinkerTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="tinker",
+            inference_url="http://inference-url",
+            base_url="http://model-base-url",
+        )
+        with patch.dict(sys.modules, {"retrain.tinker_backend": fake_mod}):
+            backend.create("tinker", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args[0][1] == "http://inference-url"
+
+    def test_tinker_falls_back_to_model_base_url(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(TinkerTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="tinker",
+            inference_url="",
+            base_url="http://model-base-url",
+        )
+        with patch.dict(sys.modules, {"retrain.tinker_backend": fake_mod}):
+            backend.create("tinker", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args[0][1] == "http://model-base-url"
 
 
 # ---------------------------------------------------------------------------

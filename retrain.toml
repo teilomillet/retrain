@@ -33,3 +33,16 @@ delay_steps = 50
 
 [logging]
 log_dir = "logs/train"
+
+[data]
+source = "math"
+
+[reward]
+type = "match"
+
+[environment]
+provider = ""
+id = ""
+args = {}
+max_turns = -1
+auto_install = false

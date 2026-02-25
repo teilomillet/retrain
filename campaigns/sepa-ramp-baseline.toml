@@ -1,0 +1,33 @@
+# Parallel split: GRPO baseline runs (seeds 101, 202)
+# Seed 42 already completed in the main campaign.
+
+[campaign]
+seeds = [101, 202]
+max_steps = 100
+
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[sepa]
+steps = 100
+schedule = "linear"
+delay_steps = 5
+
+[logging]
+wandb_project = "sepa-ramp"

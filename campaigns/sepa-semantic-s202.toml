@@ -1,0 +1,38 @@
+# sepa-semantic seed 202 only — run in parallel with main campaign (which handles 101)
+
+[campaign]
+seeds = [202]
+max_steps = 100
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_sepa"
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[planning]
+detector = "semantic"
+
+[sepa]
+steps = 100
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "sepa-semantic"

@@ -1,0 +1,50 @@
+# sepa-amplify-amp: SEPA raw amplification only
+# NOTE: Tinker supports concurrent training sessions — run this in parallel
+#       with sepa-amplify-amp-c.toml for 2x throughput.
+#
+# Baseline grpo+none results at: logs/campaign_20260224_005440
+#
+# 1 condition x 3 seeds x 100 steps = 3 runs
+#
+# Run (parallel):
+#   retrain campaigns/sepa-amplify-amp.toml &
+#   retrain campaigns/sepa-amplify-amp-c.toml &
+
+[campaign]
+seeds = [101, 202]  # s42 completed in campaign_20260224_225120
+max_steps = 100
+
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_sepa_amp"
+
+# --- base training config ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[planning]
+detector = "semantic"
+
+[sepa]
+steps = 100
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "sepa-amplify"

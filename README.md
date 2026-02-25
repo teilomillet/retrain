@@ -63,6 +63,37 @@ def make_transform_spec():
     )
 ```
 
+### Verifiers Environment (TOML-first)
+
+Use a verifiers environment directly from TOML:
+
+```toml
+[environment]
+provider = "verifiers"
+id = "primeintellect/aime"            # installed env id
+args = { split = "train" }             # native TOML object
+auto_install = true                    # install from Prime Hub if missing
+max_turns = 8                          # only used for multi-turn envs
+```
+
+For single-turn envs, retrain scores with the environment rubric.
+For multi-turn envs (for example Wordle-style), retrain runs the env loop and
+samples each turn with the selected backend/model.
+
+Minimal switchboard in TOML:
+
+```toml
+[backend]
+backend = "tinker"                     # local | tinker
+
+[algorithm]
+transform_mode = "gtpo_sepa"           # or dotted plugin path
+
+[environment]
+provider = "verifiers"                 # optional
+id = "primeintellect/wordle"           # e.g. wordle or aime
+```
+
 ## Documentation
 
 Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
