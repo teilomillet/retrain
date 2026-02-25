@@ -31,6 +31,8 @@ Not all logged metrics are equally important. Here's what to focus on at each le
 |--------|-------------------|
 | `max_token_hit_rate` | Spikes mean the model is rambling -- consider increasing `max_tokens` |
 | `loss` | Should decrease. Can be negative with importance sampling -- that's normal |
+| `loss_is_placeholder` | `true` means the backend reports async placeholder loss (compare reward/correct metrics instead) |
+| `backend_reports_sync_loss` | `false` means `loss` is not a synchronous optimizer objective |
 | `num_datums` | Drops when groups are uninformative (all correct or all wrong) |
 | `bp_regime` | If stuck in `retrograde`, batch size is too high |
 

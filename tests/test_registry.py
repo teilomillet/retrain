@@ -18,6 +18,7 @@ from retrain.registry import (
     get_registry,
     inference_engine,
     planning_detector,
+    probe_backend_runtime,
     reward,
 )
 
@@ -199,13 +200,13 @@ class TestBuiltinCreation:
             backend="prime_rl",
             inference_url="http://prime-inference",
             base_url="http://model-base-url",
-            adapter_path="/tmp/prime-output",
+            adapter_path="adapters/prime-output",
         )
         with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://prime-inference"
-        assert mock_cls.call_args.kwargs["output_dir"] == "/tmp/prime-output"
+        assert mock_cls.call_args.kwargs["output_dir"] == "adapters/prime-output"
         assert mock_cls.call_args.kwargs["transport_type"] == "filesystem"
         assert mock_cls.call_args.kwargs["zmq_host"] == "localhost"
         assert mock_cls.call_args.kwargs["zmq_port"] == 5555
@@ -281,6 +282,33 @@ class TestCheckEnvironment:
             assert isinstance(import_name, str)
             assert isinstance(hint, str)
             assert isinstance(available, bool)
+
+
+class TestRuntimeProbes:
+    def test_probe_backend_runtime_shape(self, monkeypatch):
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False))
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "tinker", SimpleNamespace())
+        monkeypatch.setitem(sys.modules, "prime_rl", SimpleNamespace())
+        monkeypatch.setenv("RETRAIN_TINKER_URL", "http://localhost:9000")
+        monkeypatch.setenv("RETRAIN_PRIME_RL_URL", "http://localhost:8000")
+
+        monkeypatch.setattr(
+            "retrain.registry._probe_http_endpoint",
+            lambda base_url, paths, timeout_s=0.8: SimpleNamespace(
+                backend="",
+                probe="http",
+                status="ok",
+                detail=f"{base_url} ok",
+            ),
+        )
+
+        probes = probe_backend_runtime(config=None)
+        names = {p.backend for p in probes}
+        assert {"local", "tinker", "prime_rl"} <= names
+        for probe in probes:
+            assert probe.status in {"ok", "fail", "skip"}
+            assert isinstance(probe.detail, str)
 
 
 # ---------------------------------------------------------------------------

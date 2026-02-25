@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import difflib
+import importlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -20,17 +21,28 @@ class BackendOptionSpec:
 
 
 @dataclass(frozen=True)
+class BackendCapabilities:
+    """Core runtime capability metadata exposed by a backend."""
+
+    reports_sync_loss: bool
+    preserves_token_advantages: bool
+    supports_checkpoint_resume: bool
+    resume_runtime_dependent: bool
+
+
+@dataclass(frozen=True)
 class BackendDefinition:
     """Single source of truth for a built-in backend."""
 
     name: str
-    factory: Callable[[Any], Any]
+    factory: Callable[[object], object]
     dependency_import: str
     dependency_hint: str
+    capabilities: BackendCapabilities
     option_schema: dict[str, BackendOptionSpec] = field(default_factory=dict)
 
 
-def _create_local(config: Any) -> Any:
+def _create_local(config: object) -> object:
     try:
         from retrain.local_train_helper import LocalTrainHelper
     except ImportError:
@@ -53,7 +65,7 @@ def _create_local(config: Any) -> Any:
     )
 
 
-def _create_tinker(config: Any) -> Any:
+def _create_tinker(config: object) -> object:
     try:
         from retrain.tinker_backend import TinkerTrainHelper
     except ImportError:
@@ -73,7 +85,7 @@ def _create_tinker(config: Any) -> Any:
     )
 
 
-def _create_prime_rl(config: Any) -> Any:
+def _create_prime_rl(config: object) -> object:
     try:
         from retrain.prime_rl_backend import PrimeRLTrainHelper
     except ImportError:
@@ -130,6 +142,12 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
         factory=_create_local,
         dependency_import="torch",
         dependency_hint="pip install retrain[local]",
+        capabilities=BackendCapabilities(
+            reports_sync_loss=True,
+            preserves_token_advantages=True,
+            supports_checkpoint_resume=True,
+            resume_runtime_dependent=False,
+        ),
         option_schema={},
     ),
     "tinker": BackendDefinition(
@@ -137,6 +155,12 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
         factory=_create_tinker,
         dependency_import="tinker",
         dependency_hint="pip install retrain[tinker]",
+        capabilities=BackendCapabilities(
+            reports_sync_loss=True,
+            preserves_token_advantages=True,
+            supports_checkpoint_resume=True,
+            resume_runtime_dependent=True,
+        ),
         option_schema={},
     ),
     "prime_rl": BackendDefinition(
@@ -144,6 +168,12 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
         factory=_create_prime_rl,
         dependency_import="prime_rl",
         dependency_hint="pip install prime-rl",
+        capabilities=BackendCapabilities(
+            reports_sync_loss=False,
+            preserves_token_advantages=False,
+            supports_checkpoint_resume=True,
+            resume_runtime_dependent=False,
+        ),
         option_schema={
             "transport": BackendOptionSpec(
                 value_type=str,
@@ -176,6 +206,21 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
     ),
 }
 
+_PLUGIN_DEFAULT_CAPABILITIES = BackendCapabilities(
+    reports_sync_loss=True,
+    preserves_token_advantages=True,
+    supports_checkpoint_resume=True,
+    resume_runtime_dependent=False,
+)
+_PLUGIN_CAPABILITIES_HOOKS = (
+    "retrain_backend_capabilities",
+    "RETRAIN_BACKEND_CAPABILITIES",
+)
+_PLUGIN_OPTION_SCHEMA_HOOKS = (
+    "retrain_backend_option_schema",
+    "RETRAIN_BACKEND_OPTION_SCHEMA",
+)
+
 
 def get_builtin_backend_definitions() -> dict[str, BackendDefinition]:
     """Return all built-in backend definitions keyed by backend name."""
@@ -187,6 +232,241 @@ def get_backend_dependency_map() -> dict[str, tuple[str, str]]:
     return {
         name: (definition.dependency_import, definition.dependency_hint)
         for name, definition in _BUILTIN_BACKENDS.items()
+    }
+
+
+def _coerce_backend_capabilities(raw: object) -> BackendCapabilities | None:
+    if isinstance(raw, BackendCapabilities):
+        return raw
+    if isinstance(raw, Mapping):
+        try:
+            return BackendCapabilities(
+                reports_sync_loss=bool(raw["reports_sync_loss"]),
+                preserves_token_advantages=bool(raw["preserves_token_advantages"]),
+                supports_checkpoint_resume=bool(raw["supports_checkpoint_resume"]),
+                resume_runtime_dependent=bool(raw["resume_runtime_dependent"]),
+            )
+        except KeyError:
+            return None
+    return None
+
+
+def _coerce_option_type(raw_type: object) -> type:
+    if isinstance(raw_type, type):
+        return raw_type
+    if isinstance(raw_type, str):
+        key = raw_type.strip().lower()
+        if key in {"bool", "boolean"}:
+            return bool
+        if key in {"int", "integer"}:
+            return int
+        if key == "float":
+            return float
+        if key in {"str", "string"}:
+            return str
+    raise ValueError(
+        "Invalid backend option type. "
+        "Expected one of bool/int/float/str (or corresponding python type)."
+    )
+
+
+def _coerce_plugin_option_spec(key: str, raw: object) -> BackendOptionSpec:
+    if isinstance(raw, BackendOptionSpec):
+        return raw
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            f"Invalid backend option schema entry for '{key}'. "
+            "Expected BackendOptionSpec or mapping."
+        )
+    raw_type = raw.get("value_type", raw.get("type", str))
+    value_type = _coerce_option_type(raw_type)
+    default = raw.get("default")
+    choices_raw = raw.get("choices")
+    choices: tuple[object, ...] | None = None
+    if choices_raw is not None:
+        if not isinstance(choices_raw, (list, tuple)):
+            raise ValueError(
+                f"Invalid backend option schema choices for '{key}': expected list/tuple."
+            )
+        choices = tuple(choices_raw)
+    validator = raw.get("validator")
+    if validator is not None and not callable(validator):
+        raise ValueError(
+            f"Invalid backend option validator for '{key}': expected callable."
+        )
+    return BackendOptionSpec(
+        value_type=value_type,
+        default=default,
+        choices=choices,
+        validator=validator,
+    )
+
+
+def _coerce_plugin_option_schema(
+    backend_name: str,
+    raw: object,
+) -> dict[str, BackendOptionSpec] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        schema: dict[str, BackendOptionSpec] = {}
+        for key, spec in raw.items():
+            if not isinstance(key, str):
+                raise ValueError(
+                    f"Invalid backend option schema for '{backend_name}': non-string key {key!r}."
+                )
+            schema[key] = _coerce_plugin_option_spec(key, spec)
+        return schema
+    raise ValueError(
+        f"Invalid backend option schema for '{backend_name}'. Expected mapping."
+    )
+
+
+def _resolve_hook_value(raw: object, backend_options: Mapping[str, object]) -> object:
+    if not callable(raw):
+        return raw
+    try:
+        return raw(dict(backend_options))
+    except TypeError:
+        return raw()
+
+
+def _import_plugin_target(backend_name: str) -> tuple[object, object] | tuple[None, None]:
+    module_path, _, attr_name = backend_name.rpartition(".")
+    if not module_path or not attr_name:
+        return None, None
+    try:
+        module = importlib.import_module(module_path)
+    except Exception:
+        return None, None
+    target = getattr(module, attr_name, None)
+    if target is None:
+        return None, None
+    return module, target
+
+
+def _plugin_hook_value(
+    backend_name: str,
+    hook_names: tuple[str, ...],
+    backend_options: Mapping[str, object],
+) -> object | None:
+    module, target = _import_plugin_target(backend_name)
+    if module is None or target is None:
+        return None
+    for hook_name in hook_names:
+        for holder in (target, module):
+            raw = getattr(holder, hook_name, None)
+            if raw is None:
+                continue
+            return _resolve_hook_value(raw, backend_options)
+    return None
+
+
+def resolve_backend_capabilities(
+    backend_name: str,
+    backend_options: Mapping[str, object] | None = None,
+) -> BackendCapabilities:
+    """Resolve capability metadata for built-in and dotted plugin backends."""
+    options = {} if backend_options is None else dict(backend_options)
+    definition = _BUILTIN_BACKENDS.get(backend_name)
+    if definition is not None:
+        return definition.capabilities
+    if "." in backend_name:
+        raw = _plugin_hook_value(
+            backend_name,
+            _PLUGIN_CAPABILITIES_HOOKS,
+            options,
+        )
+        caps = _coerce_backend_capabilities(raw)
+        if caps is not None:
+            return caps
+        return _PLUGIN_DEFAULT_CAPABILITIES
+    return _PLUGIN_DEFAULT_CAPABILITIES
+
+
+def backend_capability_source(
+    backend_name: str,
+    backend_options: Mapping[str, object] | None = None,
+) -> str:
+    """Human-readable source for capability resolution diagnostics."""
+    options = {} if backend_options is None else dict(backend_options)
+    if backend_name in _BUILTIN_BACKENDS:
+        return "builtin"
+    if "." in backend_name:
+        raw = _plugin_hook_value(
+            backend_name,
+            _PLUGIN_CAPABILITIES_HOOKS,
+            options,
+        )
+        if _coerce_backend_capabilities(raw) is not None:
+            return "plugin/hook"
+    return "plugin/default"
+
+
+def _option_type_name(value_type: type) -> str:
+    if value_type is bool:
+        return "bool"
+    if value_type is int:
+        return "int"
+    if value_type is float:
+        return "float"
+    if value_type is str:
+        return "str"
+    return getattr(value_type, "__name__", str(value_type))
+
+
+def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, bool]:
+    return {
+        "reports_sync_loss": caps.reports_sync_loss,
+        "preserves_token_advantages": caps.preserves_token_advantages,
+        "supports_checkpoint_resume": caps.supports_checkpoint_resume,
+        "resume_runtime_dependent": caps.resume_runtime_dependent,
+    }
+
+
+def _schema_to_payload(
+    schema: Mapping[str, BackendOptionSpec],
+) -> dict[str, dict[str, object]]:
+    payload: dict[str, dict[str, object]] = {}
+    for key, spec in schema.items():
+        payload[key] = {
+            "type": _option_type_name(spec.value_type),
+            "default": spec.default,
+            "choices": list(spec.choices) if spec.choices else None,
+            "has_validator": spec.validator is not None,
+        }
+    return payload
+
+
+def describe_backends_catalog() -> dict[str, object]:
+    """Machine-readable catalog for built-in backends + plugin hook contract."""
+    builtins: list[dict[str, object]] = []
+    for name, definition in sorted(_BUILTIN_BACKENDS.items()):
+        builtins.append(
+            {
+                "name": name,
+                "dependency": {
+                    "import": definition.dependency_import,
+                    "hint": definition.dependency_hint,
+                },
+                "capabilities": _capabilities_to_payload(definition.capabilities),
+                "option_schema": _schema_to_payload(definition.option_schema),
+            }
+        )
+    return {
+        "builtins": builtins,
+        "plugin": {
+            "dotted_path_supported": True,
+            "default_capabilities": _capabilities_to_payload(
+                _PLUGIN_DEFAULT_CAPABILITIES
+            ),
+            "capability_hooks": list(_PLUGIN_CAPABILITIES_HOOKS),
+            "option_schema_hooks": list(_PLUGIN_OPTION_SCHEMA_HOOKS),
+            "option_schema_format": (
+                "mapping[str, BackendOptionSpec | "
+                "{type|value_type, default, choices?, validator?}]"
+            ),
+        },
     }
 
 
@@ -263,10 +543,29 @@ def normalize_backend_options(
     if not isinstance(options, dict):
         raise ValueError("backend_options must be a mapping.")
 
-    # For dotted plugins, options are backend-defined; keep as-is.
     if backend not in _BUILTIN_BACKENDS:
         if "." in backend:
-            return options
+            raw_schema = _plugin_hook_value(
+                backend,
+                _PLUGIN_OPTION_SCHEMA_HOOKS,
+                options,
+            )
+            schema = _coerce_plugin_option_schema(backend, raw_schema)
+            if not schema:
+                return options
+            unknown = sorted(k for k in options if k not in schema)
+            if unknown:
+                bad = unknown[0]
+                close = difflib.get_close_matches(bad, schema.keys(), n=1, cutoff=0.6)
+                hint = f" Did you mean '{close[0]}'?" if close else ""
+                raise ValueError(
+                    f"Unknown [backend.options] key '{bad}' for backend '{backend}'.{hint}"
+                )
+            normalized = {k: spec.default for k, spec in schema.items()}
+            for key, raw in options.items():
+                spec = schema[key]
+                normalized[key] = _coerce_option_value(backend, key, raw, spec)
+            return normalized
         return options
 
     schema = _BUILTIN_BACKENDS[backend].option_schema

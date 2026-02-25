@@ -9,7 +9,9 @@ from retrain.cli import (
     _INIT_TEMPLATES,
     _customize_toml,
     _print_top_help,
+    _run_backends,
     _run_diff,
+    _run_doctor,
     _run_explain,
     _run_init,
     _run_init_interactive,
@@ -51,9 +53,32 @@ class TestTopHelp:
         _print_top_help("retrain")
         captured = capsys.readouterr()
         assert "retrain man" in captured.out
+        assert "retrain migrate-config" in captured.out
+        assert "retrain backends" in captured.out
         assert "retrain man --path" in captured.out
         assert "retrain man --sync" in captured.out
         assert "retrain man --check" in captured.out
+
+
+class TestBackendsCommand:
+    def test_backends_json(self, capsys):
+        _run_backends(["--json"])
+        payload = json.loads(capsys.readouterr().out)
+        names = {item["name"] for item in payload["builtins"]}
+        assert {"local", "tinker", "prime_rl"} <= names
+        assert "capability_hooks" in payload["plugin"]
+
+
+class TestDoctor:
+    def test_doctor_prints_backend_capabilities(self, capsys):
+        _run_doctor()
+        out = capsys.readouterr().out
+        assert "Backend capability summary" in out
+        assert "Runtime probes" in out
+        assert "local" in out
+        assert "tinker" in out
+        assert "prime_rl" in out
+        assert "plugin/default" in out
 
 
 class TestManCommand:
@@ -363,6 +388,8 @@ class TestExplainCommand:
         _run_explain(["--json", str(p)])
         payload = json.loads(capsys.readouterr().out)
         assert payload["mode"] == "single"
+        assert payload["backend"] == "local"
+        assert payload["backend_capabilities"]["reports_sync_loss"] is True
         assert payload["condition"] == "grpo+none"
         assert payload["max_steps"] == 50
         assert payload["datums_per_step"] == 32  # 4 * 8
@@ -381,6 +408,8 @@ class TestExplainCommand:
         _run_explain(["--json", str(p)])
         payload = json.loads(capsys.readouterr().out)
         assert payload["mode"] == "campaign"
+        assert payload["backend"] == "local"
+        assert payload["backend_capabilities"]["source"] == "builtin"
         assert payload["total_runs"] == 4
         assert len(payload["conditions"]) == 2
 

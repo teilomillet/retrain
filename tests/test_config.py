@@ -543,6 +543,13 @@ class TestNumericValidation:
 
 
 class TestValidationWarnings:
+    def test_default_adapter_path_does_not_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig()
+        msgs = [str(x.message) for x in w]
+        assert not any("adapter_path starts with /tmp" in m for m in msgs)
+
     def test_tmp_adapter_warns(self):
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")

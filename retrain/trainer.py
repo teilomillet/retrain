@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
 
 from transformers import AutoTokenizer
 
@@ -20,6 +19,10 @@ from retrain.advantages import (
 from retrain.backpressure import (
     BackPressureDecision,
     StepObservation,
+)
+from retrain.backend_definitions import (
+    backend_capability_source,
+    resolve_backend_capabilities,
 )
 from retrain.config import TrainConfig
 from retrain.logging_utils import JsonlLogger
@@ -68,6 +71,36 @@ def _print_config_summary(config: TrainConfig) -> None:
     print(sep)
 
 
+def _print_backend_capability_summary(
+    backend_name: str,
+    source: str,
+    reports_sync_loss: bool,
+    preserves_token_advantages: bool,
+    supports_checkpoint_resume: bool,
+    resume_runtime_dependent: bool,
+) -> None:
+    """Print backend capability metadata for run-time diagnostics."""
+    print(
+        "Backend capabilities: "
+        f"backend={backend_name}, "
+        f"source={source}, "
+        f"reports_sync_loss={reports_sync_loss}, "
+        f"preserves_token_advantages={preserves_token_advantages}, "
+        f"supports_checkpoint_resume={supports_checkpoint_resume}, "
+        f"resume_runtime_dependent={resume_runtime_dependent}"
+    )
+    if not reports_sync_loss:
+        print("Backend note: loss is reported as placeholder by backend design.")
+
+
+def _format_loss_for_display(loss_value: float, reports_sync_loss: bool) -> str:
+    """Format loss consistently, including async placeholder semantics."""
+    formatted = f"{loss_value:.4f}"
+    if reports_sync_loss:
+        return formatted
+    return f"{formatted} (placeholder)"
+
+
 def _save_trainer_state(
     path: Path,
     *,
@@ -78,7 +111,7 @@ def _save_trainer_state(
     current_batch_size: int,
     current_group_size: int,
     checkpoint_name: str,
-    sepa_state: dict[str, Any],
+    sepa_state: dict[str, object],
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
     state = {
@@ -96,7 +129,7 @@ def _save_trainer_state(
     tmp.rename(path / _TRAINER_STATE_FILE)
 
 
-def _load_trainer_state(resume_dir: str) -> dict[str, Any]:
+def _load_trainer_state(resume_dir: str) -> dict[str, object]:
     """Load trainer state from a checkpoint directory."""
     p = Path(resume_dir)
     state_file = p / _TRAINER_STATE_FILE
@@ -173,6 +206,15 @@ def train(config: TrainConfig) -> str | None:
     # 3. Init backend (after data preflight)
     # -----------------------------------------------------------------------
     helper = get_registry("backend").create(config.backend, config)
+    backend_caps = resolve_backend_capabilities(config.backend, config.backend_options)
+    _print_backend_capability_summary(
+        config.backend,
+        backend_capability_source(config.backend, config.backend_options),
+        backend_caps.reports_sync_loss,
+        backend_caps.preserves_token_advantages,
+        backend_caps.supports_checkpoint_resume,
+        backend_caps.resume_runtime_dependent,
+    )
 
     # -----------------------------------------------------------------------
     # 4. Load tokenizer + vocab table
@@ -236,7 +278,7 @@ def train(config: TrainConfig) -> str | None:
             if config.wandb_tags
             else None
         )
-        wandb_kwargs: dict[str, Any] = {
+        wandb_kwargs: dict[str, object] = {
             "project": config.wandb_project,
             "name": run_name,
             "config": {
@@ -338,12 +380,12 @@ def train(config: TrainConfig) -> str | None:
         helper.checkpoint(f"step_{batch_idx}")
 
         # 10b. Select prompts
-        batch_prompt_objs: list[str | list[dict[str, Any]]] = []
+        batch_prompt_objs: list[str | list[dict[str, object]]] = []
         batch_prompt_previews: list[str] = []
         batch_prompt_ids: list[list[int]] = []
         batch_answers: list[str] = []
         batch_tasks: list[str] = []
-        batch_infos: list[dict[str, Any] | str | None] = []
+        batch_infos: list[dict[str, object] | str | None] = []
 
         for _ in range(current_batch_size):
             ex_idx = example_idx % len(examples)
@@ -750,6 +792,10 @@ def train(config: TrainConfig) -> str | None:
             "advantage_mode": config.advantage_mode,
             "transform_mode": config.transform_mode,
             "condition": condition_label,
+            "backend_reports_sync_loss": backend_caps.reports_sync_loss,
+            "backend_preserves_token_advantages": backend_caps.preserves_token_advantages,
+            "loss_is_placeholder": not backend_caps.reports_sync_loss,
+            "reported_loss": loss_value,
             "loss": loss_value,
             "mean_reward": mean_reward,
             "correct_rate": correct_rate,
@@ -782,8 +828,12 @@ def train(config: TrainConfig) -> str | None:
                 metrics[k] = sum(vals) / len(vals)
         metrics_logger.log(metrics)
 
+        loss_display = _format_loss_for_display(
+            loss_value,
+            backend_caps.reports_sync_loss,
+        )
         print(
-            f"Step {batch_idx} [{condition_label}] | loss={loss_value:.4f}"
+            f"Step {batch_idx} [{condition_label}] | loss={loss_display}"
             f" | reward={mean_reward:.3f}"
             f" | correct={correct_rate * 100:.1f}%"
             f" | datums={num_datums}"
@@ -795,11 +845,17 @@ def train(config: TrainConfig) -> str | None:
 
         # Wandb
         if wandb_enabled and wandb_run is not None:
-            wandb_metrics: dict[str, Any] = {
+            wandb_metrics: dict[str, object] = {
                 "train/loss": loss_value,
+                "train/reported_loss": loss_value,
+                "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
                 "train/rewards/mean_reward": mean_reward,
                 "train/rewards/correct_rate": correct_rate,
                 "train/rewards/running_correct_rate": running_correct_rate,
+                "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
+                "train/backend/preserves_token_advantages": int(
+                    backend_caps.preserves_token_advantages
+                ),
                 "train/sepa_lambda": sepa_lambda_val,
                 "train/sepa_gate_open": int(sepa_gate),
                 "train/max_token_hit_rate": max_token_hit_rate,

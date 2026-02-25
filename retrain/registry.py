@@ -13,7 +13,9 @@ boilerplate.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable
+import os
+from dataclasses import dataclass
+from typing import Callable
 
 from retrain.backend_definitions import (
     get_backend_dependency_map,
@@ -35,18 +37,20 @@ class Registry:
 
     def __init__(self, kind: str) -> None:
         self.kind = kind
-        self._factories: dict[str, Callable[[TrainConfig], Any]] = {}
+        self._factories: dict[str, Callable[[TrainConfig], object]] = {}
 
     # -- public API --------------------------------------------------------
 
     def register(self, name: str) -> Callable:
         """Decorator to register a lazy factory under *name*."""
-        def decorator(fn: Callable[[TrainConfig], Any]) -> Callable[[TrainConfig], Any]:
+        def decorator(
+            fn: Callable[[TrainConfig], object],
+        ) -> Callable[[TrainConfig], object]:
             self._factories[name] = fn
             return fn
         return decorator
 
-    def create(self, name: str, config: TrainConfig) -> Any:
+    def create(self, name: str, config: TrainConfig) -> object:
         """Look up *name* and call its factory with *config*.
 
         Falls back to dotted-path import when *name* contains a ``.``.
@@ -75,7 +79,7 @@ class Registry:
     # -- internals ---------------------------------------------------------
 
     @staticmethod
-    def _import_dotted(dotted: str, config: TrainConfig) -> Any:
+    def _import_dotted(dotted: str, config: TrainConfig) -> object:
         """Import ``module.attr`` and call ``attr(config)``."""
         module_path, _, attr_name = dotted.rpartition(".")
         if not module_path or not attr_name:
@@ -170,13 +174,13 @@ def _ie_openai(config: TrainConfig) -> None:
 # -- reward ----------------------------------------------------------------
 
 @reward.register("match")
-def _reward_match(config: TrainConfig) -> Any:
+def _reward_match(config: TrainConfig) -> object:
     from retrain.rewards import BoxedMathReward
     return BoxedMathReward()
 
 
 @reward.register("math")
-def _reward_math(config: TrainConfig) -> Any:
+def _reward_math(config: TrainConfig) -> object:
     try:
         from retrain.rewards import VerifiersMathReward
         return VerifiersMathReward()
@@ -188,7 +192,7 @@ def _reward_math(config: TrainConfig) -> Any:
 
 
 @reward.register("judge")
-def _reward_judge(config: TrainConfig) -> Any:
+def _reward_judge(config: TrainConfig) -> object:
     try:
         from retrain.rewards import VerifiersJudgeReward
         model = config.reward_judge_model or "gpt-4o-mini"
@@ -201,7 +205,7 @@ def _reward_judge(config: TrainConfig) -> Any:
 
 
 @reward.register("custom")
-def _reward_custom(config: TrainConfig) -> Any:
+def _reward_custom(config: TrainConfig) -> object:
     from retrain.rewards import CustomReward
     if not config.reward_custom_module:
         raise ValueError(
@@ -216,14 +220,14 @@ def _reward_custom(config: TrainConfig) -> Any:
 # -- planning_detector ----------------------------------------------------
 
 @planning_detector.register("regex")
-def _detector_regex(config: TrainConfig) -> Any:
+def _detector_regex(config: TrainConfig) -> object:
     from retrain.planning import create_planning_detector
     # Reuse existing factory for regex — it handles strategic_grams parsing
     return create_planning_detector(config)
 
 
 @planning_detector.register("semantic")
-def _detector_semantic(config: TrainConfig) -> Any:
+def _detector_semantic(config: TrainConfig) -> object:
     from retrain.planning import SemanticPlanningDetector
     return SemanticPlanningDetector(
         model_name=config.planning_model,
@@ -234,7 +238,7 @@ def _detector_semantic(config: TrainConfig) -> Any:
 # -- data_source -----------------------------------------------------------
 
 @data_source.register("math")
-def _data_math(config: TrainConfig) -> Any:
+def _data_math(config: TrainConfig) -> object:
     from retrain.data import MathDataSource
     return MathDataSource(config.max_examples)
 
@@ -242,13 +246,13 @@ def _data_math(config: TrainConfig) -> Any:
 # -- backpressure ----------------------------------------------------------
 
 @backpressure.register("noop")
-def _bp_noop(config: TrainConfig) -> Any:
+def _bp_noop(config: TrainConfig) -> object:
     from retrain.backpressure import NoOpBackPressure
     return NoOpBackPressure()
 
 
 @backpressure.register("usl")
-def _bp_usl(config: TrainConfig) -> Any:
+def _bp_usl(config: TrainConfig) -> object:
     from retrain.backpressure import USLBackPressure
     return USLBackPressure(
         warmup_steps=config.bp_warmup_steps,
@@ -306,3 +310,159 @@ def check_environment(
         results.append((name, import_name, hint, available))
 
     return results
+
+
+@dataclass(frozen=True)
+class BackendRuntimeProbe:
+    """Runtime probe result for doctor diagnostics."""
+
+    backend: str
+    probe: str
+    status: str  # ok | fail | skip
+    detail: str
+
+
+def _probe_http_endpoint(
+    base_url: str,
+    paths: tuple[str, ...],
+    timeout_s: float = 0.8,
+) -> BackendRuntimeProbe:
+    """Probe an HTTP endpoint quickly; returns ok/fail with details."""
+    try:
+        import requests
+    except ImportError:
+        return BackendRuntimeProbe(
+            backend="",
+            probe="http",
+            status="fail",
+            detail="requests not installed",
+        )
+
+    clean_base = base_url.rstrip("/")
+    last_err = "no response"
+    for path in paths:
+        url = f"{clean_base}{path}"
+        try:
+            resp = requests.get(url, timeout=timeout_s)
+        except Exception as exc:
+            last_err = f"{url} ({type(exc).__name__}: {exc})"
+            continue
+        code = int(resp.status_code)
+        if code in {200, 204, 405}:
+            return BackendRuntimeProbe(
+                backend="",
+                probe="http",
+                status="ok",
+                detail=f"{url} status={code}",
+            )
+        if code == 404:
+            last_err = f"{url} status=404"
+            continue
+        if code < 500:
+            return BackendRuntimeProbe(
+                backend="",
+                probe="http",
+                status="ok",
+                detail=f"{url} status={code}",
+            )
+        last_err = f"{url} status={code}"
+    return BackendRuntimeProbe(
+        backend="",
+        probe="http",
+        status="fail",
+        detail=last_err,
+    )
+
+
+def probe_backend_runtime(config: TrainConfig | None = None) -> list[BackendRuntimeProbe]:
+    """Run lightweight runtime probes for built-in backends."""
+    probes: list[BackendRuntimeProbe] = []
+
+    # Local backend: torch import + CUDA visibility.
+    try:
+        torch = importlib.import_module("torch")
+        cuda_ok = bool(torch.cuda.is_available())
+        probes.append(
+            BackendRuntimeProbe(
+                backend="local",
+                probe="torch_runtime",
+                status="ok",
+                detail=f"torch import ok, cuda_available={cuda_ok}",
+            )
+        )
+    except Exception as exc:
+        probes.append(
+            BackendRuntimeProbe(
+                backend="local",
+                probe="torch_runtime",
+                status="fail",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    # Tinker backend: SDK import + optional endpoint reachability.
+    try:
+        importlib.import_module("tinker")
+        tinker_url = ""
+        if config is not None:
+            tinker_url = config.inference_url or config.base_url
+        tinker_url = tinker_url or os.getenv("RETRAIN_TINKER_URL", "")
+        if not tinker_url:
+            probes.append(
+                BackendRuntimeProbe(
+                    backend="tinker",
+                    probe="service_reachability",
+                    status="skip",
+                    detail=(
+                        "set RETRAIN_TINKER_URL (or [model].base_url/[inference].url) "
+                        "to enable endpoint probing"
+                    ),
+                )
+            )
+        else:
+            hit = _probe_http_endpoint(tinker_url, ("/health", "/"))
+            probes.append(
+                BackendRuntimeProbe(
+                    backend="tinker",
+                    probe="service_reachability",
+                    status=hit.status,
+                    detail=hit.detail,
+                )
+            )
+    except Exception as exc:
+        probes.append(
+            BackendRuntimeProbe(
+                backend="tinker",
+                probe="service_reachability",
+                status="fail",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    # PRIME-RL backend: import + endpoint compatibility probe.
+    try:
+        importlib.import_module("prime_rl")
+        prime_url = ""
+        if config is not None:
+            prime_url = config.inference_url or config.base_url
+        prime_url = prime_url or os.getenv("RETRAIN_PRIME_RL_URL", "http://localhost:8000")
+        hit = _probe_http_endpoint(prime_url, ("/health", "/v1/models", "/"))
+        probes.append(
+            BackendRuntimeProbe(
+                backend="prime_rl",
+                probe="endpoint_compat",
+                status=hit.status,
+                detail=hit.detail,
+            )
+        )
+    except Exception as exc:
+        probes.append(
+            BackendRuntimeProbe(
+                backend="prime_rl",
+                probe="endpoint_compat",
+                status="fail",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    return probes

@@ -9,7 +9,12 @@ import json
 
 import pytest
 
-from retrain.trainer import _save_trainer_state, _load_trainer_state, _TRAINER_STATE_FILE
+from retrain.trainer import (
+    _TRAINER_STATE_FILE,
+    _format_loss_for_display,
+    _load_trainer_state,
+    _save_trainer_state,
+)
 
 
 class TestSaveTrainerState:
@@ -101,6 +106,14 @@ class TestLoadTrainerState:
         state = _load_trainer_state(str(tmp_path))
         start_step = state["step"] + 1
         assert start_step == 20
+
+
+class TestLossDisplaySemantics:
+    def test_sync_loss_display_is_plain_value(self):
+        assert _format_loss_for_display(0.125, True) == "0.1250"
+
+    def test_placeholder_loss_display_is_annotated(self):
+        assert _format_loss_for_display(0.0, False) == "0.0000 (placeholder)"
 
 
 class TestSEPAStateRoundtripViaTrainer:

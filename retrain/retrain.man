@@ -8,6 +8,7 @@ SYNOPSIS
     retrain init [--template NAME] [--list] [--interactive]
     retrain status [logdir] [--json]
     retrain explain [config.toml] [--json]
+    retrain migrate-config <config.toml> [--check|--write|--output PATH] [--json]
     retrain diff <run_a> <run_b> [--json]
     retrain diff <campaign_dir> <cond_a> <cond_b> [--json]
     retrain doctor
@@ -56,6 +57,21 @@ COMMANDS
 
     retrain doctor
         Checks optional dependencies for configured components.
+
+    retrain backends [--json]
+        Prints backend metadata (capabilities, deps, option schema).
+        --json            machine-readable JSON output.
+
+    retrain migrate-config <config.toml> [--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]
+        Migrates legacy [backend] prime_rl_* keys into [backend.options].
+        Default mode previews a unified diff and does not write files.
+        --check           exits 1 when migration is required.
+        --write           writes migration in place.
+        --output PATH     writes migrated config to a new path.
+        --backup          writes <config>.bak before in-place write.
+        --stdin           reads source TOML from stdin.
+        --stdout          prints migrated TOML instead of a diff.
+        --json            machine-readable report.
 
     retrain init [--template NAME] [--list] [--interactive]
         Writes a starter config in the current directory.
@@ -283,6 +299,23 @@ CONFIGURATION
         strict_advantages = true
         sync_wait_s = 30
         sync_poll_s = 0.2
+
+    Legacy migration:
+        Legacy prime_rl_* keys under [backend] hard-fail at load time.
+        Use migrate-config to rewrite safely:
+            retrain migrate-config retrain.toml
+            retrain migrate-config retrain.toml --check
+            retrain migrate-config retrain.toml --write
+
+    Capability metadata (doctor/explain/trainer diagnostics):
+        reports_sync_loss
+            Whether train_step() returns a real synchronous optimization loss.
+        preserves_token_advantages
+            Whether token-level advantages are consumed without aggregation.
+        supports_checkpoint_resume
+            Whether checkpoint restore is exposed at interface level.
+        resume_runtime_dependent
+            Whether resume success depends on external runtime/SDK behavior.
 
   [model]
 
@@ -709,6 +742,12 @@ LOGGING
         step                    Training step index
         condition               Label like "maxrl+gtpo_sepa"
         loss                    Training loss
+        reported_loss           Raw backend-reported loss value
+        loss_is_placeholder     True when loss is backend placeholder
+        backend_reports_sync_loss
+                                Whether backend loss is synchronous
+        backend_preserves_token_advantages
+                                Whether backend keeps token-level advantages
         mean_reward             Mean reward across the batch
         correct_rate            Batch correct rate (0.0 - 1.0)
         running_correct_rate    Cumulative correct rate
@@ -733,7 +772,9 @@ LOGGING
     completion text, reward, and token count.
 
     wandb metric prefixes:
-        train/                  loss, rewards/*, sepa_*, step_time_s, ...
+        train/                  loss, reported_loss, loss_is_placeholder,
+                                rewards/*, sepa_*, step_time_s, ...
+        train/backend/          reports_sync_loss, preserves_token_advantages
         train/entropy/          exec_mean, exec_var, plan_mean, plan_var
         train/backpressure/     action, regime, p_star, sigma, ...
 
@@ -917,6 +958,7 @@ METRICS GUIDE
 
         max_token_hit_rate      Spikes = model rambling. Increase max_tokens.
         loss                    Should decrease. Can be negative (normal).
+        loss_is_placeholder     True for async backend-reported placeholder loss.
         num_datums              Drops = groups uninformative (all right/wrong).
         bp_regime               Stuck in "retrograde" = batch size too high.
 

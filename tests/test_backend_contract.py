@@ -70,8 +70,8 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
-def _exercise_contract(helper: TrainHelper) -> None:
-    helper.checkpoint("step_0")
+def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
+    helper.checkpoint(step_name)
     out = helper.sample(
         prompt_ids_list=[[1, 2, 3]],
         num_samples=1,
@@ -90,10 +90,25 @@ def _exercise_contract(helper: TrainHelper) -> None:
     )
     assert isinstance(loss, float)
 
-    save_path = helper.save_adapter("/tmp/backend-contract", "step_0")
-    assert save_path.endswith("/step_0")
+    save_path = helper.save_adapter("/tmp/backend-contract", step_name)
+    assert save_path.endswith(f"/{step_name}")
 
-    helper.load_state("step_0")
+    helper.load_state(step_name)
+
+
+def _assert_lifecycle_calls(helper: _BaseFakeHelper) -> None:
+    assert helper.calls == [
+        "checkpoint:step_0",
+        "sample",
+        "train_step",
+        "save_adapter:step_0",
+        "load_state:step_0",
+        "checkpoint:step_1",
+        "sample",
+        "train_step",
+        "save_adapter:step_1",
+        "load_state:step_1",
+    ]
 
 
 def test_local_backend_contract(monkeypatch):
@@ -103,7 +118,10 @@ def test_local_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="local")
     helper = backend.create("local", cfg)
     assert isinstance(helper, TrainHelper)
-    _exercise_contract(helper)
+    assert isinstance(helper, _BaseFakeHelper)
+    _exercise_lifecycle_step(helper, "step_0")
+    _exercise_lifecycle_step(helper, "step_1")
+    _assert_lifecycle_calls(helper)
 
 
 def test_tinker_backend_contract(monkeypatch):
@@ -113,7 +131,10 @@ def test_tinker_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="tinker")
     helper = backend.create("tinker", cfg)
     assert isinstance(helper, TrainHelper)
-    _exercise_contract(helper)
+    assert isinstance(helper, _BaseFakeHelper)
+    _exercise_lifecycle_step(helper, "step_0")
+    _exercise_lifecycle_step(helper, "step_1")
+    _assert_lifecycle_calls(helper)
 
 
 def test_prime_rl_backend_contract(monkeypatch):
@@ -123,4 +144,7 @@ def test_prime_rl_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="prime_rl")
     helper = backend.create("prime_rl", cfg)
     assert isinstance(helper, TrainHelper)
-    _exercise_contract(helper)
+    assert isinstance(helper, _BaseFakeHelper)
+    _exercise_lifecycle_step(helper, "step_0")
+    _exercise_lifecycle_step(helper, "step_1")
+    _assert_lifecycle_calls(helper)

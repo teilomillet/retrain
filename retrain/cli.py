@@ -4,8 +4,10 @@ Usage:
     retrain                  # loads retrain.toml from cwd
     retrain config.toml      # single training run
     retrain campaign.toml    # campaign (if TOML has [campaign] section)
+    retrain backends         # list backend capabilities/schema metadata
     retrain init             # generate a starter retrain.toml
     retrain doctor           # check installed dependencies for all components
+    retrain migrate-config config.toml   # migrate legacy backend keys
     retrain man              # human/agent-friendly manual
     retrain --seed 42 --lr 1e-4   # override config values from CLI
 
@@ -15,6 +17,7 @@ A TOML without it runs a single training job. Same command either way.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -205,7 +208,12 @@ def _print_top_help(cli_name: str) -> None:
     print()
     print("Usage:")
     print(f"  {cli_name} [config.toml] [--flag value ...]")
+    print(f"  {cli_name} backends [--json]")
     print(f"  {cli_name} doctor")
+    print(
+        f"  {cli_name} migrate-config <config.toml> "
+        "[--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]"
+    )
     print(f"  {cli_name} init [--template NAME] [--list] [--interactive]")
     print(f"  {cli_name} status [logdir] [--json]")
     print(f"  {cli_name} explain [config.toml] [--json]")
@@ -305,6 +313,21 @@ def _render_commands_block(cli_name: str) -> list[str]:
         "",
         f"    {cli_name} doctor",
         "        Checks optional dependencies for configured components.",
+        "",
+        f"    {cli_name} backends [--json]",
+        "        Prints backend metadata (capabilities, deps, option schema).",
+        "        --json            machine-readable JSON output.",
+        "",
+        f"    {cli_name} migrate-config <config.toml> [--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]",
+        "        Migrates legacy [backend] prime_rl_* keys into [backend.options].",
+        "        Default mode previews a unified diff and does not write files.",
+        "        --check           exits 1 when migration is required.",
+        "        --write           writes migration in place.",
+        "        --output PATH     writes migrated config to a new path.",
+        "        --backup          writes <config>.bak before in-place write.",
+        "        --stdin           reads source TOML from stdin.",
+        "        --stdout          prints migrated TOML instead of a diff.",
+        "        --json            machine-readable report.",
         "",
         f"    {cli_name} init [--template NAME] [--list] [--interactive]",
         "        Writes a starter config in the current directory.",
@@ -791,9 +814,94 @@ def _is_campaign(path: str) -> bool:
     return "campaign" in data
 
 
+def _resolve_backend_capability_payload(
+    backend_name: str,
+    backend_options: dict[str, object] | None = None,
+) -> dict[str, object]:
+    from retrain.backend_definitions import (
+        backend_capability_source,
+        resolve_backend_capabilities,
+    )
+
+    caps = resolve_backend_capabilities(backend_name, backend_options or {})
+    return {
+        "backend": backend_name,
+        "source": backend_capability_source(backend_name, backend_options or {}),
+        "reports_sync_loss": caps.reports_sync_loss,
+        "preserves_token_advantages": caps.preserves_token_advantages,
+        "supports_checkpoint_resume": caps.supports_checkpoint_resume,
+        "resume_runtime_dependent": caps.resume_runtime_dependent,
+    }
+
+
+def _format_backend_capability_summary(capabilities: dict[str, object]) -> str:
+    return (
+        f"source={capabilities['source']}, "
+        f"reports_sync_loss={capabilities['reports_sync_loss']}, "
+        f"preserves_token_advantages={capabilities['preserves_token_advantages']}, "
+        f"supports_checkpoint_resume={capabilities['supports_checkpoint_resume']}, "
+        f"resume_runtime_dependent={capabilities['resume_runtime_dependent']}"
+    )
+
+
+def _run_backends(args: list[str]) -> None:
+    """Print backend metadata catalog."""
+    from retrain.backend_definitions import describe_backends_catalog
+
+    fmt = "text"
+    for arg in args:
+        if arg == "--json":
+            fmt = "json"
+        elif arg.startswith("--"):
+            print(f"Unknown backends flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"Unexpected argument for backends: {arg}", file=sys.stderr)
+            sys.exit(1)
+
+    payload = describe_backends_catalog()
+    if fmt == "json":
+        print(json.dumps(payload, indent=2))
+        return
+
+    print("Built-in backends:")
+    for backend_item in payload["builtins"]:
+        name = backend_item["name"]
+        dep = backend_item["dependency"]
+        caps = backend_item["capabilities"]
+        print(f"  {name}")
+        print(f"    dependency: {dep['import']} ({dep['hint']})")
+        print(
+            "    capabilities: "
+            f"reports_sync_loss={caps['reports_sync_loss']}, "
+            f"preserves_token_advantages={caps['preserves_token_advantages']}, "
+            f"supports_checkpoint_resume={caps['supports_checkpoint_resume']}, "
+            f"resume_runtime_dependent={caps['resume_runtime_dependent']}"
+        )
+        option_schema = backend_item["option_schema"]
+        if option_schema:
+            print("    options:")
+            for key, spec in sorted(option_schema.items()):
+                choices = spec.get("choices")
+                choice_text = f" choices={choices}" if choices else ""
+                print(
+                    f"      {key}: type={spec['type']} default={spec['default']!r}{choice_text}"
+                )
+        else:
+            print("    options: none")
+
+    plugin = payload["plugin"]
+    print("\nPlugin metadata hooks:")
+    print(f"  dotted_path_supported: {plugin['dotted_path_supported']}")
+    print(f"  capability_hooks     : {', '.join(plugin['capability_hooks'])}")
+    print(f"  option_schema_hooks  : {', '.join(plugin['option_schema_hooks'])}")
+    print(f"  schema_format        : {plugin['option_schema_format']}")
+
+
 def _run_doctor() -> None:
     """Print dependency status for all known components."""
-    from retrain.registry import check_environment
+    from retrain.backend_definitions import get_builtin_backend_definitions
+    from retrain.registry import check_environment, probe_backend_runtime
 
     print("retrain doctor — checking component dependencies\n")
     results = check_environment(config=None)
@@ -805,6 +913,21 @@ def _run_doctor() -> None:
         print(f"  {name:20s} {import_name:25s} {status}")
         if not available:
             print(f"  {'':20s} -> {hint}")
+
+    print("\nBackend capability summary:")
+    for backend_name in sorted(get_builtin_backend_definitions()):
+        caps = _resolve_backend_capability_payload(backend_name, {})
+        print(f"  {backend_name:20s} {_format_backend_capability_summary(caps)}")
+    plugin_caps = _resolve_backend_capability_payload("myplugin.CustomBackend", {})
+    print(f"  {'plugin/default':20s} {_format_backend_capability_summary(plugin_caps)}")
+
+    print("\nRuntime probes:")
+    for probe in probe_backend_runtime(config=None):
+        print(
+            f"  {probe.backend:20s} {probe.probe:20s} "
+            f"{probe.status.upper():5s} {probe.detail}"
+        )
+
     print()
     if all_ok:
         print("All optional dependencies are installed.")
@@ -893,11 +1016,18 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
     data_info = config.data_source
     if config.environment_provider:
         data_info = f"{config.environment_provider}:{config.environment_id}"
+    backend_capabilities = _resolve_backend_capability_payload(
+        config.backend,
+        config.backend_options,
+    )
 
     info: dict = {
         "mode": "single",
         "config": config_path or "retrain.toml",
         "model": config.model,
+        "backend": config.backend,
+        "backend_options": dict(config.backend_options),
+        "backend_capabilities": backend_capabilities,
         "condition": condition,
         "advantage_mode": config.advantage_mode,
         "transform_mode": config.transform_mode,
@@ -936,6 +1066,10 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
     print(f"retrain explain — dry-run preview")
     print(f"  config        : {info['config']}")
     print(f"  model         : {config.model}")
+    print(f"  backend       : {config.backend}")
+    print(f"  backend caps  : {_format_backend_capability_summary(backend_capabilities)}")
+    if not backend_capabilities["reports_sync_loss"]:
+        print("  note          : loss is reported as placeholder by backend design")
     print(f"  condition     : {condition}")
     print(f"  steps         : {config.max_steps}")
     print(f"  batch_size    : {config.batch_size}")
@@ -976,10 +1110,24 @@ def _explain_campaign(config_path: str, fmt: str) -> None:
     conditions = _parse_campaign_conditions(raw_conditions, config_path)
     condition_labels = [f"{a}+{t}" for a, t in conditions]
     total_runs = len(conditions) * len(seeds)
+    backend_sec = data.get("backend", {})
+    backend_name = "local"
+    backend_options: dict[str, object] = {}
+    if isinstance(backend_sec, dict):
+        backend_name = str(backend_sec.get("backend", "local") or "local")
+        raw_options = backend_sec.get("options", {})
+        if isinstance(raw_options, dict):
+            backend_options = dict(raw_options)
+    backend_capabilities = _resolve_backend_capability_payload(
+        backend_name,
+        backend_options,
+    )
 
     info = {
         "mode": "campaign",
         "config": config_path,
+        "backend": backend_name,
+        "backend_capabilities": backend_capabilities,
         "conditions": condition_labels,
         "seeds": seeds,
         "max_steps": max_steps,
@@ -992,6 +1140,8 @@ def _explain_campaign(config_path: str, fmt: str) -> None:
 
     print(f"retrain explain — campaign dry-run preview")
     print(f"  config        : {config_path}")
+    print(f"  backend       : {backend_name}")
+    print(f"  backend caps  : {_format_backend_capability_summary(backend_capabilities)}")
     print(f"  conditions    : {', '.join(condition_labels)}")
     print(f"  seeds         : {seeds}")
     print(f"  max_steps     : {max_steps}")
@@ -1075,6 +1225,184 @@ def _run_diff(args: list[str]) -> None:
         print(format_diff(result))
 
 
+def _run_migrate_config(args: list[str]) -> None:
+    """Migrate legacy backend config keys to [backend.options] format."""
+    from retrain.config import migrate_legacy_backend_keys_toml_text
+
+    check_only = False
+    write_in_place = False
+    backup = False
+    stdin_mode = False
+    stdout_mode = False
+    json_mode = False
+    output_path: str | None = None
+    positional: list[str] = []
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--check":
+            check_only = True
+        elif arg == "--write":
+            write_in_place = True
+        elif arg == "--backup":
+            backup = True
+        elif arg == "--stdin":
+            stdin_mode = True
+        elif arg == "--stdout":
+            stdout_mode = True
+        elif arg == "--json":
+            json_mode = True
+        elif arg in ("--output", "-o"):
+            i += 1
+            if i >= len(args):
+                print("Flag --output requires a path.", file=sys.stderr)
+                sys.exit(1)
+            output_path = args[i]
+        elif arg.startswith("--output="):
+            output_path = arg.split("=", 1)[1]
+        elif arg.startswith("--"):
+            print(f"Unknown migrate-config flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            positional.append(arg)
+        i += 1
+
+    if stdin_mode and positional:
+        print("Use either a config path or --stdin, not both.", file=sys.stderr)
+        sys.exit(1)
+    if not stdin_mode and len(positional) != 1:
+        print(
+            "Usage: retrain migrate-config <config.toml> "
+            "[--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if check_only and (write_in_place or output_path or stdout_mode or backup):
+        print(
+            "Flag --check cannot be combined with --write, --output, --stdout, or --backup.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if stdin_mode and write_in_place:
+        print("Flag --write requires a file path input (cannot be used with --stdin).", file=sys.stderr)
+        sys.exit(1)
+    if write_in_place and output_path:
+        print("Use either --write or --output, not both.", file=sys.stderr)
+        sys.exit(1)
+    if stdout_mode and (write_in_place or output_path):
+        print("Flag --stdout cannot be combined with --write or --output.", file=sys.stderr)
+        sys.exit(1)
+    if backup and not write_in_place:
+        print("Flag --backup can only be used with --write.", file=sys.stderr)
+        sys.exit(1)
+
+    config_path: Path | None = None
+    source_label = "<stdin>"
+    if stdin_mode:
+        original_text = sys.stdin.read()
+        if not original_text:
+            print("No TOML content received on stdin.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        config_path = Path(positional[0])
+        if not config_path.is_file():
+            print(f"File not found: {config_path}", file=sys.stderr)
+            sys.exit(1)
+        source_label = str(config_path)
+        original_text = config_path.read_text()
+
+    try:
+        migrated = migrate_legacy_backend_keys_toml_text(original_text)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"Invalid TOML in {source_label}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    needs_migration = bool(migrated.legacy_keys)
+    diff_text = "\n".join(
+        difflib.unified_diff(
+            original_text.splitlines(),
+            migrated.output_text.splitlines(),
+            fromfile=source_label,
+            tofile=f"{source_label}.migrated",
+            lineterm="",
+        )
+    )
+
+    mode = "preview"
+    if check_only:
+        mode = "check"
+    elif write_in_place:
+        mode = "write"
+    elif output_path:
+        mode = "output"
+    elif stdout_mode:
+        mode = "stdout"
+
+    payload: dict[str, object] = {
+        "config": source_label,
+        "mode": mode,
+        "needs_migration": needs_migration,
+        "changed": migrated.changed,
+        "legacy_keys": list(migrated.legacy_keys),
+        "merged_backend_options": migrated.merged_backend_options,
+        "diff": diff_text,
+        "written": False,
+        "output_path": None,
+        "backup_path": None,
+    }
+
+    if check_only:
+        if json_mode:
+            print(json.dumps(payload, indent=2))
+        elif needs_migration:
+            keys = ", ".join(migrated.legacy_keys)
+            print(f"Migration required in {source_label} (legacy keys: {keys}).")
+        else:
+            print(f"No migration needed: {source_label}")
+        if needs_migration:
+            sys.exit(1)
+        return
+
+    if write_in_place:
+        assert config_path is not None
+        if backup:
+            backup_path = Path(str(config_path) + ".bak")
+            backup_path.write_text(original_text)
+            payload["backup_path"] = str(backup_path)
+        config_path.write_text(migrated.output_text)
+        payload["written"] = True
+        payload["output_path"] = str(config_path)
+    elif output_path:
+        out_path = Path(output_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(migrated.output_text)
+        payload["written"] = True
+        payload["output_path"] = str(out_path)
+
+    if json_mode:
+        print(json.dumps(payload, indent=2))
+        return
+
+    if stdout_mode:
+        print(migrated.output_text, end="")
+        return
+
+    if payload["written"]:
+        if needs_migration:
+            print(f"Migrated config written to {payload['output_path']}")
+        else:
+            print(f"No migration required. Wrote unchanged config to {payload['output_path']}")
+        if payload["backup_path"]:
+            print(f"Backup written to {payload['backup_path']}")
+        return
+
+    if needs_migration:
+        print(diff_text)
+    else:
+        print(f"No migration needed: {source_label}")
+
+
 def _run_explain(args: list[str]) -> None:
     """Dry-run: show what a config would do without running it."""
     fmt = "text"
@@ -1124,8 +1452,16 @@ def main() -> None:
         _run_man(args[1:])
         sys.exit(0)
 
+    if args and args[0] == "backends":
+        _run_backends(args[1:])
+        sys.exit(0)
+
     if args and args[0] == "doctor":
         _run_doctor()
+        sys.exit(0)
+
+    if args and args[0] == "migrate-config":
+        _run_migrate_config(args[1:])
         sys.exit(0)
 
     if args and args[0] == "init":

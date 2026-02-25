@@ -21,6 +21,10 @@ One JSON object per training step with all metrics:
 | `step` | Training step index |
 | `condition` | Label like `maxrl+gtpo_sepa` |
 | `loss` | Training loss |
+| `reported_loss` | Raw backend-reported loss value (same as `loss`, explicit for tooling) |
+| `loss_is_placeholder` | `true` when loss is backend placeholder by design |
+| `backend_reports_sync_loss` | Whether backend loss is synchronous optimization loss |
+| `backend_preserves_token_advantages` | Whether backend consumes per-token advantages directly |
 | `mean_reward` | Mean reward across the batch |
 | `correct_rate` | Batch correct rate |
 | `running_correct_rate` | Cumulative correct rate |
@@ -82,6 +86,8 @@ All wandb metrics use structured prefixes:
 | Prefix | Metrics |
 |--------|---------|
 | `train/` | `loss`, `rewards/mean_reward`, `rewards/correct_rate`, `rewards/running_correct_rate`, `sepa_lambda`, `sepa_gate_open`, `max_token_hit_rate`, `num_datums`, `step_time_s`, `batch_size`, `group_size` |
+| `train/backend/` | `reports_sync_loss`, `preserves_token_advantages` |
+| `train/` (semantics) | `reported_loss`, `loss_is_placeholder` |
 | `train/entropy/` | `exec_mean`, `exec_var`, `plan_mean`, `plan_var` |
 | `train/backpressure/` | `action`, `regime`, `p_star`, `sigma`, `kappa`, `utilization`, `throughput`, `warmup` |
 

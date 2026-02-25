@@ -140,7 +140,7 @@ retrain --seed 42 --lr 1e-4 --wandb-project my-run
     ...
     ```
 
-Each step shows the condition label, loss, mean reward, correct rate, number of datums submitted for training, batch/group sizes, SEPA lambda, and wall time.
+Each step shows the condition label, loss, mean reward, correct rate, number of datums submitted for training, batch/group sizes, SEPA lambda, and wall time. For asynchronous backends, loss is annotated as `(... placeholder)` to avoid misreading it as synchronous optimizer loss.
 
 ## What happened
 

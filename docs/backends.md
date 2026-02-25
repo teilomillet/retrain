@@ -2,6 +2,46 @@
 
 retrain supports three training backends: **local** (PyTorch/PEFT on your GPUs), **tinker** (remote GPU service), and **prime_rl** (external PRIME-RL trainer + inference).
 
+## Backend capabilities
+
+`retrain doctor`, `retrain explain`, and trainer startup report capability metadata:
+
+| Backend | reports_sync_loss | preserves_token_advantages | supports_checkpoint_resume | resume_runtime_dependent |
+|---------|-------------------|----------------------------|----------------------------|--------------------------|
+| `local` | `true` | `true` | `true` | `false` |
+| `tinker` | `true` | `true` | `true` | `true` |
+| `prime_rl` | `false` | `false` | `true` | `false` |
+
+- `reports_sync_loss=false` means the backend returns a placeholder loss value by design.
+- `preserves_token_advantages=false` means token-level advantages are aggregated before backend transport.
+- Dotted-path custom plugins use conservative defaults and are reported as `source=plugin/default`.
+
+Inspect backend metadata directly:
+
+```bash
+retrain backends --json
+```
+
+The JSON payload includes built-in dependency hints, capability flags, option schemas, and plugin hook names.
+
+### Plugin metadata hooks
+
+Dotted-path custom backends can provide metadata hooks on either the backend callable/class
+or its module:
+
+- `retrain_backend_capabilities` / `RETRAIN_BACKEND_CAPABILITIES`
+- `retrain_backend_option_schema` / `RETRAIN_BACKEND_OPTION_SCHEMA`
+
+Capabilities can be provided as:
+
+- `BackendCapabilities(...)`
+- dict with keys: `reports_sync_loss`, `preserves_token_advantages`, `supports_checkpoint_resume`, `resume_runtime_dependent`
+
+Option schema can be provided as:
+
+- mapping to `BackendOptionSpec`
+- mapping to dict spec: `{type|value_type, default, choices?, validator?}`
+
 ## Local backend
 
 The default. Runs PyTorch/PEFT training directly on local GPUs with a pluggable inference engine.
@@ -145,6 +185,8 @@ Notes:
   If you use token-varying transforms (for example GTPO/HICRA/SEPA), keep
   `strict_advantages = true` to fail fast, or set it to `false` to
   aggregate completion-token advantages by mean.
+- PRIME-RL `train_step()` reports a placeholder loss (`0.0`) because optimization
+  runs asynchronously inside the PRIME-RL runtime.
 
 ## Device allocation
 

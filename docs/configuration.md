@@ -127,6 +127,32 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
 
+### Migrate legacy backend config
+
+Use `migrate-config` to rewrite old `prime_rl_*` keys safely:
+
+```bash
+# Preview only (default): shows unified diff, does not write
+retrain migrate-config retrain.toml
+
+# CI check mode: exit 1 if migration is needed
+retrain migrate-config retrain.toml --check
+
+# Apply in place
+retrain migrate-config retrain.toml --write
+
+# Apply in place + backup
+retrain migrate-config retrain.toml --write --backup
+
+# Non-destructive output file
+retrain migrate-config retrain.toml --output retrain.migrated.toml
+
+# Stream mode (stdin -> stdout)
+cat retrain.toml | retrain migrate-config --stdin --stdout
+```
+
+`load_config` remains strict: legacy keys still hard-fail until migrated.
+
 ### `[model]`
 
 | TOML key | Type | Default | Description |
