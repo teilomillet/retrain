@@ -85,7 +85,7 @@ class TestParseCampaignConditions:
         )
         assert len(conditions) == 1
         assert conditions[0].overrides == {"uncertainty_kind": "predictive_variance"}
-        assert conditions[0].label == "maxrl+gtpo_sepa/uncertainty_kind=predictive_variance"
+        assert conditions[0].label == "maxrl+gtpo_sepa~uncertainty_kind=predictive_variance"
 
     def test_non_list_conditions_raises(self):
         with pytest.raises(ValueError, match="campaign.conditions must be a list"):

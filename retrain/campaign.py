@@ -122,7 +122,7 @@ class CampaignCondition:
         suffix = ",".join(
             f"{k}={v}" for k, v in sorted(self.overrides.items())
         )
-        return f"{base}/{suffix}"
+        return f"{base}~{suffix}"
 
     def as_legacy_tuple(self) -> tuple[str, str]:
         return (self.advantage_mode, self.transform_mode)
