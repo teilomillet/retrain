@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -196,9 +197,10 @@ def _print_top_help(cli_name: str) -> None:
     print("Usage:")
     print(f"  {cli_name} [config.toml] [--flag value ...]")
     print(f"  {cli_name} doctor")
-    print(f"  {cli_name} init [--template NAME] [--list]")
+    print(f"  {cli_name} init [--template NAME] [--list] [--interactive]")
     print(f"  {cli_name} status [logdir] [--json]")
     print(f"  {cli_name} explain [config.toml] [--json]")
+    print(f"  {cli_name} diff <run_a> <run_b> [--json]")
     print(f"  {cli_name} man")
     print()
     print("Manual:")
@@ -293,11 +295,12 @@ def _render_commands_block(cli_name: str) -> list[str]:
         f"    {cli_name} doctor",
         "        Checks optional dependencies for configured components.",
         "",
-        f"    {cli_name} init [--template NAME] [--list]",
+        f"    {cli_name} init [--template NAME] [--list] [--interactive]",
         "        Writes a starter config in the current directory.",
         "        Templates: default, quickstart, experiment, campaign.",
         "        --template NAME   selects a template (default: default).",
         "        --list            shows available templates.",
+        "        --interactive/-i  guided setup with prompts.",
         "",
         f"    {cli_name} status [logdir] [--json]",
         "        Scans log directories for run and campaign status.",
@@ -307,6 +310,12 @@ def _render_commands_block(cli_name: str) -> list[str]:
         f"    {cli_name} explain [config.toml] [--json]",
         "        Dry-run preview: shows what a config would do.",
         "        Works for single runs, campaigns, and squeeze configs.",
+        "        --json            machine-readable JSON output.",
+        "",
+        f"    {cli_name} diff <run_a> <run_b> [--json]",
+        "        Compares metrics between two training runs.",
+        f"    {cli_name} diff <campaign_dir> <cond_a> <cond_b> [--json]",
+        "        Compares two conditions in a campaign (averaged across seeds).",
         "        --json            machine-readable JSON output.",
         "",
         f"    {cli_name} man",
@@ -575,6 +584,99 @@ def _run_man(args: list[str]) -> None:
         print(section_text.rstrip())
 
 
+def _customize_toml(
+    content: str,
+    max_steps: int | None = None,
+    seed: int | None = None,
+    wandb_project: str | None = None,
+) -> str:
+    """Apply customizations to a TOML template string via regex."""
+    if max_steps is not None:
+        content = re.sub(r"^(max_steps\s*=\s*)\d+", rf"\g<1>{max_steps}", content, flags=re.MULTILINE)
+    if seed is not None:
+        content = re.sub(r"^(seed\s*=\s*)-?\d+", rf"\g<1>{seed}", content, flags=re.MULTILINE)
+    if wandb_project is not None:
+        if wandb_project:
+            # Uncomment and set
+            content = re.sub(
+                r"^#\s*wandb_project\s*=.*$",
+                f'wandb_project = "{wandb_project}"',
+                content,
+                flags=re.MULTILINE,
+            )
+            # Replace already-uncommented line
+            content = re.sub(
+                r'^wandb_project\s*=\s*"[^"]*"',
+                f'wandb_project = "{wandb_project}"',
+                content,
+                flags=re.MULTILINE,
+            )
+        # Empty string: leave as-is (commented or empty)
+    return content
+
+
+_INTERACTIVE_GOALS: dict[str, tuple[str, int]] = {
+    "1": ("quickstart", 20),
+    "2": ("experiment", 500),
+    "3": ("campaign", 200),
+}
+
+
+def _run_init_interactive(cli_name: str) -> None:
+    """Interactively build a retrain config file."""
+    if not sys.stdin.isatty():
+        print("Interactive init requires a terminal (TTY).", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"{cli_name} init — interactive setup\n")
+    print("What would you like to do?")
+    print("  1) quickstart  — 20-step smoke test")
+    print("  2) experiment  — reproducible training run")
+    print("  3) campaign    — sweep across conditions and seeds")
+    choice = input("\nChoice [1]: ").strip() or "1"
+    if choice not in _INTERACTIVE_GOALS:
+        print(f"Invalid choice '{choice}'. Using quickstart.", file=sys.stderr)
+        choice = "1"
+
+    goal_name, default_steps = _INTERACTIVE_GOALS[choice]
+
+    # Steps
+    steps_input = input(f"Training steps [{default_steps}]: ").strip()
+    if steps_input:
+        try:
+            max_steps = int(steps_input)
+        except ValueError:
+            print(f"Not a number, using default ({default_steps}).", file=sys.stderr)
+            max_steps = default_steps
+    else:
+        max_steps = default_steps
+
+    # Seed
+    seed_input = input("Reproducible seed [42]: ").strip()
+    if seed_input:
+        try:
+            seed = int(seed_input)
+        except ValueError:
+            print("Not a number, using default (42).", file=sys.stderr)
+            seed = 42
+    else:
+        seed = 42
+
+    # Wandb
+    wandb_project = input("Wandb project name (empty to skip): ").strip()
+
+    content, filename = _INIT_TEMPLATES[goal_name]
+    content = _customize_toml(content, max_steps=max_steps, seed=seed, wandb_project=wandb_project or None)
+
+    dest = Path(filename)
+    if dest.exists():
+        print(f"{filename} already exists — refusing to overwrite.")
+        sys.exit(1)
+    dest.write_text(content)
+    print(f"\nCreated {filename} (template: {goal_name})")
+    print(f"Edit it, then run: {cli_name}")
+
+
 def _run_init(args: list[str] | None = None, cli_name: str | None = None) -> None:
     """Generate a starter config file in the current directory."""
     if not cli_name:
@@ -583,10 +685,13 @@ def _run_init(args: list[str] | None = None, cli_name: str | None = None) -> Non
 
     template_name = "default"
     list_templates = False
+    interactive = False
     i = 0
     while i < len(args):
         arg = args[i]
-        if arg in ("--list", "-l"):
+        if arg in ("--interactive", "-i"):
+            interactive = True
+        elif arg in ("--list", "-l"):
             list_templates = True
         elif arg in ("--template", "-t"):
             i += 1
@@ -605,6 +710,10 @@ def _run_init(args: list[str] | None = None, cli_name: str | None = None) -> Non
         print("Available templates:")
         for name, (_, filename) in sorted(_INIT_TEMPLATES.items()):
             print(f"  {name:12s} -> {filename}")
+        return
+
+    if interactive:
+        _run_init_interactive(cli_name)
         return
 
     if template_name not in _INIT_TEMPLATES:
@@ -900,6 +1009,50 @@ def _explain_squeeze(config_path: str, fmt: str) -> None:
         print(f"  compress_to           : {cfg.compress_to}")
 
 
+def _run_diff(args: list[str]) -> None:
+    """Compare two runs or campaign conditions."""
+    from retrain.diff import diff_conditions, diff_runs, format_diff
+
+    fmt = "text"
+    positional: list[str] = []
+    for arg in args:
+        if arg == "--json":
+            fmt = "json"
+        elif arg.startswith("--"):
+            print(f"Unknown diff flag: {arg}", file=sys.stderr)
+            sys.exit(1)
+        else:
+            positional.append(arg)
+
+    if len(positional) == 2:
+        dir_a, dir_b = Path(positional[0]), Path(positional[1])
+        try:
+            result = diff_runs(dir_a, dir_b)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+    elif len(positional) == 3:
+        campaign_dir = Path(positional[0])
+        cond_a, cond_b = positional[1], positional[2]
+        try:
+            result = diff_conditions(campaign_dir, cond_a, cond_b)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("Usage:", file=sys.stderr)
+        print("  retrain diff <run_a> <run_b>", file=sys.stderr)
+        print("  retrain diff <campaign_dir> <cond_a> <cond_b>", file=sys.stderr)
+        sys.exit(1)
+
+    if fmt == "json":
+        from dataclasses import asdict
+
+        print(json.dumps(asdict(result), indent=2))
+    else:
+        print(format_diff(result))
+
+
 def _run_explain(args: list[str]) -> None:
     """Dry-run: show what a config would do without running it."""
     fmt = "text"
@@ -965,6 +1118,10 @@ def main() -> None:
         _run_explain(args[1:])
         sys.exit(0)
 
+    if args and args[0] == "diff":
+        _run_diff(args[1:])
+        sys.exit(0)
+
     # Parse CLI overrides
     from retrain.config import parse_cli_overrides
 
@@ -975,6 +1132,11 @@ def main() -> None:
         if Path("retrain.toml").is_file():
             config_path = "retrain.toml"
         elif not overrides:
+            if sys.stdin.isatty():
+                answer = input("No retrain.toml found. Create one now? [Y/n]: ").strip().lower()
+                if answer in ("", "y", "yes"):
+                    _run_init(cli_name=cli_name)
+                    sys.exit(0)
             print("No retrain.toml found. Create one with:")
             print(f"  {cli_name} init")
             print("Or pass a path:")

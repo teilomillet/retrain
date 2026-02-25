@@ -7,9 +7,12 @@ import pytest
 
 from retrain.cli import (
     _INIT_TEMPLATES,
+    _customize_toml,
     _print_top_help,
+    _run_diff,
     _run_explain,
     _run_init,
+    _run_init_interactive,
     _run_man,
 )
 from retrain.config import parse_cli_overrides
@@ -357,3 +360,195 @@ class TestExplainCommand:
         with pytest.raises(SystemExit) as exc_info:
             _run_explain(["/nonexistent/path.toml"])
         assert exc_info.value.code == 1
+
+
+class TestCustomizeToml:
+    def test_replace_max_steps(self):
+        content = "max_steps = 100\nseed = -1\n"
+        result = _customize_toml(content, max_steps=50)
+        assert "max_steps = 50" in result
+        assert "seed = -1" in result
+
+    def test_replace_seed(self):
+        content = "max_steps = 100\nseed = -1\n"
+        result = _customize_toml(content, seed=99)
+        assert "seed = 99" in result
+        assert "max_steps = 100" in result
+
+    def test_replace_negative_seed(self):
+        content = "seed = -1\n"
+        result = _customize_toml(content, seed=42)
+        assert "seed = 42" in result
+
+    def test_uncomment_wandb(self):
+        content = '# wandb_project = ""         # uncomment to enable wandb\n'
+        result = _customize_toml(content, wandb_project="my_proj")
+        assert 'wandb_project = "my_proj"' in result
+
+    def test_replace_existing_wandb(self):
+        content = 'wandb_project = ""           # set your project name\n'
+        result = _customize_toml(content, wandb_project="my_proj")
+        assert 'wandb_project = "my_proj"' in result
+
+    def test_no_changes_when_none(self):
+        content = "max_steps = 100\nseed = -1\n"
+        result = _customize_toml(content)
+        assert result == content
+
+
+class TestInitInteractive:
+    def test_non_tty_exits(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        with pytest.raises(SystemExit) as exc_info:
+            _run_init_interactive("retrain")
+        assert exc_info.value.code == 1
+
+    def test_quickstart_defaults(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["1", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "max_steps = 20" in content
+        assert "seed = 42" in content
+
+    def test_experiment_custom_steps(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["2", "300", "7", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "max_steps = 300" in content
+        assert "seed = 7" in content
+
+    def test_campaign_with_wandb(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["3", "", "", "my_project"])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        content = (tmp_path / "campaign.toml").read_text()
+        assert "[campaign]" in content
+        assert "max_steps = 200" in content
+        assert "seed = 42" not in content  # campaign template has no seed line
+
+    def test_invalid_choice_falls_back(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["9", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        captured = capsys.readouterr()
+        assert "Invalid choice" in captured.err
+        # Falls back to quickstart
+        assert (tmp_path / "retrain.toml").is_file()
+
+    def test_bad_steps_uses_default(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["1", "abc", "", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        captured = capsys.readouterr()
+        assert "Not a number" in captured.err
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "max_steps = 20" in content
+
+    def test_bad_seed_uses_default(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["1", "", "xyz", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init_interactive("retrain")
+        captured = capsys.readouterr()
+        assert "Not a number" in captured.err
+        content = (tmp_path / "retrain.toml").read_text()
+        assert "seed = 42" in content
+
+    def test_refuses_overwrite(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "retrain.toml").write_text("existing")
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["1", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        with pytest.raises(SystemExit) as exc_info:
+            _run_init_interactive("retrain")
+        assert exc_info.value.code == 1
+        assert (tmp_path / "retrain.toml").read_text() == "existing"
+
+    def test_interactive_flag_in_run_init(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        inputs = iter(["1", "", "", ""])
+        monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+
+        _run_init(args=["--interactive"], cli_name="retrain")
+        assert (tmp_path / "retrain.toml").is_file()
+
+
+class TestAutoInit:
+    def test_auto_init_tty_yes(self, tmp_path, monkeypatch, capsys):
+        """TTY user accepts auto-init → creates retrain.toml."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        monkeypatch.setattr("sys.argv", ["retrain"])
+
+        from retrain.cli import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        assert (tmp_path / "retrain.toml").is_file()
+
+    def test_auto_init_tty_enter(self, tmp_path, monkeypatch, capsys):
+        """TTY user presses Enter (default yes) → creates retrain.toml."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        monkeypatch.setattr("sys.argv", ["retrain"])
+
+        from retrain.cli import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
+        assert (tmp_path / "retrain.toml").is_file()
+
+    def test_auto_init_tty_no(self, tmp_path, monkeypatch, capsys):
+        """TTY user declines → exit 1, no file."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        monkeypatch.setattr("sys.argv", ["retrain"])
+
+        from retrain.cli import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert not (tmp_path / "retrain.toml").is_file()
+
+    def test_auto_init_non_tty(self, tmp_path, monkeypatch, capsys):
+        """Non-TTY → no prompt, exit 1."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("sys.argv", ["retrain"])
+
+        from retrain.cli import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert not (tmp_path / "retrain.toml").is_file()
+        captured = capsys.readouterr()
+        assert "retrain init" in captured.out

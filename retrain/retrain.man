@@ -38,11 +38,12 @@ COMMANDS
     retrain doctor
         Checks optional dependencies for configured components.
 
-    retrain init [--template NAME] [--list]
+    retrain init [--template NAME] [--list] [--interactive]
         Writes a starter config in the current directory.
         Templates: default, quickstart, experiment, campaign.
         --template NAME   selects a template (default: default).
         --list            shows available templates.
+        --interactive/-i  guided setup with prompts.
 
     retrain status [logdir] [--json]
         Scans log directories for run and campaign status.
@@ -52,6 +53,12 @@ COMMANDS
     retrain explain [config.toml] [--json]
         Dry-run preview: shows what a config would do.
         Works for single runs, campaigns, and squeeze configs.
+        --json            machine-readable JSON output.
+
+    retrain diff <run_a> <run_b> [--json]
+        Compares metrics between two training runs.
+    retrain diff <campaign_dir> <cond_a> <cond_b> [--json]
+        Compares two conditions in a campaign (averaged across seeds).
         --json            machine-readable JSON output.
 
     retrain man
