@@ -266,6 +266,17 @@ class TrainConfig:
                 stacklevel=2,
             )
 
+    @property
+    def post_process_params(self) -> dict[str, float]:
+        """Build the params dict passed to TransformSpec.post_process hooks.
+
+        Collects algorithm hyperparameters that post-process hooks may need.
+        Hooks pick the keys they care about; unknown keys are ignored.
+        """
+        return {
+            "entropy_mask_rho": self.entropy_mask_rho,
+        }
+
 
 # TOML section -> config field mapping
 _TOML_MAP: dict[str, dict[str, str]] = {

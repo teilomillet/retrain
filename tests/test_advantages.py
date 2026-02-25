@@ -369,6 +369,50 @@ class TestPostProcessHooks:
         )
         assert result.extra_metrics == {}
 
+    def test_post_process_wrong_sequence_count_raises(self):
+        """Hook returning wrong number of sequences is caught."""
+        def _bad_hook(all_token_advs, all_raw_entropies, params):
+            return all_token_advs[:1], {}  # drop a sequence
+
+        from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+        spec = TransformSpec(name="bad_seq", use_gtpo=True, post_process=_bad_hook)
+        _BUILTIN_TRANSFORM_SPECS["bad_seq"] = spec
+        _TRANSFORM_SPEC_CACHE.pop("bad_seq", None)
+        try:
+            with pytest.raises(ValueError, match="1 sequences, expected 2"):
+                compute_composable_advantages(
+                    rewards_G=[1.0, 0.0],
+                    logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                    planning_masks_G=[[0, 0], [0, 0]],
+                    advantage_mode="grpo",
+                    transform_mode="bad_seq",
+                )
+        finally:
+            _BUILTIN_TRANSFORM_SPECS.pop("bad_seq", None)
+            _TRANSFORM_SPEC_CACHE.pop("bad_seq", None)
+
+    def test_post_process_wrong_token_count_raises(self):
+        """Hook returning wrong token count for a sequence is caught."""
+        def _bad_hook(all_token_advs, all_raw_entropies, params):
+            return [[0.0], all_token_advs[1]], {}  # truncate first sequence
+
+        from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+        spec = TransformSpec(name="bad_tok", use_gtpo=True, post_process=_bad_hook)
+        _BUILTIN_TRANSFORM_SPECS["bad_tok"] = spec
+        _TRANSFORM_SPEC_CACHE.pop("bad_tok", None)
+        try:
+            with pytest.raises(ValueError, match="1 tokens for sequence 0, expected 2"):
+                compute_composable_advantages(
+                    rewards_G=[1.0, 0.0],
+                    logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                    planning_masks_G=[[0, 0], [0, 0]],
+                    advantage_mode="grpo",
+                    transform_mode="bad_tok",
+                )
+        finally:
+            _BUILTIN_TRANSFORM_SPECS.pop("bad_tok", None)
+            _TRANSFORM_SPEC_CACHE.pop("bad_tok", None)
+
 
 # ---------------------------------------------------------------------------
 # Composable pipeline

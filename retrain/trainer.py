@@ -465,7 +465,7 @@ def train(config: TrainConfig) -> str | None:
                     gtpo_beta=config.gtpo_beta,
                     hicra_alpha=config.hicra_alpha,
                     sepa_lambda=sepa_lambda_val,
-                    post_process_params={"entropy_mask_rho": config.entropy_mask_rho},
+                    post_process_params=config.post_process_params,
                 )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:
@@ -611,7 +611,7 @@ def train(config: TrainConfig) -> str | None:
                     gtpo_beta=config.gtpo_beta,
                     hicra_alpha=config.hicra_alpha,
                     sepa_lambda=sepa_lambda_val,
-                    post_process_params={"entropy_mask_rho": config.entropy_mask_rho},
+                    post_process_params=config.post_process_params,
                 )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:

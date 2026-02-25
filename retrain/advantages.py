@@ -614,10 +614,24 @@ def compute_composable_advantages(
 
     # Post-process hook (e.g. entropy masking)
     extra_metrics: dict[str, float] = {}
+    n_seqs = len(all_token_advs)
+    seq_lens = [len(seq) for seq in all_token_advs]
     if transform_spec.post_process is not None:
         all_token_advs, extra_metrics = transform_spec.post_process(
             all_token_advs, all_raw_entropies, post_process_params or {}
         )
+        # Validate hook output shape
+        if len(all_token_advs) != n_seqs:
+            raise ValueError(
+                f"post_process hook '{transform_spec.name}' returned "
+                f"{len(all_token_advs)} sequences, expected {n_seqs}"
+            )
+        for i, seq in enumerate(all_token_advs):
+            if len(seq) != seq_lens[i]:
+                raise ValueError(
+                    f"post_process hook '{transform_spec.name}' returned "
+                    f"{len(seq)} tokens for sequence {i}, expected {seq_lens[i]}"
+                )
 
     stats = compute_entropy_stats(all_exec_entropies, all_plan_entropies)
     return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra_metrics)

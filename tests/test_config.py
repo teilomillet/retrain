@@ -496,3 +496,13 @@ class TestEntropyMaskRho:
     def test_boundary_one(self):
         c = TrainConfig(entropy_mask_rho=1.0)
         assert c.entropy_mask_rho == 1.0
+
+    def test_post_process_params_property(self):
+        c = TrainConfig(entropy_mask_rho=0.3)
+        params = c.post_process_params
+        assert params == {"entropy_mask_rho": 0.3}
+
+    def test_post_process_params_default(self):
+        c = TrainConfig()
+        params = c.post_process_params
+        assert params == {"entropy_mask_rho": 0.0}
