@@ -1,10 +1,12 @@
-"""OpenAI-compatible inference engine — HTTP client for vLLM, SGLang, MAX serve.
+"""OpenAI-compatible inference engine — HTTP client for vLLM, SGLang, MLX-LM, MAX serve.
 
 Targets any server exposing /v1/completions with logprobs support.
 Decodes prompt token IDs to text, sends HTTP requests, recovers token IDs
 and logprobs from the response.
 
-Weight reloading uses /v1/load_lora_adapter (vLLM/SGLang convention).
+Weight reloading uses:
+- /v1/load_lora_adapter for vLLM/SGLang-style servers
+- per-request "adapters" payload field for MLX-LM server
 """
 
 import time
@@ -24,7 +26,7 @@ class OpenAIEngine(InferenceEngine):
         Args:
             base_url: Server URL (e.g. "http://localhost:8000").
             model_name: HuggingFace model ID (for tokenizer + model param).
-            engine_type: One of "vllm", "sglang", "openai".
+            engine_type: One of "vllm", "sglang", "mlx", "openai".
         """
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
@@ -61,6 +63,9 @@ class OpenAIEngine(InferenceEngine):
                 "n": num_samples,
                 "logprobs": 1,
             }
+            # mlx_lm.server supports dynamic adapter selection via request payload.
+            if self.engine_type == "mlx" and self._current_adapter_path:
+                payload["adapters"] = self._current_adapter_path
 
             response = self._post("/v1/completions", payload)
             choices = response.get("choices", [])
@@ -120,10 +125,16 @@ class OpenAIEngine(InferenceEngine):
     def reload_weights(self, adapter_path):
         """Tell the server to load/reload a LoRA adapter.
 
-        Uses /v1/load_lora_adapter (vLLM/SGLang convention).
-        Falls back gracefully if the endpoint isn't supported.
+        Uses /v1/load_lora_adapter for vLLM/SGLang-style servers.
+        For MLX-LM, stores adapter path and sends it on each request as
+        the "adapters" field.
         """
         if adapter_path == self._current_adapter_path:
+            return
+
+        if self.engine_type == "mlx":
+            self._current_adapter_path = adapter_path
+            print(f"MLX-LM adapter set to {adapter_path}")
             return
 
         payload = {

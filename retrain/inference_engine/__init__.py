@@ -9,6 +9,7 @@ the PyTorch/PEFT training model. Available engines:
                without URL: in-process MAX pipeline (dev/testing)
 - vllm:      vLLM OpenAI-compatible server
 - sglang:    SGLang OpenAI-compatible server
+- mlx:       MLX-LM OpenAI-compatible server (Apple Silicon)
 - openai:    Any OpenAI-compatible endpoint
 """
 
@@ -26,7 +27,7 @@ def create_engine(
     """Factory: create the right InferenceEngine based on engine_type.
 
     Args:
-        engine_type: One of "pytorch", "max", "vllm", "sglang", "openai".
+        engine_type: One of "pytorch", "max", "vllm", "sglang", "mlx", "openai".
         model_name: HuggingFace model ID.
         device: Torch device string for local engines.
         peft_config: LoraConfig (used by PyTorchEngine).
@@ -46,13 +47,14 @@ def create_engine(
 
         return create_max_engine(model_name, inference_url)
 
-    elif engine_type in ("vllm", "sglang", "openai"):
+    elif engine_type in ("vllm", "sglang", "mlx", "openai"):
         from retrain.inference_engine.openai_engine import OpenAIEngine
 
         if not inference_url:
             defaults = {
                 "vllm": "http://localhost:8000",
                 "sglang": "http://localhost:30000",
+                "mlx": "http://localhost:8080",
                 "openai": "http://localhost:8000",
             }
             inference_url = defaults[engine_type]
@@ -66,7 +68,7 @@ def create_engine(
     else:
         raise ValueError(
             f"Unknown inference engine: {engine_type!r}. "
-            f"Expected: pytorch, max, vllm, sglang, openai"
+            f"Expected: pytorch, max, vllm, sglang, mlx, openai"
         )
 
 

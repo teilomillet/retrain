@@ -24,6 +24,13 @@ if TYPE_CHECKING:
     from retrain.config import TrainConfig
 
 
+_FALLBACK_TRAINING_ENVS = (
+    "primeintellect/gsm8k",
+    "primeintellect/wordle",
+    "primeintellect/hendrycks-math",
+)
+
+
 def _require_verifiers() -> Any:
     try:
         import verifiers as vf
@@ -58,6 +65,52 @@ def parse_environment_args(raw: str | dict[str, Any] | None) -> dict[str, Any]:
     return parsed
 
 
+def _hub_env_suggestions(env_id: str, limit: int = 5) -> list[str]:
+    """Best-effort suggestions for similar Hub environment IDs."""
+    if "/" not in env_id:
+        return []
+
+    query = env_id.rsplit("/", 1)[-1].split("@", 1)[0].strip()
+    if not query:
+        return []
+
+    try:
+        import requests
+        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL
+    except Exception:
+        return []
+
+    try:
+        response = requests.get(
+            ENVIRONMENTS_HUB_URL,
+            params={"search": query, "limit": max(1, limit)},
+            timeout=10,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        return []
+
+    suggestions: list[str] = []
+    for row in payload.get("data", []):
+        owner = (row.get("owner") or {}).get("name")
+        name = row.get("name")
+        if owner and name:
+            env_key = f"{owner}/{name}"
+            if env_key not in suggestions:
+                suggestions.append(env_key)
+        if len(suggestions) >= limit:
+            break
+    return suggestions
+
+
+def _format_hub_suggestions(env_id: str) -> str:
+    suggestions = _hub_env_suggestions(env_id)
+    if not suggestions:
+        return ""
+    return " Similar IDs: " + ", ".join(suggestions) + "."
+
+
 def load_verifiers_environment(config: "TrainConfig") -> Any:
     """Load a verifiers environment from local install or Prime Hub package."""
     vf = _require_verifiers()
@@ -86,20 +139,44 @@ def load_verifiers_environment(config: "TrainConfig") -> Any:
         ):
             ok = install_from_hub(env_id)
             if not ok:
+                suggestion_hint = _format_hub_suggestions(env_id)
                 raise RuntimeError(
                     f"Failed to auto-install verifiers environment '{env_id}'. "
+                    "The environment ID may be invalid, private, or inaccessible."
+                    f"{suggestion_hint} "
                     "Try manually: uv run python -m verifiers.cli.commands.install "
                     f"{env_id}"
                 )
 
-    return vf.load_environment(env_id, **env_args)
+    try:
+        return vf.load_environment(env_id, **env_args)
+    except Exception as exc:
+        suggestion_hint = _format_hub_suggestions(env_id)
+        raise RuntimeError(
+            f"Failed to load verifiers environment '{env_id}': {exc}."
+            f"{suggestion_hint}"
+        ) from exc
 
 
 def load_examples_from_environment(env: Any, config: "TrainConfig") -> list[Example]:
     """Convert verifiers dataset rows into retrain Example objects."""
     n = config.max_examples if config.max_examples > 0 else -1
     seed = config.seed if config.seed >= 0 else None
-    dataset = env.get_dataset(n=n, seed=seed)
+    env_id = str(getattr(env, "env_id", config.environment_id or "unknown"))
+    try:
+        dataset = env.get_dataset(n=n, seed=seed)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "dataset is not set" in msg:
+            fallback = ", ".join(_FALLBACK_TRAINING_ENVS)
+            raise RuntimeError(
+                f"Environment '{env_id}' does not expose a training dataset "
+                "(likely eval-only). Use a trainable environment such as "
+                f"{fallback}. If you intended evaluation, use verifiers eval flow."
+            ) from None
+        raise RuntimeError(
+            f"Failed to load dataset from verifiers environment '{env_id}': {exc}"
+        ) from exc
 
     examples: list[Example] = []
     for row in dataset:

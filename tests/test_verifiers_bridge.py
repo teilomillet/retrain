@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from retrain.config import TrainConfig
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
+    load_examples_from_environment,
     parse_environment_args,
     prompt_preview,
 )
@@ -19,6 +21,20 @@ class _DummyTokenizer:
 
     def encode(self, text):
         return [len(text), len(text) + 1]
+
+
+class _EvalOnlyEnv:
+    env_id = "primeintellect/aime2025"
+
+    def get_dataset(self, n=-1, seed=None):
+        raise ValueError("dataset is not set")
+
+
+class _BrokenDatasetEnv:
+    env_id = "primeintellect/broken"
+
+    def get_dataset(self, n=-1, seed=None):
+        raise RuntimeError("backend unavailable")
 
 
 class TestParseEnvironmentArgs:
@@ -76,3 +92,21 @@ class TestPromptHelpers:
             [{"role": "user", "content": "test prompt"}],
         )
         assert ids == [11, 21]
+
+
+class TestLoadExamplesFromEnvironment:
+    def test_eval_only_env_has_actionable_error(self):
+        cfg = TrainConfig(
+            environment_provider="verifiers",
+            environment_id="primeintellect/aime2025",
+        )
+        with pytest.raises(RuntimeError, match="does not expose a training dataset"):
+            load_examples_from_environment(_EvalOnlyEnv(), cfg)
+
+    def test_other_dataset_errors_preserve_context(self):
+        cfg = TrainConfig(
+            environment_provider="verifiers",
+            environment_id="primeintellect/broken",
+        )
+        with pytest.raises(RuntimeError, match="Failed to load dataset"):
+            load_examples_from_environment(_BrokenDatasetEnv(), cfg)

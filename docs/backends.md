@@ -38,7 +38,7 @@ In split mode, training runs asynchronously on a background thread. Weight snaps
 
 ### External inference engine
 
-When using MAX, vLLM, or SGLang, the external engine manages its own GPUs. The `devices` field controls only the training GPU:
+When using MAX, vLLM, SGLang, or MLX-LM, the external engine manages its own GPUs. The `devices` field controls only the training GPU:
 
 ```toml
 [backend]
@@ -111,7 +111,7 @@ The tokenizer and dataset still load locally (for prompt encoding and reward sco
 |---------|-------|--------|
 | Local GPU required | Yes | No |
 | Model loading | Local HuggingFace download | Server-side |
-| Inference | Pluggable engine (PyTorch, MAX, vLLM, ...) | Tinker sampling API |
+| Inference | Pluggable engine (PyTorch, MAX, vLLM, SGLang, MLX-LM, ...) | Tinker sampling API |
 | Training | PyTorch/PEFT | Tinker training API |
 | Weight sync | In-memory or disk | Server-managed |
 | Checkpoints | Saved to `adapter_path` | Saved on Tinker service |

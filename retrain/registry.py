@@ -195,6 +195,10 @@ def _ie_vllm(config: TrainConfig) -> None:
 def _ie_sglang(config: TrainConfig) -> None:
     pass
 
+@inference_engine.register("mlx")
+def _ie_mlx(config: TrainConfig) -> None:
+    pass
+
 @inference_engine.register("openai")
 def _ie_openai(config: TrainConfig) -> None:
     pass

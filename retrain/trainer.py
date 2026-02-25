@@ -114,12 +114,7 @@ def train(config: TrainConfig) -> str | None:
     _print_config_summary(config)
 
     # -----------------------------------------------------------------------
-    # 0. Init backend (fail fast, before loading anything else)
-    # -----------------------------------------------------------------------
-    helper = get_registry("backend").create(config.backend, config)
-
-    # -----------------------------------------------------------------------
-    # 1. Setup directories + loggers
+    # 0. Setup directories + loggers
     # -----------------------------------------------------------------------
     log_path = Path(config.log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
@@ -131,7 +126,7 @@ def train(config: TrainConfig) -> str | None:
     generations_logger = JsonlLogger(str(emergence_dir / "generations.jsonl"))
 
     # -----------------------------------------------------------------------
-    # 1b. Seed for reproducibility
+    # 1. Seed for reproducibility
     # -----------------------------------------------------------------------
     if config.seed >= 0:
         import random
@@ -147,29 +142,7 @@ def train(config: TrainConfig) -> str | None:
         print(f"Seeded RNGs with {config.seed}")
 
     # -----------------------------------------------------------------------
-    # 2. Load tokenizer + vocab table
-    # -----------------------------------------------------------------------
-    print(f"Loading tokenizer for {config.model} ...")
-    tokenizer = AutoTokenizer.from_pretrained(config.model)
-    print("Loading vocabulary table...")
-    vocab_size = tokenizer.vocab_size
-    if hasattr(tokenizer, "added_tokens_encoder"):
-        vocab_size += len(tokenizer.added_tokens_encoder)
-    all_ids = list(range(vocab_size))
-    vocab_table: list[str] = []
-    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)
-    for tok in py_tokens:
-        vocab_table.append(str(tok) if tok is not None else "")
-    print(f"Vocabulary table: {len(vocab_table)} entries")
-
-    # -----------------------------------------------------------------------
-    # 2b. Planning detector
-    # -----------------------------------------------------------------------
-    detector = get_registry("planning_detector").create(config.planning_detector, config)
-    print(f"Planning detector: {config.planning_detector}")
-
-    # -----------------------------------------------------------------------
-    # 3. Load dataset
+    # 2. Load dataset (fail fast before backend/tokenizer setup)
     # -----------------------------------------------------------------------
     print("Loading dataset...")
     verifiers_env = None
@@ -197,7 +170,34 @@ def train(config: TrainConfig) -> str | None:
         print(f"Loaded {len(examples)} examples")
 
     # -----------------------------------------------------------------------
-    # 4. Pre-encode all prompts
+    # 3. Init backend (after data preflight)
+    # -----------------------------------------------------------------------
+    helper = get_registry("backend").create(config.backend, config)
+
+    # -----------------------------------------------------------------------
+    # 4. Load tokenizer + vocab table
+    # -----------------------------------------------------------------------
+    print(f"Loading tokenizer for {config.model} ...")
+    tokenizer = AutoTokenizer.from_pretrained(config.model)
+    print("Loading vocabulary table...")
+    vocab_size = tokenizer.vocab_size
+    if hasattr(tokenizer, "added_tokens_encoder"):
+        vocab_size += len(tokenizer.added_tokens_encoder)
+    all_ids = list(range(vocab_size))
+    vocab_table: list[str] = []
+    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)
+    for tok in py_tokens:
+        vocab_table.append(str(tok) if tok is not None else "")
+    print(f"Vocabulary table: {len(vocab_table)} entries")
+
+    # -----------------------------------------------------------------------
+    # 4b. Planning detector
+    # -----------------------------------------------------------------------
+    detector = get_registry("planning_detector").create(config.planning_detector, config)
+    print(f"Planning detector: {config.planning_detector}")
+
+    # -----------------------------------------------------------------------
+    # 5. Pre-encode all prompts
     # -----------------------------------------------------------------------
     print("Pre-encoding prompts...")
     pre_encoded_prompts: list[list[int]] = []
@@ -864,7 +864,11 @@ def train(config: TrainConfig) -> str | None:
         f"Training complete. {config.advantage_mode}+{config.transform_mode}, "
         f"{config.max_steps} steps, running correct rate: {final_rate:.1f}%"
     )
-    print(f"Metrics saved to {log_path / 'metrics.jsonl'}")
+    metrics_path = log_path / "metrics.jsonl"
+    if metrics_path.is_file():
+        print(f"Metrics saved to {metrics_path}")
+    else:
+        print("No metrics file written (all steps skipped / no informative datums).")
 
     if wandb_enabled and wandb_run is not None:
         wandb_run.finish()

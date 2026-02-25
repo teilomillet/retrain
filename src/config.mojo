@@ -62,7 +62,7 @@ struct TrainConfig(Copyable, Movable, Writable):
     var bp_peak_bw_gb_s: Float64
 
     # Inference engine
-    var inference_engine: String  # "pytorch" | "max" | "vllm" | "sglang" | "trtllm" | "openai"
+    var inference_engine: String  # "pytorch" | "max" | "vllm" | "sglang" | "mlx" | "openai"
     var inference_url: String  # Server URL for server-based engines (empty = default)
     var attention_kernel: String  # "default" | "flash" | "triton" | "tk" | "cutlass"
     var inference_dtype: String  # "auto" | "bf16" | "fp8" | "fp4"
@@ -163,7 +163,7 @@ fn print_usage():
     print("  save_every = 20")
     print()
     print("  [inference]")
-    print("  engine = \"pytorch\"         # pytorch | max | vllm | sglang | trtllm | openai")
+    print("  engine = \"pytorch\"         # pytorch | max | vllm | sglang | mlx | openai")
     print("  attention_kernel = \"default\"  # default | flash | triton | tk | cutlass")
     print("  dtype = \"auto\"             # auto | bf16 | fp8 | fp4")
     print("  kv_cache_dtype = \"auto\"    # auto | bf16 | fp8 | int8")

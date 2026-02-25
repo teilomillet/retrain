@@ -57,8 +57,8 @@ class LocalTrainHelper:
 
         # Non-PyTorch engines manage their own inference independently.
         # Server engines use a remote process; MAX engine uses its own in-process model.
-        self._server_engine = engine_type in ("vllm", "sglang", "openai")
-        self._external_engine = engine_type in ("max", "vllm", "sglang", "openai")
+        self._server_engine = engine_type in ("vllm", "sglang", "mlx", "openai")
+        self._external_engine = engine_type in ("max", "vllm", "sglang", "mlx", "openai")
 
         if self._external_engine:
             # Server handles inference — all local GPUs for training

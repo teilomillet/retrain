@@ -29,7 +29,7 @@ retrain
 ├── squeeze.py          # LoRA-Squeeze rank analysis and compression
 ├── local_train_helper.py   # Local GPU backend (PyTorch/PEFT + inference engine)
 ├── tinker_backend.py       # Remote GPU backend (Tinker API)
-├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang)
+├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, MLX-LM)
 ├── data.py             # MATH dataset loader
 └── logging_utils.py    # JSONL logger
 ```
@@ -42,7 +42,7 @@ retrain
 | **GTPO** | Entropy-weighted token-level credit assignment |
 | **HICRA** | Planning token amplification via strategic gram detection |
 | **SEPA** | Selective Entropy Pooling of Attention -- adaptive scheduling with correctness gate |
-| **Inference engines** | PyTorch, MAX, vLLM, SGLang, OpenAI-compatible servers |
+| **Inference engines** | PyTorch, MAX, vLLM, SGLang, MLX-LM, OpenAI-compatible servers |
 | **Reward functions** | String match, symbolic math (math_verify), LLM judge, custom |
 | **Back pressure** | USL model fits throughput curves, auto-adjusts batch size |
 | **Campaigns** | Sweep conditions x seeds from a single TOML with wandb groups |

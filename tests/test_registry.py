@@ -16,6 +16,7 @@ from retrain.registry import (
     check_environment,
     data_source,
     get_registry,
+    inference_engine,
     planning_detector,
     reward,
 )
@@ -125,6 +126,16 @@ class TestBuiltinNames:
 
     def test_backpressure_names(self):
         assert set(backpressure.builtin_names) >= {"noop", "usl"}
+
+    def test_inference_engine_names(self):
+        assert set(inference_engine.builtin_names) >= {
+            "pytorch",
+            "max",
+            "vllm",
+            "sglang",
+            "mlx",
+            "openai",
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -49,8 +49,8 @@ delay_steps = 50           # steps before SEPA ramp begins
 correct_rate_gate = 0.1    # min correct rate to enable SEPA
 
 [inference]
-engine = "pytorch"         # pytorch | max | vllm | sglang | openai
-url = ""                   # server URL for max/vllm/sglang/openai
+engine = "pytorch"         # pytorch | max | vllm | sglang | mlx | openai
+url = ""                   # server URL for max/vllm/sglang/mlx/openai
 attention_kernel = "default"  # default | flash | triton | tk | cutlass
 dtype = "auto"             # auto | bf16 | fp8 | fp4
 kv_cache_dtype = "auto"    # auto | bf16 | fp8 | int8
@@ -208,7 +208,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `engine` | str | `"pytorch"` | Inference engine: `pytorch`, `max`, `vllm`, `sglang`, `openai` |
+| `engine` | str | `"pytorch"` | Inference engine: `pytorch`, `max`, `vllm`, `sglang`, `mlx`, `openai` |
 | `url` | str | `""` | Server URL for non-PyTorch engines |
 | `attention_kernel` | str | `"default"` | Attention implementation: `default`, `flash`, `triton`, `tk`, `cutlass` |
 | `dtype` | str | `"auto"` | Inference dtype: `auto`, `bf16`, `fp8`, `fp4` |

@@ -19,10 +19,11 @@ dependencies = [
 [project.optional-dependencies]
 local = ["torch>=2.4.0"]
 tinker = ["tinker>=0.13.1"]
+mlx = ["mlx-lm>=0.20.0; platform_system == 'Darwin'"]
 verifiers = ["verifiers>=0.1.0"]
 semantic = ["sentence-transformers>=5.2.3"]
 wandb = ["wandb>=0.17.0"]
-all = ["retrain[local,tinker,verifiers,semantic,wandb]"]
+all = ["retrain[local,tinker,mlx,verifiers,semantic,wandb]"]
 dev = ["retrain[all]", "pytest>=8.0.0"]
 
 [project.scripts]

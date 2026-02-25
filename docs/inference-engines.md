@@ -14,7 +14,7 @@ retrain
         │     ├── PyTorchEngine     ← same model, shared VRAM
         │     ├── MAXLocalEngine    ← in-process MAX pipeline
         │     ├── MAXServeEngine    ← HTTP to max serve
-        │     └── OpenAIEngine      ← HTTP to vLLM / SGLang / any server
+        │     └── OpenAIEngine      ← HTTP to vLLM / SGLang / MLX-LM / any server
         └── PyTorch/PEFT training (unchanged)
 ```
 
@@ -28,13 +28,16 @@ All engines implement the same interface: `generate()` returns token IDs + per-t
 | MAX (auto) | `max` | In-process if no URL, HTTP to `max serve` if `url` set |
 | vLLM | `vllm` | HTTP client to a vLLM server |
 | SGLang | `sglang` | HTTP client to a SGLang server |
+| MLX-LM | `mlx` | HTTP client to a local `mlx_lm.server` endpoint |
 | OpenAI | `openai` | HTTP client to any OpenAI-compatible endpoint |
+
+For `mlx`, retrain sends the active LoRA adapter path in each completion request using the MLX-LM `adapters` field.
 
 ## Why PyTorch is best on 1 GPU
 
 With LoRA training, only the adapter weights change -- the base model is frozen. The PyTorch engine exploits this: the same model object serves both training and inference. There is no weight duplication.
 
-Every other engine loads a separate copy of the base model -- either in a different framework (MAX) or a different process (vLLM, SGLang). On 1 GPU, that means 2x base model VRAM for no benefit.
+Every other engine loads a separate copy of the base model -- either in a different framework (MAX) or a different process (vLLM, SGLang, MLX-LM). On 1 GPU, that means 2x base model VRAM for no benefit.
 
 ```
 PyTorch (1 GPU):     [base model + LoRA]  ← shared, 1x VRAM
@@ -72,6 +75,12 @@ retrain --devices gpu:7 \
 vllm serve Qwen/Qwen3-4B-Instruct-2507 --tensor-parallel-size 7
 retrain --devices gpu:7 \
     --inference-engine vllm --inference-url http://localhost:8000
+
+# Apple Silicon -- MLX-LM local server
+pip install -e ".[mlx]"
+python -m mlx_lm.server --model mlx-community/Qwen2.5-3B-Instruct-4bit
+retrain --devices cpu \
+    --inference-engine mlx --inference-url http://localhost:8080
 ```
 
 ## LoRA weight sync
@@ -82,7 +91,7 @@ After each training step, updated LoRA weights must reach the inference engine:
 |--------|---------------|---------|
 | PyTorch (1 GPU) | Same model object, no sync needed | 0 |
 | PyTorch (split mode) | In-memory `sync_from_state_dict()` via snapshot | ~1ms |
-| MAX / vLLM / SGLang | `save_pretrained()` to disk, then `reload_weights()` | ~1-2s |
+| MAX / vLLM / SGLang / MLX-LM | `save_pretrained()` to disk, then `reload_weights()` | ~1-2s |
 
 The `_weights_dirty` flag avoids redundant saves. In split mode, a weight snapshot is taken after each optimizer step for safe cross-thread access.
 
@@ -94,6 +103,7 @@ The `_weights_dirty` flag avoids redundant saves. In split mode, a weight snapsh
 | `engine = "pytorch"`, `devices = "gpu:0,gpu:1"` | GPU 1 | GPU 0 (split mode) |
 | `engine = "max"`, `devices = "gpu:7"` | GPU 7 | MAX-managed |
 | `engine = "vllm"`, `devices = "gpu:7"` | GPU 7 | Server-managed |
+| `engine = "mlx"`, `devices = "cpu"` | CPU | MLX-LM server-managed |
 
 With external engines, `devices` controls only the training GPU. The engine manages its own GPU allocation independently.
 
@@ -101,7 +111,7 @@ With external engines, `devices` controls only the training GPU. The engine mana
 
 ```toml
 [inference]
-engine = "pytorch"         # pytorch | max | vllm | sglang | openai
+engine = "pytorch"         # pytorch | max | vllm | sglang | mlx | openai
 url = ""                   # server URL for non-PyTorch engines
 attention_kernel = "default"
 dtype = "auto"
@@ -138,5 +148,5 @@ class InferenceEngine(ABC):
 | `retrain/inference_engine/base.py` | `InferenceEngine` ABC + `SampleResult` dataclass |
 | `retrain/inference_engine/pytorch_engine.py` | Local PyTorch engine |
 | `retrain/inference_engine/max_engine.py` | MAX engine (in-process vs serve) |
-| `retrain/inference_engine/openai_engine.py` | HTTP client for vLLM / SGLang / any server |
+| `retrain/inference_engine/openai_engine.py` | HTTP client for vLLM / SGLang / MLX-LM / any server |
 | `retrain/local_train_helper.py` | Orchestrates engine + training, weight sync |
