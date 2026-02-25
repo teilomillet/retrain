@@ -23,8 +23,12 @@ import re
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TypeAlias, cast
 
 import requests
+
+
+JSONPayload: TypeAlias = dict[str, object]
 
 
 class PrimeRLTrainHelper:
@@ -49,8 +53,15 @@ class PrimeRLTrainHelper:
     ) -> None:
         """Create PRIME-RL transport sender and inference client."""
         try:
-            from prime_rl.configs.shared import FileSystemTransportConfig, ZMQTransportConfig
-            from prime_rl.transport import TrainingBatch, TrainingSample, setup_training_batch_sender
+            from prime_rl.configs.shared import (  # ty: ignore[unresolved-import]
+                FileSystemTransportConfig,
+                ZMQTransportConfig,
+            )
+            from prime_rl.transport import (  # ty: ignore[unresolved-import]
+                TrainingBatch,
+                TrainingSample,
+                setup_training_batch_sender,
+            )
         except ImportError:
             raise RuntimeError(
                 "Backend 'prime_rl' requires PRIME-RL.\n"
@@ -121,7 +132,7 @@ class PrimeRLTrainHelper:
         results: list[list[tuple[list[int], list[float]]]] = []
 
         for prompt_ids in prompt_ids_list:
-            payload: dict[str, object] = {
+            payload: JSONPayload = {
                 "model": self.model_name,
                 "messages": [{"role": "user", "content": ""}],
                 "tokens": list(prompt_ids),
@@ -151,7 +162,12 @@ class PrimeRLTrainHelper:
 
             group: list[tuple[list[int], list[float]]] = []
             for choice in choices:
-                token_ids, logprobs = self._extract_completion(choice, prompt_ids)
+                if not isinstance(choice, Mapping):
+                    raise RuntimeError("PRIME-RL inference returned non-object choice payload.")
+                token_ids, logprobs = self._extract_completion(
+                    dict(cast(Mapping[str, object], choice)),
+                    prompt_ids,
+                )
                 group.append((token_ids, logprobs))
             results.append(group)
 
@@ -362,51 +378,63 @@ class PrimeRLTrainHelper:
         # Path 1: PRIME-RL/verifiers token payload.
         token_block = choice.get("tokens")
         if isinstance(token_block, Mapping):
-            ids = token_block.get("completion_ids")
-            lps = token_block.get("completion_logprobs")
+            token_payload = cast(Mapping[str, object], token_block)
+            ids = token_payload.get("completion_ids")
+            lps = token_payload.get("completion_logprobs")
             if isinstance(ids, list) and isinstance(lps, list):
-                return [int(t) for t in ids], [float(lp) for lp in lps]
+                return (
+                    [self._coerce_int(t) for t in ids],
+                    [self._coerce_float(lp) for lp in lps],
+                )
 
         # Path 2: OpenAI logprobs.content with token_id.
         content = None
         logprobs_obj = choice.get("logprobs")
         if isinstance(logprobs_obj, Mapping):
-            content = logprobs_obj.get("content")
+            logprobs_payload = cast(Mapping[str, object], logprobs_obj)
+            content = logprobs_payload.get("content")
         if isinstance(content, list):
             ids: list[int] = []
             lps: list[float] = []
             for item in content:
                 if not isinstance(item, Mapping):
                     continue
-                lp = item.get("logprob")
+                item_payload = cast(Mapping[str, object], item)
+                lp = item_payload.get("logprob")
                 if lp is None:
                     continue
-                lps.append(float(lp))
-                tid = item.get("token_id")
+                lps.append(self._coerce_float(lp))
+                tid = item_payload.get("token_id")
                 if tid is not None:
-                    ids.append(int(tid))
+                    ids.append(self._coerce_int(tid))
             if ids and len(ids) == len(lps):
                 return ids, lps
 
         # Path 3: OpenAI logprobs token arrays.
         if isinstance(logprobs_obj, Mapping):
-            token_lps = logprobs_obj.get("token_logprobs")
-            tokens = logprobs_obj.get("tokens")
+            logprobs_payload = cast(Mapping[str, object], logprobs_obj)
+            token_lps = logprobs_payload.get("token_logprobs")
+            tokens = logprobs_payload.get("tokens")
             if isinstance(token_lps, list) and isinstance(tokens, list):
-                lps = [0.0 if lp is None else float(lp) for lp in token_lps]
-                ids = choice.get("token_ids")
-                if isinstance(ids, list):
-                    ids = [int(t) for t in ids]
-                    ids, lps = self._align_ids_and_logprobs(ids, lps, prompt_ids)
-                    return ids, lps
+                lps = [
+                    0.0 if lp is None else self._coerce_float(lp)
+                    for lp in token_lps
+                ]
+                choice_ids = choice.get("token_ids")
+                if isinstance(choice_ids, list):
+                    parsed_ids = [self._coerce_int(t) for t in choice_ids]
+                    parsed_ids, lps = self._align_ids_and_logprobs(
+                        parsed_ids, lps, prompt_ids
+                    )
+                    return parsed_ids, lps
 
         # Path 4: explicit id/logprob arrays.
-        ids = choice.get("completion_ids") or choice.get("token_ids")
-        lps = choice.get("completion_logprobs")
-        if isinstance(ids, list) and isinstance(lps, list):
+        raw_ids = choice.get("completion_ids") or choice.get("token_ids")
+        raw_lps = choice.get("completion_logprobs")
+        if isinstance(raw_ids, list) and isinstance(raw_lps, list):
             ids2, lps2 = self._align_ids_and_logprobs(
-                [int(t) for t in ids],
-                [float(lp) for lp in lps],
+                [self._coerce_int(t) for t in raw_ids],
+                [self._coerce_float(lp) for lp in raw_lps],
                 prompt_ids,
             )
             return ids2, lps2
@@ -434,7 +462,25 @@ class PrimeRLTrainHelper:
         n = min(len(ids), len(lps))
         return ids[:n], lps[:n]
 
-    def _post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
+    @staticmethod
+    def _coerce_int(value: object) -> int:
+        try:
+            return int(cast(str | int | float, value))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Expected integer-like token id, got {value!r}."
+            ) from exc
+
+    @staticmethod
+    def _coerce_float(value: object) -> float:
+        try:
+            return float(cast(str | int | float, value))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Expected float-like logprob, got {value!r}."
+            ) from exc
+
+    def _post_json(self, url: str, payload: JSONPayload) -> JSONPayload:
         try:
             resp = self._session.post(url, json=payload, timeout=120)
             resp.raise_for_status()
