@@ -1,57 +1,130 @@
 # retrain
 
-RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLMs. Train reasoning models on MATH with composable advantage functions and adaptive scheduling.
+`retrain` is a TOML-first RLVR (Reinforcement Learning with Verifiable Rewards) trainer for LLMs.
 
-## Features
-
-- **Composable advantages** -- GRPO, MaxRL, GTPO entropy weighting, HICRA planning amplification, SEPA entropy pooling
-- **Pluggable inference** -- PyTorch, MAX, vLLM, SGLang, or any OpenAI-compatible server
-- **Pluggable rewards** -- string match, symbolic math, LLM judge, or bring your own
-- **Back pressure** -- USL+Roofline adaptive batch sizing
-- **Campaign orchestrator** -- sweep conditions x seeds from a single TOML, with wandb logging
-- **LoRA-Squeeze** -- auto-analyze optimal LoRA rank after first campaign run (arXiv 2602.10993)
-- **Checkpoint resume** -- save and restore full trainer state across preemptions
+If you are new, start with install -> explore commands -> run a tiny config.
 
 ## Install
 
+Requires Python 3.11+.
+
 ```bash
-pip install -e .
+# CLI + docs exploration
+uv tool install retrain
+
+# Local GPU training (adds torch)
+uv tool install "retrain[local]"
+
+# Remote Tinker backend
+uv tool install "retrain[tinker]"
 ```
 
-## Quick start
+If you are developing this repo directly:
 
 ```bash
-# 0. Inspect CLI manual (human or agent-friendly)
+pip install -e ".[dev]"
+```
+
+## Explore the CLI
+
+Use these first to understand what exists before you train:
+
+```bash
+retrain --help
 retrain man
-# show a specific section in machine-readable form
-retrain man --format json --topic quickstart
-# grep/edit the source manual directly
-retrain man --path
-# refresh auto-generated manual sections
-retrain man --sync
-# check manual drift (CI-friendly, non-writing)
-retrain man --check
-
-# 1. Drop a config
-cp retrain.toml my_run.toml
-
-# 2. Train
-retrain my_run.toml
-
-# 3. Override from CLI
-retrain my_run.toml --seed 42 --wandb-project my-project
+retrain man --topic quickstart
+retrain man --list-topics
+retrain backends
+retrain doctor
 ```
 
-Contributor note: run `retrain man --check` in CI to detect stale auto-generated
-manual blocks, and `retrain man --sync` locally to update them.
+Useful inspection commands while iterating:
 
-## Configuration
+```bash
+retrain explain retrain.toml   # dry-run: what this config would do
+retrain status logs            # summarize runs/campaigns under logs/
+retrain man --json --topic quickstart
+retrain man --path             # editable bundled manual source
+```
 
-All configuration lives in a TOML file. See [`retrain.toml`](retrain.toml) for the default config, or run `retrain help` for the full reference.
+## Tiny TOML Demo
 
-### Custom Transform (TOML-first)
+Create `mini.toml`:
 
-You can select a custom advantage transform directly from TOML using a dotted Python path:
+```toml
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+
+[algorithm]
+advantage_mode = "grpo"
+transform_mode = "none"
+
+[training]
+max_steps = 20
+batch_size = 2
+group_size = 8
+max_tokens = 1024
+lr = 4e-5
+
+[backend]
+backend = "local"
+adapter_path = "adapters/mini"
+
+[logging]
+log_dir = "logs/mini"
+```
+
+Run it:
+
+```bash
+retrain mini.toml
+```
+
+Override fields from CLI without editing TOML:
+
+```bash
+retrain mini.toml --seed 42 --max-steps 40 --wandb-project my-project
+```
+
+## Quick Start from Template
+
+```bash
+retrain init --template quickstart
+retrain retrain.toml
+```
+
+Other templates:
+
+```bash
+retrain init --list
+retrain init --template experiment
+retrain init --template campaign
+retrain init --interactive
+```
+
+## Why retrain
+
+- Composable advantage pipeline: GRPO/MaxRL + GTPO/HICRA/SEPA
+- Pluggable backends and inference engines
+- Pluggable rewards (match, math, judge, custom)
+- Campaign sweeps from one TOML
+- LoRA-Squeeze rank analysis/compression
+- Checkpoint resume and run status tooling
+
+## Common Config Patterns
+
+Use verifiers environments from TOML:
+
+```toml
+[environment]
+provider = "verifiers"
+id = "primeintellect/gsm8k"
+args = { split = "train" }
+auto_install = true
+max_turns = 8
+```
+
+Use a custom transform plugin from TOML:
 
 ```toml
 [algorithm]
@@ -59,61 +132,9 @@ advantage_mode = "maxrl"
 transform_mode = "my_transforms.make_transform_spec"
 ```
 
-Then add an importable Python module (for example `my_transforms.py`) that returns a `TransformSpec`:
-
-```python
-from retrain.advantages import TransformSpec
-
-def _entropy_transform(entropies, planning_mask, sepa_lambda):
-    return [e if m else e + sepa_lambda for e, m in zip(entropies, planning_mask)]
-
-def make_transform_spec():
-    return TransformSpec(
-        name="entropy_shift",
-        use_gtpo=True,
-        needs_planning=True,
-        uses_sepa_controller=True,
-        entropy_transform=_entropy_transform,
-    )
-```
-
-### Verifiers Environment (TOML-first)
-
-Use a verifiers environment directly from TOML:
-
-```toml
-[environment]
-provider = "verifiers"
-id = "primeintellect/gsm8k"           # installed env id
-args = { split = "train" }             # native TOML object
-auto_install = true                    # install from Prime Hub if missing
-max_turns = 8                          # only used for multi-turn envs
-```
-
-For single-turn envs, retrain scores with the environment rubric.
-For multi-turn envs (for example Wordle-style), retrain runs the env loop and
-samples each turn with the selected backend/model.
-Some Hub environments are eval-only and do not expose training datasets; in that
-case retrain now fails fast with guidance. Known trainable examples:
-`primeintellect/gsm8k`, `primeintellect/wordle`.
-
-Minimal switchboard in TOML:
-
-```toml
-[backend]
-backend = "tinker"                     # local | tinker | prime_rl
-
-[algorithm]
-transform_mode = "gtpo_sepa"           # or dotted plugin path
-
-[environment]
-provider = "verifiers"                 # optional
-id = "primeintellect/wordle"           # e.g. wordle or aime
-```
-
 ## Documentation
 
-Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
+Full docs: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 
 - [Getting Started](https://retrain.readthedocs.io/getting-started/)
 - [Configuration Reference](https://retrain.readthedocs.io/configuration/)
@@ -123,3 +144,5 @@ Full documentation: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [LoRA-Squeeze](https://retrain.readthedocs.io/squeeze/)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
+
+Contributor note: run `retrain man --check` in CI to detect stale auto-generated manual blocks, and `retrain man --sync` locally to refresh them.
