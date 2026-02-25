@@ -9,8 +9,10 @@ import json
 
 import pytest
 
+from retrain.flow import build_flow
 from retrain.trainer import (
     _TRAINER_STATE_FILE,
+    _assert_uniform_completion_advantages_for_non_preserving_backend,
     _format_loss_for_display,
     _load_trainer_state,
     _save_trainer_state,
@@ -114,6 +116,181 @@ class TestLossDisplaySemantics:
 
     def test_placeholder_loss_display_is_annotated(self):
         assert _format_loss_for_display(0.0, False) == "0.0000 (placeholder)"
+
+
+class TestBackendAdvantageFlowGuard:
+    def test_rejects_builtin_token_varying_transform_mode(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            transform_mode="gtpo",
+            advantage_mode="maxrl",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("transform_mode='gtpo'" in e.message for e in errors)
+
+    def test_rejects_builtin_token_varying_algorithm_mode(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            algorithm_mode="maxrl_gtpo",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("algorithm_mode='maxrl_gtpo'" in e.message for e in errors)
+
+    def test_allows_scalar_safe_builtin_modes(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            algorithm_mode="maxrl_none",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+
+    def test_allows_custom_dotted_transform_mode(self, tmp_path, monkeypatch):
+        from retrain.config import TrainConfig
+
+        module_name = "custom_uniform_transform"
+        plugin_file = tmp_path / f"{module_name}.py"
+        plugin_file.write_text(
+            "from retrain.advantages import TransformSpec\n"
+            "\n"
+            "def make_transform_spec():\n"
+            "    return TransformSpec(name='uniform_custom', use_gtpo=False)\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            transform_mode=f"{module_name}.make_transform_spec",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+
+    def test_allows_custom_dotted_algorithm_mode(self, tmp_path, monkeypatch):
+        from retrain.config import TrainConfig
+
+        module_name = "custom_uniform_algorithm"
+        plugin_file = tmp_path / f"{module_name}.py"
+        plugin_file.write_text(
+            "def my_algo(ctx):\n"
+            "    return [[ctx.rewards_G[i]] * len(seq) for i, seq in enumerate(ctx.logprobs_G)]\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            algorithm_mode=f"{module_name}.my_algo",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+
+    def test_rejects_custom_dotted_transform_mode_with_token_variation(
+        self, tmp_path, monkeypatch
+    ):
+        from retrain.config import TrainConfig
+
+        module_name = "custom_nonuniform_transform"
+        plugin_file = tmp_path / f"{module_name}.py"
+        plugin_file.write_text(
+            "from retrain.advantages import TransformSpec\n"
+            "\n"
+            "def make_transform_spec():\n"
+            "    return TransformSpec(name='nonuniform_custom', use_gtpo=True)\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            transform_mode=f"{module_name}.make_transform_spec",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("token-varying advantages" in e.message for e in errors)
+
+    def test_rejects_custom_dotted_algorithm_mode_with_token_variation(
+        self, tmp_path, monkeypatch
+    ):
+        from retrain.config import TrainConfig
+
+        module_name = "custom_nonuniform_algorithm"
+        plugin_file = tmp_path / f"{module_name}.py"
+        plugin_file.write_text(
+            "def my_algo(ctx):\n"
+            "    out = []\n"
+            "    for i, seq in enumerate(ctx.logprobs_G):\n"
+            "        base = ctx.rewards_G[i]\n"
+            "        out.append([base + float(j) for j in range(len(seq))])\n"
+            "    return out\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            algorithm_mode=f"{module_name}.my_algo",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("token-varying advantages" in e.message for e in errors)
+
+    def test_rejects_future_non_preserving_backend_with_token_variation(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="future.backends.MyBackend",
+            transform_mode="gtpo",
+            advantage_mode="maxrl",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("token-varying advantages" in e.message for e in errors)
+
+    def test_allows_same_flow_for_token_preserving_backend(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="local",
+            transform_mode="gtpo",
+            advantage_mode="maxrl",
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+
+
+class TestNonPreservingRuntimeGuard:
+    def test_allows_uniform_completion_advantages(self):
+        _assert_uniform_completion_advantages_for_non_preserving_backend(
+            all_logprobs=[[0.0, 0.0, -0.4, -0.2]],
+            all_advantages=[[0.0, 0.0, 1.5, 1.5]],
+            backend_name="future.backends.MyBackend",
+        )
+
+    def test_rejects_non_uniform_completion_advantages(self):
+        with pytest.raises(RuntimeError, match="does not preserve token-level advantages"):
+            _assert_uniform_completion_advantages_for_non_preserving_backend(
+                all_logprobs=[[0.0, 0.0, -0.4, -0.2]],
+                all_advantages=[[0.0, 0.0, 1.0, 2.0]],
+                backend_name="future.backends.MyBackend",
+            )
 
 
 class TestSEPAStateRoundtripViaTrainer:

@@ -240,7 +240,7 @@ class TestBuiltinCreation:
                 "zmq_host": "127.0.0.1",
                 "zmq_port": 7777,
                 "zmq_hwm": 32,
-                "strict_advantages": False,
+                "strict_advantages": True,
                 "sync_wait_s": 5,
                 "sync_poll_s": 0.5,
             },
@@ -252,7 +252,7 @@ class TestBuiltinCreation:
         assert mock_cls.call_args.kwargs["zmq_host"] == "127.0.0.1"
         assert mock_cls.call_args.kwargs["zmq_port"] == 7777
         assert mock_cls.call_args.kwargs["zmq_hwm"] == 32
-        assert mock_cls.call_args.kwargs["strict_advantages"] is False
+        assert mock_cls.call_args.kwargs["strict_advantages"] is True
         assert mock_cls.call_args.kwargs["sync_wait_s"] == 5
         assert mock_cls.call_args.kwargs["sync_poll_s"] == pytest.approx(0.5)
 

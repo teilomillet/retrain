@@ -162,23 +162,15 @@ def test_train_step_rejects_non_uniform_advantages_by_default(monkeypatch, tmp_p
         )
 
 
-def test_train_step_can_aggregate_advantages_when_relaxed(monkeypatch, tmp_path):
-    sender = _install_fake_prime_rl(monkeypatch)
-    helper = PrimeRLTrainHelper(
-        model_name="m",
-        output_dir=str(tmp_path),
-        inference_url="http://localhost:8000",
-        strict_advantages=False,
-    )
-    helper.train_step(
-        all_tokens=[[10, 11, 12]],
-        all_logprobs=[[0.0, -0.3, -0.2]],
-        all_advantages=[[0.0, 1.0, 3.0]],
-        lr=1e-4,
-        weight_decay=0.0,
-    )
-    sample = sender.sent[0].examples[0]
-    assert sample.advantage == pytest.approx(2.0)
+def test_disallow_relaxed_advantage_aggregation(monkeypatch, tmp_path):
+    _install_fake_prime_rl(monkeypatch)
+    with pytest.raises(ValueError, match="strict_advantages=false is disallowed"):
+        PrimeRLTrainHelper(
+            model_name="m",
+            output_dir=str(tmp_path),
+            inference_url="http://localhost:8000",
+            strict_advantages=False,
+        )
 
 
 def test_checkpoint_syncs_latest_stable_broadcast_step(monkeypatch, tmp_path):
@@ -201,4 +193,3 @@ def test_checkpoint_syncs_latest_stable_broadcast_step(monkeypatch, tmp_path):
     assert any(u.endswith("/update_weights") for u in urls)
     call = [c for c in session.calls if c[0].endswith("/update_weights")][0]
     assert Path(call[1]["weight_dir"]) == (tmp_path / "broadcasts" / "step_3")
-

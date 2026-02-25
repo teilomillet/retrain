@@ -37,10 +37,17 @@ One JSON object per training step with all metrics:
 | `group_size` | Current group size |
 | `bp_action` | Back pressure action |
 | `bp_regime` | Back pressure regime |
+| `uncertainty_kind` | Uncertainty variant selected in config (`surprisal`, etc.) |
 | `exec_entropy_mean` | Mean execution-token entropy (GTPO modes) |
 | `exec_entropy_var` | Execution-token entropy variance |
 | `plan_entropy_mean` | Mean planning-token entropy |
 | `plan_entropy_var` | Planning-token entropy variance |
+| `exec_surprisal_mean` | Mean execution-token surprisal (preferred name) |
+| `exec_surprisal_var` | Execution-token surprisal variance (preferred name) |
+| `plan_surprisal_mean` | Mean planning-token surprisal (preferred name) |
+| `plan_surprisal_var` | Planning-token surprisal variance (preferred name) |
+
+`*_entropy_*` keys are kept for backward compatibility and currently mirror `*_surprisal_*`.
 
 ### emergence/steps.jsonl
 
@@ -89,13 +96,14 @@ All wandb metrics use structured prefixes:
 | `train/backend/` | `reports_sync_loss`, `preserves_token_advantages` |
 | `train/` (semantics) | `reported_loss`, `loss_is_placeholder` |
 | `train/entropy/` | `exec_mean`, `exec_var`, `plan_mean`, `plan_var` |
+| `train/surprisal/` | `exec_mean`, `exec_var`, `plan_mean`, `plan_var` |
 | `train/backpressure/` | `action`, `regime`, `p_star`, `sigma`, `kappa`, `utilization`, `throughput`, `warmup` |
 
 ### Run config
 
 The wandb run config records all hyperparameters:
 
-- `advantage_mode`, `transform_mode`, `condition`
+- `advantage_mode`, `transform_mode`, `uncertainty_kind`, `condition`
 - `model`, `lora_rank`, `lr`, `batch_size`, `group_size`
 - `max_tokens`, `temperature`, `gtpo_beta`, `hicra_alpha`
 - `sepa_steps`, `sepa_delay_steps`, `sepa_correct_rate_gate`

@@ -30,6 +30,7 @@ class TestDefaults:
         assert c.inference_engine == "pytorch"
         assert c.prefix_caching is True
         assert c.log_dir == "logs/train"
+        assert c.uncertainty_kind == "surprisal"
 
 
 class TestLoadConfig:
@@ -134,6 +135,12 @@ wandb_run_name = "run-1"
         c = load_config(str(toml))
         assert c.model == "Qwen/Qwen3-4B-Instruct-2507"
 
+    def test_uncertainty_kind_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[algorithm]\nuncertainty_kind = "surprisal"\n')
+        c = load_config(str(toml))
+        assert c.uncertainty_kind == "surprisal"
+
     def test_type_coercion_float_from_int(self, tmp_path):
         """TOML integer should be coerced to float for float fields."""
         toml = tmp_path / "config.toml"
@@ -231,7 +238,7 @@ wandb_run_name = "run-1"
             'zmq_host = "127.0.0.1"\n'
             'zmq_port = 7777\n'
             'zmq_hwm = 32\n'
-            'strict_advantages = false\n'
+            'strict_advantages = true\n'
             'sync_wait_s = 5\n'
             'sync_poll_s = 0.5\n'
         )
@@ -247,7 +254,7 @@ wandb_run_name = "run-1"
             "zmq_host": "127.0.0.1",
             "zmq_port": 7777,
             "zmq_hwm": 32,
-            "strict_advantages": False,
+            "strict_advantages": True,
             "sync_wait_s": 5,
             "sync_poll_s": pytest.approx(0.5),
         }
@@ -390,6 +397,14 @@ class TestValidation:
         with pytest.raises(ValueError, match="Invalid transform_mode"):
             TrainConfig(transform_mode="custom_transforms.")
 
+    def test_uncertainty_kind_alias_is_canonicalized(self):
+        c = TrainConfig(uncertainty_kind="entropy")
+        assert c.uncertainty_kind == "shannon_entropy"
+
+    def test_invalid_uncertainty_kind_raises(self):
+        with pytest.raises(ValueError, match="Unknown uncertainty kind"):
+            TrainConfig(uncertainty_kind="mystery_metric")
+
     def test_invalid_environment_provider_raises(self):
         with pytest.raises(ValueError, match="Invalid environment_provider"):
             TrainConfig(environment_provider="unknown")
@@ -425,6 +440,13 @@ class TestValidation:
             TrainConfig(
                 backend="prime_rl",
                 backend_options={"zmq_port": 0},
+            )
+
+    def test_prime_rl_strict_advantages_false_rejected(self):
+        with pytest.raises(ValueError, match="strict_advantages=false is disallowed"):
+            TrainConfig(
+                backend="prime_rl",
+                backend_options={"strict_advantages": False},
             )
 
     def test_backend_options_accepts_dotted_plugin_backend(self):
@@ -645,39 +667,47 @@ class TestValidationWarnings:
 # ---------------------------------------------------------------------------
 
 
-class TestEntropyMaskRho:
+class TestSurprisalMaskRho:
     def test_default_value(self):
         c = TrainConfig()
-        assert c.entropy_mask_rho == pytest.approx(0.0)
+        assert c.surprisal_mask_rho == pytest.approx(0.0)
 
-    def test_toml_loading(self, tmp_path):
+    def test_toml_loading_new_key(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[algorithm]\nsurprisal_mask_rho = 0.2\n')
+        c = load_config(str(toml))
+        assert c.surprisal_mask_rho == pytest.approx(0.2)
+
+    def test_toml_loading_legacy_key(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text('[algorithm]\nentropy_mask_rho = 0.2\n')
         c = load_config(str(toml))
-        assert c.entropy_mask_rho == pytest.approx(0.2)
+        assert c.surprisal_mask_rho == pytest.approx(0.2)
 
     def test_out_of_range_negative(self):
-        with pytest.raises(ValueError, match="entropy_mask_rho"):
-            TrainConfig(entropy_mask_rho=-0.1)
+        with pytest.raises(ValueError, match="surprisal_mask_rho"):
+            TrainConfig(surprisal_mask_rho=-0.1)
 
     def test_out_of_range_above_one(self):
-        with pytest.raises(ValueError, match="entropy_mask_rho"):
-            TrainConfig(entropy_mask_rho=1.1)
+        with pytest.raises(ValueError, match="surprisal_mask_rho"):
+            TrainConfig(surprisal_mask_rho=1.1)
 
     def test_boundary_zero(self):
-        c = TrainConfig(entropy_mask_rho=0.0)
-        assert c.entropy_mask_rho == 0.0
+        c = TrainConfig(surprisal_mask_rho=0.0)
+        assert c.surprisal_mask_rho == 0.0
 
     def test_boundary_one(self):
-        c = TrainConfig(entropy_mask_rho=1.0)
-        assert c.entropy_mask_rho == 1.0
+        c = TrainConfig(surprisal_mask_rho=1.0)
+        assert c.surprisal_mask_rho == 1.0
 
     def test_post_process_params_property(self):
-        c = TrainConfig(entropy_mask_rho=0.3)
+        c = TrainConfig(surprisal_mask_rho=0.3)
         params = c.post_process_params
-        assert params == {"entropy_mask_rho": 0.3}
+        assert params["surprisal_mask_rho"] == 0.3
+        assert params["entropy_mask_rho"] == 0.3  # backward-compat alias
 
     def test_post_process_params_default(self):
         c = TrainConfig()
         params = c.post_process_params
-        assert params == {"entropy_mask_rho": 0.0}
+        assert params["surprisal_mask_rho"] == 0.0
+        assert params["entropy_mask_rho"] == 0.0

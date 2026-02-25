@@ -13,7 +13,7 @@ Rewards (per completion)
 Episode-level advantage (GRPO or MaxRL)
     │
     ▼
-Token-level expansion (GTPO entropy weighting)
+Token-level expansion (GTPO token-surprisal weighting)
     │
     ▼
 Optional transform (HICRA or SEPA)
@@ -104,14 +104,23 @@ scale = 2.0
 
 ### GTPO
 
-Group-relative Token-level Policy Optimization. Weights token advantages by normalized entropy:
+Group-relative Token-level Policy Optimization. Weights token advantages by normalized token surprisal (`-logprob` of the sampled token):
 
 ```
 w(t) = max(0, 1 + beta * (H(t)/mean(H) - 1))
 A_token(t) = A_episode * w(t)
 ```
 
-High-entropy tokens (where the model is uncertain) get amplified. Low-entropy tokens (confident predictions) get dampened. This focuses learning on the "interesting" tokens where the model's decision actually matters.
+High-surprisal tokens (where the sampled token was unlikely) get amplified. Low-surprisal tokens get dampened.
+
+`uncertainty_kind` controls semantics in TOML:
+
+```toml
+[algorithm]
+uncertainty_kind = "surprisal"   # default
+```
+
+`shannon_entropy` and `varentropy` are parsed but fail fast today; they require full token distributions that current backend sample APIs do not expose.
 
 Controlled by `beta`:
 

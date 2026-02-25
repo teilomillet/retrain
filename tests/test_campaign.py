@@ -387,7 +387,7 @@ class TestParallelCampaignConfig:
         )
 
         # Mock _run_parallel to return runs with returncode=0
-        def mock_run_parallel(runs, config_dir, max_workers):
+        def mock_run_parallel(runs, config_dir, max_workers, stagger_seconds=0):
             for r in runs:
                 r["returncode"] = 0
             return runs

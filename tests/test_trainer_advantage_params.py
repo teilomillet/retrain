@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +12,7 @@ from retrain.advantages import AdvantageResult
 from retrain.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig
 from retrain.data import Example
+from retrain.flow import build_flow
 
 
 class _FakeTokenizer:
@@ -80,6 +83,25 @@ class _FakeHelper:
         _ = name
 
 
+def _make_fake_flow(cfg, helper):
+    """Build a Tier-1 flow, then inject fake Tier-2 objects."""
+    from retrain.sepa import SEPAController
+
+    flow = build_flow(cfg, gpu=False)
+    flow.backend = helper
+    flow.planning_detector = SimpleNamespace(
+        detect=lambda token_strs: [0] * len(token_strs)
+    )
+    flow.sepa_controller = SEPAController(
+        sepa_steps=cfg.sepa_steps,
+        sepa_schedule=cfg.sepa_schedule,
+        sepa_delay_steps=cfg.sepa_delay_steps,
+        sepa_correct_rate_gate=cfg.sepa_correct_rate_gate,
+    )
+    flow.backpressure = NoOpBackPressure()
+    return flow
+
+
 def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     captured_kwargs: list[dict[str, object]] = []
 
@@ -112,14 +134,6 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
                     ]
                 )
             )
-        if kind == "backend":
-            return SimpleNamespace(create=lambda _name, _cfg: helper)
-        if kind == "planning_detector":
-            return SimpleNamespace(
-                create=lambda _name, _cfg: SimpleNamespace(
-                    detect=lambda token_strs: [0] * len(token_strs)
-                )
-            )
         if kind == "reward":
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
@@ -128,8 +142,6 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
                     )
                 )
             )
-        if kind == "backpressure":
-            return SimpleNamespace(create=lambda _name, _cfg: NoOpBackPressure())
         raise AssertionError(f"Unexpected registry kind: {kind}")
 
     monkeypatch.setattr(
@@ -165,7 +177,8 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
         advantage_params={"scale": 3.0},
     )
 
-    final_path = trainer_mod.train(cfg)
+    flow = _make_fake_flow(cfg, helper)
+    final_path = trainer_mod.train(cfg, flow=flow)
 
     assert captured_kwargs, "compute_composable_advantages should be called"
     assert captured_kwargs[0]["advantage_params"] == cfg.effective_advantage_params
@@ -196,6 +209,15 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
 
     helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
 
+    # Create a custom algorithm plugin for build_flow to resolve
+    module_name = "custom_algorithms"
+    plugin_file = tmp_path / f"{module_name}.py"
+    plugin_file.write_text(
+        "def my_algo(ctx):\n"
+        "    return [[0.25] * len(seq) for seq in ctx.logprobs_G]\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
     def fake_get_registry(kind: str):
         if kind == "data_source":
             return SimpleNamespace(
@@ -210,14 +232,6 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
                     ]
                 )
             )
-        if kind == "backend":
-            return SimpleNamespace(create=lambda _name, _cfg: helper)
-        if kind == "planning_detector":
-            return SimpleNamespace(
-                create=lambda _name, _cfg: SimpleNamespace(
-                    detect=lambda token_strs: [0] * len(token_strs)
-                )
-            )
         if kind == "reward":
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
@@ -226,8 +240,6 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
                     )
                 )
             )
-        if kind == "backpressure":
-            return SimpleNamespace(create=lambda _name, _cfg: NoOpBackPressure())
         raise AssertionError(f"Unexpected registry kind: {kind}")
 
     monkeypatch.setattr(
@@ -248,11 +260,6 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         trainer_mod,
-        "get_algorithm_spec",
-        lambda _mode: SimpleNamespace(needs_planning=False, uses_sepa_controller=False),
-    )
-    monkeypatch.setattr(
-        trainer_mod,
         "encode_prompt_for_sampling",
         lambda _tokenizer, _prompt: [101],
     )
@@ -268,15 +275,95 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
         save_every=0,
         log_dir=str(tmp_path / "logs"),
         adapter_path=str(tmp_path / "adapter"),
-        algorithm_mode="custom_algorithms.my_algo",
+        algorithm_mode=f"{module_name}.my_algo",
         algorithm_params={"alpha": 0.3},
         advantage_mode="grpo",
         transform_mode="none",
     )
 
-    _ = trainer_mod.train(cfg)
+    flow = _make_fake_flow(cfg, helper)
+    _ = trainer_mod.train(cfg, flow=flow)
 
     assert called["algorithm"] > 0
     assert called["composable"] == 0
     assert captured_algorithm_params[0]["algorithm_mode"] == cfg.algorithm_mode
     assert captured_algorithm_params[0]["params"] == cfg.effective_algorithm_params
+
+
+def test_tinker_entropy_stats_pipeline_does_not_break(monkeypatch, tmp_path):
+    """Entropy-weighted transforms should run cleanly on token-preserving tinker backend."""
+
+    helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="tinker",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="maxrl",
+        transform_mode="gtpo",
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trace = flow.trace()
+    assert trace.ok, "tinker flow should accept entropy-weighted transforms"
+
+    final_path = trainer_mod.train(cfg, flow=flow)
+    assert final_path == str(Path(cfg.adapter_path) / "final")
+
+    metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
+    entries = [
+        json.loads(line)
+        for line in metrics_path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert entries
+    step_metrics = entries[-1]
+
+    assert step_metrics["backend_preserves_token_advantages"] is True
+    assert "exec_entropy_mean" in step_metrics
+    assert "exec_entropy_var" in step_metrics
+    assert math.isfinite(float(step_metrics["exec_entropy_mean"]))
+    assert math.isfinite(float(step_metrics["exec_entropy_var"]))

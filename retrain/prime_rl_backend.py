@@ -13,7 +13,7 @@ Key behavior:
 Limit:
 PRIME-RL `TrainingSample` stores one scalar advantage per sample. By default this
 backend enforces that completion-token advantages are uniform within each sample.
-Set `strict_advantages=False` to aggregate token advantages by mean.
+`strict_advantages` must remain true to avoid silent token-advantage aggregation.
 """
 
 from __future__ import annotations
@@ -72,6 +72,11 @@ class PrimeRLTrainHelper:
             raise ValueError(
                 f"Invalid PRIME-RL transport '{transport_type}'. "
                 "Expected 'filesystem' or 'zmq'."
+            )
+        if not strict_advantages:
+            raise ValueError(
+                "strict_advantages=false is disallowed for PRIME-RL backend "
+                "to prevent silent token-advantage aggregation."
             )
 
         self.model_name = model_name
@@ -360,13 +365,11 @@ class PrimeRLTrainHelper:
             return 0.0
         lo = min(values)
         hi = max(values)
-        if self.strict_advantages and (hi - lo) > self._ADV_UNIFORM_EPS:
+        if (hi - lo) > self._ADV_UNIFORM_EPS:
             raise RuntimeError(
                 "PRIME-RL backend received non-uniform token advantages in one sample. "
                 "PRIME-RL transport accepts one scalar advantage per sample. "
-                "Use transform_mode='none' to keep uniform per-token advantages, "
-                "or set [backend.options] strict_advantages = false to aggregate "
-                "token advantages by mean."
+                "Use transform_mode='none' or a scalar-safe algorithm mode."
             )
         return float(sum(values) / len(values))
 

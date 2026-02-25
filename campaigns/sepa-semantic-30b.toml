@@ -1,15 +1,18 @@
 # sepa-semantic-30b: Does SEPA separate from baseline on a larger model?
 #
 # Same design as sepa-semantic but on Qwen3-30B-A3B (MoE, 3B active).
-# Single seed probe — if no signal here, SEPA is dead at all scales.
+# Full 3-seed experiment to test the +0.6pp hint from the single-seed probe.
 #
-# 2 conditions x 1 seed x 100 steps = 2 runs
+# 2 conditions x 3 seeds x 100 steps = 6 runs
 #
 # Run: retrain campaigns/sepa-semantic-30b.toml
 
 [campaign]
-seeds = [42]
+seeds = [42, 101, 202]
 max_steps = 100
+parallel = true
+max_workers = 6
+stagger_seconds = 12
 
 [[campaign.conditions]]
 advantage_mode = "grpo"

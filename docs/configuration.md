@@ -20,7 +20,7 @@ transport = "filesystem"   # filesystem | zmq
 zmq_host = "localhost"     # used when transport = "zmq"
 zmq_port = 5555            # used when transport = "zmq"
 zmq_hwm = 10               # used when transport = "zmq"
-strict_advantages = true   # fail if token advantages are non-uniform
+strict_advantages = true   # must remain true; false is rejected to prevent silent aggregation
 sync_wait_s = 30           # max wait for broadcast weights in checkpoint()
 sync_poll_s = 0.2          # polling interval for broadcast weights
 
@@ -33,6 +33,7 @@ lora_rank = 32
 algorithm_mode = ""        # optional full algorithm plugin (overrides composable path)
 advantage_mode = "maxrl"   # grpo | maxrl | my_module.my_advantage
 transform_mode = "gtpo_sepa"  # none | gtpo | ... | my_module.my_transform
+uncertainty_kind = "surprisal" # surprisal | shannon_entropy | varentropy (last two fail fast today)
 
 [algorithm.params]
 # used by algorithm_mode plugins
@@ -45,6 +46,7 @@ transform_mode = "gtpo_sepa"  # none | gtpo | ... | my_module.my_transform
 [algorithm.transform_params]
 # used by transform_mode plugins
 # cap = 0.2
+# uncertainty_kind = "surprisal"  # optional per-transform override
 
 [plugins]
 search_paths = ["plugins"] # module prefixes searched before normal dotted imports
@@ -63,7 +65,7 @@ max_examples = 0           # 0 = use all examples
 save_every = 20
 
 [gtpo]
-beta = 0.1                 # entropy weighting strength
+beta = 0.1                 # token-surprisal weighting strength
 
 [hicra]
 alpha = 0.2                # planning token amplification
@@ -185,6 +187,8 @@ cat retrain.toml | retrain migrate-config --stdin --stdout
 | `algorithm_mode` | str | `""` | Optional full algorithm selector. Built-ins (`grpo_none`, `maxrl_gtpo`, etc.) or dotted plugin path (`my_module.my_algorithm`). When set, it overrides composable `advantage_mode + transform_mode`. |
 | `advantage_mode` | str | `"maxrl"` | Episode-level advantage: built-ins (`grpo`, `maxrl`) or a dotted plugin path (`my_module.my_advantage`) |
 | `transform_mode` | str | `"gtpo_sepa"` | Token-level transform: built-ins (`none`, `gtpo`, `gtpo_hicra`, `gtpo_sepa`, …) or dotted plugin path (`my_module.my_transform`) |
+| `uncertainty_kind` | str | `"surprisal"` | Uncertainty signal used by GTPO-family transforms. `surprisal` uses sampled-token `-logprob`. `shannon_entropy` / `varentropy` are parsed but require full token distributions that backends don't yet provide — `flow.trace()` catches the mismatch with a diagnostic error showing what data was received vs needed. |
+| `surprisal_mask_rho` | float | `0.0` | Top-ρ surprisal masking fraction (Yue et al.). `0` disables masking. TOML key `entropy_mask_rho` is accepted as a backward-compat alias. |
 
 Nested plugin params tables under `[algorithm]`:
 
@@ -261,7 +265,7 @@ Nested plugin params tables under `[algorithm]`:
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `beta` | float | `0.1` | Entropy weighting strength. `0` disables GTPO weighting |
+| `beta` | float | `0.1` | Uncertainty weighting strength. `0` disables GTPO weighting |
 
 ### `[hicra]`
 
@@ -274,7 +278,7 @@ Nested plugin params tables under `[algorithm]`:
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `steps` | int | `500` | Ramp duration for linear schedule |
-| `schedule` | str | `"linear"` | `linear` ramps lambda 0->1; `auto` adapts based on entropy variance decay |
+| `schedule` | str | `"linear"` | `linear` ramps lambda 0->1; `auto` adapts based on uncertainty variance decay |
 | `delay_steps` | int | `50` | Steps before linear ramp begins |
 | `correct_rate_gate` | float | `0.1` | Min batch correct rate to enable SEPA. Sticky once opened |
 

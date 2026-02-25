@@ -291,8 +291,13 @@ def _run_parallel(
     runs: list[dict],
     config_dir: Path,
     max_workers: int,
+    stagger_seconds: float = 0.0,
 ) -> list[dict]:
     """Execute runs as parallel subprocesses.
+
+    Args:
+        stagger_seconds: Delay between launching consecutive subprocesses
+            to desynchronize their backend API calls and reduce contention.
 
     Returns runs list with ``returncode`` added to each entry.
     """
@@ -318,6 +323,8 @@ def _run_parallel(
                 )
                 print(f"[{finished}/{total}] {run['run_name']} started (pid={proc.pid})")
                 active.append((proc, run, time.monotonic(), stdout_f, stderr_f))
+                if stagger_seconds > 0 and pending and len(active) < max_workers:
+                    time.sleep(stagger_seconds)
 
             # Poll active processes
             still_active = []
@@ -423,6 +430,7 @@ def run_campaign(campaign_path: str) -> None:
     max_steps = campaign.get("max_steps", TrainConfig().max_steps)
     parallel = bool(campaign.get("parallel", False))
     max_workers = int(campaign.get("max_workers", 0))
+    stagger_seconds = float(campaign.get("stagger_seconds", 0))
 
     # Conditions
     raw_conditions = campaign.get("conditions", None)
@@ -491,7 +499,7 @@ def run_campaign(campaign_path: str) -> None:
         _write_run_configs(runs, base_config, max_steps, config_dir)
 
         effective_workers = max_workers if max_workers > 0 else len(runs)
-        runs = _run_parallel(runs, config_dir, effective_workers)
+        runs = _run_parallel(runs, config_dir, effective_workers, stagger_seconds)
 
         failed = sum(1 for r in runs if r.get("returncode", -1) != 0)
 

@@ -4,14 +4,14 @@ Selective Entropy Pooling of Attention (SEPA) is an adaptive scheduling strategy
 
 ## What SEPA does
 
-In the [advantage pipeline](advantages.md), GTPO weights token advantages by entropy -- high-entropy tokens get more credit. SEPA modifies execution-token entropies *before* GTPO weighting by pulling them toward their mean:
+In the [advantage pipeline](advantages.md), GTPO weights token advantages by token surprisal (`-logprob`) -- high-surprisal tokens get more credit. SEPA modifies execution-token surprisals *before* GTPO weighting by pulling them toward their mean:
 
 ```
 H_pooled(t) = lambda * mean(H_exec) + (1 - lambda) * H(t)    if execution token
 H_pooled(t) = H(t)                                             if planning token
 ```
 
-When `lambda = 0`, SEPA is off and GTPO sees raw entropies. When `lambda = 1`, all execution tokens have the same entropy (the mean), so GTPO's differentiation is concentrated entirely on planning tokens.
+When `lambda = 0`, SEPA is off and GTPO sees raw surprisals. When `lambda = 1`, all execution tokens have the same surprisal (the mean), so GTPO's differentiation is concentrated entirely on planning tokens.
 
 ## Why
 

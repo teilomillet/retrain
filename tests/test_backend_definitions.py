@@ -30,7 +30,7 @@ def test_builtin_capabilities_match_spec() -> None:
 
 
 def test_plugin_capabilities_use_conservative_defaults() -> None:
-    assert _as_tuple("my_backend.Factory") == (True, True, True, False)
+    assert _as_tuple("my_backend.Factory") == (True, False, True, False)
     assert backend_capability_source("my_backend.Factory") == "plugin/default"
 
 
@@ -39,7 +39,7 @@ def test_resolver_accepts_backend_options_for_builtins() -> None:
         "prime_rl",
         {
             "transport": "zmq",
-            "strict_advantages": False,
+            "strict_advantages": True,
         },
     )
     assert caps.reports_sync_loss is False
