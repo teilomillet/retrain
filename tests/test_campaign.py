@@ -431,3 +431,38 @@ class TestParallelCampaignConfig:
                             os.chdir(old_cwd)
 
         assert squeeze_called[0], "Squeeze should be called after parallel runs complete"
+
+
+class TestRunPidFileWritten:
+    """Verify that _run_parallel writes a run.pid file for each subprocess."""
+
+    def test_pid_file_written(self, tmp_path):
+        runs = []
+        for i in range(2):
+            run = {
+                "run_name": f"run_{i}",
+                "log_dir": str(tmp_path / f"run_{i}"),
+                "config_path": str(tmp_path / f"run_{i}.toml"),
+                "condition": "grpo+none",
+            }
+            Path(run["log_dir"]).mkdir(parents=True, exist_ok=True)
+            runs.append(run)
+
+        pids = [10001, 10002]
+        call_count = [0]
+
+        def make_proc(*args, **kwargs):
+            mock = MagicMock()
+            mock.pid = pids[call_count[0]]
+            call_count[0] += 1
+            mock.poll.return_value = 0
+            return mock
+
+        with patch("retrain.campaign.subprocess.Popen", side_effect=make_proc):
+            with patch("retrain.campaign.time.sleep"):
+                _run_parallel(runs, tmp_path, max_workers=2)
+
+        for i, run in enumerate(runs):
+            pid_file = Path(run["log_dir"]) / "run.pid"
+            assert pid_file.is_file(), f"run.pid missing for {run['run_name']}"
+            assert pid_file.read_text().strip() == str(pids[i])

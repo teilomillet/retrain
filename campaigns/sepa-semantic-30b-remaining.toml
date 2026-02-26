@@ -1,17 +1,15 @@
-# sepa-semantic-30b: Does SEPA separate from baseline on a larger model?
+# sepa-semantic-30b (remaining seeds): Complete the 30B experiment.
 #
-# Same design as sepa-semantic but on Qwen3-30B-A3B (MoE, 3B active).
-# Full 3-seed experiment to test the +0.6pp hint from the single-seed probe.
+# Seed 42 is done for both conditions. This runs the remaining 4:
+# 2 conditions x 2 seeds x 100 steps = 4 runs
 #
-# 2 conditions x 3 seeds x 100 steps = 6 runs
-#
-# Run: retrain campaigns/sepa-semantic-30b.toml
+# Run: retrain campaigns/sepa-semantic-30b-remaining.toml
 
 [campaign]
-seeds = [42, 101, 202]
+seeds = [101, 202]
 max_steps = 100
 parallel = true
-max_workers = 6
+max_workers = 4
 stagger_seconds = 12
 
 [[campaign.conditions]]
@@ -24,6 +22,7 @@ transform_mode = "gtpo_sepa"
 
 [backend]
 backend = "tinker"
+max_concurrent = 4
 
 [model]
 model = "Qwen/Qwen3-30B-A3B-Instruct-2507"
