@@ -123,9 +123,28 @@ uncertainty_kind = "surprisal"   # default; also: predictive_variance, shannon_e
 Built-in uncertainty signals:
 - **`surprisal`** (default) — sampled-token `-logprob`. Requires only logprobs. Noisy for tail samples where the model was confident but the sampler drew unluckily.
 - **`predictive_variance`** — Bernoulli variance `p * (1 - p)` where `p = exp(logprob)`. Free from existing logprobs, peaks at genuine uncertainty (`p ≈ 0.5`), decays for both confident and tail-sample tokens. Aliases: `pred_var`, `bernoulli_variance`.
-- **`shannon_entropy`** — true per-position entropy `−Σ pᵢ log pᵢ`. Requires full token distributions that backends don't yet return — `flow.trace()` catches the mismatch with a diagnostic error.
+- **`shannon_entropy`** — true per-position entropy `H(t) = −Σ pᵢ log pᵢ` computed from the full ~150k-dimensional vocabulary distribution on GPU. Unlike surprisal (a function of the single sampled token's logprob), this captures the model's true distributional uncertainty at each position. Requires `inference_engine = "pytorch"` and `backend = "local"`.
 
 Custom uncertainty signals can be provided via dotted plugin paths (e.g. `my_module.my_uncertainty`).
+
+### Real entropy vs surprisal
+
+Surprisal (`-log p`) is a single scalar — the negative log-probability of whichever token was sampled. It's a noisy proxy for uncertainty: a low-probability sample from a confident distribution gives high surprisal even though the model was sure.
+
+Shannon entropy `H(t) = -Σ pᵢ log pᵢ` uses the full softmax distribution over the vocabulary. It captures genuine distributional uncertainty regardless of which token was sampled. The predictive variance experiment confirmed that no function of a single logprob can approximate this — the information lives in the ~150k-dimensional distribution, not the scalar.
+
+The PyTorch engine computes `H(t)` on GPU alongside logprobs (`-(probs * log_probs).sum(dim=-1)`) and passes one float per token to the advantage pipeline. No full distribution is transferred to CPU.
+
+```toml
+[algorithm]
+uncertainty_kind = "shannon_entropy"
+
+[inference]
+engine = "pytorch"
+
+[backend]
+backend = "local"
+```
 
 Controlled by `beta`:
 

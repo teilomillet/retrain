@@ -657,13 +657,36 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         else:
             # 10c. Sample completions
             sample_start = time.perf_counter()
-            all_group_sequences = helper.sample(
-                batch_prompt_ids,
-                current_group_size,
-                config.max_tokens,
-                config.temperature,
-                config.top_p,
+            use_entropy_sampling = (
+                config.uncertainty_kind == "shannon_entropy"
+                and hasattr(helper, "sample_with_entropy")
             )
+            precomputed_entropies_batch: list[list[list[float]]] | None = None
+            if use_entropy_sampling:
+                enriched_sequences = helper.sample_with_entropy(
+                    batch_prompt_ids,
+                    current_group_size,
+                    config.max_tokens,
+                    config.temperature,
+                    config.top_p,
+                )
+                # Separate into standard 2-tuples + entropy side channel
+                all_group_sequences = [
+                    [(ids, lps) for ids, lps, _ent in group]
+                    for group in enriched_sequences
+                ]
+                precomputed_entropies_batch = [
+                    [ent if ent is not None else [] for _ids, _lps, ent in group]
+                    for group in enriched_sequences
+                ]
+            else:
+                all_group_sequences = helper.sample(
+                    batch_prompt_ids,
+                    current_group_size,
+                    config.max_tokens,
+                    config.temperature,
+                    config.top_p,
+                )
             sample_time = time.perf_counter() - sample_start
 
             # Build flat token sequences for batch decode
@@ -755,6 +778,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         print("    -> skipped (all wrong)")
                     continue
 
+                # Resolve per-group precomputed entropies
+                group_entropies_G: list[list[float]] | None = None
+                if precomputed_entropies_batch is not None:
+                    group_entropies_G = precomputed_entropies_batch[f_idx]
+
                 if config.algorithm_mode:
                     adv_result = compute_algorithm_advantages(
                         rewards_G,
@@ -767,6 +795,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         sepa_lambda=sepa_lambda_val,
                         step=batch_idx,
                         token_distributions_G=None,
+                        precomputed_entropies_G=group_entropies_G,
                     )
                 else:
                     adv_result = compute_composable_advantages(
@@ -783,6 +812,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         step=batch_idx,
                         post_process_params=config.post_process_params,
                         token_distributions_G=None,
+                        precomputed_entropies_G=group_entropies_G,
                     )
                 all_token_advs_G = adv_result.token_advs
                 if adv_result.has_stats:

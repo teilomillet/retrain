@@ -522,8 +522,9 @@ class TestComposablePipeline:
         )
         assert result.has_stats
 
-    def test_uncertainty_kind_shannon_entropy_not_implemented(self):
-        with pytest.raises(ValueError, match="uncertainty_kind='shannon_entropy'") as exc_info:
+    def test_uncertainty_kind_shannon_entropy_requires_data(self):
+        """Shannon entropy raises when neither precomputed nor distributions are provided."""
+        with pytest.raises(ValueError, match="shannon_entropy"):
             compute_composable_advantages(
                 rewards_G=[1.0, 0.0],
                 logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
@@ -532,7 +533,6 @@ class TestComposablePipeline:
                 transform_mode="gtpo",
                 transform_params={"uncertainty_kind": "shannon_entropy"},
             )
-        assert "token_distributions_G=absent" in str(exc_info.value)
 
     def test_uncertainty_kind_varentropy_not_implemented(self):
         with pytest.raises(ValueError, match="Unknown uncertainty_kind 'varentropy'"):
@@ -546,7 +546,8 @@ class TestComposablePipeline:
             )
 
     def test_uncertainty_kind_entropy_alias_maps_to_shannon(self):
-        with pytest.raises(ValueError, match="uncertainty_kind='shannon_entropy'") as exc_info:
+        """Alias 'entropy' resolves to shannon_entropy and raises without data."""
+        with pytest.raises(ValueError, match="shannon_entropy"):
             compute_composable_advantages(
                 rewards_G=[1.0, 0.0],
                 logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
@@ -555,7 +556,6 @@ class TestComposablePipeline:
                 transform_mode="gtpo",
                 transform_params={"uncertainty_kind": "entropy"},
             )
-        assert "token_distributions_G=absent" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -702,6 +702,91 @@ class TestPredictiveVariance:
             transform_mode="gtpo_sepa",
             sepa_lambda=0.5,
             transform_params={"uncertainty_kind": "predictive_variance"},
+        )
+        assert len(result.token_advs) == 2
+        assert result.has_stats
+
+
+# ---------------------------------------------------------------------------
+# Precomputed Shannon entropy
+# ---------------------------------------------------------------------------
+
+class TestPrecomputedShannonEntropy:
+    def test_compute_uses_precomputed_entropy(self):
+        """_compute_shannon_entropy uses precomputed values when provided."""
+        from retrain.advantages import _compute_shannon_entropy
+
+        precomputed = [0.5, 1.2, 0.8]
+        ctx = UncertaintyContext(
+            logprobs=[-0.3, -0.7, -0.5],
+            precomputed_entropy=precomputed,
+        )
+        result = _compute_shannon_entropy(ctx)
+        assert result == [0.5, 1.2, 0.8]
+
+    def test_precomputed_entropy_clamped_to_max(self):
+        """Precomputed entropy values are clamped to MAX_SURPRISAL."""
+        from retrain.advantages import _compute_shannon_entropy, MAX_SURPRISAL
+
+        precomputed = [0.5, 100.0, MAX_SURPRISAL + 10.0]
+        ctx = UncertaintyContext(
+            logprobs=[-0.3, -0.7, -0.5],
+            precomputed_entropy=precomputed,
+        )
+        result = _compute_shannon_entropy(ctx)
+        assert result[0] == 0.5
+        assert result[1] == MAX_SURPRISAL
+        assert result[2] == MAX_SURPRISAL
+
+    def test_falls_back_to_distributions(self):
+        """Falls back to token_distributions when no precomputed."""
+        from retrain.advantages import _compute_shannon_entropy
+
+        # Simple 2-token vocab: [0.5, 0.5] -> H = log(2) ≈ 0.693
+        distributions = [[0.5, 0.5], [0.25, 0.75]]
+        ctx = UncertaintyContext(
+            logprobs=[-0.3, -0.7],
+            token_distributions=distributions,
+        )
+        result = _compute_shannon_entropy(ctx)
+        assert len(result) == 2
+        assert result[0] == pytest.approx(math.log(2), abs=1e-6)
+
+    def test_raises_when_no_data(self):
+        """Raises clear error when neither precomputed nor distributions."""
+        from retrain.advantages import _compute_shannon_entropy
+
+        ctx = UncertaintyContext(logprobs=[-0.3, -0.7])
+        with pytest.raises(ValueError, match="shannon_entropy requires"):
+            _compute_shannon_entropy(ctx)
+
+    def test_pipeline_with_precomputed_entropies(self):
+        """Full pipeline integration: shannon_entropy + precomputed entropies."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+            transform_params={"uncertainty_kind": "shannon_entropy"},
+            precomputed_entropies_G=[[0.5, 1.2], [0.8, 0.3]],
+        )
+        assert len(result.token_advs) == 2
+        assert result.has_stats
+        for ta in result.token_advs:
+            assert all(math.isfinite(a) for a in ta)
+
+    def test_pipeline_with_sepa_and_precomputed_entropies(self):
+        """Shannon entropy works with SEPA transforms via precomputed path."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[1, 0], [0, 1]],
+            advantage_mode="grpo",
+            transform_mode="gtpo_sepa",
+            sepa_lambda=0.5,
+            transform_params={"uncertainty_kind": "shannon_entropy"},
+            precomputed_entropies_G=[[0.5, 1.2], [0.8, 0.3]],
         )
         assert len(result.token_advs) == 2
         assert result.has_stats

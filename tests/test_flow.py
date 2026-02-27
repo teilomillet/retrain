@@ -145,21 +145,25 @@ class TestTrace:
         result = flow.trace()
         assert result.ok
 
-    def test_tinker_shannon_entropy_request_fails_trace(self):
-        cfg = TrainConfig(
-            backend="tinker",
-            advantage_mode="maxrl",
-            transform_mode="gtpo",
-            uncertainty_kind="shannon_entropy",
-        )
-        flow = build_flow(cfg, gpu=False)
-        result = flow.trace()
-        assert not result.ok
-        errors = [i for i in result.issues if i.severity == "error"]
-        assert any(
-            "uncertainty_kind='shannon_entropy'" in e.message and e.category == "probe"
-            for e in errors
-        )
+    def test_tinker_shannon_entropy_rejected_at_config(self):
+        """shannon_entropy + tinker backend is rejected at config validation."""
+        with pytest.raises(ValueError, match="shannon_entropy.*not supported.*tinker"):
+            TrainConfig(
+                backend="tinker",
+                advantage_mode="maxrl",
+                transform_mode="gtpo",
+                uncertainty_kind="shannon_entropy",
+            )
+
+    def test_shannon_entropy_non_pytorch_engine_rejected(self):
+        """shannon_entropy + non-pytorch engine is rejected at config."""
+        with pytest.raises(ValueError, match="shannon_entropy.*requires.*pytorch"):
+            TrainConfig(
+                backend="local",
+                inference_engine="vllm",
+                inference_url="http://localhost:8000",
+                uncertainty_kind="shannon_entropy",
+            )
 
     def test_tinker_varentropy_request_fails_trace(self):
         cfg = TrainConfig(
@@ -177,21 +181,19 @@ class TestTrace:
             for e in errors
         )
 
-    def test_local_shannon_entropy_request_fails_trace(self):
+    def test_local_pytorch_shannon_entropy_passes_trace(self):
+        """shannon_entropy + pytorch engine + local backend passes flow trace."""
         cfg = TrainConfig(
             backend="local",
+            inference_engine="pytorch",
             advantage_mode="maxrl",
             transform_mode="gtpo",
             uncertainty_kind="shannon_entropy",
         )
         flow = build_flow(cfg, gpu=False)
         result = flow.trace()
-        assert not result.ok
-        errors = [i for i in result.issues if i.severity == "error"]
-        assert any(
-            "uncertainty_kind='shannon_entropy'" in e.message and e.category == "probe"
-            for e in errors
-        )
+        assert result.ok
+        assert result.probe_cases_passed == result.probe_cases_run
 
     def test_disallowed_builtin_algorithm_on_prime_rl(self):
         cfg = TrainConfig(

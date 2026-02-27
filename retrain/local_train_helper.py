@@ -251,6 +251,36 @@ class LocalTrainHelper:
             results.append(converted)
         return results
 
+    def sample_with_entropy(self, prompt_ids_list, num_samples, max_tokens,
+                            temperature, top_p):
+        """Generate completions with per-token logprobs and Shannon entropy.
+
+        Like sample(), but requests per-token entropy from the engine.
+        Returns 3-tuples (token_ids, logprobs, token_entropies).
+
+        Args:
+            prompt_ids_list: List of lists of token IDs (one per prompt).
+            num_samples: Number of completions per prompt.
+            max_tokens: Maximum new tokens per completion.
+            temperature: Sampling temperature.
+            top_p: Nucleus sampling threshold.
+
+        Returns:
+            List of lists of (token_ids, logprobs, token_entropies) tuples.
+        """
+        engine_results = self.engine.generate(
+            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+            compute_entropy=True,
+        )
+
+        results = []
+        for group in engine_results:
+            converted = []
+            for sr in group:
+                converted.append((sr.token_ids, sr.logprobs, sr.token_entropies))
+            results.append(converted)
+        return results
+
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
         """Execute training forward/backward/step on pre-prepared tensors.
 

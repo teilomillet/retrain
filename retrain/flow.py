@@ -260,6 +260,26 @@ def _run_probe(
     sepa_lambda = float(case["sepa_lambda"])  # type: ignore[arg-type]
     step = int(case["step"])  # type: ignore[arg-type]
 
+    # Generate synthetic precomputed entropies when the config requests
+    # shannon_entropy and the engine can provide GPU-computed entropy.
+    precomputed_entropies: list[list[float]] | None = None
+    if (
+        config.uncertainty_kind == "shannon_entropy"
+        and config.inference_engine == "pytorch"
+        and config.backend != "tinker"
+    ):
+        precomputed_entropies = [
+            [-lp * 0.8 for lp in seq]  # synthetic: proportional to surprisal
+            for seq in logprobs
+        ]
+    elif config.uncertainty_kind == "shannon_entropy":
+        raise ValueError(
+            "shannon_entropy requires the local PyTorch backend "
+            '(inference_engine = "pytorch"). Current config: '
+            f"inference_engine={config.inference_engine!r}, "
+            f"backend={config.backend!r}."
+        )
+
     if config.algorithm_mode:
         return compute_algorithm_advantages(
             rewards_G=rewards,
@@ -272,6 +292,7 @@ def _run_probe(
             sepa_lambda=sepa_lambda,
             step=step,
             token_distributions_G=None,
+            precomputed_entropies_G=precomputed_entropies,
         )
     return compute_composable_advantages(
         rewards_G=rewards,
@@ -287,6 +308,7 @@ def _run_probe(
         step=step,
         post_process_params=config.post_process_params,
         token_distributions_G=None,
+        precomputed_entropies_G=precomputed_entropies,
     )
 
 

@@ -52,7 +52,8 @@ class MAXServeEngine(InferenceEngine):
         )
         print(f"MAXServeEngine ready ({model_name} @ {base_url}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
+    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                 compute_entropy=False):
         return self._engine.generate(
             prompt_ids_list, num_samples, max_tokens, temperature, top_p
         )
@@ -88,7 +89,8 @@ class MAXLocalEngine(InferenceEngine):
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
         print(f"MAXLocalEngine ready ({model_name}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
+    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                 compute_entropy=False):
         """Generate completions with per-token logprobs via MAX pipeline."""
         from max.interfaces.pipeline_variants.text_generation import (
             TextGenerationRequest,

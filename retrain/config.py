@@ -322,6 +322,26 @@ class TrainConfig:
                 "Use strict_advantages=true."
             )
 
+        if (
+            self.uncertainty_kind == "shannon_entropy"
+            and self.inference_engine != "pytorch"
+        ):
+            errors.append(
+                f"uncertainty_kind='shannon_entropy' requires "
+                f"inference_engine='pytorch' (got '{self.inference_engine}'). "
+                f"Shannon entropy needs GPU-side logit access to compute "
+                f"per-token entropy."
+            )
+        if (
+            self.uncertainty_kind == "shannon_entropy"
+            and self.backend == "tinker"
+        ):
+            errors.append(
+                "uncertainty_kind='shannon_entropy' is not supported with "
+                "backend='tinker'. The Tinker API returns only scalar "
+                "logprobs; use backend='local' with inference_engine='pytorch'."
+            )
+
         if errors:
             raise ValueError("\n".join(errors))
 

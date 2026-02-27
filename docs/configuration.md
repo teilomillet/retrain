@@ -187,7 +187,7 @@ cat retrain.toml | retrain migrate-config --stdin --stdout
 | `algorithm_mode` | str | `""` | Optional full algorithm selector. Built-ins (`grpo_none`, `maxrl_gtpo`, etc.) or dotted plugin path (`my_module.my_algorithm`). When set, it overrides composable `advantage_mode + transform_mode`. |
 | `advantage_mode` | str | `"maxrl"` | Episode-level advantage: built-ins (`grpo`, `maxrl`) or a dotted plugin path (`my_module.my_advantage`) |
 | `transform_mode` | str | `"gtpo_sepa"` | Token-level transform: built-ins (`none`, `gtpo`, `gtpo_hicra`, `gtpo_sepa`, …) or dotted plugin path (`my_module.my_transform`) |
-| `uncertainty_kind` | str | `"surprisal"` | Uncertainty signal used by GTPO-family transforms. `surprisal` uses sampled-token `-logprob`. `predictive_variance` uses `p*(1-p)` (works with logprobs only). `shannon_entropy` requires full token distributions. Or a dotted plugin path (e.g. `my_module.my_uncertainty`). |
+| `uncertainty_kind` | str | `"surprisal"` | Uncertainty signal used by GTPO-family transforms. `surprisal` uses sampled-token `-logprob`. `predictive_variance` uses `p*(1-p)` (works with logprobs only). `shannon_entropy` uses true per-position entropy `−Σ pᵢ log pᵢ` computed on GPU — requires `inference_engine = "pytorch"` and `backend = "local"`. Or a dotted plugin path (e.g. `my_module.my_uncertainty`). |
 | `surprisal_mask_rho` | float | `0.0` | Top-ρ surprisal masking fraction (Yue et al.). `0` disables masking. TOML key `entropy_mask_rho` is accepted as a backward-compat alias. |
 
 Nested plugin params tables under `[algorithm]`:

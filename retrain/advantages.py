@@ -160,6 +160,7 @@ class AlgorithmContext:
     gtpo_beta: float = 0.1
     hicra_alpha: float = 0.2
     token_distributions_G: list[list[list[float]]] | None = None
+    precomputed_entropies_G: list[list[float]] | None = None
 
 
 @dataclass
@@ -182,6 +183,7 @@ class UncertaintyContext:
 
     logprobs: list[float]
     token_distributions: list[list[float]] | None = None
+    precomputed_entropy: list[float] | None = None
     planning_mask: list[int] | None = None
     params: Mapping[str, object] = field(default_factory=dict)
 
@@ -1114,16 +1116,26 @@ def _compute_surprisal(ctx: UncertaintyContext) -> list[float]:
 
 
 def _compute_shannon_entropy(ctx: UncertaintyContext) -> list[float]:
-    """Full-distribution Shannon entropy: -sum(p * log(p))."""
-    if ctx.token_distributions is None:
-        raise ValueError(
-            "shannon_entropy requires per-position token distributions."
-        )
-    result: list[float] = []
-    for dist in ctx.token_distributions:
-        h = -sum(p * math.log(p) for p in dist if p > 0)
-        result.append(min(h, MAX_SURPRISAL))
-    return result
+    """Full-distribution Shannon entropy: -sum(p * log(p)).
+
+    Fast path: if precomputed_entropy is available (GPU-computed scalars
+    from PyTorchEngine), use those directly. Otherwise fall back to
+    computing from full token_distributions.
+    """
+    if ctx.precomputed_entropy is not None:
+        return [min(h, MAX_SURPRISAL) for h in ctx.precomputed_entropy]
+    if ctx.token_distributions is not None:
+        result: list[float] = []
+        for dist in ctx.token_distributions:
+            h = -sum(p * math.log(p) for p in dist if p > 0)
+            result.append(min(h, MAX_SURPRISAL))
+        return result
+    raise ValueError(
+        "shannon_entropy requires either precomputed per-token entropy "
+        "(from PyTorch engine with compute_entropy=True) or full "
+        "per-position token distributions. Use inference_engine = "
+        "\"pytorch\" to enable GPU-side entropy computation."
+    )
 
 
 def _compute_predictive_variance(ctx: UncertaintyContext) -> list[float]:
@@ -1451,6 +1463,7 @@ def compute_composable_advantages(
     step: int = 0,
     post_process_params: Mapping[str, object] | None = None,
     token_distributions_G: list[list[list[float]]] | None = None,
+    precomputed_entropies_G: list[list[float]] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages with composable transforms."""
     advantage_spec = get_advantage_spec(advantage_mode)
@@ -1505,7 +1518,11 @@ def compute_composable_advantages(
     uncertainty_kind = _resolve_uncertainty_kind(merged_transform_params)
     uncertainty_spec = get_uncertainty_spec(uncertainty_kind)
 
-    if uncertainty_spec.needs_distributions and token_distributions_G is None:
+    if (
+        uncertainty_spec.needs_distributions
+        and token_distributions_G is None
+        and precomputed_entropies_G is None
+    ):
         _raise_missing_data(
             uncertainty_kind,
             has_logprobs=True,
@@ -1529,6 +1546,7 @@ def compute_composable_advantages(
         ctx = UncertaintyContext(
             logprobs=logprobs,
             token_distributions=token_distributions_G[idx] if token_distributions_G else None,
+            precomputed_entropy=precomputed_entropies_G[idx] if precomputed_entropies_G else None,
             planning_mask=planning_mask,
             params=merged_transform_params,
         )
@@ -1601,6 +1619,7 @@ def compute_algorithm_advantages(
     sepa_lambda: float = 0.0,
     step: int = 0,
     token_distributions_G: list[list[list[float]]] | None = None,
+    precomputed_entropies_G: list[list[float]] | None = None,
 ) -> AdvantageResult:
     """Compute token-level advantages through a full algorithm plugin."""
     spec = get_algorithm_spec(algorithm_mode)
@@ -1614,6 +1633,7 @@ def compute_algorithm_advantages(
         gtpo_beta=gtpo_beta,
         hicra_alpha=hicra_alpha,
         token_distributions_G=token_distributions_G,
+        precomputed_entropies_G=precomputed_entropies_G,
     )
     try:
         raw_output = spec.compute(ctx)

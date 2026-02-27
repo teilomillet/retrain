@@ -32,6 +32,21 @@ class _BaseFakeHelper:
             for _ in prompt_ids_list
         ]
 
+    def sample_with_entropy(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> list[list[tuple[list[int], list[float], list[float] | None]]]:
+        self.calls.append("sample_with_entropy")
+        _ = max_tokens, temperature, top_p
+        return [
+            [([101, 102], [-0.1, -0.2], None) for _ in range(num_samples)]
+            for _ in prompt_ids_list
+        ]
+
     def train_step(
         self,
         all_tokens: list[list[int]],

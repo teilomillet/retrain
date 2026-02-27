@@ -17,3 +17,8 @@ ExampleInfoLike: TypeAlias = dict[str, JSONValue] | str | None
 # Sampling output shared by helper protocols and trainer loops.
 SampleGroup: TypeAlias = list[tuple[list[int], list[float]]]
 SampleBatch: TypeAlias = list[SampleGroup]
+
+# Enriched sampling output with optional per-token entropy.
+# Each tuple: (token_ids, logprobs, token_entropies | None)
+EnrichedSampleGroup: TypeAlias = list[tuple[list[int], list[float], list[float] | None]]
+EnrichedSampleBatch: TypeAlias = list[EnrichedSampleGroup]

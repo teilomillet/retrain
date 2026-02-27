@@ -115,6 +115,25 @@ class TinkerTrainHelper:
                 results.append(group)
             return results
 
+    def sample_with_entropy(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> list[list[tuple[list[int], list[float], list[float] | None]]]:
+        """Generate completions with entropy (stub — Tinker lacks entropy).
+
+        Delegates to sample() and appends None for token_entropies.
+        """
+        groups = self.sample(prompt_ids_list, num_samples, max_tokens,
+                             temperature, top_p)
+        return [
+            [(ids, lps, None) for ids, lps in group]
+            for group in groups
+        ]
+
     def train_step(
         self,
         all_tokens: list[list[int]],

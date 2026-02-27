@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from retrain.type_defs import SampleBatch
+from retrain.type_defs import EnrichedSampleBatch, SampleBatch
 
 
 @runtime_checkable
@@ -26,6 +26,15 @@ class TrainHelper(Protocol):
         temperature: float,
         top_p: float,
     ) -> SampleBatch: ...
+
+    def sample_with_entropy(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> EnrichedSampleBatch: ...
 
     def train_step(
         self,

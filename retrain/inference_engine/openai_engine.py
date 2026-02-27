@@ -42,7 +42,8 @@ class OpenAIEngine(InferenceEngine):
 
         print(f"OpenAIEngine ready ({engine_type} @ {self.base_url}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
+    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                 compute_entropy=False):
         """Generate completions via /v1/completions with logprobs.
 
         Decodes prompt token IDs to text, sends request, recovers token IDs

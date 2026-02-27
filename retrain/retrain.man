@@ -302,8 +302,9 @@ CONFIGURATION
         "surprisal" uses sampled-token -logprob (requires only logprobs).
         "predictive_variance" uses p*(1-p) where p=exp(logprob) — free
         from existing logprobs, peaks at genuine uncertainty.
-        "shannon_entropy" requires full token distributions that backends
-        don't yet provide — flow.trace() catches the mismatch.
+        "shannon_entropy" uses true per-position entropy H(t) = -sum(p*log(p))
+        computed on GPU from the full vocabulary distribution. Requires
+        inference_engine = "pytorch" and backend = "local".
         Or a dotted plugin path (e.g. "my_module.my_uncertainty").
 
     surprisal_mask_rho = 0.0

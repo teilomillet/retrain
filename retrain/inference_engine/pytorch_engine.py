@@ -37,7 +37,8 @@ class PyTorchEngine(InferenceEngine):
         self.model = get_peft_model(base, peft_config)
         self.model.to(device)
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
+    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                 compute_entropy=False):
         """Generate completions with per-token logprobs via PyTorch."""
         results = []
         self.model.eval()
@@ -60,9 +61,15 @@ class PyTorchEngine(InferenceEngine):
                 )
 
                 # Vectorized logprob extraction
+                all_entropies = None
                 if len(outputs.scores) > 0:
                     all_scores = torch.stack(outputs.scores, dim=1)
                     all_log_probs = F.log_softmax(all_scores.float(), dim=-1)
+
+                    if compute_entropy:
+                        all_probs = F.softmax(all_scores.float(), dim=-1)
+                        # H(t) = -sum(p * log(p)) per position
+                        all_entropies = -(all_probs * all_log_probs).sum(dim=-1)
 
                 group = []
                 for i in range(num_samples):
@@ -77,7 +84,15 @@ class PyTorchEngine(InferenceEngine):
                     else:
                         logprobs = []
 
-                    group.append(SampleResult(token_ids=gen_ids, logprobs=logprobs))
+                    token_entropies = None
+                    if all_entropies is not None and gen_len > 0:
+                        token_entropies = all_entropies[i, :gen_len].tolist()
+
+                    group.append(SampleResult(
+                        token_ids=gen_ids,
+                        logprobs=logprobs,
+                        token_entropies=token_entropies,
+                    ))
                 results.append(group)
 
         return results

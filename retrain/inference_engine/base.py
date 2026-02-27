@@ -17,10 +17,12 @@ class SampleResult:
     Attributes:
         token_ids: Generated token IDs (completion only, no prompt).
         logprobs: Log-probability of each generated token under the model.
+        token_entropies: Per-token Shannon entropy (optional, GPU-computed).
     """
 
     token_ids: List[int]
     logprobs: List[float]
+    token_entropies: Optional[List[float]] = None
 
 
 class InferenceEngine(ABC):
@@ -34,6 +36,7 @@ class InferenceEngine(ABC):
         max_tokens: int,
         temperature: float,
         top_p: float,
+        compute_entropy: bool = False,
     ) -> List[List[SampleResult]]:
         """Generate completions for a batch of prompts.
 
@@ -43,6 +46,8 @@ class InferenceEngine(ABC):
             max_tokens: Maximum new tokens per completion.
             temperature: Sampling temperature.
             top_p: Nucleus sampling threshold.
+            compute_entropy: If True, compute per-token Shannon entropy
+                on GPU and populate SampleResult.token_entropies.
 
         Returns:
             Nested list [num_prompts][num_samples] of SampleResult.
