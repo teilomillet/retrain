@@ -116,6 +116,7 @@ class TrainConfig:
     weight_decay: float = 0.0
     clip_eps: float = 0.0        # 0 = disabled (no PPO-style ratio clipping)
     clip_eps_high: float = 0.0   # 0 = symmetric (uses clip_eps for upper bound)
+    adv_clip_max: float = 0.0    # 0 = disabled; caps token advantages to [-max, +max]
     max_examples: int = 0
     save_every: int = 20
 
@@ -238,6 +239,10 @@ class TrainConfig:
             errors.append(
                 "clip_eps_high > 0 requires clip_eps > 0. "
                 "Set clip_eps first. Try: clip_eps = 0.2"
+            )
+        if self.adv_clip_max < 0:
+            errors.append(
+                "adv_clip_max must be >= 0. Try: adv_clip_max = 5.0"
             )
         try:
             self.uncertainty_kind = canonicalize_uncertainty_kind(
@@ -474,6 +479,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "weight_decay": "weight_decay",
         "clip_eps": "clip_eps",
         "clip_eps_high": "clip_eps_high",
+        "adv_clip_max": "adv_clip_max",
         "max_examples": "max_examples",
         "save_every": "save_every",
     },

@@ -1,0 +1,79 @@
+# clip-rescue: Does bounding gradient magnitude rescue GRPO from the 47.5% plateau?
+#
+# Previous 40+ campaigns showed null results across all conditions.
+# Hypothesis: unbounded advantages cause entropy collapse, making all
+# conditions converge to the same degenerate optimum.
+#
+# Mechanism: adv_clip_max caps token-level advantages to [-max, +max]
+# BEFORE they reach Tinker's loss function. This is NOT PPO ratio clipping
+# (we don't have access to Tinker's internal ratios). It's advantage capping
+# — bounding how hard any single token can push the gradient.
+#
+# The proof is in the model's behavior (entropy trajectory, correct_rate),
+# NOT in adv_cap_fraction (which just measures our preprocessing).
+#
+# 4 conditions x 3 seeds x 100 steps = 12 runs
+# See campaigns/EXPERIMENT_THESIS.md for full rationale.
+#
+# Run: retrain campaigns/clip-rescue.toml
+
+[campaign]
+seeds = [42, 101, 202]
+max_steps = 100
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: Uncapped baseline — reproduces the ~47.5% null result
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+
+# C2: Moderate advantage cap (5.0)
+# GRPO advantages are zero-mean; cap=5 trims heavy-tail outliers
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+adv_clip_max = 5.0
+
+# C3: Tight advantage cap (2.0)
+# Aggressive bounding — if entropy collapse is the problem, this should
+# show the strongest effect (at the cost of slower learning)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+adv_clip_max = 2.0
+
+# C4: Capped SEPA — does SEPA add signal when training is stable?
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "gtpo_sepa"
+adv_clip_max = 5.0
+
+# --- base training config ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[sepa]
+steps = 100
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "clip-rescue"

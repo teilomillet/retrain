@@ -766,3 +766,23 @@ class TestClipEpsConfig:
         c = load_config(str(toml), overrides={"clip_eps": "0.2", "clip_eps_high": "0.28"})
         assert c.clip_eps == pytest.approx(0.2)
         assert c.clip_eps_high == pytest.approx(0.28)
+
+
+class TestAdvClipMaxConfig:
+    def test_default(self):
+        c = TrainConfig()
+        assert c.adv_clip_max == pytest.approx(0.0)
+
+    def test_valid(self):
+        c = TrainConfig(adv_clip_max=5.0)
+        assert c.adv_clip_max == pytest.approx(5.0)
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="adv_clip_max must be >= 0"):
+            TrainConfig(adv_clip_max=-1.0)
+
+    def test_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[training]\nadv_clip_max = 5.0\n')
+        c = load_config(str(toml))
+        assert c.adv_clip_max == pytest.approx(5.0)

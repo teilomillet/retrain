@@ -48,6 +48,50 @@ _CORRECT_THRESHOLD = 0.5
 _PROMPT_PAD_EPS = 1e-9
 
 
+def _apply_advantage_cap(
+    all_advantages: list[list[float]],
+    cap: float,
+) -> tuple[list[list[float]], float, float]:
+    """Cap per-token advantages to [-cap, +cap].
+
+    This is NOT ratio clipping (PPO). It bounds the advantage magnitude sent
+    to the backend, limiting how hard any single token can push the gradient.
+    The mechanism is upstream of the loss function — it modifies the signal,
+    not the optimization dynamics.
+
+    Returns:
+        (capped_advantages, cap_fraction, mean_cap_magnitude)
+        cap_fraction: fraction of non-zero tokens that were capped.
+        mean_cap_magnitude: mean absolute value of tokens that were capped
+            (before capping). 0.0 if nothing was capped.
+    """
+    total = 0
+    capped_count = 0
+    capped_magnitude_sum = 0.0
+    result: list[list[float]] = []
+    for seq in all_advantages:
+        capped_seq: list[float] = []
+        for a in seq:
+            if a == 0.0:
+                capped_seq.append(a)
+                continue
+            total += 1
+            if a > cap:
+                capped_magnitude_sum += abs(a)
+                capped_count += 1
+                capped_seq.append(cap)
+            elif a < -cap:
+                capped_magnitude_sum += abs(a)
+                capped_count += 1
+                capped_seq.append(-cap)
+            else:
+                capped_seq.append(a)
+        result.append(capped_seq)
+    frac = capped_count / max(total, 1)
+    mean_mag = capped_magnitude_sum / max(capped_count, 1)
+    return result, frac, mean_mag
+
+
 class TrainerState(TypedDict):
     """Serialized trainer state stored in checkpoint directories."""
 
@@ -889,6 +933,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 backend_name=config.backend,
             )
 
+        # Advantage capping (pre-training, any backend)
+        adv_cap_fraction = 0.0
+        adv_cap_magnitude = 0.0
+        if config.adv_clip_max > 0:
+            all_datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
+                _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
+            )
+
         train_start = time.perf_counter()
         loss_value = helper.train_step(
             all_datum_tokens,
@@ -1008,6 +1060,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["post_plan_surprisal_mean"] = step_post_plan_mean
             metrics["post_plan_surprisal_var"] = step_post_plan_var
         metrics["clip_fraction"] = clip_fraction
+        metrics["adv_cap_fraction"] = adv_cap_fraction
+        metrics["adv_cap_magnitude"] = adv_cap_magnitude
         if batch_adv_results:
             all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
             for k in all_extra_keys:
@@ -1064,6 +1118,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "train/surprisal/post_plan_mean": step_post_plan_mean,
                 "train/surprisal/post_plan_var": step_post_plan_var,
                 "train/clip_fraction": clip_fraction,
+                "train/adv_cap_fraction": adv_cap_fraction,
+                "train/adv_cap_magnitude": adv_cap_magnitude,
                 "train/backpressure/action": bp_decision.action,
                 "train/backpressure/regime": bp_decision.regime,
                 "train/backpressure/p_star": bp_decision.p_star,
@@ -1101,6 +1157,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
             step_entry["post_plan_surprisal_var"] = step_post_plan_var
         step_entry["clip_fraction"] = clip_fraction
+        step_entry["adv_cap_fraction"] = adv_cap_fraction
+        step_entry["adv_cap_magnitude"] = adv_cap_magnitude
         steps_logger.log(step_entry)
 
         # Periodic checkpoint
