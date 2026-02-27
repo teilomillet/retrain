@@ -25,6 +25,35 @@ from peft import get_peft_model, LoraConfig, TaskType
 from retrain.inference_engine import create_engine
 
 
+def _compute_policy_loss(ratio, adv, mask, clip_eps, clip_eps_high):
+    """Compute PPO-style clipped policy loss.
+
+    Args:
+        ratio: Importance sampling ratio (new_prob / old_prob).
+        adv: Per-token advantages.
+        mask: Attention mask (1 for real tokens, 0 for padding).
+        clip_eps: Lower clipping epsilon. 0 = no clipping.
+        clip_eps_high: Upper clipping epsilon. 0 = use clip_eps (symmetric).
+
+    Returns:
+        (masked_loss, clip_fraction) tuple.
+    """
+    if clip_eps > 0:
+        eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
+        clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high)
+        surr1 = ratio * adv
+        surr2 = clipped_ratio * adv
+        per_token_loss = -torch.min(surr1, surr2)
+        with torch.no_grad():
+            clipped = ((ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)).float()
+            frac = (clipped * mask).sum().item() / mask.sum().clamp(min=1).item()
+    else:
+        per_token_loss = -(ratio * adv)
+        frac = 0.0
+    masked_loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1)
+    return masked_loss, frac
+
+
 def _parse_device(device_str):
     """Convert a device spec like 'gpu:0' to a torch device string like 'cuda:0'."""
     device_str = device_str.strip()
@@ -42,10 +71,14 @@ class LocalTrainHelper:
     def __init__(self, model_name, adapter_path, devices, lora_rank=32,
                  engine_type="pytorch", inference_url="",
                  lora_alpha=0, lora_dropout=0.0,
-                 optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8):
+                 optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
+                 clip_eps=0.0, clip_eps_high=0.0):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
+        self.clip_eps = clip_eps
+        self.clip_eps_high = clip_eps_high
+        self._clip_fraction = 0.0
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -308,11 +341,12 @@ class LocalTrainHelper:
             adv = advantages[:, 1:]       # [N, max_len-1]
             mask = attention_mask[:, 1:]   # [N, max_len-1] — exclude padding
 
-            # Importance sampling loss: -mean(ratio * advantage) over real tokens
+            # Importance sampling loss with optional PPO-style ratio clipping
             ratio = torch.exp(new_logprobs - old_lp)
-            per_token_loss = -(ratio * adv)
-            # Mask out padding, average over real tokens
-            masked_loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1)
+            masked_loss, clip_frac = _compute_policy_loss(
+                ratio, adv, mask, self.clip_eps, self.clip_eps_high
+            )
+            self._clip_fraction = clip_frac
 
         self.scaler.scale(masked_loss).backward()
         self.scaler.step(self.optimizer)

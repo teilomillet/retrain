@@ -114,6 +114,8 @@ class TrainConfig:
     top_p: float = 0.95
     lr: float = 4e-5
     weight_decay: float = 0.0
+    clip_eps: float = 0.0        # 0 = disabled (no PPO-style ratio clipping)
+    clip_eps_high: float = 0.0   # 0 = symmetric (uses clip_eps for upper bound)
     max_examples: int = 0
     save_every: int = 20
 
@@ -223,6 +225,19 @@ class TrainConfig:
         if self.surprisal_mask_rho < 0.0 or self.surprisal_mask_rho > 1.0:
             errors.append(
                 "surprisal_mask_rho must be in [0.0, 1.0]. Try: surprisal_mask_rho = 0.2"
+            )
+        if self.clip_eps < 0:
+            errors.append(
+                "clip_eps must be >= 0. Try: clip_eps = 0.2"
+            )
+        if self.clip_eps_high < 0:
+            errors.append(
+                "clip_eps_high must be >= 0. Try: clip_eps_high = 0.28"
+            )
+        if self.clip_eps_high > 0 and self.clip_eps <= 0:
+            errors.append(
+                "clip_eps_high > 0 requires clip_eps > 0. "
+                "Set clip_eps first. Try: clip_eps = 0.2"
             )
         try:
             self.uncertainty_kind = canonicalize_uncertainty_kind(
@@ -372,6 +387,12 @@ class TrainConfig:
                 f"weight_decay={self.weight_decay} is negative — this is unusual.",
                 stacklevel=2,
             )
+        if self.clip_eps > 0 and self.backend != "local":
+            warnings.warn(
+                f"clip_eps={self.clip_eps} is set but backend='{self.backend}' — "
+                "ratio clipping is only implemented in the local backend.",
+                stacklevel=2,
+            )
 
     @property
     def post_process_params(self) -> dict[str, object]:
@@ -451,6 +472,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "top_p": "top_p",
         "lr": "lr",
         "weight_decay": "weight_decay",
+        "clip_eps": "clip_eps",
+        "clip_eps_high": "clip_eps_high",
         "max_examples": "max_examples",
         "save_every": "save_every",
     },

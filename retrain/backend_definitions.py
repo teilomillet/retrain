@@ -80,6 +80,8 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         optim_beta1=config.optim_beta1,
         optim_beta2=config.optim_beta2,
         optim_eps=config.optim_eps,
+        clip_eps=config.clip_eps,
+        clip_eps_high=config.clip_eps_high,
     )
 
 

@@ -435,9 +435,76 @@ class TestComposablePipeline:
             transform_mode="none",
         )
         assert len(result.token_advs) == 2
-        assert not result.has_stats
+        assert result.has_stats  # baseline now reports observational stats
         # Each token gets the same episode-level advantage
         assert all(a == result.token_advs[0][0] for a in result.token_advs[0])
+        # Stats should reflect the raw surprisal (-logprob) values
+        assert result.stats.exec_count > 0
+
+    def test_baseline_stats_match_manual(self):
+        """Baseline (none) stats = manual mean/var of -logprob."""
+        logprobs = [[-0.5, -0.3], [-0.8, -0.6]]
+        masks = [[0, 0], [0, 0]]
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=logprobs,
+            planning_masks_G=masks,
+            advantage_mode="grpo",
+            transform_mode="none",
+        )
+        # All tokens are exec (masks all 0)
+        all_surprisals = [0.5, 0.3, 0.8, 0.6]
+        expected_mean = sum(all_surprisals) / len(all_surprisals)
+        expected_var = sum((s - expected_mean) ** 2 for s in all_surprisals) / len(all_surprisals)
+        assert result.stats.exec_mean == pytest.approx(expected_mean)
+        assert result.stats.exec_var == pytest.approx(expected_var)
+        assert result.stats.exec_count == 4.0
+        assert result.stats.plan_count == 0.0
+
+    def test_baseline_advantages_unchanged(self):
+        """Baseline stats don't alter the uniform advantages."""
+        rewards = [1.0, 0.0, 0.5]
+        logprobs = [[-0.5, -0.3], [-0.8, -0.6], [-0.2, -0.7]]
+        masks = [[0, 0], [0, 0], [0, 0]]
+        result = compute_composable_advantages(
+            rewards_G=rewards,
+            logprobs_G=logprobs,
+            planning_masks_G=masks,
+            advantage_mode="grpo",
+            transform_mode="none",
+        )
+        grpo_advs = compute_grpo_advantages(rewards)
+        for i in range(3):
+            assert all(a == pytest.approx(grpo_advs[i]) for a in result.token_advs[i])
+
+    def test_post_transform_differs_with_sepa(self):
+        """With SEPA transform active, post-transform stats differ from pre-transform."""
+        # Need multiple exec tokens per episode so SEPA pooling has effect
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.1, -0.9, -0.3], [-0.5, -0.5, -0.8]],
+            planning_masks_G=[[1, 0, 0], [0, 0, 1]],
+            advantage_mode="grpo",
+            transform_mode="gtpo_sepa",
+            sepa_lambda=0.5,
+        )
+        assert result.has_stats
+        # When SEPA is active with non-uniform exec tokens, post-transform
+        # variance should be reduced vs pre-transform
+        assert result.stats.post_exec_var < result.stats.exec_var
+
+    def test_post_transform_equals_without_sepa(self):
+        """Without entropy transform (plain gtpo), post == pre."""
+        result = compute_composable_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.1, -0.9], [-0.5, -0.5]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            advantage_mode="grpo",
+            transform_mode="gtpo",
+        )
+        assert result.has_stats
+        assert result.stats.post_exec_mean == pytest.approx(result.stats.exec_mean)
+        assert result.stats.post_exec_var == pytest.approx(result.stats.exec_var)
 
     def test_maxrl_gtpo(self):
         result = compute_composable_advantages(

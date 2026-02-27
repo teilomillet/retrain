@@ -898,6 +898,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             config.weight_decay,
         )
         train_time = time.perf_counter() - train_start
+        clip_fraction = getattr(helper, '_clip_fraction', 0.0)
 
         step_time = time.perf_counter() - step_start
 
@@ -939,12 +940,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
         # Aggregate entropy stats
         step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
+        step_post_exec_mean = step_post_exec_var = 0.0
+        step_post_plan_mean = step_post_plan_var = 0.0
         if batch_surprisal_stats:
             n_stats = len(batch_surprisal_stats)
             step_exec_mean = sum(s.exec_mean for s in batch_surprisal_stats) / n_stats
             step_exec_var = sum(s.exec_var for s in batch_surprisal_stats) / n_stats
             step_plan_mean = sum(s.plan_mean for s in batch_surprisal_stats) / n_stats
             step_plan_var = sum(s.plan_var for s in batch_surprisal_stats) / n_stats
+            step_post_exec_mean = sum(s.post_exec_mean for s in batch_surprisal_stats) / n_stats
+            step_post_exec_var = sum(s.post_exec_var for s in batch_surprisal_stats) / n_stats
+            step_post_plan_mean = sum(s.post_plan_mean for s in batch_surprisal_stats) / n_stats
+            step_post_plan_var = sum(s.post_plan_var for s in batch_surprisal_stats) / n_stats
 
         condition_label = _condition_label(config)
         sepa_gate = (
@@ -996,6 +1003,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["exec_surprisal_var"] = step_exec_var
             metrics["plan_surprisal_mean"] = step_plan_mean
             metrics["plan_surprisal_var"] = step_plan_var
+            metrics["post_exec_surprisal_mean"] = step_post_exec_mean
+            metrics["post_exec_surprisal_var"] = step_post_exec_var
+            metrics["post_plan_surprisal_mean"] = step_post_plan_mean
+            metrics["post_plan_surprisal_var"] = step_post_plan_var
+        metrics["clip_fraction"] = clip_fraction
         if batch_adv_results:
             all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
             for k in all_extra_keys:
@@ -1047,6 +1059,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "train/surprisal/exec_var": step_exec_var,
                 "train/surprisal/plan_mean": step_plan_mean,
                 "train/surprisal/plan_var": step_plan_var,
+                "train/surprisal/post_exec_mean": step_post_exec_mean,
+                "train/surprisal/post_exec_var": step_post_exec_var,
+                "train/surprisal/post_plan_mean": step_post_plan_mean,
+                "train/surprisal/post_plan_var": step_post_plan_var,
+                "train/clip_fraction": clip_fraction,
                 "train/backpressure/action": bp_decision.action,
                 "train/backpressure/regime": bp_decision.regime,
                 "train/backpressure/p_star": bp_decision.p_star,
@@ -1079,6 +1096,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             step_entry["exec_surprisal_var"] = step_exec_var
             step_entry["plan_surprisal_mean"] = step_plan_mean
             step_entry["plan_surprisal_var"] = step_plan_var
+            step_entry["post_exec_surprisal_mean"] = step_post_exec_mean
+            step_entry["post_exec_surprisal_var"] = step_post_exec_var
+            step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
+            step_entry["post_plan_surprisal_var"] = step_post_plan_var
+        step_entry["clip_fraction"] = clip_fraction
         steps_logger.log(step_entry)
 
         # Periodic checkpoint

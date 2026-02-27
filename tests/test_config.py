@@ -711,3 +711,58 @@ class TestSurprisalMaskRho:
         params = c.post_process_params
         assert params["surprisal_mask_rho"] == 0.0
         assert params["entropy_mask_rho"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Ratio clipping config
+# ---------------------------------------------------------------------------
+
+
+class TestClipEpsConfig:
+    def test_defaults(self):
+        c = TrainConfig()
+        assert c.clip_eps == pytest.approx(0.0)
+        assert c.clip_eps_high == pytest.approx(0.0)
+
+    def test_valid_symmetric(self):
+        c = TrainConfig(clip_eps=0.2)
+        assert c.clip_eps == pytest.approx(0.2)
+        assert c.clip_eps_high == pytest.approx(0.0)
+
+    def test_valid_asymmetric(self):
+        c = TrainConfig(clip_eps=0.2, clip_eps_high=0.28)
+        assert c.clip_eps == pytest.approx(0.2)
+        assert c.clip_eps_high == pytest.approx(0.28)
+
+    def test_negative_clip_eps_raises(self):
+        with pytest.raises(ValueError, match="clip_eps must be >= 0"):
+            TrainConfig(clip_eps=-0.1)
+
+    def test_negative_clip_eps_high_raises(self):
+        with pytest.raises(ValueError, match="clip_eps_high must be >= 0"):
+            TrainConfig(clip_eps=0.2, clip_eps_high=-0.1)
+
+    def test_clip_eps_high_without_clip_eps_raises(self):
+        with pytest.raises(ValueError, match="clip_eps_high > 0 requires clip_eps > 0"):
+            TrainConfig(clip_eps=0.0, clip_eps_high=0.28)
+
+    def test_clip_eps_non_local_warns(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(clip_eps=0.2, backend="tinker")
+        msgs = [str(x.message) for x in w]
+        assert any("ratio clipping is only implemented in the local backend" in m for m in msgs)
+
+    def test_clip_eps_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[training]\nclip_eps = 0.2\nclip_eps_high = 0.28\n')
+        c = load_config(str(toml))
+        assert c.clip_eps == pytest.approx(0.2)
+        assert c.clip_eps_high == pytest.approx(0.28)
+
+    def test_clip_eps_cli_override(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("")
+        c = load_config(str(toml), overrides={"clip_eps": "0.2", "clip_eps_high": "0.28"})
+        assert c.clip_eps == pytest.approx(0.2)
+        assert c.clip_eps_high == pytest.approx(0.28)

@@ -61,6 +61,13 @@ class EntropyStats:
     plan_mean: float = 0.0
     plan_var: float = 0.0
     plan_count: float = 0.0
+    # Post-transform stats (after SEPA/entropy transform, before GTPO weighting)
+    post_exec_mean: float = 0.0
+    post_exec_var: float = 0.0
+    post_exec_count: float = 0.0
+    post_plan_mean: float = 0.0
+    post_plan_var: float = 0.0
+    post_plan_count: float = 0.0
 
 
 @dataclass
@@ -1513,7 +1520,19 @@ def compute_composable_advantages(
             expected_lens=expected_lens,
             mode_name=f"transform_mode '{transform_spec.name}'",
         )
-        return AdvantageResult(all_token_advs, False, EntropyStats())
+        # Observational stats — advantages are unchanged but we still
+        # compute surprisal distributions for cross-condition comparison.
+        obs_exec: list[float] = []
+        obs_plan: list[float] = []
+        for idx in range(len(logprobs_G)):
+            for j, lp in enumerate(logprobs_G[idx]):
+                s = min(-lp, MAX_SURPRISAL)
+                if planning_masks_G[idx][j]:
+                    obs_plan.append(s)
+                else:
+                    obs_exec.append(s)
+        stats = compute_surprisal_stats(obs_exec, obs_plan)
+        return AdvantageResult(all_token_advs, True, stats)
 
     uncertainty_kind = _resolve_uncertainty_kind(merged_transform_params)
     uncertainty_spec = get_uncertainty_spec(uncertainty_kind)
@@ -1536,6 +1555,8 @@ def compute_composable_advantages(
     all_token_advs = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []
+    all_post_exec_surprisals: list[float] = []
+    all_post_plan_surprisals: list[float] = []
     all_raw_surprisals: list[list[float]] = []  # for surprisal_mask compatibility
 
     for idx in range(len(logprobs_G)):
@@ -1555,7 +1576,7 @@ def compute_composable_advantages(
         # Store raw surprisals before any transform (for surprisal masking)
         all_raw_surprisals.append(list(surprisals))
 
-        # Collect surprisal stats
+        # Collect pre-transform surprisal stats
         for j, e in enumerate(surprisals):
             if planning_mask[j]:
                 all_plan_surprisals.append(e)
@@ -1567,6 +1588,13 @@ def compute_composable_advantages(
             surprisals = transform_spec.entropy_transform(
                 surprisals, planning_mask, sepa_lambda
             )
+
+        # Collect post-transform surprisal stats (before GTPO weighting)
+        for j, e in enumerate(surprisals):
+            if planning_mask[j]:
+                all_post_plan_surprisals.append(e)
+            else:
+                all_post_exec_surprisals.append(e)
 
         # GTPO weighting
         token_advs = apply_gtpo_weighting(advantage, surprisals, beta=gtpo_beta)
@@ -1604,6 +1632,13 @@ def compute_composable_advantages(
         mode_name=f"transform_mode '{transform_spec.name}'",
     )
     stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
+    post_stats = compute_surprisal_stats(all_post_exec_surprisals, all_post_plan_surprisals)
+    stats.post_exec_mean = post_stats.exec_mean
+    stats.post_exec_var = post_stats.exec_var
+    stats.post_exec_count = post_stats.exec_count
+    stats.post_plan_mean = post_stats.plan_mean
+    stats.post_plan_var = post_stats.plan_var
+    stats.post_plan_count = post_stats.plan_count
     return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra_metrics)
 
 
