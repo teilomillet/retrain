@@ -824,6 +824,7 @@ _PLUGIN_KINDS = {
     "backend",
     "inference",
     "backpressure",
+    "trainer",
 }
 
 
@@ -914,6 +915,24 @@ def _plugin_template(kind: str, fn_name: str) -> tuple[str, str]:
                 'type = "custom"\n'
                 f'custom_module = "plugins.{fn_name}"\n'
                 f'custom_function = "{fn_name}"\n'
+            ),
+        )
+
+    if kind == "trainer":
+        return (
+            (
+                f"def {fn_name}(config):\n"
+                '    """Run training. Return adapter path or None.\n\n'
+                "    config: retrain.config.TrainConfig\n"
+                "    Expected output:\n"
+                "      - metrics.jsonl in config.log_dir (for retrain status)\n"
+                "      - adapter at config.adapter_path (for downstream use)\n"
+                '    """\n'
+                "    raise NotImplementedError\n"
+            ),
+            (
+                "[training]\n"
+                f'trainer = "plugins.{fn_name}.{fn_name}"\n'
             ),
         )
 
@@ -1399,6 +1418,7 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         "mode": "single",
         "config": config_path or "retrain.toml",
         "model": config.model,
+        "trainer": config.trainer,
         "backend": config.backend,
         "backend_options": dict(config.backend_options),
         "backend_capabilities": backend_capabilities,
@@ -1441,6 +1461,7 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
     print(f"retrain explain — dry-run preview")
     print(f"  config        : {info['config']}")
     print(f"  model         : {config.model}")
+    print(f"  trainer       : {config.trainer}")
     print(f"  backend       : {config.backend}")
     print(f"  backend caps  : {_format_backend_capability_summary(backend_capabilities)}")
     if not backend_capabilities["reports_sync_loss"]:
@@ -2195,10 +2216,11 @@ def main() -> None:
         run_squeeze(config_path)
     else:
         from retrain.config import load_config
-        from retrain.trainer import train
+        from retrain.registry import get_registry
         config = load_config(config_path, overrides=overrides)
         _check_environment(config)
-        train(config)
+        runner = get_registry("trainer").create(config.trainer, config)
+        runner.run(config)
 
 
 if __name__ == "__main__":

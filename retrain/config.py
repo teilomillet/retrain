@@ -99,6 +99,10 @@ class TrainConfig:
     adapter_path: str = _DEFAULT_ADAPTER_PATH
     backend_options: dict[str, object] = field(default_factory=dict)
 
+    # Training runner
+    trainer: str = "retrain"       # "retrain", "command", or dotted plugin path
+    trainer_command: str = ""      # shell command template for trainer = "command"
+
     # Model
     model: str = "Qwen/Qwen3-4B-Instruct-2507"
     base_url: str = ""
@@ -317,6 +321,11 @@ class TrainConfig:
                         "when environment_provider is set."
                     )
 
+        if self.trainer == "command" and not self.trainer_command:
+            errors.append(
+                "trainer='command' requires [training] trainer_command to be set."
+            )
+
         if not isinstance(self.backend_options, dict):
             errors.append(
                 "backend_options must be a mapping. "
@@ -482,6 +491,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "adv_clip_max": "adv_clip_max",
         "max_examples": "max_examples",
         "save_every": "save_every",
+        "trainer": "trainer",
+        "trainer_command": "trainer_command",
     },
     "optimizer": {
         "beta1": "optim_beta1",

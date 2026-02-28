@@ -424,7 +424,7 @@ def _run_sequential(
 
     Returns ``(failed_count, recommended_rank)``.
     """
-    from retrain.trainer import train
+    from retrain.registry import get_registry
 
     failed = 0
     recommended_rank: int | None = None
@@ -448,7 +448,8 @@ def _run_sequential(
                 cfg.wandb_run_name = run["run_name"]
                 cfg.wandb_tags = f"{condition},seed{run['seed']}"
 
-            adapter_path = train(cfg)
+            runner = get_registry("trainer").create(cfg.trainer, cfg)
+            adapter_path = runner.run(cfg)
             print(f"  OK")
 
             # Auto-squeeze after first run (errors here don't fail the run)

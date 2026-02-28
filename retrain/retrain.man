@@ -425,6 +425,19 @@ CONFIGURATION
     save_every = 20
         Warning if 0 (disables periodic checkpoints).
 
+    trainer = "retrain"
+        Training runner. Built-in: "retrain", "command".
+        Dotted paths load plugins: "my_module.my_runner".
+        "retrain" uses the built-in training loop.
+        "command" runs an arbitrary shell command (see trainer_command).
+
+    trainer_command = ""
+        Shell command template when trainer = "command".
+        Placeholders: {config_path}, {log_dir}, {adapter_path}, {model}.
+        The command receives a JSON config file at {config_path} and
+        should write metrics to {log_dir}/metrics.jsonl and save the
+        adapter to {adapter_path}.
+
   [optimizer]
 
     beta1 = 0.9

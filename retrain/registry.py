@@ -28,6 +28,7 @@ from retrain.data import DataSource
 from retrain.plugin_resolver import resolve_dotted_attribute
 from retrain.planning import PlanningDetector
 from retrain.rewards import RewardFunction
+from retrain.training_runner import TrainingRunner
 
 
 T = TypeVar("T")
@@ -116,6 +117,7 @@ reward = Registry[RewardFunction]("reward")
 planning_detector = Registry[PlanningDetector]("planning_detector")
 data_source = Registry[DataSource]("data_source")
 backpressure = Registry[BackPressure]("backpressure")
+trainer = Registry[TrainingRunner]("trainer")
 
 KnownRegistry = (
     Registry[TrainHelper]
@@ -124,6 +126,7 @@ KnownRegistry = (
     | Registry[PlanningDetector]
     | Registry[DataSource]
     | Registry[BackPressure]
+    | Registry[TrainingRunner]
 )
 
 _ALL_REGISTRIES: dict[str, KnownRegistry] = {
@@ -133,6 +136,7 @@ _ALL_REGISTRIES: dict[str, KnownRegistry] = {
     "planning_detector": planning_detector,
     "data_source": data_source,
     "backpressure": backpressure,
+    "trainer": trainer,
 }
 
 
@@ -158,6 +162,10 @@ def get_registry(name: Literal["data_source"]) -> Registry[DataSource]: ...
 
 @overload
 def get_registry(name: Literal["backpressure"]) -> Registry[BackPressure]: ...
+
+
+@overload
+def get_registry(name: Literal["trainer"]) -> Registry[TrainingRunner]: ...
 
 
 def get_registry(name: str) -> KnownRegistry:
@@ -301,6 +309,24 @@ def _bp_usl(config: TrainConfig) -> BackPressure:
         peak_gflops=config.bp_peak_gflops,
         peak_bw_gb_s=config.bp_peak_bw_gb_s,
     )
+
+
+# -- trainer ---------------------------------------------------------------
+
+@trainer.register("retrain")
+def _trainer_retrain(config: TrainConfig) -> TrainingRunner:
+    from retrain.training_runner import RetainRunner
+    return RetainRunner()
+
+
+@trainer.register("command")
+def _trainer_command(config: TrainConfig) -> TrainingRunner:
+    from retrain.training_runner import CommandRunner
+    if not config.trainer_command:
+        raise ValueError(
+            "trainer='command' requires [training] trainer_command to be set."
+        )
+    return CommandRunner(config.trainer_command)
 
 
 # ---------------------------------------------------------------------------
