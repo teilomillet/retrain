@@ -20,9 +20,12 @@ from retrain.tree import (
     effective_status,
     evaluate_node,
     format_next,
+    format_show,
     format_tree,
+    format_tree_json,
     load_tree,
     parse_success_condition,
+    reset_node,
     save_state,
 )
 
@@ -624,3 +627,251 @@ class TestCliTree:
         _run_tree(["--help"])
         out = capsys.readouterr().out
         assert "Usage" in out
+
+
+# ---------------------------------------------------------------------------
+# TestFormatShow
+# ---------------------------------------------------------------------------
+
+
+class TestFormatShow:
+    def test_basic(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        output = format_show(tree, "a")
+        assert 'a: "Node A"' in output
+        assert "campaigns/a.toml" in output
+        assert "correct_rate > 0.55" in output
+        assert "on_success:" in output
+
+    def test_with_annotations(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        tree.state.nodes["a"] = NodeState(
+            annotations=[Annotation(text="Test note", at="2026-02-28T14:00:00")],
+        )
+        output = format_show(tree, "a")
+        assert "annotations:" in output
+        assert "[2026-02-28T14:00:00] Test note" in output
+
+    def test_with_result(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        tree.state.nodes["a"] = NodeState(
+            status="done",
+            outcome="success",
+            campaign_dir="logs/test",
+            result={"correct_rate": 0.62},
+        )
+        output = format_show(tree, "a")
+        assert "campaign_dir: logs/test" in output
+        assert "correct_rate=0.62" in output
+
+    def test_unknown_node_raises(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        with pytest.raises(KeyError, match="Unknown node"):
+            format_show(tree, "nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# TestFormatTreeJson
+# ---------------------------------------------------------------------------
+
+
+class TestFormatTreeJson:
+    def test_structure(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        data = format_tree_json(tree)
+        assert data["name"] == "test-tree"
+        assert data["description"] == "A test tree"
+        assert len(data["nodes"]) == 3
+        ids = [n["id"] for n in data["nodes"]]
+        assert ids == ["a", "b", "c"]
+
+    def test_effective_statuses(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        tree.state.nodes["a"] = NodeState(status="done", outcome="success")
+        data = format_tree_json(tree)
+        by_id = {n["id"]: n for n in data["nodes"]}
+        assert by_id["a"]["status"] == "done"
+        assert by_id["a"]["outcome"] == "success"
+        assert by_id["b"]["status"] == "pending"
+        assert by_id["c"]["status"] == "skipped"
+
+    def test_annotations_serialized(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        tree.state.nodes["a"] = NodeState(
+            annotations=[Annotation(text="note1", at="2026-01-01T00:00:00")],
+        )
+        data = format_tree_json(tree)
+        by_id = {n["id"]: n for n in data["nodes"]}
+        assert len(by_id["a"]["annotations"]) == 1
+        assert by_id["a"]["annotations"][0]["text"] == "note1"
+
+    def test_json_serializable(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        data = format_tree_json(tree)
+        # Must not raise
+        json.dumps(data)
+
+
+# ---------------------------------------------------------------------------
+# TestResetNode
+# ---------------------------------------------------------------------------
+
+
+class TestResetNode:
+    def test_resets_fields(self, tmp_path):
+        tree_path = _write_tree(tmp_path)
+        tree = load_tree(tree_path)
+        tree.state.nodes["a"] = NodeState(
+            status="done",
+            outcome="success",
+            campaign_dir="logs/test",
+            result={"correct_rate": 0.62},
+            started_at="2026-02-28T10:00:00",
+            completed_at="2026-02-28T11:00:00",
+            annotations=[Annotation(text="keep me", at="2026-02-28T12:00:00")],
+        )
+        save_state(tree)
+
+        reset_node(tree, "a")
+        ns = tree.state.nodes["a"]
+        assert ns.status == "pending"
+        assert ns.outcome == ""
+        assert ns.campaign_dir == ""
+        assert ns.result == {}
+        assert ns.started_at == ""
+        assert ns.completed_at == ""
+
+    def test_preserves_annotations(self, tmp_path):
+        tree_path = _write_tree(tmp_path)
+        tree = load_tree(tree_path)
+        tree.state.nodes["a"] = NodeState(
+            status="done",
+            outcome="failure",
+            annotations=[Annotation(text="important", at="2026-02-28T12:00:00")],
+        )
+        save_state(tree)
+
+        reset_node(tree, "a")
+        assert len(tree.state.nodes["a"].annotations) == 1
+        assert tree.state.nodes["a"].annotations[0].text == "important"
+
+    def test_saves_to_disk(self, tmp_path):
+        tree_path = _write_tree(tmp_path)
+        tree = load_tree(tree_path)
+        tree.state.nodes["a"] = NodeState(status="done", outcome="success")
+        save_state(tree)
+
+        reset_node(tree, "a")
+
+        # Reload from disk
+        tree2 = load_tree(tree_path)
+        assert tree2.state.nodes["a"].status == "pending"
+
+    def test_unknown_node_raises(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        with pytest.raises(KeyError, match="Unknown node"):
+            reset_node(tree, "nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# TestFormatNextRicher
+# ---------------------------------------------------------------------------
+
+
+class TestFormatNextRicher:
+    def test_label_and_notes_appear(self, tmp_path):
+        toml = """\
+[tree]
+name = "test"
+
+[[tree.nodes]]
+id = "a"
+label = "Node A label"
+campaign = "campaigns/a.toml"
+notes = "Some important note"
+"""
+        tree = load_tree(_write_tree(tmp_path, toml))
+        output = format_next(tree)
+        assert "a: campaigns/a.toml" in output
+        assert '"Node A label"' in output
+        assert "Some important note" in output
+
+    def test_label_without_notes(self, tmp_path):
+        tree = load_tree(_write_tree(tmp_path))
+        output = format_next(tree)
+        # Should still show label even without notes
+        assert '"Node A"' in output
+
+
+# ---------------------------------------------------------------------------
+# TestCliTreeShow
+# ---------------------------------------------------------------------------
+
+
+class TestCliTreeShow:
+    def test_show(self, tmp_path, capsys):
+        tree_path = _write_tree(tmp_path)
+        from retrain.cli import _run_tree
+
+        _run_tree(["show", "a", str(tree_path)])
+        out = capsys.readouterr().out
+        assert "Node A" in out
+        assert "campaigns/a.toml" in out
+
+    def test_show_unknown_node(self, tmp_path):
+        tree_path = _write_tree(tmp_path)
+        from retrain.cli import _run_tree
+
+        with pytest.raises(SystemExit):
+            _run_tree(["show", "nonexistent", str(tree_path)])
+
+
+# ---------------------------------------------------------------------------
+# TestCliTreeReset
+# ---------------------------------------------------------------------------
+
+
+class TestCliTreeReset:
+    def test_reset(self, tmp_path, capsys):
+        tree_path = _write_tree(tmp_path)
+        from retrain.cli import _run_tree
+
+        # Set up state first
+        tree = load_tree(tree_path)
+        tree.state.nodes["a"] = NodeState(status="done", outcome="success")
+        save_state(tree)
+
+        _run_tree(["reset", "a", str(tree_path)])
+        out = capsys.readouterr().out
+        assert "reset to pending" in out
+
+        # Verify on disk
+        tree2 = load_tree(tree_path)
+        assert tree2.state.nodes["a"].status == "pending"
+
+
+# ---------------------------------------------------------------------------
+# TestCliTreeJson
+# ---------------------------------------------------------------------------
+
+
+class TestCliTreeJson:
+    def test_view_json(self, tmp_path, capsys):
+        tree_path = _write_tree(tmp_path)
+        from retrain.cli import _run_tree
+
+        _run_tree([str(tree_path), "--json"])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["name"] == "test-tree"
+        assert len(data["nodes"]) == 3
+
+    def test_show_json(self, tmp_path, capsys):
+        tree_path = _write_tree(tmp_path)
+        from retrain.cli import _run_tree
+
+        _run_tree(["show", "a", str(tree_path), "--json"])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert data["id"] == "a"
+        assert data["campaign"] == "campaigns/a.toml"

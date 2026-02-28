@@ -58,6 +58,7 @@ nav:
   - Operations:
     - Capacity Planning: capacity-planning.md
     - Campaigns: campaigns.md
+    - Experiment Tree: tree.md
     - LoRA-Squeeze: squeeze.md
     - Backends: backends.md
     - Logging & wandb: logging.md

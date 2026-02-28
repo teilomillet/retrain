@@ -194,6 +194,7 @@ _TOPIC_TO_SECTION = {
     "files": "FILES",
     "plugins": "PLUGINS",
     "glossary": "GLOSSARY",
+    "tree": "TREE MODE",
 }
 
 _AUTO_BLOCK_NAMES = (
@@ -227,7 +228,10 @@ def _print_top_help(cli_name: str) -> None:
     print(f"  {cli_name} explain [config.toml] [--json]")
     print(f"  {cli_name} diff <run_a> <run_b> [--json]")
     print(f"  {cli_name} trace [config.toml] [--json]")
-    print(f"  {cli_name} tree [tree.toml]  (view | next | run | note | eval)")
+    print(
+        f"  {cli_name} tree [tree.toml] [--json]"
+        "  (view | next | show | run | note | eval | reset)"
+    )
     print(f"  {cli_name} man")
     print()
     print("Manual:")
@@ -1886,27 +1890,37 @@ def _run_tree(args: list[str]) -> None:
         Annotation,
         evaluate_node,
         format_next,
+        format_show,
         format_tree,
+        format_tree_json,
         load_tree,
+        reset_node,
         save_state,
     )
 
     usage = (
         "Usage:\n"
-        "  retrain tree [tree.toml]                  — view tree\n"
+        "  retrain tree [tree.toml] [--json]          — view tree\n"
         "  retrain tree next [tree.toml]              — show pending nodes\n"
+        "  retrain tree show <node> [tree.toml] [--json] — node details\n"
         "  retrain tree run <node> [tree.toml]        — launch node's campaign\n"
         '  retrain tree note <node> "text" [tree.toml] — add annotation\n'
         "  retrain tree eval [tree.toml]              — evaluate success conditions\n"
+        "  retrain tree reset <node> [tree.toml]      — reset node to pending\n"
     )
 
     if not args or args[0] in ("-h", "--help"):
         print(usage)
         return
 
+    # Extract --json flag
+    json_flag = "--json" in args
+    if json_flag:
+        args = [a for a in args if a != "--json"]
+
     # Determine subcommand vs bare tree path
-    subcommands = {"next", "run", "note", "eval"}
-    if args[0] in subcommands:
+    subcommands = {"next", "run", "note", "eval", "show", "reset"}
+    if args and args[0] in subcommands:
         subcmd = args[0]
         rest = args[1:]
     else:
@@ -1918,7 +1932,10 @@ def _run_tree(args: list[str]) -> None:
     if subcmd == "view":
         tree_path = rest[0] if rest else "tree.toml"
         tree = load_tree(tree_path)
-        print(format_tree(tree))
+        if json_flag:
+            print(json.dumps(format_tree_json(tree), indent=2))
+        else:
+            print(format_tree(tree))
         return
 
     # --- next ---
@@ -1926,6 +1943,29 @@ def _run_tree(args: list[str]) -> None:
         tree_path = rest[0] if rest else "tree.toml"
         tree = load_tree(tree_path)
         print(format_next(tree))
+        return
+
+    # --- show <node> [tree.toml] ---
+    if subcmd == "show":
+        if not rest:
+            print("Error: 'show' requires a node id.")
+            print(usage)
+            sys.exit(1)
+        node_id = rest[0]
+        tree_path = rest[1] if len(rest) > 1 else "tree.toml"
+        tree = load_tree(tree_path)
+        try:
+            if json_flag:
+                data = format_tree_json(tree)
+                node_data = [n for n in data["nodes"] if n["id"] == node_id]
+                if not node_data:
+                    raise KeyError(node_id)
+                print(json.dumps(node_data[0], indent=2))
+            else:
+                print(format_show(tree, node_id))
+        except KeyError:
+            print(f"Error: unknown node {node_id!r}")
+            sys.exit(1)
         return
 
     # --- run <node> [tree.toml] ---
@@ -1960,6 +2000,19 @@ def _run_tree(args: list[str]) -> None:
         _tree_eval(tree)
         return
 
+    # --- reset <node> [tree.toml] ---
+    if subcmd == "reset":
+        if not rest:
+            print("Error: 'reset' requires a node id.")
+            print(usage)
+            sys.exit(1)
+        node_id = rest[0]
+        tree_path = rest[1] if len(rest) > 1 else "tree.toml"
+        tree = load_tree(tree_path)
+        reset_node(tree, node_id)
+        print(f"Node {node_id!r} reset to pending.")
+        return
+
     print(f"Unknown tree subcommand: {subcmd}")
     print(usage)
     sys.exit(1)
@@ -1977,7 +2030,9 @@ def _tree_run_node(tree, node_id: str) -> None:
         sys.exit(1)
 
     node = tree.node_map[node_id]
-    ns = tree.state.nodes.setdefault(node_id, __import__("retrain.tree", fromlist=["NodeState"]).NodeState())
+    from retrain.tree import NodeState
+
+    ns = tree.state.nodes.setdefault(node_id, NodeState())
 
     ns.status = "running"
     ns.started_at = datetime.now(timezone.utc).isoformat()

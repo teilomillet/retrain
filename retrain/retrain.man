@@ -12,6 +12,7 @@ SYNOPSIS
     retrain diff <run_a> <run_b> [--json]
     retrain diff <campaign_dir> <cond_a> <cond_b> [--json]
     retrain trace [config.toml] [--json]
+    retrain tree [tree.toml] [--json]
     retrain doctor
     retrain man [--topic NAME] [--path] [--list-topics] [--sync] [--check] [--json]
 
@@ -773,6 +774,103 @@ SQUEEZE MODE
 
         Recommended rank: 32 (>= 95% variance retained)
 
+TREE MODE
+    The experiment tech tree organises campaigns into a dependency graph.
+    Each node wraps a campaign TOML and has a success condition.  When a
+    node completes, its outcome (success/failure) unlocks the next set
+    of experiments automatically.
+
+    Example TOML:
+
+        [tree]
+        name = "post-sepa"
+        description = "Experiments after the SEPA null result"
+
+        [[tree.nodes]]
+        id = "ratio-clip"
+        label = "PPO ratio clipping"
+        campaign = "campaigns/ratio-clip.toml"
+        notes = "Highest priority. clip_eps=0.2 on local GPU."
+        refs = ["PPO: https://arxiv.org/abs/1707.06347"]
+        success = "correct_rate > 0.55"
+        on_success = ["shannon-gtpo", "clip-sweep"]
+        on_failure = ["kl-penalty"]
+
+    Node fields:
+
+        id              Required. Unique short identifier.
+        label           Human-readable description (defaults to id).
+        campaign        Required. Path to campaign TOML.
+        notes           Free-text notes (shown in tree and show output).
+        refs            List of reference strings (papers, URLs).
+        success         Condition string: "metric op value".
+                        Valid metrics: correct_rate, loss, mean_reward.
+                        Valid ops: >, >=, <, <=, ==.
+        on_success      Node ids to unlock when this node succeeds.
+        on_failure      Node ids to unlock when this node fails.
+        related         Node ids for informational cross-references.
+
+    Subcommands:
+
+        retrain tree [tree.toml] [--json]
+            View the full tree as ASCII art. With --json, output the
+            tree as a JSON object with computed statuses.
+
+        retrain tree next [tree.toml]
+            List nodes that are ready to run (pending, not locked).
+
+        retrain tree show <node> [tree.toml] [--json]
+            Show detailed information for a single node.
+
+        retrain tree run <node> [tree.toml]
+            Launch the node's campaign. Sets status to running, then
+            done on completion. Run eval afterwards.
+
+        retrain tree note <node> "text" [tree.toml]
+            Add a timestamped annotation (lab notebook entry).
+
+        retrain tree eval [tree.toml]
+            Evaluate success conditions for all completed nodes that
+            do not yet have an outcome.
+
+        retrain tree reset <node> [tree.toml]
+            Reset a node to pending. Clears outcome, campaign_dir,
+            result, and timestamps. Preserves annotations.
+
+    State file:
+
+        Tree state is stored in tree_state.json beside the tree TOML
+        (e.g. campaigns/tree_state.json for campaigns/tree.toml).
+        Writes are atomic (tmp + rename).  The state file tracks per-
+        node status, outcome, campaign_dir, results, timestamps, and
+        annotations.  It is safe to delete the state file to start
+        fresh — all nodes revert to pending.
+
+    Status icons:
+
+        [ ]   pending    Ready to run (root or parent outcome matches).
+        [#]   locked     Waiting for a parent to complete.
+        [~]   running    Campaign in progress.
+        [✓]   done       Succeeded (outcome = success).
+        [✗]   done       Failed (outcome = failure).
+        [-]   skipped    Parent completed on wrong branch.
+
+    Node lifecycle:
+
+        pending → running → done (success|failure)
+                         ↘ locked children become pending or skipped
+
+    Success condition format:
+
+        "metric op threshold"
+
+        metric      One of: correct_rate, loss, mean_reward.
+        op          One of: > >= < <= ==
+        threshold   A floating-point number.
+
+        When evaluated, the metric is averaged across all completed
+        campaign runs, then compared against the threshold.
+
 INFERENCE ENGINES
     Engine      Type     Default URL                  Notes
     -------     ------   -------------------------    ----------------------------
@@ -1261,6 +1359,7 @@ SEE ALSO
     docs/advantages.md           GRPO, MaxRL, GTPO, HICRA, SEPA
     docs/sepa.md                 Selective Entropy Pooling details
     docs/campaigns.md            Campaign sweep documentation
+    docs/tree.md                 Experiment tech tree
     docs/squeeze.md              LoRA-Squeeze documentation
     docs/rewards.md              Reward function reference
     docs/inference-engines.md    Engine selection and multi-GPU setup
