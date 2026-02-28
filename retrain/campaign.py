@@ -344,6 +344,11 @@ def _run_parallel(
 ) -> list[dict]:
     """Execute runs as parallel subprocesses.
 
+    ``max_workers`` limits concurrency **within this campaign only**.
+    Multiple campaigns can run simultaneously as independent processes,
+    each managing its own worker pool.  To run two campaigns in parallel,
+    launch them in separate terminals / background processes.
+
     Args:
         stagger_seconds: Delay between launching consecutive subprocesses
             to desynchronize their backend API calls and reduce contention.
@@ -470,7 +475,7 @@ def _run_sequential(
     return failed, recommended_rank
 
 
-def run_campaign(campaign_path: str) -> None:
+def run_campaign(campaign_path: str) -> str:
     """Load a campaign TOML and execute all runs (sequential or parallel)."""
     with open(campaign_path, "rb") as f:
         data = tomllib.load(f)
@@ -598,3 +603,4 @@ def run_campaign(campaign_path: str) -> None:
     if recommended_rank is not None:
         print(f"Squeeze recommended rank: {recommended_rank}")
     print(f"Results in {campaign_dir}")
+    return str(campaign_dir)

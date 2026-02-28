@@ -227,6 +227,7 @@ def _print_top_help(cli_name: str) -> None:
     print(f"  {cli_name} explain [config.toml] [--json]")
     print(f"  {cli_name} diff <run_a> <run_b> [--json]")
     print(f"  {cli_name} trace [config.toml] [--json]")
+    print(f"  {cli_name} tree [tree.toml]  (view | next | run | note | eval)")
     print(f"  {cli_name} man")
     print()
     print("Manual:")
@@ -1879,6 +1880,165 @@ def _run_trace(args: list[str]) -> None:
     sys.exit(0 if result.ok else 1)
 
 
+def _run_tree(args: list[str]) -> None:
+    """Experiment tech-tree commands."""
+    from retrain.tree import (
+        Annotation,
+        evaluate_node,
+        format_next,
+        format_tree,
+        load_tree,
+        save_state,
+    )
+
+    usage = (
+        "Usage:\n"
+        "  retrain tree [tree.toml]                  — view tree\n"
+        "  retrain tree next [tree.toml]              — show pending nodes\n"
+        "  retrain tree run <node> [tree.toml]        — launch node's campaign\n"
+        '  retrain tree note <node> "text" [tree.toml] — add annotation\n'
+        "  retrain tree eval [tree.toml]              — evaluate success conditions\n"
+    )
+
+    if not args or args[0] in ("-h", "--help"):
+        print(usage)
+        return
+
+    # Determine subcommand vs bare tree path
+    subcommands = {"next", "run", "note", "eval"}
+    if args[0] in subcommands:
+        subcmd = args[0]
+        rest = args[1:]
+    else:
+        # Default: view
+        subcmd = "view"
+        rest = args
+
+    # --- view ---
+    if subcmd == "view":
+        tree_path = rest[0] if rest else "tree.toml"
+        tree = load_tree(tree_path)
+        print(format_tree(tree))
+        return
+
+    # --- next ---
+    if subcmd == "next":
+        tree_path = rest[0] if rest else "tree.toml"
+        tree = load_tree(tree_path)
+        print(format_next(tree))
+        return
+
+    # --- run <node> [tree.toml] ---
+    if subcmd == "run":
+        if not rest:
+            print("Error: 'run' requires a node id.")
+            print(usage)
+            sys.exit(1)
+        node_id = rest[0]
+        tree_path = rest[1] if len(rest) > 1 else "tree.toml"
+        tree = load_tree(tree_path)
+        _tree_run_node(tree, node_id)
+        return
+
+    # --- note <node> "text" [tree.toml] ---
+    if subcmd == "note":
+        if len(rest) < 2:
+            print("Error: 'note' requires a node id and text.")
+            print(usage)
+            sys.exit(1)
+        node_id = rest[0]
+        text = rest[1]
+        tree_path = rest[2] if len(rest) > 2 else "tree.toml"
+        tree = load_tree(tree_path)
+        _tree_add_note(tree, node_id, text)
+        return
+
+    # --- eval [tree.toml] ---
+    if subcmd == "eval":
+        tree_path = rest[0] if rest else "tree.toml"
+        tree = load_tree(tree_path)
+        _tree_eval(tree)
+        return
+
+    print(f"Unknown tree subcommand: {subcmd}")
+    print(usage)
+    sys.exit(1)
+
+
+def _tree_run_node(tree, node_id: str) -> None:
+    """Launch a node's campaign and record state."""
+    from datetime import datetime, timezone
+
+    from retrain.campaign import run_campaign
+    from retrain.tree import save_state
+
+    if node_id not in tree.node_map:
+        print(f"Error: unknown node {node_id!r}")
+        sys.exit(1)
+
+    node = tree.node_map[node_id]
+    ns = tree.state.nodes.setdefault(node_id, __import__("retrain.tree", fromlist=["NodeState"]).NodeState())
+
+    ns.status = "running"
+    ns.started_at = datetime.now(timezone.utc).isoformat()
+    save_state(tree)
+
+    print(f"Running node {node_id!r}: {node.campaign}")
+    campaign_dir = run_campaign(node.campaign)
+
+    ns.campaign_dir = campaign_dir
+    ns.status = "done"
+    ns.completed_at = datetime.now(timezone.utc).isoformat()
+    save_state(tree)
+
+    print(f"Node {node_id!r} campaign completed. Dir: {campaign_dir}")
+    print("Run 'retrain tree eval' to evaluate success conditions.")
+
+
+def _tree_add_note(tree, node_id: str, text: str) -> None:
+    """Add an annotation to a node."""
+    from datetime import datetime, timezone
+
+    from retrain.tree import Annotation, NodeState, save_state
+
+    if node_id not in tree.node_map:
+        print(f"Error: unknown node {node_id!r}")
+        sys.exit(1)
+
+    ns = tree.state.nodes.setdefault(node_id, NodeState())
+    ns.annotations.append(
+        Annotation(text=text, at=datetime.now(timezone.utc).isoformat())
+    )
+    save_state(tree)
+    print(f"Note added to {node_id!r}.")
+
+
+def _tree_eval(tree) -> None:
+    """Evaluate success conditions for all done nodes without outcomes."""
+    from retrain.tree import evaluate_node, save_state
+
+    evaluated = 0
+    for node in tree.nodes:
+        ns = tree.state.nodes.get(node.id)
+        if ns and ns.status == "done" and not ns.outcome:
+            if node.success_condition is None:
+                print(f"  {node.id}: no success condition defined")
+                continue
+            try:
+                outcome = evaluate_node(tree, node.id)
+                result_str = ""
+                if ns.result:
+                    parts = [f"{k}={v}" for k, v in ns.result.items()]
+                    result_str = f" ({', '.join(parts)})"
+                print(f"  {node.id}: {outcome}{result_str}")
+                evaluated += 1
+            except Exception as e:
+                print(f"  {node.id}: error — {e}")
+
+    if evaluated == 0:
+        print("No nodes to evaluate.")
+
+
 def main() -> None:
     """Single entry point: retrain config.toml"""
     _load_dotenv()
@@ -1936,6 +2096,10 @@ def main() -> None:
 
     if args and args[0] == "trace":
         _run_trace(args[1:])
+        sys.exit(0)
+
+    if args and args[0] == "tree":
+        _run_tree(args[1:])
         sys.exit(0)
 
     # Parse CLI overrides

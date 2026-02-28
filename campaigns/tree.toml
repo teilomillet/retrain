@@ -1,0 +1,38 @@
+[tree]
+name = "post-sepa"
+description = "Experiments after the SEPA null result"
+
+[[tree.nodes]]
+id = "ratio-clip"
+label = "PPO ratio clipping"
+campaign = "campaigns/ratio-clip.toml"
+notes = "Highest priority. clip_eps=0.2 on local GPU."
+refs = ["PPO: https://arxiv.org/abs/1707.06347"]
+success = "correct_rate > 0.55"
+on_success = ["shannon-gtpo", "clip-sweep"]
+on_failure = ["kl-penalty"]
+
+[[tree.nodes]]
+id = "shannon-gtpo"
+label = "GTPO with true Shannon entropy"
+campaign = "campaigns/shannon-gtpo.toml"
+notes = "Requires local GPU for H(t)"
+related = ["ratio-clip"]
+success = "correct_rate > 0.60"
+
+[[tree.nodes]]
+id = "clip-sweep"
+label = "Clip epsilon sweep"
+campaign = "campaigns/clip-sweep.toml"
+success = "correct_rate > 0.60"
+
+[[tree.nodes]]
+id = "kl-penalty"
+label = "KL penalty baseline"
+campaign = "campaigns/kl-penalty.toml"
+success = "correct_rate > 0.50"
+
+[[tree.nodes]]
+id = "entropy-bonus"
+label = "Entropy bonus exploration"
+campaign = "campaigns/entropy-bonus.toml"
