@@ -448,6 +448,9 @@ def _run_sequential(
                 cfg.wandb_run_name = run["run_name"]
                 cfg.wandb_tags = f"{condition},seed{run['seed']}"
 
+            meta_path = Path(cfg.log_dir) / "run_meta.json"
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(json.dumps({"trainer": cfg.trainer}))
             runner = get_registry("trainer").create(cfg.trainer, cfg)
             adapter_path = runner.run(cfg)
             print(f"  OK")

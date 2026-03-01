@@ -87,6 +87,7 @@ class RunSummary:
     stale: bool = False
     pid: int = 0
     alive: bool = False
+    trainer: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -238,6 +239,15 @@ def scan_run(run_dir: Path) -> RunSummary | None:
     if pid:
         summary.pid = pid
         summary.alive = is_pid_alive(pid)
+
+    # Read run metadata (trainer info)
+    meta_path = run_dir / "run_meta.json"
+    if meta_path.is_file():
+        try:
+            meta = json.loads(meta_path.read_text())
+            summary.trainer = meta.get("trainer", "")
+        except (json.JSONDecodeError, OSError):
+            pass
 
     return summary
 
@@ -441,10 +451,11 @@ def format_run(run: RunSummary) -> str:
     status = "done" if run.completed else ("stale" if run.stale else "running")
     cond = run.condition or "unknown"
     t = format_time(run.wall_time_s)
+    trainer_tag = f"  trainer={run.trainer}" if run.trainer else ""
     return (
         f"  {run.path:40s}  {cond:20s}  step={run.step:>4d}  "
         f"cr={run.correct_rate:.1%}  loss={run.loss:.4f}  "
-        f"time={t:>8s}  [{status}]"
+        f"time={t:>8s}  [{status}]{trainer_tag}"
     )
 
 

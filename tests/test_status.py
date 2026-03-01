@@ -730,3 +730,76 @@ class TestFormatSummaryBanner:
         })
         banner = format_summary_banner([c])
         assert "pending" not in banner
+
+
+class TestTrainerField:
+    def test_scan_run_reads_trainer_from_meta(self, tmp_path):
+        """run_meta.json with trainer field → populated in RunSummary."""
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+        )
+        (run_dir / "run_meta.json").write_text(json.dumps({"trainer": "command"}))
+
+        result = scan_run(run_dir)
+        assert result is not None
+        assert result.trainer == "command"
+
+    def test_scan_run_trainer_empty_when_no_meta(self, tmp_path):
+        """No run_meta.json → trainer is empty string."""
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+        )
+
+        result = scan_run(run_dir)
+        assert result is not None
+        assert result.trainer == ""
+
+    def test_format_run_shows_trainer(self):
+        """format_run includes trainer tag when set."""
+        run = RunSummary(
+            path="logs/train",
+            condition="grpo+none",
+            step=10,
+            correct_rate=0.25,
+            loss=0.5,
+            wall_time_s=120.0,
+            trainer="retrain",
+        )
+        text = format_run(run)
+        assert "trainer=retrain" in text
+
+    def test_format_run_hides_trainer_when_empty(self):
+        """format_run omits trainer tag when empty."""
+        run = RunSummary(
+            path="logs/train",
+            condition="grpo+none",
+            step=10,
+            correct_rate=0.25,
+            loss=0.5,
+            wall_time_s=120.0,
+        )
+        text = format_run(run)
+        assert "trainer=" not in text
+
+    def test_scan_run_trainer_empty_on_corrupt_meta(self, tmp_path):
+        """Corrupt run_meta.json → trainer falls back to empty string."""
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+        )
+        (run_dir / "run_meta.json").write_text("{invalid json")
+
+        result = scan_run(run_dir)
+        assert result is not None
+        assert result.trainer == ""
+
+    def test_to_dict_includes_trainer(self):
+        """trainer field is included in to_dict() output."""
+        run = RunSummary(path="logs/train", trainer="command")
+        d = run.to_dict()
+        assert d["trainer"] == "command"

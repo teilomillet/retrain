@@ -2219,6 +2219,9 @@ def main() -> None:
         from retrain.registry import get_registry
         config = load_config(config_path, overrides=overrides)
         _check_environment(config)
+        meta_dir = Path(config.log_dir)
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "run_meta.json").write_text(json.dumps({"trainer": config.trainer}))
         runner = get_registry("trainer").create(config.trainer, config)
         runner.run(config)
 
