@@ -6,7 +6,8 @@ NAME
 SYNOPSIS
     retrain [config.toml] [--flag value ...]
     retrain init [--template NAME] [--list] [--interactive]
-    retrain status [logdir] [--json]
+    retrain status [logdir] [--json] [--all] [--watch]
+    retrain top [logdir]
     retrain explain [config.toml] [--json]
     retrain migrate-config <config.toml> [--check|--write|--output PATH] [--json]
     retrain diff <run_a> <run_b> [--json]
@@ -96,10 +97,17 @@ COMMANDS
         Lists built-ins + discovered plugin modules.
         If config.toml is provided, uses its [plugins] search_paths.
 
-    retrain status [logdir] [--json]
+    retrain status [logdir] [--json] [--all] [--watch]
         Scans log directories for run and campaign status.
         Defaults to ./logs when no path is given.
+        Shows only active campaigns by default (last 24h).
         --json            machine-readable JSON output.
+        --all             show all campaigns including old dead/done.
+        --active          show only active campaigns (default).
+        --watch           refresh every 5 seconds (Ctrl-C to stop).
+
+    retrain top [logdir]
+        Live dashboard: alias for status --watch --active.
 
     retrain explain [config.toml] [--json]
         Dry-run preview: shows what a config would do.
@@ -143,6 +151,7 @@ OPTIONS
 
     All flags (sorted):
         --adapter-path
+        --adv-clip-max
         --advantage-mode
         --algorithm-mode
         --attention-kernel
@@ -158,6 +167,8 @@ OPTIONS
         --bp-peak-gflops
         --bp-throttle-margin
         --bp-warmup-steps
+        --clip-eps
+        --clip-eps-high
         --data-source
         --devices
         --environment-args
@@ -207,6 +218,8 @@ OPTIONS
         --tinker-max-concurrent
         --tinker-throttle-dir
         --top-p
+        --trainer
+        --trainer-command
         --transform-mode
         --uncertainty-kind
         --wandb-entity
@@ -735,11 +748,21 @@ CAMPAIGN MODE
 
                        condition      s42     s101     s202     s303
         ----------------------------------------------------------
-                       grpo+none    62.5%    58.3%    61.0%       —
-                  maxrl+gtpo_sepa    75.2%    72.1%    74.8%    73.5%
+                       grpo+none   42/100  100 ✓    61/100       —
+                  maxrl+gtpo_sepa  100 ✓   100 ✓    74/100   13 ✗
 
-    Each cell shows the final correct_rate for that run. An em-dash
-    (—) indicates a run that has not started or has no metrics yet.
+    Cell values show step progress:
+        42/100    active run at step 42 of 100
+        100 ✓     completed run
+        13 ✗      stale/dead run (no progress for 5+ minutes, process gone)
+        —         run not started or no metrics yet
+
+    When a campaign's runner process is alive, stale runs show step/max
+    instead of the ✗ marker (the step may just be slow).
+
+    A one-line summary banner appears above the matrix:
+
+        Campaigns: 1 running, 1 done  |  Runs: 2 active, 1 done, 1 pending
 
 SQUEEZE MODE
     A TOML with [squeeze] (and no [campaign]) runs LoRA rank analysis.
@@ -1121,9 +1144,17 @@ EXAMPLES
 
         retrain diff logs/campaign_20260222 grpo+none maxrl+gtpo_sepa
 
-    Check run status across all log directories:
+    Check run status (active campaigns only):
 
         retrain status logs
+
+    Show all campaigns including old dead/done ones:
+
+        retrain status logs --all
+
+    Live dashboard (refreshes every 5s):
+
+        retrain top logs
 
     Preview what a config would do without running:
 
