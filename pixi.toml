@@ -12,6 +12,7 @@ run = "./retrain-tinker"
 
 [dependencies]
 max = ">=26.1"
+pytest = ">=9.0.2,<10"
 
 [system-requirements]
 cuda = "12"
