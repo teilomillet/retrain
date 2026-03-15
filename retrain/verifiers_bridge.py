@@ -545,17 +545,30 @@ def run_multiturn_group(
                     "overlong_prompt": False,
                     "is_truncated": False,
                 }
-                trajectory_step = vf.TrajectoryStep(
-                    prompt=prompt_messages,
-                    completion=completion_messages,
-                    response=None,
-                    tokens=tokens_payload,
-                    reward=None,
-                    advantage=None,
-                    is_truncated=False,
-                    trajectory_id=states[idx]["trajectory_id"],
-                    extras={},
-                )
+                _TrajectoryStep = getattr(vf, "TrajectoryStep", None)
+                if _TrajectoryStep is not None:
+                    trajectory_step = _TrajectoryStep(
+                        prompt=prompt_messages,
+                        completion=completion_messages,
+                        response=None,
+                        tokens=tokens_payload,
+                        reward=None,
+                        advantage=None,
+                        is_truncated=False,
+                        trajectory_id=states[idx]["trajectory_id"],
+                        extras={},
+                    )
+                else:
+                    # Fallback for verifiers versions without TrajectoryStep.
+                    trajectory_step = types.SimpleNamespace(
+                        prompt=prompt_messages,
+                        completion=completion_messages,
+                        tokens=tokens_payload,
+                        reward=None,
+                        advantage=None,
+                        is_truncated=False,
+                        trajectory_id=states[idx].get("trajectory_id", idx),
+                    )
                 await env_typed.add_trajectory_step(states[idx], trajectory_step)
                 per_rollout_turns[idx].append(
                     VerifiersTurnSample(
