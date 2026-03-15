@@ -125,6 +125,20 @@ def _coerce_int(raw: object) -> int:
         raise TypeError(f"Expected int-like value, got {raw!r}.") from exc
 
 
+def _coerce_float_list(raw: object) -> list[float]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    result: list[float] = []
+    for item in raw:
+        try:
+            result.append(float(cast(int | float | str, item)))
+        except (TypeError, ValueError):
+            result.append(0.0)
+    return result
+
+
 def _coerce_reward(raw: object) -> float:
     if raw is None:
         return 0.0
@@ -444,10 +458,16 @@ def run_multiturn_group(
     temperature: float,
     top_p: float,
     max_turns_override: int = -1,
-) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str]]:
-    """Run group rollouts for verifiers MultiTurnEnv using retrain sampling."""
+) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]]]:
+    """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
 
-    async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str]]:
+    Returns:
+        (rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages)
+        turn_rewards: per-turn reward deltas for each rollout (from env state)
+        turn_advantages: MT-GRPO per-turn advantages for each rollout (from env rubric)
+    """
+
+    async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]]]:
         vf = _require_verifiers()
         env_typed = cast(_MultiTurnEnvironment, env)
         tokenizer_typed = cast(_Tokenizer, tokenizer)
@@ -554,6 +574,8 @@ def run_multiturn_group(
 
         rewards = [_coerce_reward(s.get("reward")) for s in states]
         completions_text = [_messages_to_text(s.get("completion")) for s in states]
-        return rewards, per_rollout_turns, completions_text
+        turn_rewards = [_coerce_float_list(s.get("turn_rewards")) for s in states]
+        turn_advantages = [_coerce_float_list(s.get("turn_advantages")) for s in states]
+        return rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages
 
     return asyncio.run(_run())

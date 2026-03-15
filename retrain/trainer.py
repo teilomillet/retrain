@@ -561,7 +561,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 task = batch_tasks[f_idx]
                 info = batch_infos[f_idx]
 
-                rewards_G, turns_G, completion_texts_G = run_multiturn_group(
+                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G = run_multiturn_group(
                     verifiers_env,
                     helper=helper,
                     tokenizer=tokenizer,
@@ -675,12 +675,34 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     turn_token_ids = turns_token_ids_G[s_idx]
                     turn_logprobs = turns_logprobs_G[s_idx]
                     token_advs = all_token_advs_G[s_idx]
+
+                    # MT-GRPO: when per-turn advantages are provided by the
+                    # environment rubric (e.g. soma's _compute_turn_advantages),
+                    # use them directly as the advantage for each turn's tokens
+                    # instead of the uniform episode-level expansion.
+                    # All-or-nothing per rollout: if turn_advantages covers all
+                    # turns, use it; otherwise fall back entirely to episode-level
+                    # to avoid offset drift between the two modes.
+                    s_turn_advs: list[float] | None = None
+                    if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
+                        candidate = turn_advantages_G[s_idx]
+                        if len(candidate) >= len(turn_token_ids):
+                            s_turn_advs = candidate
+
                     offset = 0
                     for t_idx in range(len(turn_token_ids)):
                         seq_tokens = turn_token_ids[t_idx]
                         seq_logprobs = turn_logprobs[t_idx]
                         prompt_ids = turn_prompt_ids[t_idx]
-                        seq_advs = token_advs[offset : offset + len(seq_tokens)]
+
+                        if s_turn_advs is not None:
+                            # Per-turn advantage: broadcast the turn's advantage
+                            # to all tokens in this turn's completion.
+                            seq_advs = [s_turn_advs[t_idx]] * len(seq_tokens)
+                        else:
+                            # Fallback: use episode-level token advantages.
+                            seq_advs = token_advs[offset : offset + len(seq_tokens)]
+
                         offset += len(seq_tokens)
                         full_tokens = list(prompt_ids) + list(seq_tokens)
                         padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)

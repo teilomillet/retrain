@@ -6,6 +6,7 @@ import pytest
 
 from retrain.config import TrainConfig
 from retrain.verifiers_bridge import (
+    _coerce_float_list,
     encode_prompt_for_sampling,
     load_examples_from_environment,
     parse_environment_args,
@@ -110,3 +111,24 @@ class TestLoadExamplesFromEnvironment:
         )
         with pytest.raises(RuntimeError, match="Failed to load dataset"):
             load_examples_from_environment(_BrokenDatasetEnv(), cfg)
+
+
+class TestCoerceFloatList:
+    def test_none_returns_empty(self):
+        assert _coerce_float_list(None) == []
+
+    def test_non_list_returns_empty(self):
+        assert _coerce_float_list(42) == []
+        assert _coerce_float_list("not a list") == []
+
+    def test_valid_floats(self):
+        assert _coerce_float_list([1.5, 0.0, -0.3]) == [1.5, 0.0, -0.3]
+
+    def test_ints_coerced_to_float(self):
+        assert _coerce_float_list([1, 2, 3]) == [1.0, 2.0, 3.0]
+
+    def test_invalid_items_become_zero(self):
+        assert _coerce_float_list([1.0, "bad", None, 2.0]) == [1.0, 0.0, 0.0, 2.0]
+
+    def test_empty_list(self):
+        assert _coerce_float_list([]) == []
