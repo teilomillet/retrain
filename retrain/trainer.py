@@ -561,7 +561,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 task = batch_tasks[f_idx]
                 info = batch_infos[f_idx]
 
-                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G = run_multiturn_group(
+                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G = run_multiturn_group(
                     verifiers_env,
                     helper=helper,
                     tokenizer=tokenizer,
@@ -712,13 +712,31 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         all_datum_advantages.append(padded_advantages)
 
                 for s_idx, comp_text in enumerate(completion_texts_G):
-                    generations_logger.log({
+                    gen_entry: dict[str, object] = {
                         "step": batch_idx,
                         "prompt": batch_prompt_previews[f_idx],
                         "completion": comp_text[:500],
                         "reward": rewards_G[s_idx],
                         "num_tokens": len(logprobs_G[s_idx]),
-                    })
+                    }
+                    if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:
+                        turn_summary = []
+                        for tl in turn_logs_G[s_idx]:
+                            obs = tl.get("observation", {})
+                            entry: dict[str, object] = {
+                                "turn": tl.get("turn"),
+                                "tick": obs.get("tick", 0) if isinstance(obs, dict) else 0,
+                                "customer_waiting": obs.get("customer_waiting") if isinstance(obs, dict) else False,
+                                "inventory": obs.get("inventory") if isinstance(obs, dict) else 0,
+                                "operation": tl.get("operation"),
+                                "reward_delta": tl.get("reward_delta", 0.0),
+                                "valid": tl.get("valid", True),
+                            }
+                            if not tl.get("valid"):
+                                entry["error"] = tl.get("error", "")
+                            turn_summary.append(entry)
+                        gen_entry["turn_log"] = turn_summary
+                    generations_logger.log(gen_entry)
             sample_time = time.perf_counter() - sample_start
         else:
             # 10c. Sample completions

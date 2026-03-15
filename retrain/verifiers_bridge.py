@@ -458,16 +458,17 @@ def run_multiturn_group(
     temperature: float,
     top_p: float,
     max_turns_override: int = -1,
-) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]]]:
+) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]]]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
 
     Returns:
-        (rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages)
+        (rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs)
         turn_rewards: per-turn reward deltas for each rollout (from env state)
         turn_advantages: MT-GRPO per-turn advantages for each rollout (from env rubric)
+        turn_logs: per-turn action log for each rollout (observation, action, result)
     """
 
-    async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]]]:
+    async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]]]:
         vf = _require_verifiers()
         env_typed = cast(_MultiTurnEnvironment, env)
         tokenizer_typed = cast(_Tokenizer, tokenizer)
@@ -589,6 +590,10 @@ def run_multiturn_group(
         completions_text = [_messages_to_text(s.get("completion")) for s in states]
         turn_rewards = [_coerce_float_list(s.get("turn_rewards")) for s in states]
         turn_advantages = [_coerce_float_list(s.get("turn_advantages")) for s in states]
-        return rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages
+        turn_logs = [
+            cast(list[dict[str, object]], s.get("turn_log") or [])
+            for s in states
+        ]
+        return rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs
 
     return asyncio.run(_run())
