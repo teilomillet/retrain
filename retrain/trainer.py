@@ -758,6 +758,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 entry["error"] = tl.get("error", "")
                             turn_summary.append(entry)
                         gen_entry["turn_log"] = turn_summary
+                    if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
+                        gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
                     generations_logger.log(gen_entry)
             sample_time = time.perf_counter() - sample_start
         else:
@@ -1194,6 +1196,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             if batch_adv_results:
                 for k in {k for r in batch_adv_results for k in r.extra_metrics}:
                     wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
+            if tl_grpo_ema is not None:
+                wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
             wandb_run.log(wandb_metrics, step=batch_idx)
 
         # Step record for emergence analysis
