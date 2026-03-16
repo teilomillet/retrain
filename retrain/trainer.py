@@ -575,7 +575,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 task = batch_tasks[f_idx]
                 info = batch_infos[f_idx]
 
-                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G = run_multiturn_group(
+                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G, branch_rewards_G = run_multiturn_group(
                     verifiers_env,
                     helper=helper,
                     tokenizer=tokenizer,
@@ -760,6 +760,19 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         gen_entry["turn_log"] = turn_summary
                     if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
                         gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
+                    if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
+                        gen_entry["branch_rewards"] = branch_rewards_G[s_idx]
+                    if s_idx < len(turns_logprobs_G) and turns_logprobs_G[s_idx]:
+                        turn_lps = turns_logprobs_G[s_idx]
+                        gen_entry["turn_mean_logprobs"] = [
+                            sum(lps) / len(lps) if lps else 0.0
+                            for lps in turn_lps
+                        ]
+                        gen_entry["turn_logprob_var"] = [
+                            (sum((x - sum(lps) / len(lps)) ** 2 for x in lps) / len(lps))
+                            if len(lps) > 1 else 0.0
+                            for lps in turn_lps
+                        ]
                     generations_logger.log(gen_entry)
             sample_time = time.perf_counter() - sample_start
         else:
