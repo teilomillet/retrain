@@ -194,6 +194,7 @@ class TrainConfig:
 
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
+    tl_grpo_branch_mode: str = "action_space"  # "action_space" or "llm"
     tl_grpo_branch_size: int = 4
     tl_grpo_ema_decay: float = 0.9
     tl_grpo_ema_init: float = 0.5
@@ -327,6 +328,11 @@ class TrainConfig:
                         "when environment_provider is set."
                     )
 
+        if self.tl_grpo and self.tl_grpo_branch_mode not in ("action_space", "llm"):
+            errors.append(
+                f"tl_grpo_branch_mode must be 'action_space' or 'llm', "
+                f"got '{self.tl_grpo_branch_mode}'. Try: tl_grpo_branch_mode = 'action_space'"
+            )
         if self.tl_grpo and self.tl_grpo_ema_decay <= 0.0:
             errors.append(
                 "tl_grpo_ema_decay must be > 0. Try: tl_grpo_ema_decay = 0.9"
@@ -514,6 +520,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "trainer": "trainer",
         "trainer_command": "trainer_command",
         "tl_grpo": "tl_grpo",
+        "tl_grpo_branch_mode": "tl_grpo_branch_mode",
         "tl_grpo_branch_size": "tl_grpo_branch_size",
         "tl_grpo_ema_decay": "tl_grpo_ema_decay",
         "tl_grpo_ema_init": "tl_grpo_ema_init",

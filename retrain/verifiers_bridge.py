@@ -499,6 +499,31 @@ def _compute_tl_grpo_advantages(
         state["turn_advantages"] = turn_advs
 
 
+def _fork_and_measure(
+    fork_execute: object,
+    ops_before: list[object],
+    alt_op: object,
+    pre_cumulative: float,
+) -> float:
+    """Execute an alternative action in a forked kernel, return reward delta."""
+    alt_snapshot = cast(object, fork_execute)(ops_before + [alt_op])
+    alt_cum = float(
+        cast(dict[str, object], alt_snapshot.get("run", {})).get(
+            "cumulative_reward", 0.0
+        )
+    )
+    return alt_cum - pre_cumulative
+
+
+# -- Default action-space alternatives for Soma vending domains. -----------
+_ACTION_SPACE_ALTERNATIVES: list[dict[str, object]] = [
+    {"kind": "act", "action": {"type": "accept_customer"}},
+    {"kind": "act", "action": {"type": "reject_customer"}},
+    {"kind": "act", "action": {"type": "schedule_restock"}},
+    {"kind": "wait"},
+]
+
+
 def _run_tl_grpo_branching(
     state: StateDict,
     turns: list["VerifiersTurnSample"],
@@ -506,6 +531,7 @@ def _run_tl_grpo_branching(
     helper: "TrainHelper",
     tokenizer: object,
     *,
+    branch_mode: str = "action_space",
     branch_size: int = 4,
     max_tokens: int = 768,
     temperature: float = 0.7,
@@ -513,11 +539,19 @@ def _run_tl_grpo_branching(
 ) -> list[list[float]]:
     """Run TL-GRPO branching from a completed primary rollout.
 
-    For each valid turn, samples ``branch_size - 1`` alternative completions
-    from the LLM, executes each in a forked kernel (replaying the operation
-    prefix), and collects reward-deltas.
+    Two branch modes:
 
-    Returns ``branch_rewards[turn_idx]`` — a list of ``G`` reward-deltas
+    ``action_space`` (default)
+        Enumerates legal kernel actions directly — guaranteed diversity,
+        zero LLM cost.  Best for domains where the LLM is too confident
+        to produce diverse samples.
+
+    ``llm``
+        Samples ``branch_size - 1`` alternative completions from the LLM.
+        Useful when the action space is too large to enumerate or when
+        the LLM's uncertainty is the signal of interest.
+
+    Returns ``branch_rewards[turn_idx]`` — a list of reward-deltas
     where index 0 is the primary action's delta.
     """
     turn_log = cast(
@@ -529,19 +563,13 @@ def _run_tl_grpo_branching(
     # mutating the primary rollout.  Works with both subprocess and HTTP envs.
     fork_execute = getattr(env_obj, "fork_execute", None)
     if fork_execute is None:
-        # Legacy fallback: try client.execute directly.
         client = getattr(env_obj, "client", None)
         if client is not None:
             fork_execute = client.execute
 
-    # Get extract_operation from the env's domain (Soma-specific).
-    extract_operation = getattr(
-        getattr(env, "domain", None), "extract_operation", None
-    )
-    if fork_execute is None or extract_operation is None:
+    if fork_execute is None:
         return []
 
-    tokenizer_typed = cast(_Tokenizer, tokenizer)
     branch_rewards: list[list[float]] = []
     valid_ops: list[object] = []
 
@@ -554,24 +582,7 @@ def _run_tl_grpo_branching(
             branch_rewards.append([primary_delta])
             continue
 
-        # Prompt ids for this turn (conversation up to the assistant response).
-        if t >= len(turns):
-            branch_rewards.append([primary_delta])
-            valid_ops.append(entry["operation"])
-            continue
-
         ops_before = list(valid_ops)
-        prompt_ids = turns[t].prompt_ids
-
-        # Sample G-1 alternative completions.
-        num_alts = branch_size - 1
-        sampled = helper.sample(
-            [prompt_ids], num_alts, max_tokens, temperature, top_p
-        )
-        alt_ids_list = [list(sampled[0][j][0]) for j in range(num_alts)]
-        alt_texts = tokenizer_typed.batch_decode(
-            alt_ids_list, skip_special_tokens=True
-        )
 
         # Pre-action cumulative reward (deterministic replay invariant).
         cum_reward = float(
@@ -579,21 +590,50 @@ def _run_tl_grpo_branching(
         )
         pre_cumulative = cum_reward - primary_delta
 
-        # Execute each alternative in a forked kernel.
         group_rewards: list[float] = [primary_delta]
-        for alt_text in alt_texts:
-            try:
-                alt_op = extract_operation(alt_text)
-                alt_snapshot = fork_execute(ops_before + [alt_op])
-                alt_cum = float(
-                    cast(
-                        dict[str, object],
-                        alt_snapshot.get("run", {}),
-                    ).get("cumulative_reward", 0.0)
-                )
-                group_rewards.append(alt_cum - pre_cumulative)
-            except (ValueError, RuntimeError):
-                group_rewards.append(0.0)
+
+        if branch_mode == "action_space":
+            # Enumerate kernel actions — skip the primary action itself.
+            primary_op = cast(dict[str, object], entry["operation"])
+            for alt_op in _ACTION_SPACE_ALTERNATIVES:
+                if alt_op == primary_op:
+                    continue
+                try:
+                    delta = _fork_and_measure(
+                        fork_execute, ops_before, alt_op, pre_cumulative,
+                    )
+                    group_rewards.append(delta)
+                except (ValueError, RuntimeError):
+                    group_rewards.append(0.0)
+
+        elif branch_mode == "llm":
+            # Sample from the LLM (original approach).
+            extract_operation = getattr(
+                getattr(env, "domain", None), "extract_operation", None,
+            )
+            if extract_operation is None or t >= len(turns):
+                branch_rewards.append([primary_delta])
+                valid_ops.append(entry["operation"])
+                continue
+
+            tokenizer_typed = cast(_Tokenizer, tokenizer)
+            num_alts = branch_size - 1
+            sampled = helper.sample(
+                [turns[t].prompt_ids], num_alts, max_tokens, temperature, top_p,
+            )
+            alt_ids_list = [list(sampled[0][j][0]) for j in range(num_alts)]
+            alt_texts = tokenizer_typed.batch_decode(
+                alt_ids_list, skip_special_tokens=True,
+            )
+            for alt_text in alt_texts:
+                try:
+                    alt_op = extract_operation(alt_text)
+                    delta = _fork_and_measure(
+                        fork_execute, ops_before, alt_op, pre_cumulative,
+                    )
+                    group_rewards.append(delta)
+                except (ValueError, RuntimeError):
+                    group_rewards.append(0.0)
 
         branch_rewards.append(group_rewards)
         valid_ops.append(entry["operation"])
@@ -617,6 +657,7 @@ def run_multiturn_group(
     top_p: float,
     max_turns_override: int = -1,
     tl_grpo: bool = False,
+    tl_grpo_branch_mode: str = "action_space",
     tl_grpo_branch_size: int = 4,
     tl_grpo_outcome_baseline: float | None = None,
 ) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]], list[list[list[float]]]]:
@@ -759,6 +800,7 @@ def run_multiturn_group(
                     env,
                     helper,
                     tokenizer,
+                    branch_mode=tl_grpo_branch_mode,
                     branch_size=tl_grpo_branch_size,
                     max_tokens=max_tokens,
                     temperature=temperature,

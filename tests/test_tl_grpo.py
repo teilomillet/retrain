@@ -303,7 +303,7 @@ class TestRunTlGrpoBranching:
 
         result = _run_tl_grpo_branching(
             state, turns, env, helper, tokenizer,
-            branch_size=4, max_tokens=100, temperature=0.7, top_p=0.95,
+            branch_mode="llm", branch_size=4, max_tokens=100, temperature=0.7, top_p=0.95,
         )
         assert len(result) == 1
         assert len(result[0]) == 4  # primary + 3 alternatives
@@ -333,7 +333,7 @@ class TestRunTlGrpoBranching:
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, env, helper, tokenizer, branch_size=4,
+            state, turns, env, helper, tokenizer, branch_mode="llm", branch_size=4,
         )
         assert len(result) == 1
         assert result[0] == [0.0]
@@ -367,7 +367,7 @@ class TestRunTlGrpoBranching:
 
         result = _run_tl_grpo_branching(
             state, turns, env, helper, tokenizer,
-            branch_size=3, max_tokens=100, temperature=0.7, top_p=0.95,
+            branch_mode="llm", branch_size=3, max_tokens=100, temperature=0.7, top_p=0.95,
         )
         assert len(result) == 1
         assert result[0][0] == 2.0  # primary
@@ -424,7 +424,7 @@ class TestRunTlGrpoBranching:
 
         result = _run_tl_grpo_branching(
             state, turns, env, helper, tokenizer,
-            branch_size=2, max_tokens=100, temperature=0.7, top_p=0.95,
+            branch_mode="llm", branch_size=2, max_tokens=100, temperature=0.7, top_p=0.95,
         )
         assert len(result) == 2
         # Turn 0: primary=1.0, alt=0.5 (cum[1] - pre_cum=0.0)
@@ -433,3 +433,129 @@ class TestRunTlGrpoBranching:
         # Turn 1: primary=3.0, alt delta = cum[2] - pre_cum = 2.0 - 1.0 = 1.0
         assert result[1][0] == 3.0
         assert result[1][1] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Action-space branching tests
+# ---------------------------------------------------------------------------
+
+
+class TestActionSpaceBranching:
+    def _make_state(
+        self,
+        turn_log: list[dict[str, object]],
+        client: _FakeClient,
+    ) -> dict[str, object]:
+        env = type("E", (), {"client": client, "fork_execute": client.execute})()
+        return {
+            "env": env,
+            "turn_log": turn_log,
+        }
+
+    def test_action_space_produces_diverse_branches(self):
+        """Action-space mode tries accept, reject, restock, wait."""
+        turn_log = [
+            {
+                "turn": 1,
+                "operation": {"kind": "act", "action": {"type": "accept_customer"}},
+                "reward_delta": 1.5,
+                "cumulative_reward": 1.5,
+                "valid": True,
+            },
+        ]
+        # Accept=1op→cum 1.5, reject=1op→cum -0.2, restock=1op→cum 0, wait=1op→cum 0
+        # But _FakeClient keys on len(ops). All alts have 1 op → same cum.
+        # Use a smarter fake that varies by action content.
+        class _ActionAwareClient:
+            def execute(self, operations, **kw):
+                if not operations:
+                    return {"run": {"cumulative_reward": 0.0}}
+                last = operations[-1]
+                action = last.get("action", {}).get("type", "") if isinstance(last, dict) else ""
+                rewards = {
+                    "accept_customer": 1.5,
+                    "reject_customer": -0.2,
+                    "schedule_restock": 0.0,
+                }
+                cum = rewards.get(action, 0.0)
+                return {"run": {"cumulative_reward": cum}}
+
+        client = _ActionAwareClient()
+        env_obj = type("E", (), {"fork_execute": client.execute})()
+        state = {"env": env_obj, "turn_log": turn_log}
+
+        result = _run_tl_grpo_branching(
+            state, [], _FakeEnv(), _FakeHelper([]), _FakeTokenizer(),
+            branch_mode="action_space",
+        )
+        assert len(result) == 1
+        # Primary (accept) + 3 alternatives (reject, restock, wait — accept is skipped)
+        assert len(result[0]) == 4
+        assert result[0][0] == 1.5  # primary: accept
+        # Alternatives should include reject=-0.2, restock=0, wait=0
+        alt_deltas = sorted(result[0][1:])
+        assert alt_deltas[0] == pytest.approx(-0.2)  # reject
+        assert alt_deltas[1] == pytest.approx(0.0)    # restock or wait
+        assert alt_deltas[2] == pytest.approx(0.0)    # restock or wait
+
+    def test_action_space_skips_primary_action(self):
+        """Primary action is not duplicated in alternatives."""
+        turn_log = [
+            {
+                "turn": 1,
+                "operation": {"kind": "wait"},
+                "reward_delta": 0.0,
+                "cumulative_reward": 0.0,
+                "valid": True,
+            },
+        ]
+
+        class _ActionAwareClient:
+            def __init__(self):
+                self.actions_tried: list[str] = []
+
+            def execute(self, operations, **kw):
+                if operations:
+                    last = operations[-1]
+                    action = last.get("action", {}).get("type", "") if isinstance(last, dict) and "action" in last else last.get("kind", "")
+                    self.actions_tried.append(action)
+                return {"run": {"cumulative_reward": 0.0}}
+
+        client = _ActionAwareClient()
+        env_obj = type("E", (), {"fork_execute": client.execute})()
+        state = {"env": env_obj, "turn_log": turn_log}
+
+        _run_tl_grpo_branching(
+            state, [], _FakeEnv(), _FakeHelper([]), _FakeTokenizer(),
+            branch_mode="action_space",
+        )
+        # "wait" is the primary action, so alternatives should be the other 3
+        assert "wait" not in client.actions_tried
+        assert len(client.actions_tried) == 3  # accept, reject, restock
+
+    def test_action_space_no_llm_calls(self):
+        """Action-space mode makes zero LLM sample calls."""
+
+        class _FailHelper:
+            def sample(self, *args, **kwargs):
+                raise AssertionError("LLM should not be called in action_space mode")
+
+        turn_log = [
+            {
+                "turn": 1,
+                "operation": {"kind": "act", "action": {"type": "accept_customer"}},
+                "reward_delta": 1.0,
+                "cumulative_reward": 1.0,
+                "valid": True,
+            },
+        ]
+        client = _FakeClient(cumulative_rewards={1: 0.5})
+        state = self._make_state(turn_log, client)
+
+        # Should NOT raise — LLM is never called
+        result = _run_tl_grpo_branching(
+            state, [], _FakeEnv(), _FailHelper(), _FakeTokenizer(),
+            branch_mode="action_space",
+        )
+        assert len(result) == 1
+        assert len(result[0]) >= 2  # primary + at least 1 alternative
