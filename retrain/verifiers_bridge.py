@@ -524,13 +524,21 @@ def _run_tl_grpo_branching(
         list[dict[str, object]], state.get("turn_log") or []
     )
     env_obj = state.get("env")
-    client = getattr(env_obj, "client", None)
+
+    # fork_execute: replay an operation sequence from scratch without
+    # mutating the primary rollout.  Works with both subprocess and HTTP envs.
+    fork_execute = getattr(env_obj, "fork_execute", None)
+    if fork_execute is None:
+        # Legacy fallback: try client.execute directly.
+        client = getattr(env_obj, "client", None)
+        if client is not None:
+            fork_execute = client.execute
 
     # Get extract_operation from the env's domain (Soma-specific).
     extract_operation = getattr(
         getattr(env, "domain", None), "extract_operation", None
     )
-    if client is None or extract_operation is None:
+    if fork_execute is None or extract_operation is None:
         return []
 
     tokenizer_typed = cast(_Tokenizer, tokenizer)
@@ -576,7 +584,7 @@ def _run_tl_grpo_branching(
         for alt_text in alt_texts:
             try:
                 alt_op = extract_operation(alt_text)
-                alt_snapshot = client.execute(ops_before + [alt_op])
+                alt_snapshot = fork_execute(ops_before + [alt_op])
                 alt_cum = float(
                     cast(
                         dict[str, object],

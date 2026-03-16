@@ -266,7 +266,7 @@ class TestRunTlGrpoBranching:
         turn_log: list[dict[str, object]],
         client: _FakeClient,
     ) -> dict[str, object]:
-        env = type("E", (), {"client": client})()
+        env = type("E", (), {"client": client, "fork_execute": client.execute})()
         return {
             "env": env,
             "turn_log": turn_log,
