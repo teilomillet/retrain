@@ -195,6 +195,8 @@ class TrainConfig:
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
     tl_grpo_branch_size: int = 4
+    tl_grpo_ema_decay: float = 0.9
+    tl_grpo_ema_init: float = 0.5
 
     # Resume
     resume_from: str = ""
@@ -325,6 +327,14 @@ class TrainConfig:
                         "when environment_provider is set."
                     )
 
+        if self.tl_grpo and self.tl_grpo_ema_decay <= 0.0:
+            errors.append(
+                "tl_grpo_ema_decay must be > 0. Try: tl_grpo_ema_decay = 0.9"
+            )
+        if self.tl_grpo and self.tl_grpo_ema_decay >= 1.0:
+            errors.append(
+                "tl_grpo_ema_decay must be < 1. Try: tl_grpo_ema_decay = 0.9"
+            )
         if self.tl_grpo and self.tl_grpo_branch_size < 2:
             errors.append(
                 "tl_grpo_branch_size must be >= 2 when tl_grpo is enabled. "
@@ -505,6 +515,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "trainer_command": "trainer_command",
         "tl_grpo": "tl_grpo",
         "tl_grpo_branch_size": "tl_grpo_branch_size",
+        "tl_grpo_ema_decay": "tl_grpo_ema_decay",
+        "tl_grpo_ema_init": "tl_grpo_ema_init",
     },
     "optimizer": {
         "beta1": "optim_beta1",

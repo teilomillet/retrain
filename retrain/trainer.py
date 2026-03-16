@@ -225,9 +225,10 @@ def _save_trainer_state(
     current_group_size: int,
     checkpoint_name: str,
     sepa_state: SEPAStateDict,
+    tl_grpo_ema: float | None = None,
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
-    state = {
+    state: dict[str, object] = {
         "step": step,
         "example_idx": example_idx,
         "total_correct": total_correct,
@@ -237,6 +238,8 @@ def _save_trainer_state(
         "checkpoint_name": checkpoint_name,
         "sepa": sepa_state,
     }
+    if tl_grpo_ema is not None:
+        state["tl_grpo_ema"] = tl_grpo_ema
     tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
     tmp.write_text(json.dumps(state, indent=2) + "\n")
     tmp.rename(path / _TRAINER_STATE_FILE)
@@ -484,6 +487,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if "sepa" in saved:
             sepa_controller.load_state_dict(saved["sepa"])
 
+        # Restore TL-GRPO EMA baseline
+        if "tl_grpo_ema" in saved and tl_grpo_ema is not None:
+            tl_grpo_ema = float(saved["tl_grpo_ema"])
+
         # Restore backend model state
         ckpt_name = saved.get("checkpoint_name", "")
         if ckpt_name:
@@ -493,6 +500,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             f"Resumed from step {saved['step']} "
             f"(checkpoint: {ckpt_name}), continuing from step {start_step}"
         )
+
+    # TL-GRPO EMA reward baseline (REINFORCE with learned baseline).
+    # With group_size=1, the group-normalized outcome advantage is always 0.
+    # The EMA baseline restores the outcome signal: outcome_adv = R - ema.
+    tl_grpo_ema: float | None = None
+    if config.tl_grpo:
+        tl_grpo_ema = config.tl_grpo_ema_init
 
     # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
     warmup_batch_sizes: list[int] = []
@@ -577,6 +591,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     max_turns_override=config.environment_max_turns,
                     tl_grpo=config.tl_grpo,
                     tl_grpo_branch_size=config.tl_grpo_branch_size,
+                    tl_grpo_outcome_baseline=tl_grpo_ema,
                 )
 
                 logprobs_G: list[list[float]] = []
@@ -622,6 +637,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     batch_rewards.append(r)
                     if r > _CORRECT_THRESHOLD:
                         batch_correct += 1
+                    if tl_grpo_ema is not None:
+                        tl_grpo_ema = (
+                            config.tl_grpo_ema_decay * tl_grpo_ema
+                            + (1 - config.tl_grpo_ema_decay) * r
+                        )
 
                 group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
                 answer_preview = answer[:40] if len(answer) > 40 else answer
@@ -1217,6 +1237,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 current_group_size=current_group_size,
                 checkpoint_name=ckpt_name,
                 sepa_state=sepa_controller.state_dict(),
+                tl_grpo_ema=tl_grpo_ema,
             )
             print(f"Saved checkpoint: {ckpt_name}")
 
@@ -1234,6 +1255,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         current_group_size=current_group_size,
         checkpoint_name="final",
         sepa_state=sepa_controller.state_dict(),
+        tl_grpo_ema=tl_grpo_ema,
     )
     final_rate = (
         100.0 * total_correct / total_completions if total_completions > 0 else 0.0

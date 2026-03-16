@@ -22,7 +22,7 @@ class TestComputeTlGrpoAdvantages:
     def test_same_rewards_give_zero_local_advantage(self):
         """When all branches get the same reward, local advantage is 0."""
         states: list[dict[str, object]] = [
-            {"advantage": 0.0},
+            {"advantage": 0.0, "reward": 0.5},
         ]
         # 3 turns, 4 branches each, all identical rewards
         branch_rewards = [
@@ -121,8 +121,8 @@ class TestComputeTlGrpoAdvantages:
     def test_missing_rollout_in_branch_rewards(self):
         """If branch_rewards has fewer entries than states, extras get []."""
         states: list[dict[str, object]] = [
-            {"advantage": 0.0},
-            {"advantage": 0.0},
+            {"advantage": 0.0, "reward": 0.5},
+            {"advantage": 0.0, "reward": 0.5},
         ]
         branch_rewards = [
             [[5.0, 5.0]],
@@ -130,6 +130,55 @@ class TestComputeTlGrpoAdvantages:
         _compute_tl_grpo_advantages(states, branch_rewards)
         assert len(states[0]["turn_advantages"]) == 1
         assert states[1]["turn_advantages"] == []
+
+    def test_outcome_baseline_overrides_group_advantage(self):
+        """With outcome_baseline, uses R - baseline instead of state advantage."""
+        states: list[dict[str, object]] = [
+            {"advantage": 0.0, "reward": 0.85},  # group_size=1 → advantage=0
+        ]
+        # All branches identical → local advantage = 0
+        branch_rewards = [
+            [[0.0, 0.0, 0.0, 0.0]],
+        ]
+        # Without baseline: advantage=0, turn_adv = 0 + 0.5*0 = 0
+        _compute_tl_grpo_advantages(states, branch_rewards, turn_weight=0.5)
+        assert abs(states[0]["turn_advantages"][0]) < 1e-6
+
+        # With baseline=0.5: outcome = 0.85 - 0.5 = 0.35, turn_adv = 0 + 0.5*0.35 = 0.175
+        _compute_tl_grpo_advantages(
+            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+        )
+        assert abs(states[0]["turn_advantages"][0] - 0.175) < 1e-6
+
+    def test_outcome_baseline_bad_episode(self):
+        """Bad episode with baseline → negative outcome signal."""
+        states: list[dict[str, object]] = [
+            {"advantage": 0.0, "reward": 0.20},
+        ]
+        branch_rewards = [
+            [[0.0, 0.0, 0.0, 0.0]],
+        ]
+        _compute_tl_grpo_advantages(
+            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+        )
+        # outcome = 0.20 - 0.5 = -0.30, turn_adv = 0 + 0.5 * (-0.30) = -0.15
+        assert abs(states[0]["turn_advantages"][0] - (-0.15)) < 1e-6
+
+    def test_outcome_baseline_combines_with_local(self):
+        """Baseline outcome + nonzero local advantage combine correctly."""
+        states: list[dict[str, object]] = [
+            {"advantage": 0.0, "reward": 0.80},
+        ]
+        # Primary is best → positive local advantage
+        branch_rewards = [
+            [[10.0, 0.0, 0.0, 0.0]],
+        ]
+        _compute_tl_grpo_advantages(
+            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+        )
+        adv = states[0]["turn_advantages"][0]
+        # local > 0 (primary is best) + 0.5 * (0.80 - 0.5) = local + 0.15
+        assert adv > 0.15  # local is positive, so total > 0.15
 
 
 # ---------------------------------------------------------------------------

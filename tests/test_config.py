@@ -808,11 +808,29 @@ class TestTlGrpoConfig:
         c = TrainConfig(tl_grpo=False, tl_grpo_branch_size=1)
         assert c.tl_grpo_branch_size == 1
 
+    def test_ema_defaults(self):
+        c = TrainConfig()
+        assert c.tl_grpo_ema_decay == pytest.approx(0.9)
+        assert c.tl_grpo_ema_init == pytest.approx(0.5)
+
+    def test_ema_decay_out_of_range(self):
+        with pytest.raises(ValueError, match="tl_grpo_ema_decay must be > 0"):
+            TrainConfig(tl_grpo=True, tl_grpo_ema_decay=0.0)
+        with pytest.raises(ValueError, match="tl_grpo_ema_decay must be < 1"):
+            TrainConfig(tl_grpo=True, tl_grpo_ema_decay=1.0)
+
+    def test_ema_unchecked_when_disabled(self):
+        c = TrainConfig(tl_grpo=False, tl_grpo_ema_decay=0.0)
+        assert c.tl_grpo_ema_decay == pytest.approx(0.0)
+
     def test_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
             '[training]\ntl_grpo = true\ntl_grpo_branch_size = 8\n'
+            'tl_grpo_ema_decay = 0.95\ntl_grpo_ema_init = 0.4\n'
         )
         c = load_config(str(toml))
         assert c.tl_grpo is True
         assert c.tl_grpo_branch_size == 8
+        assert c.tl_grpo_ema_decay == pytest.approx(0.95)
+        assert c.tl_grpo_ema_init == pytest.approx(0.4)

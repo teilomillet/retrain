@@ -447,6 +447,7 @@ def _compute_tl_grpo_advantages(
     states: list[StateDict],
     branch_rewards: list[list[list[float]]],
     turn_weight: float = 0.5,
+    outcome_baseline: float | None = None,
 ) -> None:
     """TL-GRPO per-turn advantage estimation from branching rewards.
 
@@ -454,13 +455,23 @@ def _compute_tl_grpo_advantages(
     turn.  ``branch_rewards[i][t]`` is a list of ``G`` reward-deltas for
     rollout ``i``, turn ``t`` (index 0 = primary action).
 
+    When ``outcome_baseline`` is provided, the outcome advantage is computed as
+    ``R_episode - baseline`` instead of using the group-normalized advantage
+    from ``score_group``.  This is necessary for ``group_size=1`` where the
+    group-normalized advantage is always 0.
+
     Overwrites ``state["turn_advantages"]`` (previously set by MT-GRPO in
     ``score_group``).
     """
     eps = 1e-8
-    outcome_advantages: list[float] = [
-        _coerce_reward(s.get("advantage")) for s in states
-    ]
+    if outcome_baseline is not None:
+        outcome_advantages: list[float] = [
+            _coerce_reward(s.get("reward")) - outcome_baseline for s in states
+        ]
+    else:
+        outcome_advantages = [
+            _coerce_reward(s.get("advantage")) for s in states
+        ]
 
     for i, state in enumerate(states):
         if i >= len(branch_rewards):
@@ -599,6 +610,7 @@ def run_multiturn_group(
     max_turns_override: int = -1,
     tl_grpo: bool = False,
     tl_grpo_branch_size: int = 4,
+    tl_grpo_outcome_baseline: float | None = None,
 ) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]]]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
 
@@ -744,7 +756,11 @@ def run_multiturn_group(
                     top_p=top_p,
                 )
                 all_branch_rewards.append(br)
-            _compute_tl_grpo_advantages(states, all_branch_rewards)
+            _compute_tl_grpo_advantages(
+                states,
+                all_branch_rewards,
+                outcome_baseline=tl_grpo_outcome_baseline,
+            )
 
         rewards = [_coerce_reward(s.get("reward")) for s in states]
         completions_text = [_messages_to_text(s.get("completion")) for s in states]
