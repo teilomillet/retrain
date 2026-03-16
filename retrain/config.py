@@ -192,6 +192,10 @@ class TrainConfig:
     tinker_throttle_dir: str = ""
     tinker_max_concurrent: int = 4
 
+    # TL-GRPO (Turn-Level GRPO with branching)
+    tl_grpo: bool = False
+    tl_grpo_branch_size: int = 4
+
     # Resume
     resume_from: str = ""
 
@@ -320,6 +324,12 @@ class TrainConfig:
                         "environment_args must decode to a JSON object "
                         "when environment_provider is set."
                     )
+
+        if self.tl_grpo and self.tl_grpo_branch_size < 2:
+            errors.append(
+                "tl_grpo_branch_size must be >= 2 when tl_grpo is enabled. "
+                "Try: tl_grpo_branch_size = 4"
+            )
 
         if self.trainer == "command" and not self.trainer_command:
             errors.append(
@@ -493,6 +503,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "save_every": "save_every",
         "trainer": "trainer",
         "trainer_command": "trainer_command",
+        "tl_grpo": "tl_grpo",
+        "tl_grpo_branch_size": "tl_grpo_branch_size",
     },
     "optimizer": {
         "beta1": "optim_beta1",

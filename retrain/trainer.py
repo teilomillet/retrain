@@ -575,6 +575,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     temperature=config.temperature,
                     top_p=config.top_p,
                     max_turns_override=config.environment_max_turns,
+                    tl_grpo=config.tl_grpo,
+                    tl_grpo_branch_size=config.tl_grpo_branch_size,
                 )
 
                 logprobs_G: list[list[float]] = []

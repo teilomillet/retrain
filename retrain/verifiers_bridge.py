@@ -443,6 +443,145 @@ def is_multiturn_environment(env: object) -> bool:
     return isinstance(env, vf.MultiTurnEnv)
 
 
+def _compute_tl_grpo_advantages(
+    states: list[StateDict],
+    branch_rewards: list[list[list[float]]],
+    turn_weight: float = 0.5,
+) -> None:
+    """TL-GRPO per-turn advantage estimation from branching rewards.
+
+    Compares alternative actions branched from the *same* kernel state at each
+    turn.  ``branch_rewards[i][t]`` is a list of ``G`` reward-deltas for
+    rollout ``i``, turn ``t`` (index 0 = primary action).
+
+    Overwrites ``state["turn_advantages"]`` (previously set by MT-GRPO in
+    ``score_group``).
+    """
+    eps = 1e-8
+    outcome_advantages: list[float] = [
+        _coerce_reward(s.get("advantage")) for s in states
+    ]
+
+    for i, state in enumerate(states):
+        if i >= len(branch_rewards):
+            state["turn_advantages"] = []
+            continue
+
+        rollout_branches = branch_rewards[i]
+        outcome_adv = outcome_advantages[i]
+        turn_advs: list[float] = []
+
+        for group_rewards in rollout_branches:
+            if len(group_rewards) < 2:
+                turn_advs.append(turn_weight * outcome_adv)
+                continue
+
+            primary_reward = group_rewards[0]
+            mean_r = sum(group_rewards) / len(group_rewards)
+            var_r = sum((r - mean_r) ** 2 for r in group_rewards) / len(
+                group_rewards
+            )
+            std_r = var_r**0.5
+            turn_local = (primary_reward - mean_r) / (std_r + eps)
+            turn_advs.append(turn_local + turn_weight * outcome_adv)
+
+        state["turn_advantages"] = turn_advs
+
+
+def _run_tl_grpo_branching(
+    state: StateDict,
+    turns: list["VerifiersTurnSample"],
+    env: object,
+    helper: "TrainHelper",
+    tokenizer: object,
+    *,
+    branch_size: int = 4,
+    max_tokens: int = 768,
+    temperature: float = 0.7,
+    top_p: float = 0.95,
+) -> list[list[float]]:
+    """Run TL-GRPO branching from a completed primary rollout.
+
+    For each valid turn, samples ``branch_size - 1`` alternative completions
+    from the LLM, executes each in a forked kernel (replaying the operation
+    prefix), and collects reward-deltas.
+
+    Returns ``branch_rewards[turn_idx]`` — a list of ``G`` reward-deltas
+    where index 0 is the primary action's delta.
+    """
+    turn_log = cast(
+        list[dict[str, object]], state.get("turn_log") or []
+    )
+    env_obj = state.get("env")
+    client = getattr(env_obj, "client", None)
+
+    # Get extract_operation from the env's domain (Soma-specific).
+    extract_operation = getattr(
+        getattr(env, "domain", None), "extract_operation", None
+    )
+    if client is None or extract_operation is None:
+        return []
+
+    tokenizer_typed = cast(_Tokenizer, tokenizer)
+    branch_rewards: list[list[float]] = []
+    valid_ops: list[object] = []
+
+    for t, entry in enumerate(turn_log):
+        primary_delta = float(
+            cast(int | float, entry.get("reward_delta", 0.0))
+        )
+
+        if not entry.get("valid") or entry.get("operation") is None:
+            branch_rewards.append([primary_delta])
+            continue
+
+        # Prompt ids for this turn (conversation up to the assistant response).
+        if t >= len(turns):
+            branch_rewards.append([primary_delta])
+            valid_ops.append(entry["operation"])
+            continue
+
+        ops_before = list(valid_ops)
+        prompt_ids = turns[t].prompt_ids
+
+        # Sample G-1 alternative completions.
+        num_alts = branch_size - 1
+        sampled = helper.sample(
+            [prompt_ids], num_alts, max_tokens, temperature, top_p
+        )
+        alt_ids_list = [list(sampled[0][j][0]) for j in range(num_alts)]
+        alt_texts = tokenizer_typed.batch_decode(
+            alt_ids_list, skip_special_tokens=True
+        )
+
+        # Pre-action cumulative reward (deterministic replay invariant).
+        cum_reward = float(
+            cast(int | float, entry.get("cumulative_reward", 0.0))
+        )
+        pre_cumulative = cum_reward - primary_delta
+
+        # Execute each alternative in a forked kernel.
+        group_rewards: list[float] = [primary_delta]
+        for alt_text in alt_texts:
+            try:
+                alt_op = extract_operation(alt_text)
+                alt_snapshot = client.execute(ops_before + [alt_op])
+                alt_cum = float(
+                    cast(
+                        dict[str, object],
+                        alt_snapshot.get("run", {}),
+                    ).get("cumulative_reward", 0.0)
+                )
+                group_rewards.append(alt_cum - pre_cumulative)
+            except (ValueError, RuntimeError):
+                group_rewards.append(0.0)
+
+        branch_rewards.append(group_rewards)
+        valid_ops.append(entry["operation"])
+
+    return branch_rewards
+
+
 def run_multiturn_group(
     env: object,
     *,
@@ -458,6 +597,8 @@ def run_multiturn_group(
     temperature: float,
     top_p: float,
     max_turns_override: int = -1,
+    tl_grpo: bool = False,
+    tl_grpo_branch_size: int = 4,
 ) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]]]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
 
@@ -585,6 +726,25 @@ def run_multiturn_group(
         for state in states:
             await env_typed.render_completion(state)
         await env_typed.rubric.score_group(states)
+
+        # TL-GRPO: branch from each turn to get epistemically sound
+        # per-turn advantages (alternatives compared against same state).
+        if tl_grpo:
+            all_branch_rewards: list[list[list[float]]] = []
+            for i, state in enumerate(states):
+                br = _run_tl_grpo_branching(
+                    state,
+                    per_rollout_turns[i],
+                    env,
+                    helper,
+                    tokenizer,
+                    branch_size=tl_grpo_branch_size,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                )
+                all_branch_rewards.append(br)
+            _compute_tl_grpo_advantages(states, all_branch_rewards)
 
         rewards = [_coerce_reward(s.get("reward")) for s in states]
         completions_text = [_messages_to_text(s.get("completion")) for s in states]

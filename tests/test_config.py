@@ -786,3 +786,33 @@ class TestAdvClipMaxConfig:
         toml.write_text('[training]\nadv_clip_max = 5.0\n')
         c = load_config(str(toml))
         assert c.adv_clip_max == pytest.approx(5.0)
+
+
+class TestTlGrpoConfig:
+    def test_defaults(self):
+        c = TrainConfig()
+        assert c.tl_grpo is False
+        assert c.tl_grpo_branch_size == 4
+
+    def test_enabled(self):
+        c = TrainConfig(tl_grpo=True, tl_grpo_branch_size=4)
+        assert c.tl_grpo is True
+        assert c.tl_grpo_branch_size == 4
+
+    def test_branch_size_too_small_raises(self):
+        with pytest.raises(ValueError, match="tl_grpo_branch_size must be >= 2"):
+            TrainConfig(tl_grpo=True, tl_grpo_branch_size=1)
+
+    def test_branch_size_unchecked_when_disabled(self):
+        # No error when tl_grpo is off, even with small branch_size.
+        c = TrainConfig(tl_grpo=False, tl_grpo_branch_size=1)
+        assert c.tl_grpo_branch_size == 1
+
+    def test_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[training]\ntl_grpo = true\ntl_grpo_branch_size = 8\n'
+        )
+        c = load_config(str(toml))
+        assert c.tl_grpo is True
+        assert c.tl_grpo_branch_size == 8
