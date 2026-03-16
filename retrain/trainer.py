@@ -650,7 +650,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     f"| answer={answer_preview}"
                 )
 
-                if rewards_G and all(r == rewards_G[0] for r in rewards_G):
+                if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
                     if rewards_G[0] > _CORRECT_THRESHOLD:
                         print("    -> skipped (all correct)")
                     else:
@@ -879,7 +879,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     f"| answer={answer_preview}"
                 )
 
-                if rewards_G and all(r == rewards_G[0] for r in rewards_G):
+                if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
                     if rewards_G[0] > _CORRECT_THRESHOLD:
                         print("    -> skipped (all correct)")
                     else:
