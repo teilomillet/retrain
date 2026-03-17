@@ -196,6 +196,7 @@ class TrainConfig:
     tl_grpo: bool = False
     tl_grpo_branch_mode: str = "action_space"  # "action_space" or "llm"
     tl_grpo_branch_size: int = 4
+    tl_grpo_lookahead_steps: int = 2
     tl_grpo_ema_decay: float = 0.9
     tl_grpo_ema_init: float = 0.5
 
@@ -522,6 +523,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "tl_grpo": "tl_grpo",
         "tl_grpo_branch_mode": "tl_grpo_branch_mode",
         "tl_grpo_branch_size": "tl_grpo_branch_size",
+        "tl_grpo_lookahead_steps": "tl_grpo_lookahead_steps",
         "tl_grpo_ema_decay": "tl_grpo_ema_decay",
         "tl_grpo_ema_init": "tl_grpo_ema_init",
     },

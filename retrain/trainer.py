@@ -592,6 +592,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     tl_grpo=config.tl_grpo,
                     tl_grpo_branch_mode=config.tl_grpo_branch_mode,
                     tl_grpo_branch_size=config.tl_grpo_branch_size,
+                    tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
                     tl_grpo_outcome_baseline=tl_grpo_ema,
                 )
 

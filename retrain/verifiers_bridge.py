@@ -504,9 +504,18 @@ def _fork_and_measure(
     ops_before: list[object],
     alt_op: object,
     pre_cumulative: float,
+    continuation: list[object] | None = None,
 ) -> float:
-    """Execute an alternative action in a forked kernel, return reward delta."""
-    alt_snapshot = cast(object, fork_execute)(ops_before + [alt_op])
+    """Execute an alternative action in a forked kernel, return reward delta.
+
+    When *continuation* is provided, the primary trajectory's next K actions
+    are appended after the alternative.  This captures delayed effects (e.g.
+    a price change that only affects the next customer interaction).
+    """
+    ops = ops_before + [alt_op]
+    if continuation:
+        ops = ops + list(continuation)
+    alt_snapshot = cast(object, fork_execute)(ops)
     alt_cum = float(
         cast(dict[str, object], alt_snapshot.get("run", {})).get(
             "cumulative_reward", 0.0
@@ -533,6 +542,7 @@ def _run_tl_grpo_branching(
     *,
     branch_mode: str = "action_space",
     branch_size: int = 4,
+    lookahead_steps: int = 0,
     max_tokens: int = 768,
     temperature: float = 0.7,
     top_p: float = 0.95,
@@ -550,6 +560,12 @@ def _run_tl_grpo_branching(
         Samples ``branch_size - 1`` alternative completions from the LLM.
         Useful when the action space is too large to enumerate or when
         the LLM's uncertainty is the signal of interest.
+
+    When ``lookahead_steps > 0``, appends the next K valid operations from
+    the primary trajectory after each alternative.  This captures delayed
+    effects — e.g. a price change whose reward only materialises when a
+    customer arrives 2 turns later.  The primary action at turn t also
+    gets the same continuation so the comparison is fair.
 
     Returns ``branch_rewards[turn_idx]`` — a list of reward-deltas
     where index 0 is the primary action's delta.
@@ -570,8 +586,18 @@ def _run_tl_grpo_branching(
     if fork_execute is None:
         return []
 
+    # Collect ALL valid operations upfront so we can build continuations.
+    all_valid_ops: list[object] = []
+    valid_op_indices: list[int] = []  # turn index → position in all_valid_ops
+    for t, entry in enumerate(turn_log):
+        if entry.get("valid") and entry.get("operation") is not None:
+            valid_op_indices.append(len(all_valid_ops))
+            all_valid_ops.append(entry["operation"])
+        else:
+            valid_op_indices.append(-1)
+
     branch_rewards: list[list[float]] = []
-    valid_ops: list[object] = []
+    valid_ops_so_far: list[object] = []
 
     for t, entry in enumerate(turn_log):
         primary_delta = float(
@@ -582,7 +608,17 @@ def _run_tl_grpo_branching(
             branch_rewards.append([primary_delta])
             continue
 
-        ops_before = list(valid_ops)
+        ops_before = list(valid_ops_so_far)
+        vop_idx = valid_op_indices[t]
+
+        # Continuation: next K valid operations from the primary trajectory.
+        continuation: list[object] | None = None
+        if lookahead_steps > 0:
+            continuation = list(
+                all_valid_ops[vop_idx + 1 : vop_idx + 1 + lookahead_steps]
+            )
+            if not continuation:
+                continuation = None
 
         # Pre-action cumulative reward (deterministic replay invariant).
         cum_reward = float(
@@ -590,7 +626,23 @@ def _run_tl_grpo_branching(
         )
         pre_cumulative = cum_reward - primary_delta
 
-        group_rewards: list[float] = [primary_delta]
+        # When using lookahead, re-measure the primary action WITH
+        # continuation so that primary and alternatives are compared
+        # on equal footing.
+        if continuation:
+            try:
+                primary_with_lookahead = _fork_and_measure(
+                    fork_execute,
+                    ops_before,
+                    entry["operation"],
+                    pre_cumulative,
+                    continuation=continuation,
+                )
+            except (ValueError, RuntimeError):
+                primary_with_lookahead = primary_delta
+            group_rewards: list[float] = [primary_with_lookahead]
+        else:
+            group_rewards = [primary_delta]
 
         if branch_mode == "action_space":
             # Enumerate kernel actions — skip the primary action itself.
@@ -601,6 +653,7 @@ def _run_tl_grpo_branching(
                 try:
                     delta = _fork_and_measure(
                         fork_execute, ops_before, alt_op, pre_cumulative,
+                        continuation=continuation,
                     )
                     group_rewards.append(delta)
                 except (ValueError, RuntimeError):
@@ -613,7 +666,7 @@ def _run_tl_grpo_branching(
             )
             if extract_operation is None or t >= len(turns):
                 branch_rewards.append([primary_delta])
-                valid_ops.append(entry["operation"])
+                valid_ops_so_far.append(entry["operation"])
                 continue
 
             tokenizer_typed = cast(_Tokenizer, tokenizer)
@@ -630,13 +683,14 @@ def _run_tl_grpo_branching(
                     alt_op = extract_operation(alt_text)
                     delta = _fork_and_measure(
                         fork_execute, ops_before, alt_op, pre_cumulative,
+                        continuation=continuation,
                     )
                     group_rewards.append(delta)
                 except (ValueError, RuntimeError):
                     group_rewards.append(0.0)
 
         branch_rewards.append(group_rewards)
-        valid_ops.append(entry["operation"])
+        valid_ops_so_far.append(entry["operation"])
 
     return branch_rewards
 
@@ -659,6 +713,7 @@ def run_multiturn_group(
     tl_grpo: bool = False,
     tl_grpo_branch_mode: str = "action_space",
     tl_grpo_branch_size: int = 4,
+    tl_grpo_lookahead_steps: int = 0,
     tl_grpo_outcome_baseline: float | None = None,
 ) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]], list[list[list[float]]]]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
@@ -802,6 +857,7 @@ def run_multiturn_group(
                     tokenizer,
                     branch_mode=tl_grpo_branch_mode,
                     branch_size=tl_grpo_branch_size,
+                    lookahead_steps=tl_grpo_lookahead_steps,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
