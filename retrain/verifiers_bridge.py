@@ -524,13 +524,36 @@ def _fork_and_measure(
     return alt_cum - pre_cumulative
 
 
-# -- Default action-space alternatives for Soma vending domains. -----------
-_ACTION_SPACE_ALTERNATIVES: list[dict[str, object]] = [
+# -- Fallback action-space alternatives (vending domain). ------------------
+# Used only when the kernel response doesn't include legal_actions.
+_FALLBACK_ACTION_SPACE: list[dict[str, object]] = [
     {"kind": "act", "action": {"type": "accept_customer"}},
     {"kind": "act", "action": {"type": "reject_customer"}},
     {"kind": "act", "action": {"type": "schedule_restock"}},
     {"kind": "wait"},
 ]
+
+
+def _get_legal_actions_at_turn(
+    fork_execute: object,
+    ops_before: list[object],
+) -> list[dict[str, object]]:
+    """Get the kernel's legal actions at the state before a turn.
+
+    Falls back to the hardcoded vending action list if the kernel response
+    doesn't include legal_actions.
+    """
+    try:
+        snapshot = cast(object, fork_execute)(ops_before)
+        # legal_actions can be at top level or nested in model_view
+        legal = snapshot.get("legal_actions") or snapshot.get(
+            "model_view", {}
+        ).get("legal_actions", [])
+        if legal:
+            return [{"kind": "act", "action": a} for a in legal] + [{"kind": "wait"}]
+    except (ValueError, RuntimeError):
+        pass
+    return list(_FALLBACK_ACTION_SPACE)
 
 
 def _run_tl_grpo_branching(
@@ -647,7 +670,8 @@ def _run_tl_grpo_branching(
         if branch_mode == "action_space":
             # Enumerate kernel actions — skip the primary action itself.
             primary_op = cast(dict[str, object], entry["operation"])
-            for alt_op in _ACTION_SPACE_ALTERNATIVES:
+            legal_actions = _get_legal_actions_at_turn(fork_execute, ops_before)
+            for alt_op in legal_actions:
                 if alt_op == primary_op:
                     continue
                 try:
