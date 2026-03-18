@@ -480,6 +480,103 @@ def compute_grpo_advantages(rewards: list[float]) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
+# 0b. REINFORCE++ advantages (group-mean subtraction, same as GRPO step 1)
+# ---------------------------------------------------------------------------
+# REINFORCE++ (Hu 2025, arxiv:2501.03262) uses the same per-group mean
+# subtraction as GRPO but follows it with a global batch normalization pass.
+# The episode-level computation is identical — the batch normalization is
+# applied separately in the trainer via apply_batch_advantage_normalization().
+
+
+def compute_reinforce_pp_advantages(rewards: list[float]) -> list[float]:
+    """A_i = r_i - mean(r).
+
+    Identical to GRPO at the per-group level. The key REINFORCE++ innovation
+    is the batch-level normalization pass applied afterward — see
+    ``apply_batch_advantage_normalization``.
+    """
+    return compute_grpo_advantages(rewards)
+
+
+# ---------------------------------------------------------------------------
+# 0c. Batch-level advantage normalization (REINFORCE++ step 2)
+# ---------------------------------------------------------------------------
+
+
+def apply_batch_advantage_normalization(
+    all_advantages: list[list[float]],
+    eps: float = 1e-8,
+) -> tuple[list[list[float]], dict[str, float]]:
+    """Normalize all non-zero advantages across the full batch.
+
+    REINFORCE++ (Hu 2025) fixes GRPO's biased local normalization by
+    normalizing advantages across the entire batch rather than within each
+    prompt's group.  This makes the estimator effectively unbiased as the
+    batch size grows (the bias vanishes as N→∞).
+
+    Two-step process (per the paper):
+      Step 1 (already done by advantage_mode): A' = r_i - mean_group(r)
+      Step 2 (this function):
+        A_norm = (A' - mean_batch(A')) / (std_batch(A') + eps)
+
+    Only normalizes tokens with non-zero advantages (prompt tokens are padded
+    with 0.0 and should not participate in batch statistics).
+
+    Note: uses ``a != 0.0`` as a sentinel to distinguish prompt padding from
+    response tokens.  This is safe because the only way a response advantage
+    is exactly 0.0 is when all group rewards are identical, in which case
+    exclusion from batch statistics is the correct behavior (no gradient
+    signal).  If a future transform produces legitimate 0.0 advantages for
+    individual response tokens, this function should be updated to accept a
+    separate mask.
+
+    Returns:
+        (normalized_advantages, metrics_dict)
+        metrics_dict contains batch_adv_mean, batch_adv_std, batch_adv_count.
+    """
+    # Collect all non-zero advantage values across the batch
+    all_values: list[float] = []
+    for seq in all_advantages:
+        for a in seq:
+            if a != 0.0:
+                all_values.append(a)
+
+    n = len(all_values)
+    metrics: dict[str, float] = {
+        "batch_adv_count": float(n),
+        "batch_adv_mean": 0.0,
+        "batch_adv_std": 0.0,
+    }
+    if n == 0:
+        return all_advantages, metrics
+
+    mean_val = sum(all_values) / n
+    var_val = sum((v - mean_val) ** 2 for v in all_values) / n
+    std_val = math.sqrt(var_val)
+    metrics["batch_adv_mean"] = mean_val
+    metrics["batch_adv_std"] = std_val
+
+    # If std is near zero, all advantages are ~equal — just center them
+    if std_val < eps:
+        result: list[list[float]] = []
+        for seq in all_advantages:
+            result.append([
+                (a - mean_val) if a != 0.0 else 0.0
+                for a in seq
+            ])
+        return result, metrics
+
+    denom = std_val + eps
+    result = []
+    for seq in all_advantages:
+        result.append([
+            (a - mean_val) / denom if a != 0.0 else 0.0
+            for a in seq
+        ])
+    return result, metrics
+
+
+# ---------------------------------------------------------------------------
 # 1. MaxRL advantages (inverse success-rate reweighting)
 # ---------------------------------------------------------------------------
 
@@ -504,6 +601,7 @@ def compute_maxrl_advantages(
 
 _BUILTIN_ADVANTAGE_SPECS: dict[str, AdvantageSpec] = {
     "grpo": _as_advantage_spec("grpo", compute_grpo_advantages),
+    "reinforce_pp": _as_advantage_spec("reinforce_pp", compute_reinforce_pp_advantages),
     "maxrl": _as_advantage_spec("maxrl", compute_maxrl_advantages),
 }
 
@@ -665,6 +763,27 @@ _BUILTIN_ALGORITHM_SPECS: dict[str, AlgorithmSpec] = {
     "maxrl_gtpo_sepa": _make_builtin_algorithm_spec(
         "maxrl_gtpo_sepa",
         advantage_mode="maxrl",
+        transform_mode="gtpo_sepa",
+        needs_planning=True,
+        uses_sepa_controller=True,
+    ),
+    "reinforce_pp_none": _make_builtin_algorithm_spec(
+        "reinforce_pp_none",
+        advantage_mode="reinforce_pp",
+        transform_mode="none",
+        needs_planning=False,
+        uses_sepa_controller=False,
+    ),
+    "reinforce_pp_gtpo": _make_builtin_algorithm_spec(
+        "reinforce_pp_gtpo",
+        advantage_mode="reinforce_pp",
+        transform_mode="gtpo",
+        needs_planning=False,
+        uses_sepa_controller=False,
+    ),
+    "reinforce_pp_gtpo_sepa": _make_builtin_algorithm_spec(
+        "reinforce_pp_gtpo_sepa",
+        advantage_mode="reinforce_pp",
         transform_mode="gtpo_sepa",
         needs_planning=True,
         uses_sepa_controller=True,

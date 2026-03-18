@@ -1,0 +1,33 @@
+# Warehouse Phase 1: Pure SFT on oracle demonstrations
+#
+# Usage:
+#   retrain campaigns/warehouse-sft.toml
+#
+# Or use the pipeline script for the full staged flow:
+#   python campaigns/warehouse_pipeline.py
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[algorithm]
+advantage_mode = "reinforce_pp"
+transform_mode = "none"
+
+[training]
+seed = 42
+max_steps = 60
+sft_warmup_steps = 60
+sft_data_path = "python/scripts/warehouse_sft_data.jsonl"
+batch_size = 4
+group_size = 16
+max_tokens = 10240
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[logging]
+log_dir = "logs/warehouse-sft"

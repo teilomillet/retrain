@@ -35,7 +35,7 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
 lora_rank = 32
 
 [algorithm]
-advantage_mode = "maxrl"     # grpo | maxrl | my_module.my_advantage
+advantage_mode = "maxrl"     # grpo | maxrl | reinforce_pp | my_module.my_advantage
 transform_mode = "gtpo_sepa" # none | gtpo | ... | my_module.make_transform_spec
 
 [training]

@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 
 from retrain.advantages import (
     EntropyStats,
+    apply_batch_advantage_normalization,
     compute_algorithm_advantages,
     compute_composable_advantages,
 )
@@ -435,6 +436,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             "max_steps": config.max_steps,
             "backend": config.backend,
             "seed": config.seed,
+            "batch_advantage_norm": int(config.batch_advantage_norm),
+            "clip_eps": config.clip_eps,
+            "clip_eps_high": config.clip_eps_high,
+            "adv_clip_max": config.adv_clip_max,
+            "sft_warmup_steps": config.sft_warmup_steps,
+            "tl_grpo": int(config.tl_grpo),
         }
         wandb_run = wandb.init(
             project=config.wandb_project,
@@ -1105,6 +1112,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 backend_name=config.backend,
             )
 
+        # REINFORCE++ batch normalization (before capping)
+        batch_norm_metrics: dict[str, float] = {}
+        if config.batch_advantage_norm:
+            all_datum_advantages, batch_norm_metrics = (
+                apply_batch_advantage_normalization(all_datum_advantages)
+            )
+
         # Advantage capping (pre-training, any backend)
         adv_cap_fraction = 0.0
         adv_cap_magnitude = 0.0
@@ -1234,6 +1248,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         metrics["clip_fraction"] = clip_fraction
         metrics["adv_cap_fraction"] = adv_cap_fraction
         metrics["adv_cap_magnitude"] = adv_cap_magnitude
+        if batch_norm_metrics:
+            metrics.update(batch_norm_metrics)
         if batch_adv_results:
             all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
             for k in all_extra_keys:
@@ -1292,6 +1308,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "train/clip_fraction": clip_fraction,
                 "train/adv_cap_fraction": adv_cap_fraction,
                 "train/adv_cap_magnitude": adv_cap_magnitude,
+                **{f"train/{k}": v for k, v in batch_norm_metrics.items()},
                 "train/backpressure/action": bp_decision.action,
                 "train/backpressure/regime": bp_decision.regime,
                 "train/backpressure/p_star": bp_decision.p_star,

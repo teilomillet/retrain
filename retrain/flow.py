@@ -48,6 +48,8 @@ _SCALAR_BACKEND_DISALLOWED_BUILTIN_ALGORITHM_MODES = frozenset(
         "maxrl_gtpo",
         "maxrl_gtpo_hicra",
         "maxrl_gtpo_sepa",
+        "reinforce_pp_gtpo",
+        "reinforce_pp_gtpo_sepa",
     }
 )
 

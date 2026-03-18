@@ -788,6 +788,28 @@ class TestAdvClipMaxConfig:
         assert c.adv_clip_max == pytest.approx(5.0)
 
 
+class TestBatchAdvantageNormConfig:
+    def test_default(self):
+        c = TrainConfig()
+        assert c.batch_advantage_norm is False
+
+    def test_enabled(self):
+        c = TrainConfig(batch_advantage_norm=True)
+        assert c.batch_advantage_norm is True
+
+    def test_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[training]\nbatch_advantage_norm = true\n')
+        c = load_config(str(toml))
+        assert c.batch_advantage_norm is True
+
+    def test_with_reinforce_pp(self):
+        """Common combination: reinforce_pp + batch_advantage_norm."""
+        c = TrainConfig(advantage_mode="reinforce_pp", batch_advantage_norm=True)
+        assert c.advantage_mode == "reinforce_pp"
+        assert c.batch_advantage_norm is True
+
+
 class TestTlGrpoConfig:
     def test_defaults(self):
         c = TrainConfig()

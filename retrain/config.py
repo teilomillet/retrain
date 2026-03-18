@@ -121,6 +121,7 @@ class TrainConfig:
     clip_eps: float = 0.0        # 0 = disabled (no PPO-style ratio clipping)
     clip_eps_high: float = 0.0   # 0 = symmetric (uses clip_eps for upper bound)
     adv_clip_max: float = 0.0    # 0 = disabled; caps token advantages to [-max, +max]
+    batch_advantage_norm: bool = False  # REINFORCE++: normalize advantages across full batch
     max_examples: int = 0
     save_every: int = 20
 
@@ -520,6 +521,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "clip_eps": "clip_eps",
         "clip_eps_high": "clip_eps_high",
         "adv_clip_max": "adv_clip_max",
+        "batch_advantage_norm": "batch_advantage_norm",
         "max_examples": "max_examples",
         "save_every": "save_every",
         "trainer": "trainer",
