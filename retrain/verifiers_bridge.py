@@ -669,11 +669,14 @@ def _run_tl_grpo_branching(
 
         if branch_mode == "action_space":
             # Enumerate kernel actions — skip the primary action itself.
+            # Cap at branch_size alternatives to control cost.
+            import random as _rng
             primary_op = cast(dict[str, object], entry["operation"])
             legal_actions = _get_legal_actions_at_turn(fork_execute, ops_before)
-            for alt_op in legal_actions:
-                if alt_op == primary_op:
-                    continue
+            alt_actions = [a for a in legal_actions if a != primary_op]
+            if len(alt_actions) > branch_size - 1:
+                alt_actions = _rng.sample(alt_actions, branch_size - 1)
+            for alt_op in alt_actions:
                 try:
                     delta = _fork_and_measure(
                         fork_execute, ops_before, alt_op, pre_cumulative,
@@ -805,9 +808,16 @@ def run_multiturn_group(
                 temperature,
                 top_p,
             )
-            completion_ids_batch = [list(group[0][0]) for group in sampled_groups]
+            # Handle empty groups: if the sampler returns no completions
+            # (e.g. prompt too long for max_tokens), use a fallback empty
+            # completion so the turn loop can continue gracefully.
+            completion_ids_batch = [
+                list(group[0][0]) if group else []
+                for group in sampled_groups
+            ]
             completion_logprobs_batch = [
-                [float(lp) for lp in group[0][1]] for group in sampled_groups
+                [float(lp) for lp in group[0][1]] if group else []
+                for group in sampled_groups
             ]
             completion_texts = tokenizer_typed.batch_decode(
                 completion_ids_batch, skip_special_tokens=True

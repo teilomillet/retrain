@@ -73,7 +73,7 @@ class PipelineConfig:
     sft_steps: int = 60
     sft_lr: float = 4e-5
     sft_batch_size: int = 4
-    sft_data_path: str = "python/scripts/warehouse_sft_data.jsonl"
+    sft_data_path: str = "/Users/teilomillet/Code/soma/python/scripts/warehouse_sft_data.jsonl"
 
     # -- RL phase --
     rl_steps: int = 200

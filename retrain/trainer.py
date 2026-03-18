@@ -602,7 +602,20 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 flush=True,
             )
 
-            # Log
+            # Log to metrics.jsonl (trace every SFT step)
+            sft_metrics: dict[str, int | float | str] = {
+                "step": batch_idx,
+                "loss": loss,
+                "phase": "sft",
+                "datums": len(sft_batch),
+                "time_s": round(elapsed, 2),
+                "advantage_mode": config.advantage_mode,
+                "lr": config.lr,
+            }
+            metrics_logger.log(sft_metrics)
+            steps_logger.log(sft_metrics)
+
+            # Wandb
             if wandb_run is not None:
                 wandb_run.log(
                     {"train/loss": loss, "train/sft_warmup": 1, "train/step": batch_idx},
