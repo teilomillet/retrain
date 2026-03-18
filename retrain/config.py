@@ -192,6 +192,10 @@ class TrainConfig:
     tinker_throttle_dir: str = ""
     tinker_max_concurrent: int = 4
 
+    # SFT warmup (supervised fine-tuning before RL)
+    sft_warmup_steps: int = 0
+    sft_data_path: str = ""  # JSONL with {"messages": [...]} per line
+
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
     tl_grpo_branch_mode: str = "action_space"  # "action_space" or "llm"
@@ -526,6 +530,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "tl_grpo_lookahead_steps": "tl_grpo_lookahead_steps",
         "tl_grpo_ema_decay": "tl_grpo_ema_decay",
         "tl_grpo_ema_init": "tl_grpo_ema_init",
+        "sft_warmup_steps": "sft_warmup_steps",
+        "sft_data_path": "sft_data_path",
     },
     "optimizer": {
         "beta1": "optim_beta1",

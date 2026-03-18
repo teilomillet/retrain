@@ -103,16 +103,27 @@ class TinkerTrainHelper:
                     )
                 )
 
-            # Collect results
+            # Collect results (with timeout to prevent hanging on context overflow)
             results: list[list[tuple[list[int], list[float]]]] = []
-            for future in futures:
-                sample_result = future.result()
-                group: list[tuple[list[int], list[float]]] = []
-                for seq in sample_result.sequences:
-                    token_ids = list(seq.tokens)
-                    logprobs = [float(lp) for lp in seq.logprobs]
-                    group.append((token_ids, logprobs))
-                results.append(group)
+            for i, future in enumerate(futures):
+                try:
+                    sample_result = future.result(timeout=120)  # 2 min timeout per sample
+                    group: list[tuple[list[int], list[float]]] = []
+                    for seq in sample_result.sequences:
+                        token_ids = list(seq.tokens)
+                        logprobs = [float(lp) for lp in seq.logprobs]
+                        group.append((token_ids, logprobs))
+                    results.append(group)
+                except Exception as exc:
+                    # Context overflow or timeout — return empty sequence
+                    # instead of hanging forever.
+                    import sys
+                    print(
+                        f"WARNING: Tinker sample {i} failed: {exc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    results.append([])
             return results
 
     def sample_with_entropy(
@@ -133,6 +144,65 @@ class TinkerTrainHelper:
             [(ids, lps, None) for ids, lps in group]
             for group in groups
         ]
+
+    def sft_train_step(
+        self,
+        all_tokens: list[list[int]],
+        all_advantages: list[list[float]],
+        lr: float,
+        weight_decay: float,
+    ) -> float:
+        """SFT via importance_sampling with advantage mask on response tokens only.
+
+        advantages=0 for prompt tokens (no gradient), advantages=1 for response
+        tokens. With logprobs=0, the importance ratio gradient pushes the model's
+        logprobs up on oracle action tokens — behavior cloning.
+        """
+        import torch
+        import tinker.types as types
+        from tinker.types.tensor_data import TensorData
+
+        with self._throttle:
+            datums = []
+            for i, tokens in enumerate(all_tokens):
+                advs = all_advantages[i] if i < len(all_advantages) else [1.0] * len(tokens)
+                model_input = types.ModelInput.from_ints(tokens)
+                loss_fn_inputs = {
+                    "target_tokens": TensorData.from_torch(
+                        torch.tensor(tokens, dtype=torch.long)
+                    ),
+                    "logprobs": TensorData.from_torch(
+                        torch.zeros(len(tokens), dtype=torch.float32)
+                    ),
+                    "advantages": TensorData.from_torch(
+                        torch.tensor(advs, dtype=torch.float32)
+                    ),
+                }
+                datums.append(types.Datum(
+                    model_input=model_input,
+                    loss_fn_inputs=loss_fn_inputs,
+                ))
+
+            fwd_bwd_future = self.training_client.forward_backward(
+                datums, loss_fn="importance_sampling"
+            )
+            adam_params = types.AdamParams(
+                learning_rate=lr,
+                beta1=self._optim_beta1,
+                beta2=self._optim_beta2,
+                eps=self._optim_eps,
+                weight_decay=weight_decay,
+            )
+            optim_future = self.training_client.optim_step(adam_params)
+
+            fwd_bwd_result = fwd_bwd_future.result()
+            optim_future.result()
+
+            if hasattr(fwd_bwd_result, "metrics") and fwd_bwd_result.metrics:
+                n = max(len(datums), 1)
+                loss_sum = fwd_bwd_result.metrics.get("loss:sum", 0.0)
+                return float(loss_sum) / n
+            return 0.0
 
     def train_step(
         self,

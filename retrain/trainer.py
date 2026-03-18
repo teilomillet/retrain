@@ -518,8 +518,101 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
             warmup_batch_sizes.append(config.bp_max_batch_size)
 
+    # -----------------------------------------------------------------------
+    # SFT warmup data (load once if configured)
+    # -----------------------------------------------------------------------
+    sft_examples: list[list[dict[str, str]]] = []
+    if config.sft_warmup_steps > 0 and config.sft_data_path:
+        sft_path = Path(config.sft_data_path)
+        if sft_path.exists():
+            import json as _json
+            with open(sft_path) as _f:
+                for _line in _f:
+                    row = _json.loads(_line)
+                    sft_examples.append(row["messages"])
+            print(f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path}")
+        else:
+            print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
+
     for batch_idx in range(start_step, config.max_steps):
         step_start = time.perf_counter()
+
+        # =================================================================
+        # SFT warmup: supervised training from oracle demonstrations
+        # =================================================================
+        if batch_idx < config.sft_warmup_steps and sft_examples:
+            helper.checkpoint(f"step_{batch_idx}")
+
+            # Sample a batch of SFT examples
+            sft_batch_size = min(16, len(sft_examples))
+            sft_start = (batch_idx * sft_batch_size) % len(sft_examples)
+            sft_batch = sft_examples[sft_start : sft_start + sft_batch_size]
+
+            # Tokenize: full conversation (system + user + assistant)
+            sft_tokens_list: list[list[int]] = []
+            sft_logprobs_list: list[list[float]] = []
+            sft_advantages_list: list[list[float]] = []
+
+            for msgs in sft_batch:
+                # Tokenize prompt (system + user) and response (assistant) separately
+                # to create a mask: advantages=0 for prompt, advantages=1 for response
+                prompt_msgs = msgs[:2]  # system + user
+                full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
+                prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)
+                prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
+                full_tokens = tokenizer.encode(full_text, add_special_tokens=False)
+                if len(full_tokens) > config.max_tokens + 512:
+                    full_tokens = full_tokens[: config.max_tokens + 512]
+                # Mask: 0 for prompt tokens, 1 for response tokens
+                n_prompt = min(len(prompt_tokens), len(full_tokens))
+                advantages = [0.0] * n_prompt + [1.0] * (len(full_tokens) - n_prompt)
+                sft_tokens_list.append(full_tokens)
+                sft_logprobs_list.append([0.0] * len(full_tokens))
+                sft_advantages_list.append(advantages)
+
+            # Train with cross-entropy loss (actual SFT, not importance sampling)
+            print(f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples...", flush=True)
+            if hasattr(helper, "sft_train_step"):
+                loss = helper.sft_train_step(
+                    sft_tokens_list,
+                    sft_advantages_list,
+                    config.lr,
+                    config.weight_decay,
+                )
+            else:
+                # Fallback: use standard train_step with importance_sampling
+                loss = helper.train_step(
+                    sft_tokens_list,
+                    sft_logprobs_list,
+                    sft_advantages_list,
+                    config.lr,
+                    config.weight_decay,
+                )
+            elapsed = time.perf_counter() - step_start
+            print(
+                f"Step {batch_idx} [SFT warmup] | loss={loss:.4f} | "
+                f"datums={len(sft_batch)} | time={elapsed:.1f}s",
+                flush=True,
+            )
+
+            # Log
+            if wandb_run is not None:
+                wandb_run.log(
+                    {"train/loss": loss, "train/sft_warmup": 1, "train/step": batch_idx},
+                    step=batch_idx,
+                )
+
+            # Save checkpoint
+            if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
+                ckpt_name = f"checkpoint_step_{batch_idx + 1}"
+                helper.save_adapter(config.adapter_path, ckpt_name)
+                print(f"Saved checkpoint: {ckpt_name}")
+
+            # Note: SFT→GRPO transition eval removed (caused context overflow).
+            # The first GRPO step (step 10) serves as the eval — if reward > 0,
+            # the SFT produced valid actions.
+
+            continue  # Skip the RL pipeline for this step
 
         # Back pressure warmup sweep
         bp_warmup = False
