@@ -596,8 +596,15 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     config.weight_decay,
                 )
             elapsed = time.perf_counter() - step_start
+            # Note: tinker's importance_sampling loss with logprobs=0 produces
+            # negative values that get MORE negative as the model learns
+            # (-exp(logprob) * advantage).  We report both the raw IS loss
+            # and the flipped "sft_signal" (= -loss, higher = better) so
+            # the learning curve is intuitive.
+            sft_signal = -loss
             print(
-                f"Step {batch_idx} [SFT warmup] | loss={loss:.4f} | "
+                f"Step {batch_idx} [SFT warmup] | is_loss={loss:.4f} | "
+                f"sft_signal={sft_signal:.4f} | "
                 f"datums={len(sft_batch)} | time={elapsed:.1f}s",
                 flush=True,
             )
@@ -606,6 +613,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             sft_metrics: dict[str, int | float | str] = {
                 "step": batch_idx,
                 "loss": loss,
+                "sft_signal": sft_signal,
                 "phase": "sft",
                 "datums": len(sft_batch),
                 "time_s": round(elapsed, 2),
@@ -618,7 +626,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # Wandb
             if wandb_run is not None:
                 wandb_run.log(
-                    {"train/loss": loss, "train/sft_warmup": 1, "train/step": batch_idx},
+                    {
+                        "train/loss": loss,
+                        "train/sft_signal": sft_signal,
+                        "train/sft_warmup": 1,
+                        "train/step": batch_idx,
+                    },
                     step=batch_idx,
                 )
 
