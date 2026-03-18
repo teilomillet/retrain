@@ -107,7 +107,7 @@ class TinkerTrainHelper:
             results: list[list[tuple[list[int], list[float]]]] = []
             for i, future in enumerate(futures):
                 try:
-                    sample_result = future.result(timeout=120)  # 2 min timeout per sample
+                    sample_result = future.result(timeout=300)  # 5 min timeout per sample
                     group: list[tuple[list[int], list[float]]] = []
                     for seq in sample_result.sequences:
                         token_ids = list(seq.tokens)
@@ -119,7 +119,7 @@ class TinkerTrainHelper:
                     # instead of hanging forever.
                     import sys
                     print(
-                        f"WARNING: Tinker sample {i} failed: {exc}",
+                        f"WARNING: Tinker sample {i} failed: {type(exc).__name__}: {exc}",
                         file=sys.stderr,
                         flush=True,
                     )
