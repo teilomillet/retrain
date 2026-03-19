@@ -168,11 +168,13 @@ class TinkerTrainHelper:
         lr: float,
         weight_decay: float,
     ) -> float:
-        """SFT via importance_sampling with advantage mask on response tokens only.
+        """SFT via cross-entropy loss with advantage mask on response tokens.
 
+        Uses tinker's native cross_entropy loss function for proper SFT.
         advantages=0 for prompt tokens (no gradient), advantages=1 for response
-        tokens. With logprobs=0, the importance ratio gradient pushes the model's
-        logprobs up on oracle action tokens — behavior cloning.
+        tokens. The cross-entropy loss directly maximizes log-probability of
+        target tokens, unlike importance_sampling which computes exp(logprob)
+        and can return 0.0 when the model assigns very low probability.
         """
         import torch
         import tinker.types as types
@@ -187,9 +189,6 @@ class TinkerTrainHelper:
                     "target_tokens": TensorData.from_torch(
                         torch.tensor(tokens, dtype=torch.long)
                     ),
-                    "logprobs": TensorData.from_torch(
-                        torch.zeros(len(tokens), dtype=torch.float32)
-                    ),
                     "advantages": TensorData.from_torch(
                         torch.tensor(advs, dtype=torch.float32)
                     ),
@@ -200,7 +199,7 @@ class TinkerTrainHelper:
                 ))
 
             fwd_bwd_future = self.training_client.forward_backward(
-                datums, loss_fn="importance_sampling"
+                datums, loss_fn="cross_entropy"
             )
             adam_params = types.AdamParams(
                 learning_rate=lr,
