@@ -788,6 +788,13 @@ _BUILTIN_ALGORITHM_SPECS: dict[str, AlgorithmSpec] = {
         needs_planning=True,
         uses_sepa_controller=True,
     ),
+    "reinforce_pp_delight": _make_builtin_algorithm_spec(
+        "reinforce_pp_delight",
+        advantage_mode="reinforce_pp",
+        transform_mode="delight",
+        needs_planning=False,
+        uses_sepa_controller=False,
+    ),
 }
 
 _ALGORITHM_SPEC_CACHE: dict[str, AlgorithmSpec] = {}
@@ -913,6 +920,51 @@ def apply_gtpo_weighting(
         h_norm = h / (mean_h + 1e-8)
         weight = max(0.0, 1.0 + beta * (h_norm - 1.0))
         result.append(advantage * weight)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 2b. Delight gating (Osband 2026, arxiv:2603.14608)
+# ---------------------------------------------------------------------------
+
+
+def apply_delight_gating(
+    advantage: float, surprisals: list[float], eta: float = 1.0
+) -> list[float]:
+    """Delight-gated token-level advantages.
+
+    Gates each token's advantage by σ(advantage × surprisal / η), where σ is
+    the sigmoid.  This amplifies "breakthroughs" (rare actions with positive
+    advantage) and suppresses "blunders" (rare actions with negative advantage).
+
+    Unlike GTPO which amplifies all high-entropy tokens uniformly, delight
+    gating considers the *sign* of the advantage: high-entropy tokens with
+    negative advantage are suppressed, not amplified.
+
+    Args:
+        advantage: Episode-level advantage for this sample.
+        surprisals: Per-token surprisal values (-logprob).
+        eta: Temperature (η=1 default; η→∞ recovers uniform weighting).
+    """
+    n = len(surprisals)
+    if n == 0:
+        return []
+    if advantage == 0.0:
+        return [0.0] * n
+
+    result = []
+    for s in surprisals:
+        s_clamped = min(s, MAX_SURPRISAL)
+        delight = advantage * s_clamped
+        # sigmoid: 1 / (1 + exp(-x))
+        x = delight / max(eta, 1e-8)
+        if x > 20:
+            gate = 1.0
+        elif x < -20:
+            gate = 0.0
+        else:
+            gate = 1.0 / (1.0 + math.exp(-x))
+        result.append(advantage * gate)
     return result
 
 
@@ -1104,8 +1156,45 @@ def apply_sepa_amplification_clamped(
 # 4b. Transform mode registry (built-ins + dotted-path plugins)
 # ---------------------------------------------------------------------------
 
+def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
+    """Delightful Policy Gradient transform (Osband 2026, arxiv:2603.14608).
+
+    Gates each token's advantage by σ(advantage × surprisal / η).
+    Amplifies breakthroughs (rare good actions), suppresses blunders
+    (rare bad actions).  Unlike GTPO which amplifies all high-entropy
+    tokens, delight considers the sign of the advantage.
+    """
+    eta = float(ctx.params.get("delight_eta", 1.0))
+    all_token_advs: list[list[float]] = []
+    all_exec_surprisals: list[float] = []
+    all_plan_surprisals: list[float] = []
+
+    for idx in range(len(ctx.logprobs_G)):
+        advantage = ctx.episode_advantages[idx]
+        logprobs = ctx.logprobs_G[idx]
+        planning_mask = ctx.planning_masks_G[idx]
+        surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
+
+        token_advs = apply_delight_gating(advantage, surprisals, eta=eta)
+        all_token_advs.append(token_advs)
+
+        for j, s in enumerate(surprisals):
+            if planning_mask[j]:
+                all_plan_surprisals.append(s)
+            else:
+                all_exec_surprisals.append(s)
+
+    stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
+    return AdvantageResult(all_token_advs, True, stats)
+
+
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
     "none": TransformSpec(name="none", use_gtpo=False),
+    "delight": TransformSpec(
+        name="delight",
+        use_gtpo=False,
+        compute_context=_compute_delight_transform,
+    ),
     "gtpo": TransformSpec(name="gtpo"),
     "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=surprisal_mask_post_process),
     "gtpo_hicra": TransformSpec(

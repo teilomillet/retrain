@@ -18,6 +18,7 @@ import pytest
 
 from retrain.advantages import (
     apply_batch_advantage_normalization,
+    apply_delight_gating,
     compute_algorithm_advantages,
     compute_composable_advantages,
     compute_grpo_advantages,
@@ -26,6 +27,7 @@ from retrain.advantages import (
     get_algorithm_spec,
     get_builtin_advantage_modes,
     get_builtin_algorithm_modes,
+    get_builtin_transform_modes,
 )
 
 
@@ -884,3 +886,101 @@ class TestReinforcePPStress:
         for seq in normalized:
             for a in seq:
                 assert math.isfinite(a), f"Non-finite: {a}"
+
+
+# ---------------------------------------------------------------------------
+# Delight gating (Osband 2026, arxiv:2603.14608)
+# ---------------------------------------------------------------------------
+
+class TestDelightGating:
+    """Test delight-gated token advantages."""
+
+    def test_registered(self):
+        assert "delight" in get_builtin_transform_modes()
+
+    def test_breakthrough_amplified(self):
+        """Rare good actions (high surprisal, positive advantage) → gate open."""
+        result = apply_delight_gating(1.0, [5.0, 0.1], eta=1.0)
+        # High surprisal token should get higher weight than low surprisal
+        assert result[0] > result[1]
+        # Both should be positive (positive advantage)
+        assert result[0] > 0
+        assert result[1] > 0
+
+    def test_blunder_suppressed(self):
+        """Rare bad actions (high surprisal, negative advantage) → gate closed."""
+        result = apply_delight_gating(-1.0, [5.0, 0.1], eta=1.0)
+        # High surprisal with negative advantage → suppressed (gate near 0)
+        assert abs(result[0]) < abs(result[1])
+
+    def test_zero_advantage(self):
+        result = apply_delight_gating(0.0, [1.0, 2.0, 3.0])
+        assert all(a == 0.0 for a in result)
+
+    def test_empty(self):
+        assert apply_delight_gating(1.0, []) == []
+
+    def test_high_eta_recovers_uniform(self):
+        """η → ∞ should recover uniform weighting (gate ≈ 0.5 for all)."""
+        result = apply_delight_gating(1.0, [0.1, 5.0, 10.0], eta=1000.0)
+        # All gates should be ~0.5, so all advantages ~0.5
+        for a in result:
+            assert a == pytest.approx(0.5, abs=0.05)
+
+    def test_composable_with_reinforce_pp(self):
+        """Delight should work through the composable pipeline."""
+        rewards = [1.0, 0.0, 0.5]
+        logprobs = [[-0.5, -3.0, -0.1], [-0.7, -0.2, -5.0], [-0.4, -0.6, -1.0]]
+        planning_masks = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="reinforce_pp",
+            transform_mode="delight",
+        )
+        assert len(result.token_advs) == 3
+        # Token advantages should vary within each sequence
+        # (unlike "none" which would broadcast uniformly)
+        for i in range(3):
+            assert len(result.token_advs[i]) == 3
+
+    def test_algorithm_mode_shortcut(self):
+        """reinforce_pp_delight algorithm mode should work."""
+        spec = get_algorithm_spec("reinforce_pp_delight")
+        assert spec.name == "reinforce_pp_delight"
+        result = compute_algorithm_advantages(
+            [1.0, 0.0],
+            [[-0.5, -3.0], [-0.7, -0.2]],
+            [[0, 0], [0, 0]],
+            algorithm_mode="reinforce_pp_delight",
+        )
+        assert len(result.token_advs) == 2
+
+    def test_gtpo_vs_delight_on_negative_advantage(self):
+        """Key difference: GTPO amplifies ALL high-entropy tokens.
+        Delight suppresses high-entropy tokens with negative advantage."""
+        from retrain.advantages import apply_gtpo_weighting
+
+        advantage = -1.0
+        surprisals = [0.1, 5.0]  # one low, one high
+
+        gtpo_result = apply_gtpo_weighting(advantage, surprisals, beta=0.1)
+        dg_result = apply_delight_gating(advantage, surprisals, eta=1.0)
+
+        # GTPO: high surprisal token gets LARGER magnitude (more negative)
+        assert abs(gtpo_result[1]) > abs(gtpo_result[0])
+
+        # DG: high surprisal with NEGATIVE advantage → suppressed (smaller magnitude)
+        assert abs(dg_result[1]) < abs(dg_result[0])
+
+    def test_all_finite(self):
+        """No NaN/Inf under extreme inputs."""
+        cases = [
+            (100.0, [0.0, 50.0, 0.001]),
+            (-100.0, [0.0, 50.0, 0.001]),
+            (0.001, [0.0, 0.0, 0.0]),
+            (1.0, [50.0, 50.0]),
+        ]
+        for adv, surps in cases:
+            result = apply_delight_gating(adv, surps, eta=1.0)
+            for a in result:
+                assert math.isfinite(a), f"Non-finite for adv={adv}, surps={surps}: {a}"
