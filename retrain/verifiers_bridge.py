@@ -333,20 +333,36 @@ def prompt_preview(prompt: PromptLike, max_chars: int = 200) -> str:
 
 
 def encode_prompt_for_sampling(tokenizer: object, prompt: PromptLike) -> list[int]:
-    """Encode a prompt object (string or chat messages) for model sampling."""
+    """Encode a prompt object (string or chat messages) for model sampling.
+
+    Passes ``enable_thinking=False`` when the tokenizer supports it (e.g.
+    Nemotron, Qwen3) to skip the thinking phase and produce direct output.
+    """
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     encode = getattr(tokenizer, "encode", None)
+
+    # Check if tokenizer supports enable_thinking
+    import inspect
+    _supports_thinking = False
+    if callable(apply_chat_template):
+        try:
+            sig = inspect.signature(apply_chat_template)
+            _supports_thinking = "enable_thinking" in sig.parameters
+        except (TypeError, ValueError):
+            pass
+    _thinking_kwargs = {"enable_thinking": False} if _supports_thinking else {}
+
     if isinstance(prompt, str):
         if callable(apply_chat_template):
             messages = [{"role": "user", "content": prompt}]
-            ids = apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
+            ids = apply_chat_template(messages, add_generation_prompt=True, tokenize=True, **_thinking_kwargs)
         else:
             if not callable(encode):
                 raise TypeError("Tokenizer must expose encode() for string prompts.")
             ids = encode(prompt)
     else:
         if callable(apply_chat_template):
-            ids = apply_chat_template(prompt, add_generation_prompt=True, tokenize=True)
+            ids = apply_chat_template(prompt, add_generation_prompt=True, tokenize=True, **_thinking_kwargs)
         else:
             text = "\n".join(str(msg.get("content", "")) for msg in prompt)
             if not callable(encode):
