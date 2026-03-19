@@ -186,7 +186,7 @@ def _print_config_summary(config: TrainConfig) -> None:
         f"  batch_size    : {config.batch_size}",
         f"  group_size    : {config.group_size}",
         f"  max_steps     : {config.max_steps}",
-        f"  lr            : {config.lr}",
+        f"  lr            : {config.lr}" + (f"  (sft_lr: {config.sft_lr})" if config.sft_lr > 0 else ""),
         f"  lora_rank     : {config.lora_rank}",
         f"  max_tokens    : {config.max_tokens}",
         f"  temperature   : {config.temperature}",
@@ -635,12 +635,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 sft_advantages_list.append(advantages)
 
             # Train with cross-entropy loss (actual SFT, not importance sampling)
-            print(f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples...", flush=True)
+            # Use sft_lr if set, otherwise fall back to main lr
+            effective_sft_lr = config.sft_lr if config.sft_lr > 0 else config.lr
+            print(
+                f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples "
+                f"(lr={effective_sft_lr:.1e})...",
+                flush=True,
+            )
             if hasattr(helper, "sft_train_step"):
                 loss = helper.sft_train_step(  # type: ignore[call-non-callable]
                     sft_tokens_list,
                     sft_advantages_list,
-                    config.lr,
+                    effective_sft_lr,
                     config.weight_decay,
                 )
             else:
@@ -649,7 +655,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     sft_tokens_list,
                     sft_logprobs_list,
                     sft_advantages_list,
-                    config.lr,
+                    effective_sft_lr,
                     config.weight_decay,
                 )
             elapsed = time.perf_counter() - step_start
@@ -675,7 +681,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "datums": len(sft_batch),
                 "time_s": round(elapsed, 2),
                 "advantage_mode": config.advantage_mode,
-                "lr": config.lr,
+                "lr": effective_sft_lr,
             }
             metrics_logger.log(sft_metrics)
             steps_logger.log(sft_metrics)
@@ -688,6 +694,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         "train/sft_signal": sft_signal,
                         "train/sft_warmup": 1,
                         "train/step": batch_idx,
+                        "train/lr": effective_sft_lr,
                     },
                     step=batch_idx,
                 )
