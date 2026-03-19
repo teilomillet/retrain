@@ -168,40 +168,59 @@ class TinkerTrainHelper:
         lr: float,
         weight_decay: float,
     ) -> float:
-        """SFT via cross-entropy loss with advantage mask on response tokens.
+        """SFT with configurable loss function (importance_sampling or cross_entropy).
 
-        Uses tinker's native cross_entropy loss function for proper SFT.
-        advantages=0 for prompt tokens (no gradient), advantages=1 for response
-        tokens. The cross-entropy loss directly maximizes log-probability of
-        target tokens, unlike importance_sampling which computes exp(logprob)
-        and can return 0.0 when the model assigns very low probability.
+        Set ``self.sft_loss_fn`` to control:
+        - ``"importance_sampling"`` (default): Softer push via exp(logprob).
+          Works well for models that already produce plausible outputs (Qwen).
+        - ``"cross_entropy"``: Direct log-prob maximization.  Stronger signal
+          for models that initially assign near-zero probability (Nemotron).
+
+        advantages=0 for prompt tokens (no gradient), advantages=1 for response.
         """
         import torch
         import tinker.types as types
         from tinker.types.tensor_data import TensorData
 
+        loss_fn = getattr(self, "sft_loss_fn", "importance_sampling")
+
         with self._throttle:
             datums = []
             for i, tokens in enumerate(all_tokens):
                 advs = all_advantages[i] if i < len(all_advantages) else [1.0] * len(tokens)
-                # Convert advantage mask (0/1) to loss_mask for cross_entropy
-                loss_mask = [1.0 if a > 0 else 0.0 for a in advs]
                 model_input = types.ModelInput.from_ints(tokens)
-                loss_fn_inputs = {
-                    "target_tokens": TensorData.from_torch(
-                        torch.tensor(tokens, dtype=torch.long)
-                    ),
-                    "weights": TensorData.from_torch(
-                        torch.tensor(loss_mask, dtype=torch.float32)
-                    ),
-                }
+
+                if loss_fn == "cross_entropy":
+                    loss_mask = [1.0 if a > 0 else 0.0 for a in advs]
+                    loss_fn_inputs = {
+                        "target_tokens": TensorData.from_torch(
+                            torch.tensor(tokens, dtype=torch.long)
+                        ),
+                        "weights": TensorData.from_torch(
+                            torch.tensor(loss_mask, dtype=torch.float32)
+                        ),
+                    }
+                else:
+                    # importance_sampling (default)
+                    loss_fn_inputs = {
+                        "target_tokens": TensorData.from_torch(
+                            torch.tensor(tokens, dtype=torch.long)
+                        ),
+                        "logprobs": TensorData.from_torch(
+                            torch.zeros(len(tokens), dtype=torch.float32)
+                        ),
+                        "advantages": TensorData.from_torch(
+                            torch.tensor(advs, dtype=torch.float32)
+                        ),
+                    }
+
                 datums.append(types.Datum(
                     model_input=model_input,
                     loss_fn_inputs=loss_fn_inputs,
                 ))
 
             fwd_bwd_future = self.training_client.forward_backward(
-                datums, loss_fn="cross_entropy"
+                datums, loss_fn=loss_fn
             )
             adam_params = types.AdamParams(
                 learning_rate=lr,

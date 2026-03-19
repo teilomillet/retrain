@@ -95,7 +95,7 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         ) from None
 
     tinker_url = config.inference_url or config.base_url
-    return TinkerTrainHelper(
+    helper = TinkerTrainHelper(
         config.model,
         tinker_url,
         config.lora_rank,
@@ -109,6 +109,8 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         grad_clip_norm=config.grad_clip_norm,
         clip_ratio_c=config.clip_ratio_c,
     )
+    helper.sft_loss_fn = config.sft_loss_fn
+    return helper
 
 
 def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOptions:

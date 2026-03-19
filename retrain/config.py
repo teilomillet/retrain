@@ -199,6 +199,7 @@ class TrainConfig:
     sft_warmup_steps: int = 0
     sft_data_path: str = ""  # JSONL with {"messages": [...]} per line
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
+    sft_loss_fn: str = "importance_sampling"  # "importance_sampling" or "cross_entropy"
 
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
@@ -539,6 +540,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_warmup_steps": "sft_warmup_steps",
         "sft_data_path": "sft_data_path",
         "sft_lr": "sft_lr",
+        "sft_loss_fn": "sft_loss_fn",
     },
     "optimizer": {
         "beta1": "optim_beta1",
