@@ -851,11 +851,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 )
 
                 if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
-                    if rewards_G[0] > _CORRECT_THRESHOLD:
+                    # With batch_advantage_norm, keep uniform groups — cross-group
+                    # reward differences provide signal after batch normalization.
+                    if config.batch_advantage_norm:
+                        print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                    elif rewards_G[0] > _CORRECT_THRESHOLD:
                         print("    -> skipped (all correct)")
+                        continue
                     else:
-                        print("    -> skipped (all wrong)")
-                    continue
+                        print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                        continue
 
                 if config.algorithm_mode:
                     adv_result = compute_algorithm_advantages(
@@ -1120,11 +1125,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 )
 
                 if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
-                    if rewards_G[0] > _CORRECT_THRESHOLD:
+                    if config.batch_advantage_norm:
+                        print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                    elif rewards_G[0] > _CORRECT_THRESHOLD:
                         print("    -> skipped (all correct)")
+                        continue
                     else:
-                        print("    -> skipped (all wrong)")
-                    continue
+                        print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                        continue
 
                 # Resolve per-group precomputed entropies
                 group_entropies_G: list[list[float]] | None = None
