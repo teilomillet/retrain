@@ -184,13 +184,15 @@ class TinkerTrainHelper:
             datums = []
             for i, tokens in enumerate(all_tokens):
                 advs = all_advantages[i] if i < len(all_advantages) else [1.0] * len(tokens)
+                # Convert advantage mask (0/1) to loss_mask for cross_entropy
+                loss_mask = [1.0 if a > 0 else 0.0 for a in advs]
                 model_input = types.ModelInput.from_ints(tokens)
                 loss_fn_inputs = {
                     "target_tokens": TensorData.from_torch(
                         torch.tensor(tokens, dtype=torch.long)
                     ),
-                    "advantages": TensorData.from_torch(
-                        torch.tensor(advs, dtype=torch.float32)
+                    "weights": TensorData.from_torch(
+                        torch.tensor(loss_mask, dtype=torch.float32)
                     ),
                 }
                 datums.append(types.Datum(
