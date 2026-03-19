@@ -90,7 +90,8 @@ class PipelineConfig:
     dataset_seed: int = 42
 
     # -- Benchmark --
-    bench_seeds: list[int] = field(default_factory=lambda: [42, 137, 256])
+    # Eval seeds must NOT overlap with training seeds [42..57]
+    bench_seeds: list[int] = field(default_factory=lambda: [100, 200, 300])
     bench_max_turns: int = 3000
 
     # -- Quality gates --
