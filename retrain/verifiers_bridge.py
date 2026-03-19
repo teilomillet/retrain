@@ -742,8 +742,15 @@ def run_multiturn_group(
     tl_grpo_branch_size: int = 4,
     tl_grpo_lookahead_steps: int = 0,
     tl_grpo_outcome_baseline: float | None = None,
+    temperature_spread: float = 0.0,
 ) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]], list[list[list[float]]]]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
+
+    Args:
+        temperature_spread: When > 0, each rollout in the group uses a
+            different temperature: ``temperature + linspace(-spread, +spread, num_rollouts)``.
+            This ensures diverse actions even from deterministic models.
+            Example: temperature=1.0, spread=0.3 → temps [0.7, 0.8, ..., 1.3]
 
     Returns:
         (rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs, branch_rewards)
@@ -759,6 +766,15 @@ def run_multiturn_group(
         tokenizer_typed = cast(_Tokenizer, tokenizer)
         states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [[] for _ in range(num_rollouts)]
+
+        # Per-rollout temperatures for diversity (temperature_spread > 0)
+        if temperature_spread > 0 and num_rollouts > 1:
+            rollout_temps = [
+                max(0.1, temperature + temperature_spread * (2 * i / (num_rollouts - 1) - 1))
+                for i in range(num_rollouts)
+            ]
+        else:
+            rollout_temps = [temperature] * num_rollouts
 
         for i in range(num_rollouts):
             input_payload: dict[str, object] = {
