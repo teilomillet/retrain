@@ -157,6 +157,7 @@ OPTIONS
         --attention-kernel
         --backend
         --base-url
+        --batch-advantage-norm
         --batch-size
         --bp-ema-decay
         --bp-enabled
@@ -169,6 +170,7 @@ OPTIONS
         --bp-warmup-steps
         --clip-eps
         --clip-eps-high
+        --clip-ratio-c
         --data-source
         --devices
         --environment-args
@@ -176,6 +178,7 @@ OPTIONS
         --environment-id
         --environment-max-turns
         --environment-provider
+        --grad-clip-norm
         --group-size
         --gtpo-beta
         --hicra-alpha
@@ -212,11 +215,19 @@ OPTIONS
         --sepa-delay-steps
         --sepa-schedule
         --sepa-steps
+        --sft-data-path
+        --sft-warmup-steps
         --strategic-grams
         --surprisal-mask-rho
         --temperature
         --tinker-max-concurrent
         --tinker-throttle-dir
+        --tl-grpo
+        --tl-grpo-branch-mode
+        --tl-grpo-branch-size
+        --tl-grpo-ema-decay
+        --tl-grpo-ema-init
+        --tl-grpo-lookahead-steps
         --top-p
         --trainer
         --trainer-command
