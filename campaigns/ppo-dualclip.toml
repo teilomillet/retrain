@@ -1,0 +1,79 @@
+# ppo-dualclip: Proper PPO dual-clip via forward_backward_custom
+#
+# BREAKTHROUGH: Tinker's forward_backward_custom API lets us implement
+# the paper's exact PPO dual-clip loss with configurable parameters.
+# This bypasses the broken loss_fn_config (500 error).
+#
+# The paper uses: clip_eps=0.2, clip_ratio_c=3.0, grad_clip_norm=0.3, lr=1e-6
+# We test this at both lr values, with and without clipping.
+#
+# 4 conditions x 2 seeds x 200 steps = 8 runs
+#
+# Run: uv run retrain campaigns/ppo-dualclip.toml
+
+[campaign]
+seeds = [42, 101]
+max_steps = 200
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: Baseline — no clipping, lr=5e-5 (reproduces 47% plateau)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+clip_eps = 0.0
+
+# C2: Paper's full PPO dual-clip at lr=5e-5
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+clip_eps = 0.2
+clip_ratio_c = 3.0
+grad_clip_norm = 0.3
+
+# C3: Baseline — no clipping, lr=1e-6
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1e-6
+clip_eps = 0.0
+
+# C4: Paper's exact setup — PPO dual-clip + lr=1e-6 + grad_clip
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1e-6
+clip_eps = 0.2
+clip_ratio_c = 3.0
+grad_clip_norm = 0.3
+
+# --- base training config ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 1e-6
+save_every = 50
+
+[sepa]
+steps = 200
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "ppo-dualclip"

@@ -1,0 +1,72 @@
+# maxrl-paper: Replicate the MaxRL paper's EXACT hyperparameters
+#
+# Paper audit (github.com/tajwarfahim/maxrl) revealed our setup was wrong:
+#   - lr=5e-5 (50x too high — paper uses 1e-6)
+#   - No PPO clipping (paper uses clip_range=0.2 + dual-clip)
+#   - temperature=0.7 (paper uses 0.6)
+#
+# This campaign tests whether matching the paper's setup produces the
+# claimed MaxRL > GRPO separation.
+#
+# 4 conditions x 2 seeds x 200 steps = 8 runs
+#
+# Run: uv run retrain campaigns/maxrl-paper.toml
+
+[campaign]
+seeds = [42, 101]
+max_steps = 200
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: GRPO at paper's lr — baseline reference
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1e-6
+
+# C2: MaxRL at paper's lr — the paper's main claim
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "none"
+lr = 1e-6
+
+# C3: GRPO at our original lr — reference to previous results
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+
+# C4: MaxRL at our original lr — reference to previous results
+[[campaign.conditions]]
+advantage_mode = "maxrl"
+transform_mode = "none"
+lr = 5e-5
+
+# --- base training config (matching paper where possible) ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 1e-6
+save_every = 50
+
+[sepa]
+steps = 200
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "maxrl-paper"

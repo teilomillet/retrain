@@ -1,0 +1,78 @@
+# grad-clip: Test gradient clipping — the paper's last missing piece
+#
+# THESIS: The paper uses grad_clip_norm=0.3 (max_grad_norm=0.3). We use 0.0
+# (disabled). At lr=5e-5, gradients may be large enough that clipping matters.
+# At lr=1e-6, gradients are tiny so clipping is likely a no-op.
+#
+# The previous lr=1e-6 campaign crashed from Tinker infra (47-min outage),
+# not from bad config. This campaign retries with gradient clipping added.
+#
+# FINDING FROM POOLED DATA: MaxRL vs GRPO is pure noise (Cohen's d=0.068).
+# Both converge to ~47.6%. So we only test GRPO here to save budget.
+#
+# 4 conditions x 2 seeds x 200 steps = 8 runs
+#
+# Run: uv run retrain campaigns/grad-clip.toml
+
+[campaign]
+seeds = [42, 101]
+max_steps = 200
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: lr=5e-5, no grad clip — baseline (reproduces 47% plateau)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+grad_clip_norm = 0.0
+
+# C2: lr=5e-5, grad clip=0.3 — does clipping stabilize at high lr?
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+grad_clip_norm = 0.3
+
+# C3: lr=1e-6, no grad clip — paper's lr, retry after infra crash
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1e-6
+grad_clip_norm = 0.0
+
+# C4: lr=1e-6, grad clip=0.3 — paper's exact setup (minus PPO clip)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1e-6
+grad_clip_norm = 0.3
+
+# --- base training config (matching paper where possible) ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 1e-6
+save_every = 50
+
+[sepa]
+steps = 200
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "grad-clip"

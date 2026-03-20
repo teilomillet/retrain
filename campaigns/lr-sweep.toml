@@ -1,0 +1,63 @@
+# lr-sweep: Does learning rate break the 47% plateau?
+#
+# All advantage manipulations (GRPO vs MaxRL, capping, SEPA) produce identical
+# training outcomes because Adam normalizes gradient magnitude. But Adam does NOT
+# normalize away learning rate — lr directly scales the post-normalization update.
+#
+# We've only tested lr=4e-5. This campaign tests 3 learning rates.
+# Also extends to 200 steps to check if the plateau breaks with more training.
+#
+# 3 conditions x 2 seeds x 200 steps = 6 runs (budget-efficient)
+#
+# Run: retrain campaigns/lr-sweep.toml
+
+[campaign]
+seeds = [42, 101]
+max_steps = 200
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: Low lr (10x lower than current)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 4e-6
+
+# C2: Current lr (baseline reference)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 4e-5
+
+# C3: High lr (4x higher than current)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 1.6e-4
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.7
+lr = 4e-5
+save_every = 40
+
+[sepa]
+steps = 200
+schedule = "linear"
+delay_steps = 5
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "lr-sweep"
