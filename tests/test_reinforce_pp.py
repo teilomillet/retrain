@@ -19,6 +19,7 @@ import pytest
 from retrain.advantages import (
     apply_batch_advantage_normalization,
     apply_delight_gating,
+    apply_delight_sepa_gating,
     compute_algorithm_advantages,
     compute_composable_advantages,
     compute_grpo_advantages,
@@ -927,6 +928,43 @@ class TestDelightGating:
         for a in result:
             assert a == pytest.approx(0.5, abs=0.05)
 
+    def test_normalize_scales_without_centering(self):
+        """Normalization should preserve surprisal sign semantics.
+
+        With normalize=True we scale by rollout std but do not center, so
+        positive-advantage gates stay above 0.5 and negative-advantage
+        gates stay below 0.5 for all tokens.
+        """
+        pos = apply_delight_gating(1.0, [0.1, 0.1, 5.0], eta=1.0, norm_mode="scale")
+        neg = apply_delight_gating(-1.0, [0.1, 0.1, 5.0], eta=1.0, norm_mode="scale")
+
+        assert all(a > 0.5 for a in pos)
+        assert pos[2] > pos[0]
+
+        assert all(abs(a) < 0.5 for a in neg)
+        assert abs(neg[2]) < abs(neg[0])
+
+    def test_norm_mode_scale_matches_legacy_alias(self):
+        """delight_norm_mode='scale' should match delight_normalize=True."""
+        surps = [0.1, 0.1, 5.0]
+        via_alias = apply_delight_gating(1.0, surps, eta=1.0, normalize=True)
+        via_mode = apply_delight_gating(1.0, surps, eta=1.0, norm_mode="scale")
+        assert via_mode == pytest.approx(via_alias)
+
+    def test_mad_scale_sharpens_outlier_separation(self):
+        """MAD scaling should react more strongly to tail tokens than std scaling."""
+        surps = [0.1, 0.2, 0.3, 10.0]
+        scaled = apply_delight_gating(1.0, surps, eta=1.0, norm_mode="scale")
+        mad_scaled = apply_delight_gating(1.0, surps, eta=1.0, norm_mode="mad_scale")
+
+        assert mad_scaled[-1] >= scaled[-1]
+        assert mad_scaled[-1] > mad_scaled[0]
+        assert all(a > 0.5 for a in mad_scaled)
+
+    def test_invalid_norm_mode_raises(self):
+        with pytest.raises(ValueError, match="Invalid delight norm_mode"):
+            apply_delight_gating(1.0, [0.1, 5.0], eta=1.0, norm_mode="zscore")
+
     def test_composable_with_reinforce_pp(self):
         """Delight should work through the composable pipeline."""
         rewards = [1.0, 0.0, 0.5]
@@ -984,3 +1022,335 @@ class TestDelightGating:
             result = apply_delight_gating(adv, surps, eta=1.0)
             for a in result:
                 assert math.isfinite(a), f"Non-finite for adv={adv}, surps={surps}: {a}"
+
+
+class TestDelightSEPA:
+    """Test SEPA-annealed delight gating (PG → DG transition)."""
+
+    def test_registered(self):
+        assert "delight_sepa" in get_builtin_transform_modes()
+
+    def test_lambda_zero_is_pure_pg(self):
+        """λ=0 → every token gets the same advantage (uniform PG)."""
+        result = apply_delight_sepa_gating(1.0, [0.1, 5.0, 10.0], lambda_t=0.0)
+        assert all(a == pytest.approx(1.0) for a in result)
+
+    def test_lambda_one_is_pure_dg(self):
+        """λ=1 → identical to apply_delight_gating."""
+        surps = [0.1, 3.0, 5.0]
+        sepa_result = apply_delight_sepa_gating(1.0, surps, lambda_t=1.0, eta=1.0)
+        dg_result = apply_delight_gating(1.0, surps, eta=1.0)
+        for a, b in zip(sepa_result, dg_result):
+            assert a == pytest.approx(b, abs=1e-10)
+
+    def test_lambda_half_interpolates(self):
+        """λ=0.5 → blend of PG and DG."""
+        surps = [0.1, 5.0]
+        pg = [1.0, 1.0]  # pure PG: advantage broadcast
+        dg = apply_delight_gating(1.0, surps, eta=1.0)
+        blended = apply_delight_sepa_gating(1.0, surps, lambda_t=0.5, eta=1.0)
+        for i in range(2):
+            expected = 1.0 * (0.5 * pg[i] / 1.0 + 0.5 * dg[i] / 1.0)
+            # blended weight = (1-λ) + λ*gate, so blended_adv = adv * weight
+            assert blended[i] == pytest.approx(expected, abs=0.01)
+
+    def test_negative_advantage_blunder_suppressed_at_lambda_one(self):
+        """At λ=1, negative-adv + high-surprisal should be suppressed (DG behavior)."""
+        result = apply_delight_sepa_gating(-1.0, [5.0, 0.1], lambda_t=1.0, eta=1.0)
+        # High surprisal blunder suppressed more than low surprisal
+        assert abs(result[0]) < abs(result[1])
+
+    def test_negative_advantage_uniform_at_lambda_zero(self):
+        """At λ=0, negative-adv is broadcast uniformly (PG behavior)."""
+        result = apply_delight_sepa_gating(-1.0, [5.0, 0.1], lambda_t=0.0, eta=1.0)
+        assert result[0] == pytest.approx(-1.0)
+        assert result[1] == pytest.approx(-1.0)
+
+    def test_zero_advantage(self):
+        result = apply_delight_sepa_gating(0.0, [1.0, 2.0], lambda_t=0.5)
+        assert all(a == 0.0 for a in result)
+
+    def test_empty(self):
+        assert apply_delight_sepa_gating(1.0, [], lambda_t=0.5) == []
+
+    def test_composable_pipeline(self):
+        """delight_sepa through the composable advantage pipeline."""
+        rewards = [1.0, 0.0, 0.5]
+        logprobs = [[-0.5, -3.0], [-0.7, -0.2], [-0.4, -1.0]]
+        planning_masks = [[0, 0], [0, 0], [0, 0]]
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight_sepa",
+            sepa_lambda=0.5,
+            transform_params={"delight_eta": 1.0},
+        )
+        assert len(result.token_advs) == 3
+        for i in range(3):
+            assert len(result.token_advs[i]) == 2
+
+    def test_transform_param_norm_mode_matches_legacy_alias(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -0.1, -5.0], [-0.1, -0.1, -5.0]]
+        planning_masks = [[0, 0, 0], [0, 0, 0]]
+
+        legacy = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight_sepa",
+            sepa_lambda=1.0,
+            transform_params={"delight_eta": 1.0, "delight_normalize": True},
+        )
+        explicit = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight_sepa",
+            sepa_lambda=1.0,
+            transform_params={"delight_eta": 1.0, "delight_norm_mode": "scale"},
+        )
+
+        for seq_explicit, seq_legacy in zip(explicit.token_advs, legacy.token_advs):
+            assert seq_explicit == pytest.approx(seq_legacy)
+
+    def test_invalid_transform_param_norm_mode_raises(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -5.0], [-0.1, -5.0]]
+        planning_masks = [[0, 0], [0, 0]]
+
+        with pytest.raises(ValueError, match="Invalid delight norm_mode"):
+            compute_composable_advantages(
+                rewards, logprobs, planning_masks,
+                advantage_mode="grpo",
+                transform_mode="delight_sepa",
+                sepa_lambda=1.0,
+                transform_params={"delight_eta": 1.0, "delight_norm_mode": "zscore"},
+            )
+
+    def test_invalid_transform_param_eta_mode_raises(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -5.0], [-0.1, -5.0]]
+        planning_masks = [[0, 0], [0, 0]]
+
+        with pytest.raises(ValueError, match="Invalid delight eta_mode"):
+            compute_composable_advantages(
+                rewards, logprobs, planning_masks,
+                advantage_mode="grpo",
+                transform_mode="delight_sepa",
+                sepa_lambda=1.0,
+                transform_params={"delight_eta_mode": "auto"},
+            )
+
+    def test_invalid_transform_param_eta_ema_decay_raises(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -5.0], [-0.1, -5.0]]
+        planning_masks = [[0, 0], [0, 0]]
+
+        with pytest.raises(ValueError, match="delight_eta_ema_decay"):
+            compute_composable_advantages(
+                rewards, logprobs, planning_masks,
+                advantage_mode="grpo",
+                transform_mode="delight_sepa",
+                sepa_lambda=1.0,
+                transform_params={
+                    "delight_eta_mode": "adaptive",
+                    "delight_eta_ema_decay": 1.0,
+                },
+            )
+
+    def test_algorithm_mode_shortcut(self):
+        """reinforce_pp_delight_sepa algorithm mode should work."""
+        spec = get_algorithm_spec("reinforce_pp_delight_sepa")
+        assert spec.name == "reinforce_pp_delight_sepa"
+        assert spec.uses_sepa_controller is True
+
+    def test_monotonic_in_lambda(self):
+        """As λ increases, token variation should increase (more DG-like)."""
+        surps = [0.1, 5.0]
+        advs_by_lambda = []
+        for lam in [0.0, 0.25, 0.5, 0.75, 1.0]:
+            result = apply_delight_sepa_gating(1.0, surps, lambda_t=lam, eta=1.0)
+            advs_by_lambda.append(result)
+
+        # At λ=0, both tokens equal. As λ grows, gap between tokens widens.
+        for i in range(len(advs_by_lambda) - 1):
+            gap_curr = abs(advs_by_lambda[i][0] - advs_by_lambda[i][1])
+            gap_next = abs(advs_by_lambda[i + 1][0] - advs_by_lambda[i + 1][1])
+            assert gap_next >= gap_curr - 1e-10
+
+    def test_all_finite(self):
+        """No NaN/Inf under extreme inputs."""
+        cases = [
+            (100.0, [0.0, 50.0], 0.5),
+            (-100.0, [0.0, 50.0], 1.0),
+            (0.001, [0.0, 0.0], 0.0),
+            (1.0, [50.0, 50.0], 0.99),
+        ]
+        for adv, surps, lam in cases:
+            result = apply_delight_sepa_gating(adv, surps, lambda_t=lam, eta=1.0)
+            for a in result:
+                assert math.isfinite(a), f"Non-finite: adv={adv}, surps={surps}, λ={lam}"
+
+    def test_gate_metrics_in_extra(self):
+        """delight_sepa should emit gate stats in extra_metrics."""
+        rewards = [1.0, 0.0, 0.5]
+        logprobs = [[-0.5, -3.0], [-0.7, -0.2], [-0.4, -1.0]]
+        planning_masks = [[0, 0], [0, 0], [0, 0]]
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight_sepa",
+            sepa_lambda=0.5,
+            transform_params={"delight_eta": 1.0},
+        )
+        em = result.extra_metrics
+        assert "dg_gate_mean" in em
+        assert "dg_gate_std" in em
+        assert "dg_breakthrough_frac" in em
+        assert "dg_suppressed_frac" in em
+        assert "dg_neutral_frac" in em
+        assert "dg_gate_ordering_gap" in em
+        assert "dg_eta" in em
+        assert "dg_eta_adaptive" in em
+        assert "dg_lambda" in em
+        assert em["dg_lambda"] == pytest.approx(0.5)
+        # Zero-sum break metrics
+        assert "dg_net_advantage_bias" in em
+        assert "dg_net_advantage_bias_per_token" in em
+        assert "dg_token_adv_std" in em
+        assert "dg_within_rollout_adv_var" in em
+        # All values should be finite
+        for v in em.values():
+            assert math.isfinite(v)
+
+    def test_gate_metrics_pos_neg_split(self):
+        """With normalized delight, mean gates should keep the correct sign."""
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -0.1, -0.1, -5.0], [-0.1, -0.1, -0.1, -5.0]]
+        planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+            transform_params={"delight_eta": 1.0, "delight_normalize": True},
+        )
+        em = result.extra_metrics
+        assert "dg_gate_mean_pos" in em
+        assert "dg_gate_mean_neg" in em
+        assert "dg_gate_ordering_gap" in em
+        assert "dg_gate_ordering_gap_pos" in em
+        assert "dg_gate_ordering_gap_neg" in em
+        assert em["dg_gate_mean_pos"] > 0.5
+        assert em["dg_gate_mean_neg"] < 0.5
+        assert em["dg_gate_mean_pos"] > em["dg_gate_mean_neg"]
+        assert em["dg_gate_ordering_gap"] > 0.0
+        assert em["dg_gate_ordering_gap_pos"] > 0.0
+        assert em["dg_gate_ordering_gap_neg"] > 0.0
+
+    def test_adaptive_eta_moves_neutral_fraction_toward_target(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -0.2, -1.0, -3.0], [-0.1, -0.2, -1.0, -3.0]]
+        planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
+
+        fixed = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+            transform_params={"delight_eta": 10.0, "delight_norm_mode": "scale"},
+        )
+        adaptive = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+            transform_params={
+                "delight_eta_mode": "adaptive",
+                "delight_norm_mode": "scale",
+                "delight_eta_target_neutral_frac": 0.5,
+            },
+        )
+
+        fixed_em = fixed.extra_metrics
+        adaptive_em = adaptive.extra_metrics
+        assert fixed_em["dg_eta_adaptive"] == pytest.approx(0.0)
+        assert adaptive_em["dg_eta_adaptive"] == pytest.approx(1.0)
+        assert adaptive_em["dg_eta"] < fixed_em["dg_eta"]
+        assert abs(adaptive_em["dg_neutral_frac"] - 0.5) < abs(
+            fixed_em["dg_neutral_frac"] - 0.5
+        )
+
+    def test_adaptive_eta_ema_smoothing_blends_with_previous_step(self):
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.1, -0.2, -1.0, -3.0], [-0.1, -0.2, -1.0, -3.0]]
+        planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
+
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+            transform_params={
+                "delight_eta_mode": "adaptive",
+                "delight_norm_mode": "scale",
+                "delight_eta_target_neutral_frac": 0.5,
+                "delight_eta_prev": 4.0,
+                "delight_eta_ema_decay": 0.75,
+            },
+        )
+
+        em = result.extra_metrics
+        assert em["dg_eta_prev"] == pytest.approx(4.0)
+        assert em["dg_eta_raw"] < em["dg_eta_prev"]
+        assert em["dg_eta"] == pytest.approx(
+            0.75 * em["dg_eta_prev"] + 0.25 * em["dg_eta_raw"]
+        )
+
+    def test_net_advantage_bias_positive(self):
+        """DG should create net positive advantage bias (zero-sum break).
+
+        With equal correct/incorrect rollouts, uniform PG sums to ~0.
+        DG's asymmetric gating should create a net positive sum because
+        gates open for correct rollouts but close for incorrect ones.
+        """
+        # 8 correct, 8 incorrect (mimics group_size=16 at 50%)
+        rewards = [1.0] * 8 + [0.0] * 8
+        logprobs = [[-0.3, -4.0, -0.1]] * 16
+        planning_masks = [[0, 0, 0]] * 16
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+            transform_params={"delight_eta": 1.0},
+        )
+        em = result.extra_metrics
+        # Net bias should be positive (DG opens gates for correct, shuts for incorrect)
+        assert em["dg_net_advantage_bias"] > 0.0
+        # Within-rollout variance should be > 0 (DG differentiates tokens)
+        assert em["dg_within_rollout_adv_var"] > 0.0
+
+    def test_net_bias_zero_at_lambda_zero(self):
+        """At λ=0 (pure PG), DG-specific net advantage bias should be ~0."""
+        rewards = [1.0] * 8 + [0.0] * 8
+        logprobs = [[-0.3, -4.0, -0.1]] * 16
+        planning_masks = [[0, 0, 0]] * 16
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight_sepa",
+            sepa_lambda=0.0,
+            transform_params={"delight_eta": 1.0},
+        )
+        em = result.extra_metrics
+        # At λ=0, DG bias = actual_sum - PG_sum = 0 (they're identical)
+        assert abs(em.get("dg_net_advantage_bias", 0.0)) < 1e-10
+
+    def test_delight_no_lambda_in_pure_dg(self):
+        """Pure delight (not SEPA) should not have dg_lambda in metrics."""
+        rewards = [1.0, 0.0]
+        logprobs = [[-0.5, -3.0], [-0.7, -0.2]]
+        planning_masks = [[0, 0], [0, 0]]
+        result = compute_composable_advantages(
+            rewards, logprobs, planning_masks,
+            advantage_mode="grpo",
+            transform_mode="delight",
+        )
+        assert "dg_lambda" not in result.extra_metrics
+        assert "dg_gate_mean" in result.extra_metrics
+        assert "dg_net_advantage_bias" in result.extra_metrics

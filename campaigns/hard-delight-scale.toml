@@ -1,0 +1,69 @@
+# hard-delight: Binary top-K token selection across models
+#
+# Soft DG (sigmoid) only changed gradient direction by 5% — too small.
+# Hard DG (top-20% mask) changes it by 63% — 13x stronger intervention.
+#
+# Test across 3 models with PG baseline + hard DG:
+# - Qwen 4B (instruct, our baseline)
+# - Nemotron 120B (thinking, 12B active)
+# - Kimi K2.5 (non-thinking, non-instruct)
+#
+# Fixed λ=0.5 (half PG + half hard-DG), k=20%, 137 steps
+#
+# Run as 3 separate campaigns (model in path breaks naming):
+
+[campaign]
+seeds = [42]
+max_steps = 137
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# C1: PG baseline
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+
+# C2: Hard DG (top-20%, λ=0.5)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "hard_delight"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_k_frac = 0.2
+delight_lambda = 0.5
+
+# C3: Hard DG (top-40%, λ=0.5) — less aggressive
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "hard_delight"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_k_frac = 0.4
+delight_lambda = 0.5
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 5e-5
+save_every = 25
+
+[sepa]
+steps = 137
+schedule = "linear"
+delay_steps = 2
+
+[logging]
+wandb_project = "delight-gate"

@@ -339,14 +339,14 @@ def encode_prompt_for_sampling(tokenizer: object, prompt: PromptLike) -> list[in
     if isinstance(prompt, str):
         if callable(apply_chat_template):
             messages = [{"role": "user", "content": prompt}]
-            ids = apply_chat_template(messages, add_generation_prompt=True)
+            ids = apply_chat_template(messages, add_generation_prompt=True, tokenize=True)
         else:
             if not callable(encode):
                 raise TypeError("Tokenizer must expose encode() for string prompts.")
             ids = encode(prompt)
     else:
         if callable(apply_chat_template):
-            ids = apply_chat_template(prompt, add_generation_prompt=True)
+            ids = apply_chat_template(prompt, add_generation_prompt=True, tokenize=True)
         else:
             text = "\n".join(str(msg.get("content", "")) for msg in prompt)
             if not callable(encode):

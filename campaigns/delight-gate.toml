@@ -1,0 +1,154 @@
+# delight-gate v4: SEPA-annealed Delight with robust normalization + adaptive eta
+#
+# v1 RESULT: Gate was 99% neutral because raw surprisals (~0.06 mean)
+# produce sigmoid arguments < 0.03. Scaling by rollout std fixes this
+# without inverting the gate:
+#   gate = σ(A · (ℓ / std) / η)
+# Centering was tried and rejected because right-skewed surprisal makes
+# most tokens negative after z-scoring, which flips the mean gate sign.
+# v4 adds two follow-ups:
+#   - delight_norm_mode = "mad_scale"   # robust against tail-heavy batches
+#   - delight_eta_mode = "adaptive"     # auto-tunes eta from current batch
+#
+# 9 conditions x 2 seeds x 30 steps = 18 runs (~7h with 4 workers)
+#
+# Run: uv run retrain campaigns/delight-gate.toml
+
+[campaign]
+seeds = [42, 101]
+max_steps = 30
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+summary_script = "summarize_delight_gate.py"
+
+# C1: GRPO baseline — no token transform
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+
+# C2: GRPO + Delight SEPA normalized (PG -> DG, eta=1.0)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 1.0
+delight_norm_mode = "scale"
+
+# C3: GRPO + Delight SEPA normalized sharp (eta=0.5)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_norm_mode = "scale"
+
+# C4: GRPO + Delight SEPA MAD-normalized (eta=1.0)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 1.0
+delight_norm_mode = "mad_scale"
+
+# C5: GRPO + Delight SEPA adaptive eta on std-scale normalization
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta_mode = "adaptive"
+delight_norm_mode = "scale"
+delight_eta_target_neutral_frac = 0.6
+delight_eta_target_ordering_gap = 0.1
+delight_eta_min = 0.05
+delight_eta_max = 4.0
+delight_eta_ema_decay = 0.8
+
+# C6: GRPO + Delight SEPA adaptive eta on MAD-scale normalization
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta_mode = "adaptive"
+delight_norm_mode = "mad_scale"
+delight_eta_target_neutral_frac = 0.6
+delight_eta_target_ordering_gap = 0.1
+delight_eta_min = 0.05
+delight_eta_max = 4.0
+delight_eta_ema_decay = 0.8
+
+# C7: GRPO + Delight SEPA normalized + PPO dual-clip
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+clip_eps = 0.2
+clip_ratio_c = 3.0
+grad_clip_norm = 0.3
+
+[campaign.conditions.transform_params]
+delight_eta = 1.0
+delight_norm_mode = "scale"
+
+# C8: GRPO + Delight SEPA adaptive eta + PPO dual-clip
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+clip_eps = 0.2
+clip_ratio_c = 3.0
+grad_clip_norm = 0.3
+
+[campaign.conditions.transform_params]
+delight_eta_mode = "adaptive"
+delight_norm_mode = "scale"
+delight_eta_target_neutral_frac = 0.6
+delight_eta_target_ordering_gap = 0.1
+delight_eta_min = 0.05
+delight_eta_max = 4.0
+delight_eta_ema_decay = 0.8
+
+# C9: GRPO + old SEPA pooling (proven null, for blog comparison)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "gtpo_sepa"
+lr = 5e-5
+
+# --- base training config ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 5e-5
+save_every = 15
+
+[sepa]
+steps = 30
+schedule = "linear"
+delay_steps = 2
+
+[squeeze]
+min_variance_retention = 0.95
+
+[logging]
+wandb_project = "delight-gate"

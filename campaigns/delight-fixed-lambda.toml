@@ -1,0 +1,42 @@
+# delight-fixed-lambda: DG at constant λ=0.5 (no ramp)
+#
+# The transient +2.9pp signal appeared at λ=0.4-0.6 then faded as λ→1.
+# This run holds λ=0.5 constant to see if the signal sustains.
+#
+# 1 run, 30 steps, seed 42
+#
+# Run: uv run retrain campaigns/delight-fixed-lambda.toml
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[algorithm]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+
+[algorithm.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+delight_lambda = 0.5
+
+[training]
+seed = 42
+max_steps = 30
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 5e-5
+save_every = 15
+
+[sepa]
+steps = 30
+schedule = "linear"
+delay_steps = 0
+
+[logging]
+wandb_project = "delight-gate"

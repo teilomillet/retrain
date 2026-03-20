@@ -1,0 +1,49 @@
+# Qwen 235B: DG vs PG at 137 steps (22B active params)
+# Largest Qwen instruct model — if size breaks the ceiling, this will show it
+
+[campaign]
+seeds = [42]
+max_steps = 137
+parallel = true
+max_workers = 2
+stagger_seconds = 10
+
+# C1: PG baseline
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+lr = 5e-5
+
+# C2: DG fixed λ=0.5
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+delight_lambda = 0.5
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+lora_rank = 64
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 5e-5
+save_every = 25
+
+[sepa]
+steps = 137
+schedule = "linear"
+delay_steps = 2
+
+[logging]
+wandb_project = "delight-gate"

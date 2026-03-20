@@ -1,5 +1,6 @@
 """Tests for retrain.campaign condition parsing, TOML serialization, and parallel execution."""
 
+import json
 import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,6 +15,7 @@ from retrain.campaign import (
     _run_parallel,
     _toml_value,
     _write_run_configs,
+    run_campaign,
 )
 from retrain.config import TrainConfig, load_config
 
@@ -103,6 +105,41 @@ class TestParseCampaignConditions:
                 [{"advantage_mode": "grpo", "transform_mode": "typo"}],
                 "campaign.toml",
             )
+
+    def test_delight_gate_campaign_matrix_stays_in_sync(self):
+        campaign_path = (
+            Path(__file__).resolve().parents[1]
+            / "campaigns"
+            / "delight-gate.toml"
+        )
+        with open(campaign_path, "rb") as f:
+            data = tomllib.load(f)
+
+        campaign = data["campaign"]
+        conditions = _parse_campaign_conditions(
+            campaign.get("conditions"),
+            str(campaign_path),
+        )
+
+        assert campaign["summary_script"] == "summarize_delight_gate.py"
+        assert len(conditions) == 9
+
+        adaptive_conditions = [
+            cond for cond in conditions
+            if cond.overrides.get("transform_params", {}).get("delight_eta_mode") == "adaptive"
+        ]
+        mad_scale_conditions = [
+            cond for cond in conditions
+            if cond.overrides.get("transform_params", {}).get("delight_norm_mode") == "mad_scale"
+        ]
+
+        assert len(adaptive_conditions) == 3
+        assert len(mad_scale_conditions) == 2
+        for cond in adaptive_conditions:
+            transform_params = cond.overrides["transform_params"]
+            assert transform_params["delight_eta_ema_decay"] == pytest.approx(0.8)
+            assert transform_params["delight_eta_target_neutral_frac"] == pytest.approx(0.6)
+            assert transform_params["delight_eta_target_ordering_gap"] == pytest.approx(0.1)
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +468,49 @@ class TestParallelCampaignConfig:
                             os.chdir(old_cwd)
 
         assert squeeze_called[0], "Squeeze should be called after parallel runs complete"
+
+    def test_run_campaign_records_summary_result(self, tmp_path):
+        summary_script = tmp_path / "summary.py"
+        summary_script.write_text("print('summary ok')\n")
+
+        toml_path = tmp_path / "campaign.toml"
+        toml_path.write_text(
+            '[campaign]\n'
+            'seeds = [42]\n'
+            'max_steps = 10\n'
+            'parallel = true\n'
+            'summary_script = "summary.py"\n\n'
+            '[[campaign.conditions]]\n'
+            'advantage_mode = "grpo"\n'
+            'transform_mode = "none"\n'
+        )
+
+        def mock_run_parallel(runs, config_dir, max_workers, stagger_seconds=0):
+            _ = config_dir, max_workers, stagger_seconds
+            for run in runs:
+                run["returncode"] = 0
+            return runs
+
+        with patch("retrain.campaign._run_parallel", side_effect=mock_run_parallel):
+            with patch("retrain.campaign.subprocess.run", return_value=MagicMock(returncode=0)) as run_mock:
+                with patch("retrain.campaign.load_config", return_value=TrainConfig()):
+                    import os
+
+                    old_cwd = os.getcwd()
+                    os.chdir(tmp_path)
+                    try:
+                        campaign_dir = run_campaign(str(toml_path))
+                    finally:
+                        os.chdir(old_cwd)
+
+        manifest = json.loads((tmp_path / campaign_dir / "manifest.json").read_text())
+        assert manifest["summary"]["returncode"] == 0
+        assert manifest["runs"][0]["returncode"] == 0
+        assert manifest["runs"][0]["config_path"].endswith(".toml")
+
+        cmd = run_mock.call_args.args[0]
+        assert cmd[1] == str(summary_script.resolve())
+        assert cmd[2] == campaign_dir
 
 
 class TestRunPidFileWritten:

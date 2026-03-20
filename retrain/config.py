@@ -129,6 +129,8 @@ class TrainConfig:
     optim_beta1: float = 0.9
     optim_beta2: float = 0.95
     optim_eps: float = 1e-8
+    grad_clip_norm: float = 0.0  # 0 = disabled; max global gradient norm
+    clip_ratio_c: float = 0.0   # 0 = disabled; dual-clip lower bound for negative advs
 
     # LoRA
     lora_alpha: int = 0  # 0 = auto = rank * 2
@@ -433,10 +435,10 @@ class TrainConfig:
                 f"weight_decay={self.weight_decay} is negative — this is unusual.",
                 stacklevel=2,
             )
-        if self.clip_eps > 0 and self.backend != "local":
+        if self.clip_eps > 0 and self.backend not in ("local", "tinker"):
             warnings.warn(
                 f"clip_eps={self.clip_eps} is set but backend='{self.backend}' — "
-                "ratio clipping is only implemented in the local backend.",
+                "ratio clipping is only implemented in the local and tinker backends.",
                 stacklevel=2,
             )
 
@@ -520,6 +522,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "weight_decay": "weight_decay",
         "clip_eps": "clip_eps",
         "clip_eps_high": "clip_eps_high",
+        "clip_ratio_c": "clip_ratio_c",
         "adv_clip_max": "adv_clip_max",
         "batch_advantage_norm": "batch_advantage_norm",
         "max_examples": "max_examples",
@@ -539,6 +542,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "beta1": "optim_beta1",
         "beta2": "optim_beta2",
         "eps": "optim_eps",
+        "grad_clip_norm": "grad_clip_norm",
     },
     "lora": {
         "alpha": "lora_alpha",

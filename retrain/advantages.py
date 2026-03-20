@@ -795,6 +795,13 @@ _BUILTIN_ALGORITHM_SPECS: dict[str, AlgorithmSpec] = {
         needs_planning=False,
         uses_sepa_controller=False,
     ),
+    "reinforce_pp_delight_sepa": _make_builtin_algorithm_spec(
+        "reinforce_pp_delight_sepa",
+        advantage_mode="reinforce_pp",
+        transform_mode="delight_sepa",
+        needs_planning=False,
+        uses_sepa_controller=True,
+    ),
 }
 
 _ALGORITHM_SPEC_CACHE: dict[str, AlgorithmSpec] = {}
@@ -928,23 +935,403 @@ def apply_gtpo_weighting(
 # ---------------------------------------------------------------------------
 
 
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid."""
+    if x > 20:
+        return 1.0
+    if x < -20:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def apply_hard_delight_gating(
+    advantage: float,
+    surprisals: list[float],
+    k_frac: float = 0.2,
+) -> list[float]:
+    """Hard top-K delight gating: sign-aware binary token selection.
+
+    Ranks tokens by surprisal. For correct rollouts (A > 0), keeps the
+    top k_frac% highest-surprisal tokens (fork-points) at full advantage
+    and zeros the rest. For incorrect rollouts (A < 0), keeps the bottom
+    k_frac% (routine tokens) and zeros the high-surprisal "blunders".
+
+    This produces a ~60% gradient directional change vs uniform PG
+    (compared to ~5% for sigmoid DG), making it a strong enough
+    intervention for the optimizer to actually respond to.
+
+    Args:
+        advantage: Episode-level advantage.
+        surprisals: Per-token surprisal values (-logprob).
+        k_frac: Fraction of tokens to keep (0.2 = top/bottom 20%).
+    """
+    n = len(surprisals)
+    if n == 0 or advantage == 0.0:
+        return [0.0] * n
+
+    k = max(1, int(n * k_frac))
+    # For correct rollouts: keep highest surprisal (fork-points)
+    # For incorrect rollouts: keep lowest surprisal (routine tokens)
+    indexed = sorted(range(n), key=lambda i: surprisals[i],
+                     reverse=(advantage > 0))
+    keep = set(indexed[:k])
+    return [advantage if i in keep else 0.0 for i in range(n)]
+
+
+def apply_hard_delight_sepa_gating(
+    advantage: float,
+    surprisals: list[float],
+    lambda_t: float,
+    k_frac: float = 0.2,
+) -> list[float]:
+    """SEPA-annealed hard delight gating: PG → hard-DG transition.
+
+    Interpolates between uniform PG (λ=0) and hard top-K gating (λ=1):
+        token_adv = A × [(1-λ) + λ × mask_k(t)]
+    where mask_k(t) is 1 for kept tokens and 0 for zeroed tokens.
+    """
+    n = len(surprisals)
+    if n == 0 or advantage == 0.0:
+        return [0.0] * n
+
+    lam = max(0.0, min(1.0, lambda_t))
+    if lam == 0.0:
+        return [advantage] * n
+
+    k = max(1, int(n * k_frac))
+    indexed = sorted(range(n), key=lambda i: surprisals[i],
+                     reverse=(advantage > 0))
+    keep = set(indexed[:k])
+    pg_w = 1.0 - lam
+    return [advantage * (pg_w + lam * (1.0 if i in keep else 0.0))
+            for i in range(n)]
+
+
+def _normalize_surprisals(surprisals: list[float]) -> list[float]:
+    """Scale surprisals to unit-std without centering.
+
+    Returns ℓ / std for each token. This keeps surprisals non-negative
+    (preserving DG's sign semantics) while scaling them so the sigmoid
+    argument covers its sensitive range.
+
+    Centering (z-scoring) is wrong here because surprisal distributions
+    are right-skewed: most tokens have z < 0 after centering, which
+    inverts the gate for the majority of tokens. Scaling without
+    centering preserves: high surprisal → large positive → gate opens
+    for correct rollouts, closes for incorrect.
+    """
+    n = len(surprisals)
+    if n < 2:
+        return list(surprisals)
+    mean_s = sum(surprisals) / n
+    var_s = sum((s - mean_s) ** 2 for s in surprisals) / n
+    std_s = var_s ** 0.5
+    if std_s < 1e-8:
+        return list(surprisals)
+    return [s / std_s for s in surprisals]
+
+
+def _median(values: list[float]) -> float:
+    """Median of a non-empty list."""
+    ordered = sorted(values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2 == 1:
+        return ordered[mid]
+    return 0.5 * (ordered[mid - 1] + ordered[mid])
+
+
+def _mad_scale_surprisals(surprisals: list[float]) -> list[float]:
+    """Scale surprisals by robust MAD estimate without centering."""
+    n = len(surprisals)
+    if n < 2:
+        return list(surprisals)
+    med = _median(surprisals)
+    abs_dev = [abs(s - med) for s in surprisals]
+    mad = _median(abs_dev)
+    robust_std = 1.4826 * mad
+    if robust_std < 1e-8:
+        return _normalize_surprisals(surprisals)
+    return [s / robust_std for s in surprisals]
+
+
+def _quantile(values: list[float], q: float) -> float:
+    """Linear-interpolated quantile for q in [0, 1]."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if q <= 0.0:
+        return ordered[0]
+    if q >= 1.0:
+        return ordered[-1]
+    pos = q * (len(ordered) - 1)
+    lo = int(math.floor(pos))
+    hi = int(math.ceil(pos))
+    if lo == hi:
+        return ordered[lo]
+    frac = pos - lo
+    return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
+
+
+def _coerce_delight_norm_mode(
+    *,
+    normalize: bool | None = None,
+    norm_mode: str | None = None,
+    default: str = "none",
+) -> str:
+    """Resolve Delight normalization mode from API parameters."""
+    if norm_mode is not None:
+        mode = norm_mode.strip().lower()
+        if mode in {"none", "scale", "mad_scale"}:
+            return mode
+        raise ValueError(
+            f"Invalid delight norm_mode '{norm_mode}'. "
+            "Expected one of: none, scale, mad_scale."
+        )
+
+    if normalize is None:
+        return default
+    return "scale" if normalize else "none"
+
+
+def _resolve_delight_norm_mode(
+    params: Mapping[str, object], *, default: str
+) -> str:
+    """Resolve Delight normalization mode from transform params.
+
+    `delight_norm_mode` is the primary API. `delight_normalize` remains as a
+    backward-compatible boolean alias: true -> "scale", false -> "none".
+    """
+    raw_mode = params.get("delight_norm_mode")
+    if raw_mode is not None:
+        if not isinstance(raw_mode, str):
+            raise ValueError("delight_norm_mode must be a string")
+        return _coerce_delight_norm_mode(norm_mode=raw_mode, default=default)
+
+    raw_normalize = params.get("delight_normalize")
+    if raw_normalize is not None:
+        if not isinstance(raw_normalize, bool):
+            raise ValueError("delight_normalize must be a boolean")
+        return _coerce_delight_norm_mode(
+            normalize=raw_normalize,
+            default=default,
+        )
+
+    return default
+
+
+def _apply_delight_norm_mode(
+    surprisals: list[float], norm_mode: str
+) -> list[float]:
+    """Apply the configured Delight normalization mode."""
+    if norm_mode == "none":
+        return list(surprisals)
+    if norm_mode == "scale":
+        return _normalize_surprisals(surprisals)
+    if norm_mode == "mad_scale":
+        return _mad_scale_surprisals(surprisals)
+    raise ValueError(
+        f"Invalid delight norm_mode '{norm_mode}'. Expected one of: none, scale, mad_scale."
+    )
+
+
+def _resolve_delight_eta_mode(
+    params: Mapping[str, object], *, default: str = "fixed"
+) -> str:
+    """Resolve Delight eta mode from transform params."""
+    raw_mode = params.get("delight_eta_mode")
+    if raw_mode is None:
+        raw_adaptive = params.get("delight_eta_adaptive")
+        if raw_adaptive is None:
+            return default
+        if not isinstance(raw_adaptive, bool):
+            raise ValueError("delight_eta_adaptive must be a boolean")
+        return "adaptive" if raw_adaptive else "fixed"
+
+    if not isinstance(raw_mode, str):
+        raise ValueError("delight_eta_mode must be a string")
+    mode = raw_mode.strip().lower()
+    if mode in {"fixed", "adaptive"}:
+        return mode
+    raise ValueError(
+        f"Invalid delight eta_mode '{raw_mode}'. Expected one of: fixed, adaptive."
+    )
+
+
+def _iter_delight_rollouts(
+    ctx: TransformContext,
+    norm_mode: str,
+) -> list[tuple[float, list[float]]]:
+    """Materialize normalized Delight surprisal sequences for the batch."""
+    rollouts: list[tuple[float, list[float]]] = []
+    for idx in range(len(ctx.logprobs_G)):
+        advantage = ctx.episode_advantages[idx]
+        if advantage == 0.0:
+            continue
+        raw_surprisals = [min(-lp, MAX_SURPRISAL) for lp in ctx.logprobs_G[idx]]
+        s_values = _apply_delight_norm_mode(raw_surprisals, norm_mode)
+        rollouts.append((advantage, s_values))
+    return rollouts
+
+
+def _compute_delight_corrected_ordering_gaps(
+    rollouts: list[tuple[float, list[float]]],
+    eta: float,
+) -> tuple[list[float], list[float], list[float]]:
+    """Return sign-corrected high-vs-low gate gaps for Delight rollouts."""
+    inv_eta = 1.0 / max(eta, 1e-8)
+    all_gaps: list[float] = []
+    pos_gaps: list[float] = []
+    neg_gaps: list[float] = []
+
+    for advantage, s_values in rollouts:
+        if len(s_values) < 2:
+            continue
+        rollout_pairs = [
+            (s, _sigmoid(advantage * s * inv_eta))
+            for s in s_values
+        ]
+        ordered = sorted(rollout_pairs, key=lambda p: p[0])
+        half = len(ordered) // 2
+        if half == 0:
+            continue
+        low_mean = sum(g for _, g in ordered[:half]) / half
+        high_mean = sum(g for _, g in ordered[-half:]) / half
+        gap = high_mean - low_mean
+        corrected_gap = gap if advantage > 0 else -gap
+        all_gaps.append(corrected_gap)
+        if advantage > 0:
+            pos_gaps.append(corrected_gap)
+        else:
+            neg_gaps.append(corrected_gap)
+
+    return all_gaps, pos_gaps, neg_gaps
+
+
+def _resolve_delight_eta(
+    ctx: TransformContext,
+    *,
+    norm_mode: str,
+) -> tuple[float, dict[str, float]]:
+    """Resolve effective Delight eta for this batch.
+
+    `delight_eta_mode = "adaptive"` chooses eta from the batch's current
+    |A * s| logit magnitudes so the gate lands near a target neutral
+    fraction, then optionally sharpens further to hit a minimum ordering gap.
+    """
+    eta_mode = _resolve_delight_eta_mode(ctx.params, default="fixed")
+    base_eta = max(float(ctx.params.get("delight_eta", 1.0)), 1e-8)
+    ema_decay = float(ctx.params.get("delight_eta_ema_decay", 0.0))
+    if ema_decay < 0.0 or ema_decay >= 1.0:
+        raise ValueError(
+            "delight_eta_ema_decay must be in [0, 1). Try: delight_eta_ema_decay = 0.8"
+        )
+    raw_prev_eta = ctx.params.get("delight_eta_prev")
+    prev_eta: float | None = None
+    if raw_prev_eta is not None:
+        prev_eta = max(float(raw_prev_eta), 1e-8)
+
+    if eta_mode == "fixed":
+        return base_eta, {
+            "dg_eta": base_eta,
+            "dg_eta_adaptive": 0.0,
+        }
+
+    rollouts = _iter_delight_rollouts(ctx, norm_mode)
+    if not rollouts:
+        eta = base_eta
+        metrics = {
+            "dg_eta": eta,
+            "dg_eta_adaptive": 1.0,
+        }
+        if prev_eta is not None and ema_decay > 0.0:
+            eta = max(ema_decay * prev_eta + (1.0 - ema_decay) * eta, 1e-8)
+            metrics.update({
+                "dg_eta": eta,
+                "dg_eta_raw": base_eta,
+                "dg_eta_prev": prev_eta,
+                "dg_eta_ema_decay": ema_decay,
+            })
+        return eta, metrics
+
+    target_neutral = float(ctx.params.get("delight_eta_target_neutral_frac", 0.5))
+    target_neutral = min(max(target_neutral, 0.0), 1.0)
+    target_gap = max(0.0, float(ctx.params.get("delight_eta_target_ordering_gap", 0.0)))
+    eta_min = max(1e-8, float(ctx.params.get("delight_eta_min", 0.05)))
+    eta_max = max(eta_min, float(ctx.params.get("delight_eta_max", 5.0)))
+    neutral_logit = math.log(0.6 / 0.4)
+
+    magnitudes = [
+        abs(advantage * s)
+        for advantage, s_values in rollouts
+        for s in s_values
+    ]
+    if magnitudes:
+        eta_raw = _quantile(magnitudes, target_neutral) / max(neutral_logit, 1e-8)
+    else:
+        eta_raw = base_eta
+    eta_raw = min(max(eta_raw, eta_min), eta_max)
+    eta = eta_raw
+
+    if target_gap > 0.0:
+        ordering_gaps, _, _ = _compute_delight_corrected_ordering_gaps(rollouts, eta)
+        if ordering_gaps:
+            gap_now = sum(ordering_gaps) / len(ordering_gaps)
+            if gap_now < target_gap:
+                ratio = max(gap_now / max(target_gap, 1e-8), 0.25)
+                eta = min(max(eta * ratio, eta_min), eta_max)
+    eta_raw = eta
+
+    if prev_eta is not None and ema_decay > 0.0:
+        eta = min(
+            max(ema_decay * prev_eta + (1.0 - ema_decay) * eta, eta_min),
+            eta_max,
+        )
+
+    metrics = {
+        "dg_eta": eta,
+        "dg_eta_adaptive": 1.0,
+        "dg_eta_target_neutral_frac": target_neutral,
+        "dg_eta_target_ordering_gap": target_gap,
+        "dg_eta_min": eta_min,
+        "dg_eta_max": eta_max,
+    }
+    if prev_eta is not None and ema_decay > 0.0:
+        metrics.update({
+            "dg_eta_raw": eta_raw,
+            "dg_eta_prev": prev_eta,
+            "dg_eta_ema_decay": ema_decay,
+        })
+    return eta, metrics
+
+
 def apply_delight_gating(
-    advantage: float, surprisals: list[float], eta: float = 1.0
+    advantage: float,
+    surprisals: list[float],
+    eta: float = 1.0,
+    normalize: bool | None = None,
+    norm_mode: str | None = None,
 ) -> list[float]:
     """Delight-gated token-level advantages.
 
-    Gates each token's advantage by σ(advantage × surprisal / η), where σ is
-    the sigmoid.  This amplifies "breakthroughs" (rare actions with positive
-    advantage) and suppresses "blunders" (rare actions with negative advantage).
+    Gates each token's advantage by σ(advantage × s / η), where σ is the
+    sigmoid and s is per-token surprisal (raw or rollout-scaled).
 
-    Unlike GTPO which amplifies all high-entropy tokens uniformly, delight
-    gating considers the *sign* of the advantage: high-entropy tokens with
-    negative advantage are suppressed, not amplified.
+    When normalized in "scale" mode, surprisals are divided by rollout std
+    before the gate so the sigmoid operates in its sensitive region
+    regardless of absolute surprisal scale. "mad_scale" uses a robust MAD
+    estimate for the same purpose on outlier-heavy batches. Neither mode
+    centers the values, preserving surprisal's non-negativity and DG's sign
+    semantics. This is critical for instruct-tuned models where mean
+    surprisal is ~0.06 (raw gate argument < 0.03 → all neutral).
 
     Args:
         advantage: Episode-level advantage for this sample.
         surprisals: Per-token surprisal values (-logprob).
         eta: Temperature (η=1 default; η→∞ recovers uniform weighting).
+        normalize: Backward-compatible alias for norm_mode="scale".
+        norm_mode: Delight normalization mode. Supported values:
+            "none", "scale", "mad_scale".
     """
     n = len(surprisals)
     if n == 0:
@@ -952,19 +1339,81 @@ def apply_delight_gating(
     if advantage == 0.0:
         return [0.0] * n
 
+    resolved_norm = _coerce_delight_norm_mode(
+        normalize=normalize,
+        norm_mode=norm_mode,
+        default="none",
+    )
+    s_values = _apply_delight_norm_mode(
+        [min(s, MAX_SURPRISAL) for s in surprisals],
+        resolved_norm,
+    )
+
+    inv_eta = 1.0 / max(eta, 1e-8)
     result = []
-    for s in surprisals:
-        s_clamped = min(s, MAX_SURPRISAL)
-        delight = advantage * s_clamped
-        # sigmoid: 1 / (1 + exp(-x))
-        x = delight / max(eta, 1e-8)
-        if x > 20:
-            gate = 1.0
-        elif x < -20:
-            gate = 0.0
-        else:
-            gate = 1.0 / (1.0 + math.exp(-x))
+    for s in s_values:
+        gate = _sigmoid(advantage * s * inv_eta)
         result.append(advantage * gate)
+    return result
+
+
+def apply_delight_sepa_gating(
+    advantage: float,
+    surprisals: list[float],
+    lambda_t: float,
+    eta: float = 1.0,
+    normalize: bool | None = None,
+    norm_mode: str | None = None,
+) -> list[float]:
+    """SEPA-annealed delight gating: smooth PG → DG transition.
+
+    Interpolates between uniform policy gradient (λ=0) and full delight
+    gating (λ=1):
+
+        token_adv = A_i × [(1 - λ) + λ · σ(A_i · s'_t / η)]
+
+    where s'_t is optionally normalized surprisal. Supported normalization
+    modes preserve non-negativity by scaling without centering.
+
+    At λ=0 (early training), every token gets the same advantage (pure PG).
+    At λ=1 (late training), only fork-tokens get gradient (pure DG).
+
+    Args:
+        advantage: Episode-level advantage for this sample.
+        surprisals: Per-token surprisal values (-logprob).
+        lambda_t: SEPA interpolation strength in [0, 1].
+        eta: DG temperature (η=1 default; η→∞ recovers uniform weighting).
+        normalize: Backward-compatible alias for norm_mode="scale".
+        norm_mode: Delight normalization mode. Supported values:
+            "none", "scale", "mad_scale".
+    """
+    n = len(surprisals)
+    if n == 0:
+        return []
+    if advantage == 0.0:
+        return [0.0] * n
+
+    lam = max(0.0, min(1.0, lambda_t))
+    if lam == 0.0:
+        return [advantage] * n
+
+    resolved_norm = _coerce_delight_norm_mode(
+        normalize=normalize,
+        norm_mode=norm_mode,
+        default="none",
+    )
+    s_values = _apply_delight_norm_mode(
+        [min(s, MAX_SURPRISAL) for s in surprisals],
+        resolved_norm,
+    )
+
+    inv_eta = 1.0 / max(eta, 1e-8)
+    pg_weight = 1.0 - lam
+    result = []
+    for s in s_values:
+        gate = _sigmoid(advantage * s * inv_eta)
+        blended = pg_weight + lam * gate
+        result.append(advantage * blended)
     return result
 
 
@@ -1156,15 +1605,145 @@ def apply_sepa_amplification_clamped(
 # 4b. Transform mode registry (built-ins + dotted-path plugins)
 # ---------------------------------------------------------------------------
 
+def _compute_delight_gate_metrics(
+    ctx: TransformContext,
+    token_advs: list[list[float]],
+    eta: float,
+    lambda_t: float | None = None,
+    norm_mode: str = "none",
+) -> dict[str, float]:
+    """Compute gate statistics for delight transforms.
+
+    Collects per-token gate values σ(A·s/η) across all rollouts and
+    returns summary metrics for logging/blog post diagnostics.
+
+    When norm_mode uses scaling ("scale" or "mad_scale"), surprisals are
+    rescaled without centering before computing gate values, matching what
+    the actual gating does.
+
+    Besides raw gate moments, this also logs a sign-corrected
+    high-vs-low surprisal gate gap. That metric is positive when DG
+    preserves its intended within-rollout ordering: high-surprisal
+    tokens get larger gates for positive-advantage rollouts and smaller
+    gates for negative-advantage rollouts.
+    """
+    all_gates: list[float] = []
+    pos_gates: list[float] = []  # gates from correct rollouts (A > 0)
+    neg_gates: list[float] = []  # gates from incorrect rollouts (A < 0)
+    inv_eta = 1.0 / max(eta, 1e-8)
+    rollouts = _iter_delight_rollouts(ctx, norm_mode)
+
+    for advantage, s_values in rollouts:
+        for s in s_values:
+            gate = _sigmoid(advantage * s * inv_eta)
+            all_gates.append(gate)
+            if advantage > 0:
+                pos_gates.append(gate)
+            else:
+                neg_gates.append(gate)
+
+    if not all_gates:
+        return {}
+
+    ordering_gaps, ordering_gaps_pos, ordering_gaps_neg = (
+        _compute_delight_corrected_ordering_gaps(rollouts, eta)
+    )
+
+    n = len(all_gates)
+    mean_g = sum(all_gates) / n
+    var_g = sum((g - mean_g) ** 2 for g in all_gates) / n
+    breakthrough_frac = sum(1 for g in all_gates if g > 0.8) / n
+    suppressed_frac = sum(1 for g in all_gates if g < 0.2) / n
+    neutral_frac = sum(1 for g in all_gates if 0.4 <= g <= 0.6) / n
+
+    metrics: dict[str, float] = {
+        "dg_gate_mean": mean_g,
+        "dg_gate_std": var_g ** 0.5,
+        "dg_gate_min": min(all_gates),
+        "dg_gate_max": max(all_gates),
+        "dg_breakthrough_frac": breakthrough_frac,
+        "dg_suppressed_frac": suppressed_frac,
+        "dg_neutral_frac": neutral_frac,
+    }
+
+    if pos_gates:
+        metrics["dg_gate_mean_pos"] = sum(pos_gates) / len(pos_gates)
+    if neg_gates:
+        metrics["dg_gate_mean_neg"] = sum(neg_gates) / len(neg_gates)
+    if ordering_gaps:
+        metrics["dg_gate_ordering_gap"] = (
+            sum(ordering_gaps) / len(ordering_gaps)
+        )
+    if ordering_gaps_pos:
+        metrics["dg_gate_ordering_gap_pos"] = (
+            sum(ordering_gaps_pos) / len(ordering_gaps_pos)
+        )
+    if ordering_gaps_neg:
+        metrics["dg_gate_ordering_gap_neg"] = (
+            sum(ordering_gaps_neg) / len(ordering_gaps_neg)
+        )
+    if lambda_t is not None:
+        metrics["dg_lambda"] = lambda_t
+
+    # --- Zero-sum break: net advantage bias ---
+    # With uniform PG, token_adv = A_i for each token, so the sum across
+    # all tokens equals Σ(A_i × n_tokens_i). This is nonzero when the
+    # batch has unequal correct/incorrect counts (natural GRPO imbalance).
+    # DG's asymmetric gating ADDS to this imbalance.
+    #
+    # To isolate the DG-specific bias, we compute:
+    #   dg_bias = Σ(actual_token_advs) - Σ(uniform_PG_token_advs)
+    # This is zero when λ=0 (pure PG) and positive when DG is active.
+    all_flat = [a for rollout in token_advs for a in rollout]
+    if all_flat:
+        n_tok = len(all_flat)
+        adv_sum = sum(all_flat)
+        adv_mean = adv_sum / n_tok
+
+        # Compute what uniform PG would give (same advantage, every token)
+        pg_sum = 0.0
+        for idx in range(len(ctx.logprobs_G)):
+            advantage = ctx.episode_advantages[idx]
+            n_tokens = len(ctx.logprobs_G[idx])
+            pg_sum += advantage * n_tokens
+
+        dg_bias = adv_sum - pg_sum
+        metrics["dg_net_advantage_bias"] = dg_bias
+        metrics["dg_net_advantage_bias_per_token"] = dg_bias / n_tok
+        adv_var = sum((a - adv_mean) ** 2 for a in all_flat) / n_tok
+        metrics["dg_token_adv_std"] = adv_var ** 0.5
+
+        # Per-rollout advantage variance (mean across rollouts):
+        # how much DG differentiates tokens within a single rollout.
+        # High = DG is actively selecting tokens. Low = uniform like PG.
+        rollout_vars = []
+        for rollout in token_advs:
+            if len(rollout) < 2:
+                continue
+            r_mean = sum(rollout) / len(rollout)
+            r_var = sum((a - r_mean) ** 2 for a in rollout) / len(rollout)
+            rollout_vars.append(r_var)
+        if rollout_vars:
+            metrics["dg_within_rollout_adv_var"] = (
+                sum(rollout_vars) / len(rollout_vars)
+            )
+
+    return metrics
+
+
 def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
     """Delightful Policy Gradient transform (Osband 2026, arxiv:2603.14608).
 
-    Gates each token's advantage by σ(advantage × surprisal / η).
-    Amplifies breakthroughs (rare good actions), suppresses blunders
-    (rare bad actions).  Unlike GTPO which amplifies all high-entropy
-    tokens, delight considers the sign of the advantage.
+    Gates each token's advantage by σ(advantage × s / η) where s is raw
+    surprisal or normalized surprisal according to delight_norm_mode.
+
+    Scaling by rollout std (without centering) is critical for instruct-tuned
+    models where mean surprisal is ~0.06: without it, the sigmoid argument is
+    < 0.03 and 99% of tokens land in the neutral zone (gate ≈ 0.5). A robust
+    `mad_scale` mode is also available for heavy-tailed batches.
     """
-    eta = float(ctx.params.get("delight_eta", 1.0))
+    norm_mode = _resolve_delight_norm_mode(ctx.params, default="none")
+    eta, eta_metrics = _resolve_delight_eta(ctx, norm_mode=norm_mode)
     all_token_advs: list[list[float]] = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []
@@ -1175,7 +1754,9 @@ def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
         planning_mask = ctx.planning_masks_G[idx]
         surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
 
-        token_advs = apply_delight_gating(advantage, surprisals, eta=eta)
+        token_advs = apply_delight_gating(
+            advantage, surprisals, eta=eta, norm_mode=norm_mode
+        )
         all_token_advs.append(token_advs)
 
         for j, s in enumerate(surprisals):
@@ -1185,7 +1766,110 @@ def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
                 all_exec_surprisals.append(s)
 
     stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
-    return AdvantageResult(all_token_advs, True, stats)
+    extra = _compute_delight_gate_metrics(
+        ctx, all_token_advs, eta, norm_mode=norm_mode
+    )
+    extra.update(eta_metrics)
+    return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra)
+
+
+def _compute_delight_sepa_transform(ctx: TransformContext) -> AdvantageResult:
+    """SEPA-annealed Delight gating: PG → DG transition over training.
+
+    Uses the SEPA controller's lambda to interpolate between uniform PG
+    (lambda=0, early training) and full DG gating (lambda=1, late training).
+
+    delight_norm_mode (default "scale") controls how surprisals are
+    normalized before gating. "scale" divides by rollout std without
+    centering, while "mad_scale" uses a robust MAD estimate for
+    outlier-heavy batches. delight_eta_mode can be "fixed" or "adaptive",
+    and adaptive eta can be smoothed across steps with delight_eta_ema_decay.
+    """
+    norm_mode = _resolve_delight_norm_mode(ctx.params, default="scale")
+    eta, eta_metrics = _resolve_delight_eta(ctx, norm_mode=norm_mode)
+    # Allow fixed lambda override from transform_params (bypasses SEPA ramp)
+    lam_override = ctx.params.get("delight_lambda")
+    lam = float(lam_override) if lam_override is not None else ctx.sepa_lambda
+    all_token_advs: list[list[float]] = []
+    all_exec_surprisals: list[float] = []
+    all_plan_surprisals: list[float] = []
+
+    for idx in range(len(ctx.logprobs_G)):
+        advantage = ctx.episode_advantages[idx]
+        logprobs = ctx.logprobs_G[idx]
+        planning_mask = ctx.planning_masks_G[idx]
+        surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
+
+        token_advs = apply_delight_sepa_gating(
+            advantage, surprisals, lambda_t=lam, eta=eta, norm_mode=norm_mode
+        )
+        all_token_advs.append(token_advs)
+
+        for j, s in enumerate(surprisals):
+            if planning_mask[j]:
+                all_plan_surprisals.append(s)
+            else:
+                all_exec_surprisals.append(s)
+
+    stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
+    extra = _compute_delight_gate_metrics(
+        ctx, all_token_advs, eta, lambda_t=lam, norm_mode=norm_mode
+    )
+    extra.update(eta_metrics)
+    return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra)
+
+
+def _compute_hard_delight_transform(ctx: TransformContext) -> AdvantageResult:
+    """Hard top-K delight gating: binary token selection.
+
+    Keeps top k_frac% tokens by surprisal for correct rollouts (fork-points),
+    bottom k_frac% for incorrect rollouts (routine tokens), zeros the rest.
+    Produces ~60% gradient directional change vs PG (13x stronger than sigmoid DG).
+    """
+    k_frac = float(ctx.params.get("delight_k_frac", 0.2))
+    lam_override = ctx.params.get("delight_lambda")
+    lam = float(lam_override) if lam_override is not None else ctx.sepa_lambda
+    all_token_advs: list[list[float]] = []
+    all_exec_surprisals: list[float] = []
+    all_plan_surprisals: list[float] = []
+
+    for idx in range(len(ctx.logprobs_G)):
+        advantage = ctx.episode_advantages[idx]
+        logprobs = ctx.logprobs_G[idx]
+        planning_mask = ctx.planning_masks_G[idx]
+        surprisals = [min(-lp, MAX_SURPRISAL) for lp in logprobs]
+
+        token_advs = apply_hard_delight_sepa_gating(
+            advantage, surprisals, lambda_t=lam, k_frac=k_frac
+        )
+        all_token_advs.append(token_advs)
+
+        for j, s in enumerate(surprisals):
+            if planning_mask[j]:
+                all_plan_surprisals.append(s)
+            else:
+                all_exec_surprisals.append(s)
+
+    stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
+
+    # Compute metrics: what fraction of tokens are active (non-zero)?
+    all_flat = [a for seq in all_token_advs for a in seq]
+    n_total = len(all_flat)
+    n_active = sum(1 for a in all_flat if a != 0.0)
+    extra: dict[str, float] = {
+        "hard_dg_active_frac": n_active / max(n_total, 1),
+        "hard_dg_k_frac": k_frac,
+        "hard_dg_lambda": lam,
+    }
+    if n_total > 0:
+        adv_sum = sum(all_flat)
+        pg_sum = sum(
+            ctx.episode_advantages[i] * len(ctx.logprobs_G[i])
+            for i in range(len(ctx.logprobs_G))
+        )
+        extra["hard_dg_net_bias"] = adv_sum - pg_sum
+
+    return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra)
 
 
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
@@ -1194,6 +1878,18 @@ _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
         name="delight",
         use_gtpo=False,
         compute_context=_compute_delight_transform,
+    ),
+    "delight_sepa": TransformSpec(
+        name="delight_sepa",
+        use_gtpo=False,
+        uses_sepa_controller=True,
+        compute_context=_compute_delight_sepa_transform,
+    ),
+    "hard_delight": TransformSpec(
+        name="hard_delight",
+        use_gtpo=False,
+        uses_sepa_controller=True,
+        compute_context=_compute_hard_delight_transform,
     ),
     "gtpo": TransformSpec(name="gtpo"),
     "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=surprisal_mask_post_process),

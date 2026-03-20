@@ -747,11 +747,20 @@ class TestClipEpsConfig:
             TrainConfig(clip_eps=0.0, clip_eps_high=0.28)
 
     def test_clip_eps_non_local_warns(self):
+        """clip_eps warns for backends other than local and tinker."""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(clip_eps=0.2, backend="prime_rl")
+        msgs = [str(x.message) for x in w]
+        assert any("ratio clipping is only implemented in the local and tinker backends" in m for m in msgs)
+
+    def test_clip_eps_tinker_no_warn(self):
+        """clip_eps on tinker backend should NOT warn (PPO loss supported)."""
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             TrainConfig(clip_eps=0.2, backend="tinker")
         msgs = [str(x.message) for x in w]
-        assert any("ratio clipping is only implemented in the local backend" in m for m in msgs)
+        assert not any("ratio clipping" in m for m in msgs)
 
     def test_clip_eps_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"

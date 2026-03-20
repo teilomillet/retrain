@@ -9,7 +9,7 @@ import json
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NotRequired, TypedDict, cast
 
 from transformers import AutoTokenizer
 
@@ -104,6 +104,8 @@ class TrainerState(TypedDict):
     current_group_size: int
     checkpoint_name: str
     sepa: SEPAStateDict
+    tl_grpo_ema: NotRequired[float]
+    delight_eta_ema: NotRequired[float]
 
 
 def _require_int_field(payload: Mapping[str, object], key: str) -> int:
@@ -125,6 +127,54 @@ def _optional_sepa_state(payload: Mapping[str, object]) -> SEPAStateDict:
     if not isinstance(value, dict):
         raise ValueError("Trainer state field 'sepa' must be an object.")
     return cast(SEPAStateDict, value)
+
+
+def _optional_float_field(payload: Mapping[str, object], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"Trainer state field '{key}' must be a number.")
+    return float(value)
+
+
+def _uses_adaptive_delight(params: Mapping[str, object] | None) -> bool:
+    if params is None:
+        return False
+    raw_mode = params.get("delight_eta_mode")
+    if isinstance(raw_mode, str):
+        return raw_mode.strip().lower() == "adaptive"
+    return params.get("delight_eta_adaptive") is True
+
+
+def _prepare_transform_params_for_step(
+    params: Mapping[str, object] | None,
+    *,
+    delight_eta_prev: float | None,
+) -> dict[str, object]:
+    prepared = dict(params) if params is not None else {}
+    if delight_eta_prev is not None and _uses_adaptive_delight(prepared):
+        prepared["delight_eta_prev"] = delight_eta_prev
+    return prepared
+
+
+def _prepare_algorithm_params_for_step(
+    params: Mapping[str, object],
+    *,
+    delight_eta_prev: float | None,
+) -> dict[str, object]:
+    prepared = dict(params)
+    raw_transform_params = prepared.get("transform_params")
+    transform_params = (
+        dict(raw_transform_params)
+        if isinstance(raw_transform_params, Mapping)
+        else {}
+    )
+    prepared["transform_params"] = _prepare_transform_params_for_step(
+        transform_params,
+        delight_eta_prev=delight_eta_prev,
+    )
+    return prepared
 
 
 def _print_config_summary(config: TrainConfig) -> None:
@@ -227,6 +277,7 @@ def _save_trainer_state(
     checkpoint_name: str,
     sepa_state: SEPAStateDict,
     tl_grpo_ema: float | None = None,
+    delight_eta_ema: float | None = None,
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
     state: dict[str, object] = {
@@ -241,6 +292,8 @@ def _save_trainer_state(
     }
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema
+    if delight_eta_ema is not None:
+        state["delight_eta_ema"] = delight_eta_ema
     tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
     tmp.write_text(json.dumps(state, indent=2) + "\n")
     tmp.rename(path / _TRAINER_STATE_FILE)
@@ -261,7 +314,7 @@ def _load_trainer_state(resume_dir: str) -> TrainerState:
             f"Invalid trainer state file {state_file}: expected JSON object."
         )
     payload_map = cast(Mapping[str, object], payload)
-    return {
+    state: TrainerState = {
         "step": _require_int_field(payload_map, "step"),
         "example_idx": _require_int_field(payload_map, "example_idx"),
         "total_correct": _require_int_field(payload_map, "total_correct"),
@@ -271,6 +324,13 @@ def _load_trainer_state(resume_dir: str) -> TrainerState:
         "checkpoint_name": _optional_str_field(payload_map, "checkpoint_name"),
         "sepa": _optional_sepa_state(payload_map),
     }
+    tl_grpo_ema = _optional_float_field(payload_map, "tl_grpo_ema")
+    if tl_grpo_ema is not None:
+        state["tl_grpo_ema"] = tl_grpo_ema
+    delight_eta_ema = _optional_float_field(payload_map, "delight_eta_ema")
+    if delight_eta_ema is not None:
+        state["delight_eta_ema"] = delight_eta_ema
+    return state
 
 
 def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
@@ -362,7 +422,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     # 4. Load tokenizer + vocab table
     # -----------------------------------------------------------------------
     print(f"Loading tokenizer for {config.model} ...")
-    tokenizer = AutoTokenizer.from_pretrained(config.model)
+    tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
     print("Loading vocabulary table...")
     vocab_size = tokenizer.vocab_size
     if hasattr(tokenizer, "added_tokens_encoder"):
@@ -477,6 +537,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             "Ignoring advantage_mode/transform_mode composition."
         )
     start_step = 0
+    tl_grpo_ema: float | None = config.tl_grpo_ema_init if config.tl_grpo else None
+    delight_eta_ema: float | None = None
 
     # -----------------------------------------------------------------------
     # 10b. Resume from checkpoint (if requested)
@@ -497,6 +559,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # Restore TL-GRPO EMA baseline
         if "tl_grpo_ema" in saved and tl_grpo_ema is not None:
             tl_grpo_ema = float(saved["tl_grpo_ema"])
+        if "delight_eta_ema" in saved:
+            delight_eta_ema = float(saved["delight_eta_ema"])
 
         # Restore backend model state
         ckpt_name = saved.get("checkpoint_name", "")
@@ -507,13 +571,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             f"Resumed from step {saved['step']} "
             f"(checkpoint: {ckpt_name}), continuing from step {start_step}"
         )
-
-    # TL-GRPO EMA reward baseline (REINFORCE with learned baseline).
-    # With group_size=1, the group-normalized outcome advantage is always 0.
-    # The EMA baseline restores the outcome signal: outcome_adv = R - ema.
-    tl_grpo_ema: float | None = None
-    if config.tl_grpo:
-        tl_grpo_ema = config.tl_grpo_ema_init
 
     # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
     warmup_batch_sizes: list[int] = []
@@ -687,6 +744,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         all_datum_tokens: list[list[int]] = []
         all_datum_logprobs: list[list[float]] = []
         all_datum_advantages: list[list[float]] = []
+        step_transform_params = _prepare_transform_params_for_step(
+            config.transform_params,
+            delight_eta_prev=delight_eta_ema,
+        )
+        step_algorithm_params = _prepare_algorithm_params_for_step(
+            config.effective_algorithm_params,
+            delight_eta_prev=delight_eta_ema,
+        )
 
         # Resolve SEPA lambda once per step (before group loop)
         if uses_sepa_controller:
@@ -791,7 +856,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         logprobs_G,
                         planning_masks_G,
                         algorithm_mode=config.algorithm_mode,
-                        params=config.effective_algorithm_params,
+                        params=step_algorithm_params,
                         gtpo_beta=config.gtpo_beta,
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
@@ -809,7 +874,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
                         advantage_params=config.effective_advantage_params,
-                        transform_params=config.transform_params,
+                        transform_params=step_transform_params,
                         step=batch_idx,
                         post_process_params=config.post_process_params,
                         token_distributions_G=None,
@@ -901,6 +966,33 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             if len(lps) > 1 else 0.0
                             for lps in turn_lps
                         ]
+                    # Log top-K highest surprisal tokens with decoded text.
+                    # Useful for debugging DG gating and blog post analysis:
+                    # shows which tokens the gate considers "fork-points".
+                    if s_idx < len(logprobs_G) and logprobs_G[s_idx]:
+                        lps = logprobs_G[s_idx]
+                        # Flatten token IDs for this sample
+                        s_tids: list[int] = []
+                        for t_idx2 in range(len(turns_token_ids_G[s_idx])):
+                            s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
+                        n_tok = min(len(lps), len(s_tids))
+                        if n_tok > 0:
+                            indexed = [
+                                (i, -lps[i], s_tids[i])
+                                for i in range(n_tok)
+                            ]
+                            indexed.sort(key=lambda x: x[1], reverse=True)
+                            top_k = indexed[:10]
+                            gen_entry["top_surprisal_tokens"] = [
+                                {
+                                    "pos": pos,
+                                    "surprisal": round(surp, 4),
+                                    "token": vocab_table[tid]
+                                    if 0 <= tid < len(vocab_table)
+                                    else f"<{tid}>",
+                                }
+                                for pos, surp, tid in top_k
+                            ]
                     generations_logger.log(gen_entry)
             sample_time = time.perf_counter() - sample_start
         else:
@@ -1038,7 +1130,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         logprobs_G,
                         planning_masks_G,
                         algorithm_mode=config.algorithm_mode,
-                        params=config.effective_algorithm_params,
+                        params=step_algorithm_params,
                         gtpo_beta=config.gtpo_beta,
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
@@ -1057,7 +1149,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         hicra_alpha=config.hicra_alpha,
                         sepa_lambda=sepa_lambda_val,
                         advantage_params=config.effective_advantage_params,
-                        transform_params=config.transform_params,
+                        transform_params=step_transform_params,
                         step=batch_idx,
                         post_process_params=config.post_process_params,
                         token_distributions_G=None,
@@ -1086,13 +1178,35 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         all_datum_advantages.append(padded_advantages)
 
                 for s_idx, comp_text in enumerate(completion_texts_G):
-                    generations_logger.log({
+                    gen_entry: dict[str, object] = {
                         "step": batch_idx,
                         "prompt": batch_prompt_previews[f_idx],
                         "completion": comp_text[:500],
                         "reward": rewards_G[s_idx],
                         "num_tokens": len(logprobs_G[s_idx]),
-                    })
+                    }
+                    # Top-K highest surprisal tokens with decoded text
+                    if s_idx < len(logprobs_G) and logprobs_G[s_idx]:
+                        lps = logprobs_G[s_idx]
+                        tids = turns_token_ids_G[s_idx][0] if turns_token_ids_G[s_idx] else []
+                        n_tok = min(len(lps), len(tids))
+                        if n_tok > 0:
+                            indexed = sorted(
+                                [(i, -lps[i], tids[i]) for i in range(n_tok)],
+                                key=lambda x: x[1],
+                                reverse=True,
+                            )
+                            gen_entry["top_surprisal_tokens"] = [
+                                {
+                                    "pos": p,
+                                    "surprisal": round(s, 4),
+                                    "token": vocab_table[t]
+                                    if 0 <= t < len(vocab_table)
+                                    else f"<{t}>",
+                                }
+                                for p, s, t in indexed[:10]
+                            ]
+                    generations_logger.log(gen_entry)
 
         # 10e. SEPA state updates
         total_completions += len(batch_rewards)
@@ -1281,6 +1395,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             for k in all_extra_keys:
                 vals = [r.extra_metrics[k] for r in batch_adv_results if k in r.extra_metrics]
                 metrics[k] = sum(vals) / len(vals)
+        if "dg_eta" in metrics:
+            delight_eta_ema = float(metrics["dg_eta"])
         metrics_logger.log(metrics)
 
         loss_display = _format_loss_for_display(
@@ -1376,6 +1492,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         step_entry["clip_fraction"] = clip_fraction
         step_entry["adv_cap_fraction"] = adv_cap_fraction
         step_entry["adv_cap_magnitude"] = adv_cap_magnitude
+        if batch_adv_results:
+            for k in {k for r in batch_adv_results for k in r.extra_metrics}:
+                step_entry[k] = metrics.get(k, 0.0)
         steps_logger.log(step_entry)
 
         # Periodic checkpoint
@@ -1393,6 +1512,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 checkpoint_name=ckpt_name,
                 sepa_state=sepa_controller.state_dict(),
                 tl_grpo_ema=tl_grpo_ema,
+                delight_eta_ema=delight_eta_ema,
             )
             print(f"Saved checkpoint: {ckpt_name}")
 
@@ -1411,6 +1531,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         checkpoint_name="final",
         sepa_state=sepa_controller.state_dict(),
         tl_grpo_ema=tl_grpo_ema,
+        delight_eta_ema=delight_eta_ema,
     )
     final_rate = (
         100.0 * total_correct / total_completions if total_completions > 0 else 0.0

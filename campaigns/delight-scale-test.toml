@@ -1,0 +1,107 @@
+# delight-scale-test: DG vs PG across model sizes
+#
+# Does model size affect DG effectiveness?
+# Fixed λ=0.5 (sweet spot) AND ramped λ (SEPA gate) per model.
+# 100 steps for long-run signal.
+#
+# 6 conditions x 1 seed x 100 steps = 6 runs
+#
+# Run: uv run retrain campaigns/delight-scale-test.toml
+
+[campaign]
+seeds = [42]
+max_steps = 137
+parallel = true
+max_workers = 4
+stagger_seconds = 10
+
+# --- Qwen 4B (our existing baseline model) ---
+
+# C1: Qwen 4B baseline PG
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lr = 5e-5
+
+# C2: Qwen 4B + DG fixed λ=0.5
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+delight_lambda = 0.5
+
+# --- Nemotron 120B Super (12B active, 10x our baseline) ---
+
+# C3: Nemotron 120B baseline PG
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "none"
+model = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+lr = 5e-5
+
+# C4: Nemotron 120B + DG fixed λ=0.5
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+model = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+delight_lambda = 0.5
+
+# C5: Nemotron 120B + DG ramped λ (SEPA gate)
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+model = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+
+# C6: Nemotron 120B baseline PG (no DG, just to see the ceiling)
+# Using Nemotron Nano 30B for a third size point
+[[campaign.conditions]]
+advantage_mode = "grpo"
+transform_mode = "delight_sepa"
+model = "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+lr = 5e-5
+
+[campaign.conditions.transform_params]
+delight_eta = 0.5
+delight_normalize = true
+delight_lambda = 0.5
+
+# --- base training config ---
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 128
+
+[training]
+batch_size = 8
+group_size = 16
+max_tokens = 2048
+temperature = 0.6
+lr = 5e-5
+save_every = 25
+
+[sepa]
+steps = 137
+schedule = "linear"
+delay_steps = 2
+
+[logging]
+wandb_project = "delight-gate"

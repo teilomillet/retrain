@@ -104,6 +104,10 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         optim_eps=config.optim_eps,
         throttle_dir=config.tinker_throttle_dir,
         max_concurrent=config.tinker_max_concurrent,
+        clip_eps=config.clip_eps,
+        clip_eps_high=config.clip_eps_high,
+        grad_clip_norm=config.grad_clip_norm,
+        clip_ratio_c=config.clip_ratio_c,
     )
 
 

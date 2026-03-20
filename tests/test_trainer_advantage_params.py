@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from retrain import trainer as trainer_mod
 from retrain.advantages import AdvantageResult
 from retrain.backpressure import NoOpBackPressure
@@ -183,6 +185,99 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     assert captured_kwargs, "compute_composable_advantages should be called"
     assert captured_kwargs[0]["advantage_params"] == cfg.effective_advantage_params
     assert final_path == str(Path(cfg.adapter_path) / "final")
+
+
+def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
+    captured_kwargs: list[dict[str, object]] = []
+    eta_by_call = [2.0, 1.5]
+
+    def fake_compute_composable_advantages(
+        rewards_G: list[float],
+        logprobs_G: list[list[float]],
+        planning_masks_G: list[list[int]],
+        **kwargs: object,
+    ) -> AdvantageResult:
+        _ = rewards_G, planning_masks_G
+        captured_kwargs.append(dict(kwargs))
+        idx = min(len(captured_kwargs) - 1, len(eta_by_call) - 1)
+        return AdvantageResult(
+            token_advs=[[0.5] * len(seq) for seq in logprobs_G],
+            has_stats=False,
+            extra_metrics={"dg_eta": eta_by_call[idx]},
+        )
+
+    helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "compute_composable_advantages",
+        fake_compute_composable_advantages,
+    )
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=2,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="grpo",
+        transform_mode="delight",
+        transform_params={
+            "delight_eta_mode": "adaptive",
+            "delight_eta_ema_decay": 0.8,
+        },
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    assert len(captured_kwargs) >= 2
+    first_params = captured_kwargs[0]["transform_params"]
+    second_params = captured_kwargs[1]["transform_params"]
+    assert isinstance(first_params, dict)
+    assert isinstance(second_params, dict)
+    assert "delight_eta_prev" not in first_params
+    assert second_params["delight_eta_prev"] == pytest.approx(2.0)
 
 
 def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):

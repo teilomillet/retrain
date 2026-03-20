@@ -92,6 +92,20 @@ class TestLoadTrainerState:
         assert state["sepa"]["var_ema"] == 1.2
         assert state["sepa"]["gate_open"] is False
 
+    def test_roundtrip_optional_ema_fields(self, tmp_path):
+        _save_trainer_state(
+            tmp_path, step=39, example_idx=320,
+            total_correct=95, total_completions=640,
+            current_batch_size=8, current_group_size=16,
+            checkpoint_name="checkpoint_step_40",
+            sepa_state={},
+            tl_grpo_ema=0.4,
+            delight_eta_ema=1.25,
+        )
+        state = _load_trainer_state(str(tmp_path))
+        assert state["tl_grpo_ema"] == pytest.approx(0.4)
+        assert state["delight_eta_ema"] == pytest.approx(1.25)
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="trainer_state.json"):
             _load_trainer_state(str(tmp_path))
