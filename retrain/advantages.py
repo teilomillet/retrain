@@ -10,7 +10,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from collections.abc import Mapping
-from typing import Callable
+from typing import Callable, cast
 
 from retrain.plugin_resolver import get_plugin_runtime, resolve_dotted_attribute
 
@@ -287,7 +287,7 @@ def _normalize_advantage_compute(
     try:
         sig = inspect.signature(compute)
     except (TypeError, ValueError):
-        return lambda rewards, _params: compute(rewards)
+        return lambda rewards, _params: compute(rewards)  # type: ignore[missing-argument]
 
     params = sig.parameters
     positional = [
@@ -299,10 +299,10 @@ def _normalize_advantage_compute(
         def _run_ctx_style(
             rewards: list[float], params_map: Mapping[str, object]
         ) -> list[float]:
-            out = compute(AdvantageContext(rewards=rewards, params=params_map))
+            out = compute(AdvantageContext(rewards=rewards, params=params_map))  # type: ignore[missing-argument, invalid-argument-type]
             if isinstance(out, AdvantageOutput):
                 return out.advantages
-            return out  # type: ignore[return-value]
+            return out
 
         return _run_ctx_style
 
@@ -316,13 +316,13 @@ def _normalize_advantage_compute(
         inspect.Parameter.KEYWORD_ONLY,
     ):
         if params_arg.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD:
-            return lambda rewards, params_map: compute(rewards, params_map)
-        return lambda rewards, params_map: compute(rewards, params=params_map)
+            return lambda rewards, params_map: compute(rewards, params_map)  # type: ignore[too-many-positional-arguments]
+        return lambda rewards, params_map: compute(rewards, params=params_map)  # type: ignore[missing-argument, unknown-argument]
 
     if accepts_varkw:
-        return lambda rewards, params_map: compute(rewards, params=params_map)
+        return lambda rewards, params_map: compute(rewards, params=params_map)  # type: ignore[missing-argument, unknown-argument]
 
-    return lambda rewards, _params: compute(rewards)
+    return lambda rewards, _params: compute(rewards)  # type: ignore[missing-argument]
 
 
 def _coerce_advantages_output(
@@ -419,7 +419,7 @@ def _coerce_transform_output(
             extra_metrics=raw_output.extra_metrics,
         )
     else:
-        token_advs = raw_output  # type: ignore[assignment]
+        token_advs = raw_output
         result = AdvantageResult(
             token_advs=[[float(v) for v in seq] for seq in token_advs],  # type: ignore[arg-type]
             has_stats=False,
@@ -655,7 +655,7 @@ def _load_custom_advantage_spec(dotted_path: str) -> AdvantageSpec:
                 f"advantage_mode '{dotted_path}' factory returned "
                 f"{type(built).__name__}, expected AdvantageSpec or callable."
             )
-        return _as_advantage_spec(dotted_path, obj)
+        return _as_advantage_spec(dotted_path, obj)  # type: ignore[invalid-argument-type]
 
     raise TypeError(
         f"advantage_mode '{dotted_path}' must resolve to AdvantageSpec "
@@ -700,7 +700,7 @@ def _make_builtin_algorithm_spec(
     """Create a built-in AlgorithmSpec by delegating to composable pipeline."""
 
     def _compute(ctx: AlgorithmContext) -> AdvantageResult:
-        post_process = dict(ctx.params.get("transform_params", {}))
+        post_process = dict(ctx.params.get("transform_params", {}))  # type: ignore[no-matching-overload]
         if "entropy_mask_rho" in ctx.params:
             post_process.setdefault("entropy_mask_rho", ctx.params["entropy_mask_rho"])
         return compute_composable_advantages(
@@ -713,10 +713,10 @@ def _make_builtin_algorithm_spec(
             gtpo_beta=ctx.gtpo_beta,
             hicra_alpha=ctx.hicra_alpha,
             sepa_lambda=ctx.sepa_lambda,
-            advantage_params=ctx.params.get("advantage_params")
+            advantage_params=ctx.params.get("advantage_params")  # type: ignore[invalid-argument-type]
             if isinstance(ctx.params.get("advantage_params"), Mapping)
             else {},
-            transform_params=ctx.params.get("transform_params")
+            transform_params=ctx.params.get("transform_params")  # type: ignore[invalid-argument-type]
             if isinstance(ctx.params.get("transform_params"), Mapping)
             else {},
             step=ctx.step,
@@ -869,7 +869,7 @@ def _load_custom_algorithm_spec(dotted_path: str) -> AlgorithmSpec:
             )
         return AlgorithmSpec(
             name=dotted_path,
-            compute=obj,
+            compute=obj,  # type: ignore[invalid-argument-type]
             needs_planning=bool(getattr(obj, "needs_planning", False)),
             uses_sepa_controller=bool(
                 getattr(obj, "uses_sepa_controller", False)
@@ -1220,8 +1220,8 @@ def _resolve_delight_eta(
     fraction, then optionally sharpens further to hit a minimum ordering gap.
     """
     eta_mode = _resolve_delight_eta_mode(ctx.params, default="fixed")
-    base_eta = max(float(ctx.params.get("delight_eta", 1.0)), 1e-8)
-    ema_decay = float(ctx.params.get("delight_eta_ema_decay", 0.0))
+    base_eta = max(float(cast(float, ctx.params.get("delight_eta", 1.0))), 1e-8)
+    ema_decay = float(cast(float, ctx.params.get("delight_eta_ema_decay", 0.0)))
     if ema_decay < 0.0 or ema_decay >= 1.0:
         raise ValueError(
             "delight_eta_ema_decay must be in [0, 1). Try: delight_eta_ema_decay = 0.8"
@@ -1229,7 +1229,7 @@ def _resolve_delight_eta(
     raw_prev_eta = ctx.params.get("delight_eta_prev")
     prev_eta: float | None = None
     if raw_prev_eta is not None:
-        prev_eta = max(float(raw_prev_eta), 1e-8)
+        prev_eta = max(float(cast(float, raw_prev_eta)), 1e-8)
 
     if eta_mode == "fixed":
         return base_eta, {
@@ -1254,11 +1254,11 @@ def _resolve_delight_eta(
             })
         return eta, metrics
 
-    target_neutral = float(ctx.params.get("delight_eta_target_neutral_frac", 0.5))
+    target_neutral = float(cast(float, ctx.params.get("delight_eta_target_neutral_frac", 0.5)))
     target_neutral = min(max(target_neutral, 0.0), 1.0)
-    target_gap = max(0.0, float(ctx.params.get("delight_eta_target_ordering_gap", 0.0)))
-    eta_min = max(1e-8, float(ctx.params.get("delight_eta_min", 0.05)))
-    eta_max = max(eta_min, float(ctx.params.get("delight_eta_max", 5.0)))
+    target_gap = max(0.0, float(cast(float, ctx.params.get("delight_eta_target_ordering_gap", 0.0))))
+    eta_min = max(1e-8, float(cast(float, ctx.params.get("delight_eta_min", 0.05))))
+    eta_max = max(eta_min, float(cast(float, ctx.params.get("delight_eta_max", 5.0))))
     neutral_logit = math.log(0.6 / 0.4)
 
     magnitudes = [
@@ -1789,7 +1789,7 @@ def _compute_delight_sepa_transform(ctx: TransformContext) -> AdvantageResult:
     eta, eta_metrics = _resolve_delight_eta(ctx, norm_mode=norm_mode)
     # Allow fixed lambda override from transform_params (bypasses SEPA ramp)
     lam_override = ctx.params.get("delight_lambda")
-    lam = float(lam_override) if lam_override is not None else ctx.sepa_lambda
+    lam = float(cast(float, lam_override)) if lam_override is not None else ctx.sepa_lambda
     all_token_advs: list[list[float]] = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []
@@ -1826,9 +1826,9 @@ def _compute_hard_delight_transform(ctx: TransformContext) -> AdvantageResult:
     bottom k_frac% for incorrect rollouts (routine tokens), zeros the rest.
     Produces ~60% gradient directional change vs PG (13x stronger than sigmoid DG).
     """
-    k_frac = float(ctx.params.get("delight_k_frac", 0.2))
+    k_frac = float(cast(float, ctx.params.get("delight_k_frac", 0.2)))
     lam_override = ctx.params.get("delight_lambda")
-    lam = float(lam_override) if lam_override is not None else ctx.sepa_lambda
+    lam = float(cast(float, lam_override)) if lam_override is not None else ctx.sepa_lambda
     all_token_advs: list[list[float]] = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []
@@ -1986,7 +1986,7 @@ def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
             uses_sepa_controller=bool(
                 getattr(obj, "uses_sepa_controller", False)
             ),
-            compute_context=obj,
+            compute_context=obj,  # type: ignore[invalid-argument-type]
         )
 
     raise TypeError(
@@ -2136,7 +2136,7 @@ def _load_custom_uncertainty_spec(dotted_path: str) -> UncertaintySpec:
                 f"uncertainty_kind '{dotted_path}' factory returned "
                 f"{type(built).__name__}, expected UncertaintySpec or callable."
             )
-        return UncertaintySpec(name=dotted_path, compute=obj)
+        return UncertaintySpec(name=dotted_path, compute=obj)  # type: ignore[invalid-argument-type]
 
     raise TypeError(
         f"uncertainty_kind '{dotted_path}' must resolve to UncertaintySpec "

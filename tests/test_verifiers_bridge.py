@@ -15,7 +15,7 @@ from retrain.verifiers_bridge import (
 
 
 class _DummyTokenizer:
-    def apply_chat_template(self, messages, add_generation_prompt=True):
+    def apply_chat_template(self, messages, add_generation_prompt=True, tokenize=True):
         # Stable synthetic IDs for tests.
         size = len(messages)
         return [10 + size, 20 + size]

@@ -149,7 +149,7 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     monkeypatch.setattr(
         trainer_mod.AutoTokenizer,
         "from_pretrained",
-        staticmethod(lambda _model: _FakeTokenizer()),
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
@@ -235,7 +235,7 @@ def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
     monkeypatch.setattr(
         trainer_mod.AutoTokenizer,
         "from_pretrained",
-        staticmethod(lambda _model: _FakeTokenizer()),
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
@@ -340,7 +340,7 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
     monkeypatch.setattr(
         trainer_mod.AutoTokenizer,
         "from_pretrained",
-        staticmethod(lambda _model: _FakeTokenizer()),
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
@@ -417,7 +417,7 @@ def test_tinker_entropy_stats_pipeline_does_not_break(monkeypatch, tmp_path):
     monkeypatch.setattr(
         trainer_mod.AutoTokenizer,
         "from_pretrained",
-        staticmethod(lambda _model: _FakeTokenizer()),
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(

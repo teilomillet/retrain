@@ -136,7 +136,7 @@ def _create_prime_rl(config: "TrainConfig") -> "TrainHelper":
     options = _normalize_prime_rl_options(config.backend_options)
     inference_url = config.inference_url or config.base_url or "http://localhost:8000"
 
-    return PrimeRLTrainHelper(
+    return PrimeRLTrainHelper(  # type: ignore[invalid-return-type]
         model_name=config.model,
         output_dir=config.adapter_path,
         inference_url=inference_url,

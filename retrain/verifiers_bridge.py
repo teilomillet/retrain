@@ -515,9 +515,9 @@ def _fork_and_measure(
     ops = ops_before + [alt_op]
     if continuation:
         ops = ops + list(continuation)
-    alt_snapshot = cast(object, fork_execute)(ops)
+    alt_snapshot = cast(object, fork_execute)(ops)  # type: ignore[call-non-callable]
     alt_cum = float(
-        cast(dict[str, object], alt_snapshot.get("run", {})).get(
+        cast(dict[str, object], alt_snapshot.get("run", {})).get(  # type: ignore[invalid-argument-type]
             "cumulative_reward", 0.0
         )
     )
@@ -544,7 +544,7 @@ def _get_legal_actions_at_turn(
     doesn't include legal_actions.
     """
     try:
-        snapshot = cast(object, fork_execute)(ops_before)
+        snapshot = cast(object, fork_execute)(ops_before)  # type: ignore[call-non-callable]
         # legal_actions can be at top level or nested in model_view
         legal = snapshot.get("legal_actions") or snapshot.get(
             "model_view", {}
