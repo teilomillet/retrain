@@ -646,11 +646,11 @@ def _load_custom_advantage_spec(dotted_path: str) -> AdvantageSpec:
         return obj
     if callable(obj):
         if _callable_takes_no_positional_args(obj):
-            built = obj()
+            built = obj()  # type: ignore[call-top-callable]
             if isinstance(built, AdvantageSpec):
                 return built
             if callable(built):
-                return _as_advantage_spec(dotted_path, built)
+                return _as_advantage_spec(dotted_path, built)  # type: ignore[invalid-argument-type]
             raise TypeError(
                 f"advantage_mode '{dotted_path}' factory returned "
                 f"{type(built).__name__}, expected AdvantageSpec or callable."
@@ -851,13 +851,13 @@ def _load_custom_algorithm_spec(dotted_path: str) -> AlgorithmSpec:
         return obj
     if callable(obj):
         if _callable_takes_no_positional_args(obj):
-            built = obj()
+            built = obj()  # type: ignore[call-top-callable]
             if isinstance(built, AlgorithmSpec):
                 return built
             if callable(built):
                 return AlgorithmSpec(
                     name=dotted_path,
-                    compute=built,
+                    compute=built,  # type: ignore[invalid-argument-type]
                     needs_planning=bool(getattr(built, "needs_planning", False)),
                     uses_sepa_controller=bool(
                         getattr(built, "uses_sepa_controller", False)
@@ -1964,7 +1964,7 @@ def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
         return obj
     if callable(obj):
         if _callable_takes_no_positional_args(obj):
-            built = obj()
+            built = obj()  # type: ignore[call-top-callable]
             if isinstance(built, TransformSpec):
                 return built
             if callable(built):
@@ -1974,7 +1974,7 @@ def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
                     uses_sepa_controller=bool(
                         getattr(built, "uses_sepa_controller", False)
                     ),
-                    compute_context=built,
+                    compute_context=built,  # type: ignore[invalid-argument-type]
                 )
             raise TypeError(
                 f"transform_mode '{dotted_path}' factory returned "
@@ -2127,11 +2127,11 @@ def _load_custom_uncertainty_spec(dotted_path: str) -> UncertaintySpec:
         return obj
     if callable(obj):
         if _callable_takes_no_positional_args(obj):
-            built = obj()
+            built = obj()  # type: ignore[call-top-callable]
             if isinstance(built, UncertaintySpec):
                 return built
             if callable(built):
-                return UncertaintySpec(name=dotted_path, compute=built)
+                return UncertaintySpec(name=dotted_path, compute=built)  # type: ignore[invalid-argument-type]
             raise TypeError(
                 f"uncertainty_kind '{dotted_path}' factory returned "
                 f"{type(built).__name__}, expected UncertaintySpec or callable."

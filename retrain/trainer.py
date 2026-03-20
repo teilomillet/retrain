@@ -424,12 +424,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     print(f"Loading tokenizer for {config.model} ...")
     tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
     print("Loading vocabulary table...")
-    vocab_size = tokenizer.vocab_size
+    vocab_size = tokenizer.vocab_size  # type: ignore[unresolved-attribute]
     if hasattr(tokenizer, "added_tokens_encoder"):
         vocab_size += len(tokenizer.added_tokens_encoder)
     all_ids = list(range(vocab_size))
     vocab_table: list[str] = []
-    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)
+    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)  # type: ignore[unresolved-attribute]
     for tok in py_tokens:
         vocab_table.append(str(tok) if tok is not None else "")
     print(f"Vocabulary table: {len(vocab_table)} entries")
@@ -466,7 +466,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     wandb_run = None
     wandb_enabled = bool(config.wandb_project)
     if wandb_enabled:
-        import wandb
+        import wandb  # type: ignore[unresolved-import]
 
         condition_label = _condition_label(config)
         run_name = config.wandb_run_name or condition_label
@@ -621,10 +621,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 # Tokenize prompt (system + user) and response (assistant) separately
                 # to create a mask: advantages=0 for prompt, advantages=1 for response
                 prompt_msgs = msgs[:2]  # system + user
-                full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-                prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)
-                prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
-                full_tokens = tokenizer.encode(full_text, add_special_tokens=False)
+                full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)  # type: ignore[unresolved-attribute]
+                prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)  # type: ignore[unresolved-attribute]
+                prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
+                full_tokens = tokenizer.encode(full_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
                 if len(full_tokens) > config.max_tokens + 512:
                     full_tokens = full_tokens[: config.max_tokens + 512]
                 # Mask: 0 for prompt tokens, 1 for response tokens
@@ -1039,7 +1039,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 for token_ids, _logprobs in group:
                     all_token_seqs_flat.append(list(token_ids))
 
-            all_decoded_texts = tokenizer.batch_decode(
+            all_decoded_texts = tokenizer.batch_decode(  # type: ignore[unresolved-attribute]
                 all_token_seqs_flat, skip_special_tokens=True
             )
 

@@ -81,7 +81,7 @@ class _Tokenizer(Protocol):
 
 def _require_verifiers() -> types.ModuleType:
     try:
-        import verifiers as vf
+        import verifiers as vf  # type: ignore[unresolved-import]
     except ModuleNotFoundError:
         raise ImportError(
             "Verifiers environment bridge requires the verifiers package.\n"
@@ -190,7 +190,7 @@ def _hub_env_suggestions(env_id: str, limit: int = 5) -> list[str]:
 
     try:
         import requests
-        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL
+        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL  # type: ignore[unresolved-import]
     except Exception:
         return []
 
@@ -233,7 +233,7 @@ def load_verifiers_environment(config: "TrainConfig") -> object:
 
     if config.environment_auto_install:
         try:
-            from verifiers.utils.install_utils import (
+            from verifiers.utils.install_utils import (  # type: ignore[unresolved-import]
                 check_hub_env_installed,
                 install_from_hub,
                 is_hub_env,
