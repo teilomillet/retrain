@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "retrain"
-version = "0.2.1"
+version = "0.3.0"
 description = "RLVR training framework for LLMs"
 readme = "README.md"
 requires-python = ">=3.11"
