@@ -32,7 +32,7 @@ adv_clip_max = 5.0
 
 [environment]
 provider = "verifiers"
-id = "soma_vending"
+id = "soma_warehouse"
 max_turns = 15
 
 [environment.args]
@@ -40,7 +40,6 @@ num_examples = 16
 dataset_seed = 42
 max_turns = 15
 http_url = "http://127.0.0.1:3000"
-domain_name = "warehouse"
 
 [logging]
 log_dir = "logs/warehouse-rl"

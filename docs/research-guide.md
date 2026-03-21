@@ -34,7 +34,11 @@ Not all logged metrics are equally important. Here's what to focus on at each le
 | `loss_is_placeholder` | `true` means the backend reports async placeholder loss (compare reward/correct metrics instead) |
 | `backend_reports_sync_loss` | `false` means `loss` is not a synchronous optimizer objective |
 | `num_datums` | Drops when groups are uninformative (all correct or all wrong) |
+| `reward_tie_group_rate` | High values mean multiple rollouts inside one prompt group got the same reward |
+| `reward_uniform_group_rate` | High values mean many groups collapsed to a single reward value |
 | `bp_regime` | If stuck in `retrograde`, batch size is too high |
+
+For group-size sweeps, also watch `reward_tie_pair_rate` and `reward_unique_fraction_mean`. See the [Tinker Forecasting Note](tinker-forecasting-note.md) for how to interpret those metrics when comparing `group_size` choices.
 
 ## What "good" looks like
 

@@ -108,6 +108,17 @@ class TrainerState(TypedDict):
     delight_eta_ema: NotRequired[float]
 
 
+class RewardTieStats(TypedDict):
+    """Approximate within-group reward tie summary."""
+
+    eligible: bool
+    has_tie: bool
+    is_uniform: bool
+    unique_count: int
+    tied_pairs: int
+    total_pairs: int
+
+
 def _require_int_field(payload: Mapping[str, object], key: str) -> int:
     value = payload.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -263,6 +274,49 @@ def _assert_uniform_completion_advantages_for_non_preserving_backend(
                 f"backend='{backend_name}' does not preserve token-level advantages, "
                 f"but sample {sample_idx} contains non-uniform completion advantages."
             )
+
+
+def _summarize_reward_ties(
+    rewards: list[float],
+    *,
+    eps: float = _UNIFORMITY_EPS,
+) -> RewardTieStats:
+    """Summarize approximate reward ties inside one prompt group."""
+    n = len(rewards)
+    if n < 2:
+        return {
+            "eligible": False,
+            "has_tie": False,
+            "is_uniform": False,
+            "unique_count": n,
+            "tied_pairs": 0,
+            "total_pairs": 0,
+        }
+
+    bucket_sizes: list[int] = []
+    bucket_anchor = 0.0
+    for reward in sorted(rewards):
+        if not bucket_sizes:
+            bucket_sizes.append(1)
+            bucket_anchor = reward
+            continue
+        if abs(reward - bucket_anchor) <= eps:
+            bucket_sizes[-1] += 1
+        else:
+            bucket_sizes.append(1)
+            bucket_anchor = reward
+
+    unique_count = len(bucket_sizes)
+    total_pairs = n * (n - 1) // 2
+    tied_pairs = sum(size * (size - 1) // 2 for size in bucket_sizes)
+    return {
+        "eligible": True,
+        "has_tie": unique_count < n,
+        "is_uniform": unique_count == 1,
+        "unique_count": unique_count,
+        "tied_pairs": tied_pairs,
+        "total_pairs": total_pairs,
+    }
 
 
 def _save_trainer_state(
@@ -744,6 +798,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         batch_correct = 0
         batch_max_token_hits = 0
         batch_total_completions = 0
+        batch_reward_tie_eligible_groups = 0
+        batch_reward_tie_groups = 0
+        batch_reward_uniform_groups = 0
+        batch_reward_tied_pairs = 0
+        batch_reward_total_pairs = 0
+        batch_reward_unique_fraction_sum = 0.0
         batch_surprisal_stats: list[EntropyStats] = []
         batch_adv_results: list = []
         all_logprobs_sepa: list[list[float]] = []
@@ -850,7 +910,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     f"| answer={answer_preview}"
                 )
 
-                if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
+                reward_tie_stats = _summarize_reward_ties(rewards_G)
+                if reward_tie_stats["eligible"]:
+                    batch_reward_tie_eligible_groups += 1
+                    batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
+                    batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
+                    batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
+                    batch_reward_total_pairs += reward_tie_stats["total_pairs"]
+                    batch_reward_unique_fraction_sum += (
+                        reward_tie_stats["unique_count"] / len(rewards_G)
+                    )
+
+                if reward_tie_stats["is_uniform"] and not config.tl_grpo:
                     # With batch_advantage_norm, keep uniform groups — cross-group
                     # reward differences provide signal after batch normalization.
                     if config.batch_advantage_norm:
@@ -1124,7 +1195,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     f"| answer={answer_preview}"
                 )
 
-                if rewards_G and all(r == rewards_G[0] for r in rewards_G) and not config.tl_grpo:
+                reward_tie_stats = _summarize_reward_ties(rewards_G)
+                if reward_tie_stats["eligible"]:
+                    batch_reward_tie_eligible_groups += 1
+                    batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
+                    batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
+                    batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
+                    batch_reward_total_pairs += reward_tie_stats["total_pairs"]
+                    batch_reward_unique_fraction_sum += (
+                        reward_tie_stats["unique_count"] / len(rewards_G)
+                    )
+
+                if reward_tie_stats["is_uniform"] and not config.tl_grpo:
                     if config.batch_advantage_norm:
                         print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
                     elif rewards_G[0] > _CORRECT_THRESHOLD:
@@ -1330,6 +1412,26 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             if batch_total_completions > 0
             else 0.0
         )
+        reward_tie_group_rate = (
+            batch_reward_tie_groups / batch_reward_tie_eligible_groups
+            if batch_reward_tie_eligible_groups > 0
+            else 0.0
+        )
+        reward_uniform_group_rate = (
+            batch_reward_uniform_groups / batch_reward_tie_eligible_groups
+            if batch_reward_tie_eligible_groups > 0
+            else 0.0
+        )
+        reward_tie_pair_rate = (
+            batch_reward_tied_pairs / batch_reward_total_pairs
+            if batch_reward_total_pairs > 0
+            else 0.0
+        )
+        reward_unique_fraction_mean = (
+            batch_reward_unique_fraction_sum / batch_reward_tie_eligible_groups
+            if batch_reward_tie_eligible_groups > 0
+            else 0.0
+        )
 
         # Aggregate entropy stats
         step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
@@ -1368,6 +1470,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             "mean_reward": mean_reward,
             "correct_rate": correct_rate,
             "running_correct_rate": running_correct_rate,
+            "reward_tie_eligible_groups": batch_reward_tie_eligible_groups,
+            "reward_tie_groups": batch_reward_tie_groups,
+            "reward_uniform_groups": batch_reward_uniform_groups,
+            "reward_tie_group_rate": reward_tie_group_rate,
+            "reward_uniform_group_rate": reward_uniform_group_rate,
+            "reward_tie_pair_rate": reward_tie_pair_rate,
+            "reward_unique_fraction_mean": reward_unique_fraction_mean,
             "sepa_lambda": sepa_lambda_val,
             "sepa_gate_open": sepa_gate,
             "num_datums": num_datums,
@@ -1425,6 +1534,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             f" | datums={num_datums}"
             f" | bs={current_batch_size}"
             f" | gs={current_group_size}"
+            f" | tie_g={reward_tie_group_rate * 100:.1f}%"
             f" | sepa_l={sepa_lambda_val:.4f}"
             f" | time={step_time:.1f}s"
         )
@@ -1439,6 +1549,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "train/rewards/mean_reward": mean_reward,
                 "train/rewards/correct_rate": correct_rate,
                 "train/rewards/running_correct_rate": running_correct_rate,
+                "train/rewards/tie_eligible_groups": batch_reward_tie_eligible_groups,
+                "train/rewards/tie_groups": batch_reward_tie_groups,
+                "train/rewards/uniform_groups": batch_reward_uniform_groups,
+                "train/rewards/tie_group_rate": reward_tie_group_rate,
+                "train/rewards/uniform_group_rate": reward_uniform_group_rate,
+                "train/rewards/tie_pair_rate": reward_tie_pair_rate,
+                "train/rewards/unique_fraction_mean": reward_unique_fraction_mean,
                 "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
                 "train/backend/preserves_token_advantages": int(
                     backend_caps.preserves_token_advantages

@@ -201,7 +201,7 @@ adv_clip_max = {cfg.rl_adv_clip_max}
 
 [environment]
 provider = "verifiers"
-id = "soma_vending"
+id = "soma_warehouse"
 max_turns = {cfg.max_turns}
 
 [environment.args]
@@ -209,7 +209,6 @@ num_examples = {cfg.num_examples}
 dataset_seed = {cfg.dataset_seed}
 max_turns = {cfg.max_turns}
 http_url = "{cfg.http_url}"
-domain_name = "warehouse"
 
 [logging]
 log_dir = "{log_dir}"

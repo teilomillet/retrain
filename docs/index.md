@@ -68,3 +68,4 @@ retrain
 - [Backends](backends.md) -- local vs Tinker
 - [Logging & wandb](logging.md) -- metrics and experiment tracking
 - [Research Guide](research-guide.md) -- interpreting results, statistical testing, analysis code
+- [Tinker Forecasting Note](tinker-forecasting-note.md) -- what a recent Tinker forecasting result does and does not imply for retrain
