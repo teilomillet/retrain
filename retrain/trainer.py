@@ -824,6 +824,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if uses_sepa_controller:
             sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
+        # Behavior monitoring accumulators for this step.
+        _step_behavior_turns = 0
+        _step_behavior_invalid = 0
+        _step_behavior_actions: dict[str, int] = {}
+        _step_behavior_resp_lens: list[int] = []
+
         if verifiers_multiturn:
             all_group_sequences: list[list[tuple[list[int], list[float]]]] = []
             sample_start = time.perf_counter()
@@ -1033,7 +1039,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             if not tl.get("valid"):
                                 entry["error"] = tl.get("error", "")
                             turn_summary.append(entry)
+                            # ── Behavior accumulation ──
+                            _step_behavior_turns += 1
+                            if not tl.get("valid", True):
+                                _step_behavior_invalid += 1
+                            _op = str(tl.get("operation", "unknown"))
+                            _step_behavior_actions[_op] = (
+                                _step_behavior_actions.get(_op, 0) + 1
+                            )
                         gen_entry["turn_log"] = turn_summary
+                        _step_behavior_resp_lens.append(
+                            len(str(gen_entry.get("completion", "")))
+                        )
                     if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
                         gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
                     if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
@@ -1521,6 +1538,26 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 metrics[k] = sum(vals) / len(vals)
         if "dg_eta" in metrics:
             delight_eta_ema = float(metrics["dg_eta"])
+
+        # ── Behavior monitoring ─────────────────────────────────────
+        # Aggregate turn-level behavior from this step's generations.
+        # Tracks model behavior drift that loss alone cannot detect:
+        # action collapse, invalid action rate, response length.
+        if _step_behavior_turns > 0:
+            metrics["behavior/invalid_action_rate"] = (
+                _step_behavior_invalid / _step_behavior_turns
+            )
+            metrics["behavior/action_type_count"] = len(_step_behavior_actions)
+            if _step_behavior_actions:
+                _act_total = sum(_step_behavior_actions.values())
+                _max_frac = max(_step_behavior_actions.values()) / _act_total
+                metrics["behavior/action_dominance"] = _max_frac
+        if _step_behavior_resp_lens:
+            metrics["behavior/avg_response_chars"] = (
+                sum(_step_behavior_resp_lens) / len(_step_behavior_resp_lens)
+            )
+        # ────────────────────────────────────────────────────────────
+
         metrics_logger.log(metrics)
 
         loss_display = _format_loss_for_display(
@@ -1597,6 +1634,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
             if tl_grpo_ema is not None:
                 wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
+            # Behavior monitoring → W&B
+            for _bk in ("behavior/invalid_action_rate", "behavior/action_type_count",
+                        "behavior/action_dominance", "behavior/avg_response_chars"):
+                if _bk in metrics:
+                    wandb_metrics[f"train/{_bk}"] = metrics[_bk]
             wandb_run.log(wandb_metrics, step=batch_idx)
 
         # Step record for emergence analysis
