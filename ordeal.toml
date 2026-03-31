@@ -1,5 +1,5 @@
 [explorer]
-target_modules = ["retrain.advantages", "retrain.registry", "retrain.sepa"]
+target_modules = ["retrain.advantages", "retrain.registry", "retrain.sepa", "retrain.backpressure", "retrain.rewards", "retrain.config"]
 max_time = 60
 seed = 42
 checkpoint_strategy = "energy"
@@ -14,6 +14,12 @@ class = "tests.test_ordeal_sepa:SEPAControllerChaos"
 
 [[tests]]
 class = "tests.test_ordeal_sepa:SEPAAutoScheduleChaos"
+
+[[tests]]
+class = "tests.test_ordeal_backpressure:USLBackPressureChaos"
+
+[[tests]]
+class = "tests.test_ordeal_trainer_state:TrainerStateChaos"
 
 [report]
 format = "both"
