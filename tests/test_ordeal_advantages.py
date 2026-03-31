@@ -165,6 +165,15 @@ class TestMaxRLProperties:
             elif r < mean_r:
                 assert a < 0
 
+    def test_exact_formula(self) -> None:
+        """Verify exact MaxRL formula: A_i = (r_i - mean) / (mean + eps)."""
+        rewards = [1.0, 0.0, 0.0, 0.0]
+        advs = compute_maxrl_advantages(rewards)
+        mean_r = 0.25
+        denom = mean_r + 1e-6
+        assert math.isclose(advs[0], (1.0 - mean_r) / denom, rel_tol=1e-6)
+        assert math.isclose(advs[1], (0.0 - mean_r) / denom, rel_tol=1e-6)
+
 
 # ═══════════════════════════════════════════
 # GTPO Properties
@@ -358,6 +367,18 @@ class TestHICRAProperties:
         for orig, out in zip(token_advs, result):
             # HICRA adds α|A|, so negative values move toward zero
             assert out >= orig - 1e-10
+
+    def test_exact_formula(self) -> None:
+        """Verify exact HICRA formula: A + alpha * |A| * mask."""
+        token_advs = [2.0, -3.0, 0.5]
+        mask = [1, 1, 0]
+        alpha = 0.2
+        result = apply_hicra(token_advs, mask, alpha)
+        # Planning tokens: a + alpha * |a|
+        assert math.isclose(result[0], 2.0 + 0.2 * 2.0, abs_tol=1e-10)
+        assert math.isclose(result[1], -3.0 + 0.2 * 3.0, abs_tol=1e-10)
+        # Execution token unchanged
+        assert math.isclose(result[2], 0.5, abs_tol=1e-10)
 
 
 # ═══════════════════════════════════════════
