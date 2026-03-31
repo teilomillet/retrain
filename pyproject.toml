@@ -7,7 +7,7 @@ name = "retrain"
 version = "0.3.0"
 description = "RLVR training framework for LLMs"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "transformers>=4.44.0",
     "datasets>=2.20.0",
@@ -34,7 +34,7 @@ retrain = "retrain.cli:main"
 packages = ["retrain"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ANN401", "TID251"]
@@ -45,3 +45,11 @@ select = ["ANN401", "TID251"]
 
 [tool.ty.analysis]
 allowed-unresolved-imports = ["prime_rl.configs.shared", "prime_rl.transport"]
+
+[tool.uv.sources]
+ordeal = { path = "../ordeal", editable = true }
+
+[dependency-groups]
+dev = [
+    "ordeal",
+]

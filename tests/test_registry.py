@@ -170,7 +170,7 @@ class TestBuiltinCreation:
             reward.create("custom", config)
 
     def test_tinker_uses_inference_url_before_base_url(self):
-        mock_cls = MagicMock(return_value=object())
+        mock_cls = MagicMock(return_value=MagicMock())
         fake_mod = SimpleNamespace(TinkerTrainHelper=mock_cls)
         config = TrainConfig(
             backend="tinker",
@@ -183,7 +183,7 @@ class TestBuiltinCreation:
         assert mock_cls.call_args[0][1] == "http://inference-url"
 
     def test_tinker_falls_back_to_model_base_url(self):
-        mock_cls = MagicMock(return_value=object())
+        mock_cls = MagicMock(return_value=MagicMock())
         fake_mod = SimpleNamespace(TinkerTrainHelper=mock_cls)
         config = TrainConfig(
             backend="tinker",

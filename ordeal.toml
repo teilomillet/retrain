@@ -1,0 +1,23 @@
+[explorer]
+target_modules = ["retrain.advantages", "retrain.registry", "retrain.sepa"]
+max_time = 60
+seed = 42
+checkpoint_strategy = "energy"
+checkpoint_prob = 0.4
+steps_per_run = 50
+fault_toggle_prob = 0.3
+max_checkpoints = 256
+workers = 0
+
+[[tests]]
+class = "tests.test_ordeal_sepa:SEPAControllerChaos"
+
+[[tests]]
+class = "tests.test_ordeal_sepa:SEPAAutoScheduleChaos"
+
+[report]
+format = "both"
+output = "ordeal-report.json"
+traces = true
+traces_dir = ".ordeal/traces"
+verbose = true
