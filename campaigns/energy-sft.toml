@@ -1,0 +1,38 @@
+# Energy Phase 1: Pure SFT on oracle demonstrations
+#
+# Prerequisites:
+#   1. Generate SFT data first:
+#      cargo run --release --bin soma_http -- configs/http/soma-energy-local.toml
+#      uv run python scripts/generate_sft_data_universal.py configs/sft/energy-search.toml
+#
+#   2. Then train:
+#      retrain campaigns/energy-sft.toml
+#
+# Or use the pipeline script for the full staged flow:
+#   python campaigns/energy_pipeline.py
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3.5-4B"
+lora_rank = 128
+
+[algorithm]
+advantage_mode = "reinforce_pp"
+transform_mode = "none"
+
+[training]
+seed = 42
+max_steps = 60
+sft_warmup_steps = 60
+sft_data_path = "/Users/teilomillet/Code/soma/python/data/sft/energy_search_sft.jsonl"
+batch_size = 4
+group_size = 16
+max_tokens = 10240
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[logging]
+log_dir = "logs/energy-sft"

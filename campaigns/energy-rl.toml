@@ -1,0 +1,56 @@
+# Energy Phase 2: RL with REINFORCE++ (resume from SFT checkpoint)
+#
+# Usage:
+#   retrain campaigns/energy-rl.toml --resume-from logs/energy-sft/checkpoint_step_60
+#
+# Or use the pipeline script for the full staged flow:
+#   python campaigns/energy_pipeline.py
+
+[backend]
+backend = "tinker"
+
+[model]
+model = "Qwen/Qwen3.5-4B"
+lora_rank = 128
+
+[algorithm]
+advantage_mode = "reinforce_pp"
+transform_mode = "none"
+
+[training]
+seed = 42
+max_steps = 200
+sft_warmup_steps = 0
+batch_size = 4
+group_size = 8
+max_tokens = 10240
+temperature = 0.7
+lr = 1e-5
+save_every = 20
+batch_advantage_norm = true
+adv_clip_max = 5.0
+
+[environment]
+provider = "verifiers"
+id = "soma_energy"
+max_turns = 120
+
+[environment.args]
+num_examples = 64
+dataset_seed = 7
+max_turns = 120
+http_url = "http://127.0.0.1:13737"
+
+[environment.args.default_config]
+grid_max_import_kw = 10.0
+utility_grid_export_limit_kw = 3.0
+forecast_demand_base_mape = 0.02
+forecast_demand_mape_per_step = 0.01
+forecast_solar_base_mape = 0.05
+forecast_solar_mape_per_step = 0.025
+
+[environment.args.evaluator]
+horizon_ticks = 96
+
+[logging]
+log_dir = "logs/energy-rl"
