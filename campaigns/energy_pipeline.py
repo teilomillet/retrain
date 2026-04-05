@@ -7,6 +7,7 @@ Usage:
     python campaigns/energy_pipeline.py
     python campaigns/energy_pipeline.py --artifact-dir runs/energy-001
     python campaigns/energy_pipeline.py --skip-sft --sft-checkpoint runs/energy-001/sft/checkpoint_step_60
+    python campaigns/energy_pipeline.py --approved-export approved_candidate_exports/job-123/export.json
     python campaigns/energy_pipeline.py --dry-run
 
 Prerequisites:
@@ -50,6 +51,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,7 @@ class PipelineConfig:
     seed: int = 42
     save_every: int = 20
     max_tokens: int = 10240
+    approved_export_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +335,69 @@ def _check_sft_gate(
     return passed, details
 
 
+def _resolve_export_path(base_dir: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (base_dir / path).resolve()
+
+
+def _load_approved_export_handoff(export_index_path: str | Path) -> tuple[Path, dict[str, Any]]:
+    path = Path(export_index_path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"approved export bundle not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"approved export bundle must be a JSON object: {path}")
+    return path, data
+
+
+def _apply_approved_export_handoff(
+    cfg: PipelineConfig,
+    export_index_path: str | Path,
+) -> dict[str, Any]:
+    """Apply an approved export bundle to the retrain pipeline config."""
+    path, export_bundle = _load_approved_export_handoff(export_index_path)
+
+    domain = export_bundle.get("domain")
+    if isinstance(domain, str) and domain.strip() and domain != "energy":
+        raise ValueError(
+            f"approved export bundle is for domain {domain!r}, not 'energy'"
+        )
+
+    retrain_input = export_bundle.get("retrain_input", {})
+    if not isinstance(retrain_input, dict):
+        retrain_input = {}
+
+    candidate = export_bundle.get("candidate", {})
+    if not isinstance(candidate, dict):
+        candidate = {}
+
+    candidate_model = candidate.get("model")
+    if isinstance(candidate_model, str) and candidate_model.strip():
+        cfg.model = candidate_model
+
+    retrain_domain = retrain_input.get("domain")
+    if isinstance(retrain_domain, str) and retrain_domain.strip() and retrain_domain != "energy":
+        raise ValueError(
+            f"approved export retrain input targets {retrain_domain!r}, not 'energy'"
+        )
+
+    sft_data_path = retrain_input.get("sft_data_path")
+    if not isinstance(sft_data_path, str) or not sft_data_path.strip():
+        raise ValueError("approved export bundle is missing retrain_input.sft_data_path")
+    cfg.sft_data_path = str(_resolve_export_path(path.parent, sft_data_path))
+    cfg.approved_export_path = str(path)
+
+    export_id = export_bundle.get("export_id")
+    if not isinstance(export_id, str) or not export_id.strip():
+        export_id = path.stem
+    if not cfg.artifact_dir:
+        cfg.artifact_dir = str(path.parent / "retrain_runs" / export_id)
+
+    return export_bundle
+
+
 # ---------------------------------------------------------------------------
 # Pipeline state
 # ---------------------------------------------------------------------------
@@ -448,6 +514,8 @@ def run_pipeline(
     print(f"  Run tag:  {run_tag}")
     print(f"  Model:    {cfg.model}")
     print(f"  Backend:  {cfg.backend}")
+    if cfg.approved_export_path:
+        print(f"  Export:   {cfg.approved_export_path}")
     print(f"  SFT:      {cfg.sft_steps} steps (lr={cfg.sft_lr})")
     print(f"  RL:       {cfg.rl_steps} steps (lr={cfg.rl_lr})")
     print(f"  Algorithm: REINFORCE++ + batch_advantage_norm")
@@ -670,6 +738,11 @@ def main() -> None:
     parser.add_argument("--skip-sft", action="store_true", help="Skip SFT phase, use existing checkpoint")
     parser.add_argument("--sft-checkpoint", default="", help="Path to SFT checkpoint (with --skip-sft)")
     parser.add_argument("--sft-data", default="", help="Override SFT data path")
+    parser.add_argument(
+        "--approved-export",
+        default="",
+        help="Path to an approved candidate export bundle (export.json)",
+    )
     parser.add_argument("--lora-rank", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--wandb-project", default="", help="W&B project (empty=disabled)")
@@ -694,6 +767,9 @@ def main() -> None:
 
     if args.sft_data:
         cfg.sft_data_path = args.sft_data
+
+    if args.approved_export:
+        _apply_approved_export_handoff(cfg, args.approved_export)
 
     state = run_pipeline(
         cfg,
