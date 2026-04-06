@@ -497,17 +497,37 @@ def _run_sequential(
 
             meta_path = Path(cfg.log_dir) / "run_meta.json"
             meta_path.parent.mkdir(parents=True, exist_ok=True)
-            meta_path.write_text(json.dumps({"trainer": cfg.trainer}))
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "trainer": cfg.trainer,
+                        "run_id": meta_path.parent.name or "run",
+                        "status": "running",
+                    }
+                )
+            )
             runner = get_registry("trainer").create(cfg.trainer, cfg)
-            adapter_path = runner.run(cfg)
-            run["returncode"] = 0
-            print(f"  OK")
+            result = runner.run(cfg)
+            meta = {"trainer": cfg.trainer}
+            meta.update(result.to_dict())
+            meta_path.write_text(json.dumps(meta))
+            if result.ok:
+                run["returncode"] = 0
+                print(f"  OK")
+            else:
+                run["returncode"] = 1
+                failed += 1
+                print(
+                    f"  FAILED: {result.failure_status}"
+                    + (f" ({result.error_message})" if result.error_message else "")
+                )
+                continue
 
             # Auto-squeeze after first run (errors here don't fail the run)
-            if idx == 0 and squeeze_cfg and adapter_path:
+            if idx == 0 and squeeze_cfg and result.policy_ref:
                 try:
                     recommended_rank = _auto_squeeze(
-                        adapter_path,
+                        result.policy_ref,
                         squeeze_cfg,
                         base_config.lora_rank,
                         wandb_project=base_config.wandb_project,

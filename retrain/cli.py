@@ -2228,9 +2228,27 @@ def main() -> None:
         _check_environment(config)
         meta_dir = Path(config.log_dir)
         meta_dir.mkdir(parents=True, exist_ok=True)
-        (meta_dir / "run_meta.json").write_text(json.dumps({"trainer": config.trainer}))
+        meta_path = meta_dir / "run_meta.json"
+        meta_path.write_text(
+            json.dumps(
+                {
+                    "trainer": config.trainer,
+                    "run_id": meta_dir.name or "run",
+                    "status": "running",
+                }
+            )
+        )
         runner = get_registry("trainer").create(config.trainer, config)
-        runner.run(config)
+        result = runner.run(config)
+        meta = {"trainer": config.trainer}
+        meta.update(result.to_dict())
+        meta_path.write_text(json.dumps(meta))
+        if not result.ok:
+            print(
+                f"Training failed ({result.failure_status}): {result.error_message}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":
