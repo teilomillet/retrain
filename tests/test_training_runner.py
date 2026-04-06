@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from retrain.config import TrainConfig
+from retrain.ttt_discover import TTTDiscoverRunner
 from retrain.training_runner import (
     CommandRunner,
     RetainRunner,
@@ -38,6 +39,9 @@ class TestProtocol:
 
     def test_command_runner_is_training_runner(self):
         assert isinstance(CommandRunner("echo ok"), TrainingRunner)
+
+    def test_ttt_discover_runner_is_training_runner(self):
+        assert isinstance(TTTDiscoverRunner(), TrainingRunner)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +161,11 @@ class TestTrainerRegistry:
         reg = get_registry("trainer")
         assert "command" in reg.builtin_names
 
+    def test_ttt_discover_resolves(self):
+        from retrain.registry import get_registry
+        reg = get_registry("trainer")
+        assert "ttt_discover" in reg.builtin_names
+
     def test_create_retrain_runner(self):
         from retrain.registry import get_registry
         config = TrainConfig()
@@ -168,6 +177,12 @@ class TestTrainerRegistry:
         config = _bare_config(trainer_command="echo ok")
         runner = get_registry("trainer").create("command", config)
         assert isinstance(runner, CommandRunner)
+
+    def test_create_ttt_discover_runner(self):
+        from retrain.registry import get_registry
+        config = _bare_config()
+        runner = get_registry("trainer").create("ttt_discover", config)
+        assert isinstance(runner, TTTDiscoverRunner)
 
     def test_command_without_trainer_command_raises(self):
         from retrain.registry import get_registry
@@ -201,6 +216,10 @@ class TestTrainerValidation:
         config = TrainConfig()
         assert config.trainer == "retrain"
         assert config.trainer_command == ""
+
+    def test_ttt_discover_trainer_is_valid(self):
+        config = TrainConfig(trainer="ttt_discover")
+        assert config.trainer == "ttt_discover"
 
 
 # ---------------------------------------------------------------------------

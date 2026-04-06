@@ -329,6 +329,12 @@ def _trainer_command(config: TrainConfig) -> TrainingRunner:
     return CommandRunner(config.trainer_command)
 
 
+@trainer.register("ttt_discover")
+def _trainer_ttt_discover(config: TrainConfig) -> TrainingRunner:
+    from retrain.ttt_discover import TTTDiscoverRunner
+    return TTTDiscoverRunner()
+
+
 # ---------------------------------------------------------------------------
 # Environment check
 # ---------------------------------------------------------------------------
