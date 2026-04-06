@@ -1,0 +1,40 @@
+{
+  "results": [
+    {
+      "test_class": "tests.test_ordeal_sepa:SEPAControllerChaos",
+      "total_runs": 170,
+      "total_steps": 4538,
+      "unique_edges": 111,
+      "checkpoints_saved": 19,
+      "duration_seconds": 3.007474291996914,
+      "failures": []
+    },
+    {
+      "test_class": "tests.test_ordeal_sepa:SEPAAutoScheduleChaos",
+      "total_runs": 145,
+      "total_steps": 3946,
+      "unique_edges": 62,
+      "checkpoints_saved": 7,
+      "duration_seconds": 3.0054478329984704,
+      "failures": []
+    },
+    {
+      "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+      "total_runs": 127,
+      "total_steps": 3226,
+      "unique_edges": 235,
+      "checkpoints_saved": 31,
+      "duration_seconds": 3.007652500004042,
+      "failures": []
+    },
+    {
+      "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+      "total_runs": 197,
+      "total_steps": 4890,
+      "unique_edges": 0,
+      "checkpoints_saved": 0,
+      "duration_seconds": 3.0031421669991687,
+      "failures": []
+    }
+  ]
+}

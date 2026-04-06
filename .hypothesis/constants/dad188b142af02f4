@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/introspection.py
+# hypothesis_version: 6.151.10
+
+['None', 'NoneType', '__annotations__']

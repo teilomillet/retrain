@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/grammar.py
+# hypothesis_version: 6.151.10
+
+[-1000000.0, 1000000.0, -10000, 126, 1000, 10000, ' ,', '!=', '#', '&', '(...)', '*', ',', ', ', '-_', '/', '<', '<=', '=', '>', '>=', '?', 'ASC', 'C', 'Cs', 'D', 'DELETE', 'DESC', 'E', 'INSERT', 'IS', 'L', 'LIKE', 'N', 'NOT NULL', 'NULL', 'SELECT', 'UPDATE', 'Z', '\\', '_', '_-', '__name__', 'cfg', 'children', 'co.uk', 'com', 'csv', 'csv_strategy', 'dat', 'dev', 'doc', 'draw', 'edu', 'email_strategy', 'empty', 'file', 'float', 'ftp', 'gov', 'html', 'http', 'https', 'info', 'int', 'io', 'json', 'json_strategy', 'log', 'mixed', 'name', 'net', 'org', 'parameters', 'path_strategy', 'py', 'qualname', 'quoted', 'regex_strategy', 'signature', 'sql_strategy', 'sqlite', 'ssh', 'string', 'structured_strategy', 'text', 'tmp', 'txt', 'unix', 'url_strategy', 'windows', 'xml', 'xml_strategy']

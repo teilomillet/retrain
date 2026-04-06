@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/tree.py
+# hypothesis_version: 6.151.10
+
+['  annotations:', '.tmp', '<', '<=', '==', '>', '>=', 'No pending nodes.', 'Ready to run:', '[ ]', '[#]', '[-]', '[?]', '[~]', '[✓]', '[✗]', 'annotations', 'at', 'campaign', 'campaign_dir', 'completed_at', 'correct_rate', 'description', 'done', 'failure', 'id', 'label', 'locked', 'loss', 'mean_reward', 'name', 'nodes', 'notes', 'on_failure', 'on_success', 'outcome', 'pending', 'rb', 'refs', 'related', 'result', 'running', 'skipped', 'started_at', 'status', 'success', 'text', 'tree', 'tree_state.json', 'w']

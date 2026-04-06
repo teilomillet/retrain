@@ -1,0 +1,41 @@
+{
+  "run_id": 2188,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_sepa:SEPAAutoScheduleChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          4.844756796739935,
+          8.870464099212413,
+          10.010163461602785,
+          2.9507256966869475,
+          16.543296405898822,
+          4.955139085029304,
+          3.7170457349925554,
+          4.790248513713986,
+          9.259591019791925,
+          12.206506831755195,
+          5.949708017280326,
+          0.3333333333333333,
+          16.86030821766833
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 5.9874990256503224e-05,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "IndexError",
+    "error_message": "index out of bounds on dimension 1",
+    "step": 0
+  },
+  "edges_discovered": 0,
+  "duration": 0.00023700000019744039
+}

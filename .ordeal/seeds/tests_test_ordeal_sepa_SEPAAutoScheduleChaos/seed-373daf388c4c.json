@@ -1,0 +1,44 @@
+{
+  "run_id": 123,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_sepa:SEPAAutoScheduleChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          8.89628674357737,
+          7.7312497705143866,
+          0.33333345254262287,
+          13.234495142279652,
+          18.745672143332506,
+          1.1,
+          14.040586063141358,
+          15.120668469776456,
+          2.233954253788027,
+          11.688344305430808,
+          -12.425927766212723,
+          2.9839612934501867,
+          19.43551427097578,
+          1e+300,
+          0.5,
+          15.943950925046522
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.000726041995221749,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "OverflowError",
+    "error_message": "(34, 'Result too large')",
+    "step": 2
+  },
+  "edges_discovered": 0,
+  "duration": 0.0008024999988265336
+}

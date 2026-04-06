@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/buggify.py
+# hypothesis_version: 6.151.10
+
+[0.1, '_T', 'active', 'probability', 'rng']

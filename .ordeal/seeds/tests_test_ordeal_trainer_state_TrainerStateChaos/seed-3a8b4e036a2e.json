@@ -1,0 +1,25 @@
+{
+  "run_id": 762,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "save_then_load_is_consistent",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.00038299999141599983,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 0
+  },
+  "edges_discovered": 0,
+  "duration": 0.0005652090039802715
+}

@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/delight_campaign_summary.py
+# hypothesis_version: 6.151.10
+
+[0.0, '__main__', 'baseline_condition', 'best_final_condition', 'campaign_dir', 'campaign_toml', 'completed_runs', 'condition', 'condition_id', 'conditions', 'configured_runs', 'correct_rate', 'delight-summary.json', 'delight-summary.md', 'dg_breakthrough_frac', 'dg_eta', 'dg_eta_raw', 'dg_gate_ordering_gap', 'dg_neutral_frac', 'final_correct_rate', 'final_dg_eta_mean', 'final_loss', 'final_loss_mean', 'final_mean_reward', 'generated_at', 'log_dir', 'loss', 'manifest.json', 'mean_correct_rate', 'mean_reward', 'metrics.jsonl', 'n/a', 'num_steps', 'peak_correct_rate', 'run_name', 'runs', 'seed']

@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/concolic.py
+# hypothesis_version: 6.151.10
+
+['__name__', '_function', 'args', 'cls', 'self']

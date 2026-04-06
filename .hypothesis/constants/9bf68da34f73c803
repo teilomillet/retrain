@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/flow.py
+# hypothesis_version: 6.151.10
+
+[-1.4, -1.3, -1.1, -0.9, -0.7, -0.6, -0.4, -0.3, -0.2, -0.1, 0.0, 1e-06, 0.1, 0.35, 0.7, 0.8, 0.9, 1.0, 'backend', 'backpressure', 'compat', 'config', 'dep', 'entropy_mask', 'error', 'gtpo', 'gtpo_hicra', 'gtpo_sepa', 'gtpo_sepa_amp', 'gtpo_sepa_amp_c', 'logprobs_G', 'maxrl_gtpo', 'maxrl_gtpo_hicra', 'maxrl_gtpo_sepa', 'none', 'noop', 'planning_detector', 'planning_masks_G', 'probe', 'pytorch', 'reinforce_pp_gtpo', 'rewards_G', 'sepa_lambda', 'shannon_entropy', 'step', 'tinker', 'usl', 'warning']

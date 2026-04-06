@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/rewards.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1.0, '\\boxed{', 'assistant', 'content', 'custom', 'gpt-4o-mini', 'judge', 'match', 'math', 'role', 'score', 'user', 'yes', '{', '}']

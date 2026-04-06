@@ -37,6 +37,26 @@ def usl_optimal_p(sigma: float, kappa: float) -> float:
     return math.sqrt(num / kappa)
 
 
+def _clamp_int(value: object, lower: int, upper: int, *, fallback: int) -> int:
+    """Best-effort int parsing with bounds and a safe fallback."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return max(lower, min(upper, parsed))
+
+
+def _nonnegative_float(value: object) -> float:
+    """Parse a finite, non-negative float or fall back to 0.0."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not math.isfinite(parsed):
+        return 0.0
+    return max(0.0, parsed)
+
+
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
@@ -213,18 +233,26 @@ class USLBackPressure:
     def observe(self, obs: StepObservation) -> None:
         """Record a step observation and refit USL parameters."""
         self.step_count += 1
-        self.last_batch_size = obs.batch_size
-        self.last_group_size = obs.group_size
+        self.last_batch_size = _clamp_int(
+            obs.batch_size,
+            1,
+            self.max_batch_size,
+            fallback=1,
+        )
+        self.last_group_size = _clamp_int(
+            obs.group_size,
+            1,
+            self.max_group_size,
+            fallback=1,
+        )
 
         if obs.skipped:
             return
 
-        p = float(obs.batch_size * obs.group_size)
-        throughput = (
-            float(obs.total_tokens) / obs.step_time_s
-            if obs.step_time_s > self.eps
-            else 0.0
-        )
+        p = float(self.last_batch_size * self.last_group_size)
+        step_time = _nonnegative_float(obs.step_time_s)
+        total_tokens = _nonnegative_float(obs.total_tokens)
+        throughput = total_tokens / step_time if step_time > self.eps else 0.0
 
         # Update EMA — seed on first real (non-skipped) observation
         self.prev_ema_throughput = self.ema_throughput
@@ -369,7 +397,7 @@ class USLBackPressure:
             self.p_star, self.sigma, self.kappa
         )
         if peak_throughput > self.eps:
-            decision.utilization = self.ema_throughput / peak_throughput
+            decision.utilization = max(0.0, self.ema_throughput / peak_throughput)
         else:
             decision.utilization = 1.0
 
@@ -380,6 +408,11 @@ class USLBackPressure:
         # retrograde cliff.  The old design targeted increase_margin * p*
         # (default 0.5 * p*), leaving ~13-15% throughput on the table.
         safe_target = self.p_star * self.throttle_margin
+        max_p = float(self.max_batch_size * self.max_group_size)
+        min_p = float(self.min_batch_size * self.min_group_size)
+        if not math.isfinite(safe_target):
+            safe_target = max_p
+        safe_target = max(min_p, min(max_p, safe_target))
 
         if self.regime == "retrograde":
             decision.action = "throttle"

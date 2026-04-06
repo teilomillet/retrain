@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/trace.py
+# hypothesis_version: 6.151.10
+
+[0.0, 30.0, '    finally:', '    try:', '+', '+-', ', ', '-', '.gz', ':', '__bytes__', '__error__', '__repr__', '__set__', '__type__', 'data', 'duration', 'edges_discovered', 'failure', 'fault_toggle', 'from_checkpoint', 'rt', 'rule', 'run_id', 'seed', 'steps', 'test_class', 'test_fail', 'test_path', 'utf-8', 'w', 'wt']

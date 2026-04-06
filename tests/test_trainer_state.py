@@ -75,6 +75,21 @@ class TestSaveTrainerState:
         tmp_file = tmp_path / f"{_TRAINER_STATE_FILE}.tmp"
         assert not tmp_file.exists()
 
+    def test_creates_missing_parent_directory(self, tmp_path):
+        checkpoint_dir = tmp_path / "nested" / "checkpoint"
+        _save_trainer_state(
+            checkpoint_dir,
+            step=5,
+            example_idx=40,
+            total_correct=10,
+            total_completions=80,
+            current_batch_size=8,
+            current_group_size=16,
+            checkpoint_name="ckpt",
+            sepa_state={},
+        )
+        assert (checkpoint_dir / _TRAINER_STATE_FILE).is_file()
+
 
 class TestLoadTrainerState:
     def test_roundtrip(self, tmp_path):

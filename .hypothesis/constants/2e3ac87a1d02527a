@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/status.py
+# hypothesis_version: 6.151.10
+
+[0.0, 300, 3600, 4096, ', ', '-', '...', '0 campaigns', '0 runs', '\\(pid=(\\d+)\\)', 'active', 'campaign_toml', 'checkpoint_name', 'condition', 'conditions', 'correct_rate', 'dead', 'done', 'final', 'log_dir', 'loss', 'manifest.json', 'matrix', 'max_steps', 'mean_reward', 'metrics.jsonl', 'num_runs', 'partial', 'pending', 'run.pid', 'run_meta.json', 'runner_pid', 'running', 'runs', 'seed', 'seeds', 'stale', 'stderr.log', 'stdout.log', 'step', 'step_time_s', 'timestamp', 'trainer', 'trainer_state.json', 'unknown', '—']

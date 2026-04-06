@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/diff.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-09, 100, 120, '...', 'DIVERGENT', 'EQUIVALENT', '__name__', 'outputs differ', 'shape']

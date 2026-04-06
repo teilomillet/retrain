@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/mutagen.py
+# hypothesis_version: 6.151.10
+
+[b'\x00', -1.0, 0.0, 1e-300, 0.2, 0.3, 0.5, 1.0, 1e+300, 126, 1000, 1114111, '\x00', '-inf', 'A', '_LazyStrategy__args', '__name__', 'allow_infinity', 'allow_nan', 'binary', 'bool', 'booleans', 'bytes', 'choices', 'd', 'dict', 'element', 'elements', 'fixed_dictionaries', 'float', 'floats', 'function', 'inf', 'int', 'integers', 'items', 'just', 'kind', 'list', 'lists', 'max', 'max_size', 'min', 'min_size', 'nan', 'optional', 'required', 'text', 'tuple', 'tuples', 'x']

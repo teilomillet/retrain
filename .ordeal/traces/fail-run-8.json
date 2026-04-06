@@ -1,0 +1,84 @@
+{
+  "run_id": 8,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": 1,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 10,
+        "correct": 9
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0004903329972876236,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 7,
+        "correct": 0
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.016061416987213306,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.01616141699196305,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.016236791998380795,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 4,
+        "correct": 3
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.016311499988660216,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save_then_load_is_consistent",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.016424082990852185,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpwywyrxzw/trainer_state.json.tmp'",
+    "step": 5
+  },
+  "edges_discovered": 0,
+  "duration": 0.016561707991058938
+}

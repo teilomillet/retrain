@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/__init__.py
+# hypothesis_version: 6.151.10
+
+[0.1, '0.1.0', 'Bundle', 'ChaosTest', 'always', 'auto_configure', 'buggify', 'buggify_value', 'initialize', 'invariant', 'ordeal', 'precondition', 'reachable', 'rule', 'sometimes', 'unreachable']

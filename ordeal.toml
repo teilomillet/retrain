@@ -7,7 +7,7 @@ checkpoint_prob = 0.4
 steps_per_run = 50
 fault_toggle_prob = 0.3
 max_checkpoints = 256
-workers = 0
+workers = 1
 
 [[tests]]
 class = "tests.test_ordeal_sepa:SEPAControllerChaos"

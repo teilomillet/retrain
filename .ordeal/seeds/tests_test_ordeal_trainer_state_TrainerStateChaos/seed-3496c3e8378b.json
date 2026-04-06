@@ -1,0 +1,100 @@
+{
+  "run_id": 242,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 11,
+        "correct": 2
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.00047291599912568927,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 549755813899,
+        "correct": 68719476740
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0006787500024074689,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 13,
+        "correct": 3
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0007800409948686138,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0008801660005701706,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 10,
+        "correct": 0
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0009490410011494532,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 13,
+        "correct": 549755813888
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0010460409976076335,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save_then_load_is_consistent",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0011344160011503845,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 6
+  },
+  "edges_discovered": 0,
+  "duration": 0.001259458003914915
+}

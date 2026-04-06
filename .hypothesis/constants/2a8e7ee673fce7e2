@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/sepa.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-08, 0.2, 0.99, 1.0, 'auto', 'eps', 'gate_open', 'linear', 'sepa_delay_steps', 'sepa_ema_decay', 'sepa_schedule', 'sepa_steps', 'sepa_var_threshold', 'sepa_warmup', 'var_0', 'var_ema', 'warmup_seen']

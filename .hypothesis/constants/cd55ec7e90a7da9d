@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/quickcheck.py
+# hypothesis_version: 6.151.10
+
+[b'\x00', b'\xff', -10000000000.0, -1.0, -0.5, -1e-10, 0.0, 1e-10, 0.5, 1.0, 10000000000.0, -256, -100, 100, 255, 256, 'PydanticUndefined', 'Undefined', '__dataclass_fields__', 'ge', 'gt', 'le', 'lt', 'max_length', 'metadata', 'min_length', 'self']

@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/config.py
+# hypothesis_version: 6.151.10
+
+[0.3, 0.4, 60.0, 100, 256, '.ordeal/traces', '/openapi.json', ':', 'api', 'app', 'base_url', 'both', 'checkpoint_prob', 'checkpoint_strategy', 'class', 'energy', 'explorer', 'fault_probability', 'fault_toggle_prob', 'faults', 'fixtures', 'format', 'headers', 'json', 'max_checkpoints', 'max_examples', 'max_runs', 'max_time', 'module', 'mutation_targets', 'ordeal-report.json', 'ordeal.toml', 'output', 'rb', 'recent', 'report', 'scan', 'schema_path', 'schema_url', 'schemathesis', 'seed', 'stateful', 'steps_per_run', 'swarm', 'target_modules', 'tests', 'text', 'traces', 'traces_dir', 'uniform', 'verbose', 'workers', 'wsgi']

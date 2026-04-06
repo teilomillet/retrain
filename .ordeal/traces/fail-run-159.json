@@ -1,0 +1,110 @@
+{
+  "run_id": 159,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": 55,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 1,
+        "group_size": 27,
+        "step_time": 5.438761976999523,
+        "total_tokens": 10379
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0004680410056607798,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0007137079956009984,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0007935000030556694,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.000862540997331962,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 3,
+        "group_size": 2,
+        "step_time": 0.9393524358900663,
+        "total_tokens": 98661
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0009261660015909001,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0010430830006953329,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 4611686018427387912,
+        "group_size": 131079,
+        "step_time": 2.5696999691340436,
+        "total_tokens": 26
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0011100830015493557,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.001210707996506244,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "AssertionError",
+    "error_message": "always violated: recommended batch size within bounds",
+    "step": 7
+  },
+  "edges_discovered": 0,
+  "duration": 0.0012542080075945705
+}

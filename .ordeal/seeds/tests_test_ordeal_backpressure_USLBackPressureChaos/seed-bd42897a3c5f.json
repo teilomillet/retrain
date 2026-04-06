@@ -1,0 +1,30 @@
+{
+  "run_id": 1028,
+  "seed": 55475,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 3,
+        "group_size": 17,
+        "step_time": 5.555520574200583,
+        "total_tokens": 65536
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 6.112499977461994e-05,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "IndexError",
+    "error_message": "index out of bounds on dimension 1",
+    "step": 0
+  },
+  "edges_discovered": 0,
+  "duration": 0.00025087498943321407
+}

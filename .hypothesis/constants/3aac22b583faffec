@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/registry.py
+# hypothesis_version: 6.151.10
+
+[0.8, 200, 204, 404, 405, 500, '.', '/', '/health', '/v1/models', 'RETRAIN_PRIME_RL_URL', 'RETRAIN_TINKER_URL', 'T', 'backend', 'backpressure', 'command', 'custom', 'data_source', 'endpoint_compat', 'fail', 'gpt-4o-mini', 'http', 'inference_engine', 'judge', 'local', 'match', 'math', 'math_verify', 'max', 'mlx', 'no response', 'noop', 'ok', 'openai', 'planning_detector', 'prime_rl', 'pytorch', 'regex', 'registry component', 'retrain', 'reward', 'score', 'semantic', 'service_reachability', 'sglang', 'skip', 'tinker', 'torch', 'torch_runtime', 'trainer', 'usl', 'verifiers', 'verifiers_env', 'vllm']

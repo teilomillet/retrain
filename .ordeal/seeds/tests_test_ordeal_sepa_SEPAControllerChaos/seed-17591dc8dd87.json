@@ -1,0 +1,41 @@
+{
+  "run_id": 1884,
+  "seed": 55475,
+  "test_class": "tests.test_ordeal_sepa:SEPAControllerChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "update_auto_state",
+      "params": {
+        "entropies": [
+          0.85,
+          4e-05,
+          1.9821466563697103,
+          9.942193056659118e-179,
+          28.384640673543178,
+          10.724440065617094,
+          28.56786013721086,
+          4.00042751071581,
+          37.74518316108787,
+          40.44680634547363,
+          7.0527539667415225e-152,
+          3.1118359910530548e-105,
+          13.863246529766007
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 5.950000195298344e-05,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "IndexError",
+    "error_message": "index out of bounds on dimension 1",
+    "step": 0
+  },
+  "edges_discovered": 0,
+  "duration": 0.014454874995863065
+}

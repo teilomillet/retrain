@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/mine.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-12, 1e-09, 0.8, 0.95, 1.0, 200, 500, ' (saturated)', ', ', '...', '0123456789_', 'ALWAYS', 'MinedProperty', 'None in -> None out', 'UnionType', '[^a-z0-9]+', '_', '__iter__', '__module__', '__name__', 'a', 'associative', 'b', 'bijective', 'cls', 'colliding_inputs', 'commutative', 'constant output', 'deterministic', 'equivalent', 'expected', 'extra_in_output', 'first', 'got', 'idempotent', 'index', 'input', 'involution', 'left', 'lhs', 'never None', 'never empty', 'new_edges', 'no NaN', 'observed range', 'output', 'output >= 0', 'output in [0, 1]', 'output is sorted', 'preserves type', 'replayed', 'return', 'rhs', 'right', 'roundtrip', 'second', 'self', 'shape', 'swapped_input', 'swapped_output', 'third', 'value', 'x', 'y']

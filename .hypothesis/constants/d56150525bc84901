@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/assertions.py
+# hypothesis_version: 6.151.10
+
+['(...)', 'FAIL', 'OBSERVE', 'PASS', '_', '__module__', 'always', 'catalog', 'doc', 'failed', 'failures', 'hits', 'name', 'passed', 'passes', 'qualname', 'reachable', 'report', 'signature', 'sometimes', 'status', 'summary', 'type', 'unreachable']

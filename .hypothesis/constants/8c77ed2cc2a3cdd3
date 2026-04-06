@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/plugin.py
+# hypothesis_version: 6.151.10
+
+[0.1, ',', '--buggify-prob', '--chaos', '--chaos-seed', 'buggify_prob', 'chaos', 'chaos_seed', 'markers', 'ordeal', 'ordeal.toml', 'store_true']

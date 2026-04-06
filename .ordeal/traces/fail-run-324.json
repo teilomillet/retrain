@@ -1,0 +1,125 @@
+{
+  "run_id": 324,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_sepa:SEPAAutoScheduleChaos",
+  "from_checkpoint": 1,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          17.922882265441018,
+          0.1
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.00036783299583476037,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          17.923004335753518,
+          0.1
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0005296660092426464,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "resolve_lambda",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0006272080063354224,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          0.1,
+          0.1
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0006941250030649826,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "resolve_lambda",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0008210410014726222,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          3.9230266190211665,
+          2.9245336239314668,
+          17.339931070597917
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0008841250091791153,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          17.922882265441018
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0009716250060591847,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "feed_entropies",
+      "params": {
+        "entropies": [
+          17.922882265441018,
+          1e+300
+        ]
+      },
+      "active_faults": [],
+      "edge_count": 53,
+      "timestamp_offset": 0.0010569160076556727,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "OverflowError",
+    "error_message": "(34, 'Result too large')",
+    "step": 7
+  },
+  "edges_discovered": 0,
+  "duration": 0.0011050409957533702
+}

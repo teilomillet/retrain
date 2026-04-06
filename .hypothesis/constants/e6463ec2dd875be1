@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/mutations.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1.0, 100, 200, '!=', '%', '*', '+', '-', '-x -> x', '.', '/', '<', '<=', '<mut>', '<mutated>', '<orig>', '==', '>', '>=', '__file__', '__format__', '__hash__', '__package__', '__reduce__', '__reduce_ex__', '__repr__', '__sizeof__', '__str__', 'and', 'argument_swap', 'arithmetic', 'boundary', 'break -> continue', 'break_continue_swap', 'col_offset', 'comparison', 'constant', 'continue -> break', 'delete statement', 'delete_statement', 'exception_swallow', 'exec', 'fork', 'ignore', 'lineno', 'logical', 'negate', 'negate if-condition', 'or', 'remove not', 'remove_not', 'return None', 'return_none', 'self', 'spawn', 'swallow exception', 'swap arguments', 'swap_if_else', 'unary_negate', 'win32']

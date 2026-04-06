@@ -1,0 +1,87 @@
+{
+  "run_id": 396,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 13,
+        "correct": 10
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0006350000039674342,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0008590409997850657,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 144115188075855883,
+        "correct": 1
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0009319579985458404,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 11,
+        "correct": 1
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.001029999999445863,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 14,
+        "correct": 13
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0011097079986939207,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.016514999995706603,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 5
+  },
+  "edges_discovered": 0,
+  "duration": 0.016661707995808683
+}

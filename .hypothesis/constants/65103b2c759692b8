@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/mine.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-12, 1e-09, 0.5, 0.95, 1.0, 200, 500, 'ALWAYS', '__name__', 'associative', 'cls', 'commutative', 'deterministic', 'expected', 'got', 'idempotent', 'index', 'involution', 'never None', 'never empty', 'no NaN', 'observed range', 'output >= 0', 'output in [0, 1]', 'self', 'shape']

@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/plugin.py
+# hypothesis_version: 6.151.10
+
+[0.1, ',', '--buggify-prob', '--chaos', '--chaos-seed', '--mutate', '--mutate-preset', '--rule-timeout', '.ordeal/seeds', 'Ordeal Seed Corpus', 'Ordeal Warning', '__dict__', 'buggify_prob', 'chaos', 'chaos_seed', 'error', 'essential', 'markers', 'mutate', 'mutate_preset', 'ordeal', 'ordeal.toml', 'path', 'preset', 'reproduced', 'rule_timeout', 'seed-*.json', 'seed_name', 'standard', 'store_true', 'test_class', 'thorough', 'type', 'workers']

@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/local_train_helper.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-08, 4e-05, 0.9, 0.95, 1.0, ',', ':', '_live_adapter', 'adapter_model.bin', 'cpu', 'cuda', 'cuda:', 'cuda:0', 'down_proj', 'gate_proj', 'gpu:', 'k_proj', 'lora_', 'lr', 'max', 'mlx', 'o_proj', 'openai', 'pytorch', 'q_proj', 'sglang', 'up_proj', 'v_proj', 'vllm', 'weight_decay']

@@ -1,0 +1,64 @@
+{
+  "run_id": 491,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": 1,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 11,
+        "correct": 67108864
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.00045658300223294646,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 16,
+        "correct": 14
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0006393329967977479,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 4,
+        "correct": 5
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0007802079926477745,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0008793330052867532,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 3
+  },
+  "edges_discovered": 0,
+  "duration": 0.0010079159983433783
+}

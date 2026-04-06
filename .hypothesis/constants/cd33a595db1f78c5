@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/squeeze.py
+# hypothesis_version: 6.151.10
+
+[0.95, 1.0, 300, ' <--', '-', '.lora_A', '.lora_B', 'adapter_config.json', 'checkpoint.tar', 'cpu', 'data', 'lora_A', 'lora_B', 'lora_alpha', 'r', 'r:*', 'retrain_squeeze_', 'tinker://', 'w', 'wb']

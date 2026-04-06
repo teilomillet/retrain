@@ -1,0 +1,51 @@
+{
+  "run_id": 651,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 2,
+        "correct": 11
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0004653750074794516,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 1,
+        "correct": 4
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.015208166994852945,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save_then_load_is_consistent",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.015319875004934147,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 2
+  },
+  "edges_discovered": 0,
+  "duration": 0.015453416999662295
+}

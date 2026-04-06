@@ -1,0 +1,74 @@
+{
+  "run_id": 7,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0005214580014580861,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 1,
+        "correct": 8
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0006850000063423067,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 7,
+        "correct": 4611686018427387910
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0008283329952973872,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 20,
+        "correct": 6
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0009282910032197833,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save_then_load_is_consistent",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0010100409999722615,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpwywyrxzw/trainer_state.json.tmp'",
+    "step": 4
+  },
+  "edges_discovered": 0,
+  "duration": 0.001151499993284233
+}

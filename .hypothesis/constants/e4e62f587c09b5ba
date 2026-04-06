@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/backend_definitions.py
+# hypothesis_version: 6.151.10
+
+[0.2, 0.6, 5555, 65535, '.', '0', '1', 'TrainConfig', 'TrainHelper', '__name__', 'bool', 'boolean', 'builtin', 'builtins', 'capabilities', 'capability_hooks', 'choices', 'default', 'default_capabilities', 'dependency', 'false', 'filesystem', 'float', 'has_validator', 'hint', 'import', 'int', 'integer', 'local', 'localhost', 'must be > 0', 'must be >= 0', 'name', 'no', 'off', 'on', 'option_schema', 'option_schema_format', 'option_schema_hooks', 'pip install prime-rl', 'plugin', 'plugin/default', 'plugin/hook', 'prime_rl', 'reports_sync_loss', 'str', 'strict_advantages', 'string', 'sync_poll_s', 'sync_wait_s', 'tinker', 'torch', 'transport', 'true', 'type', 'validator', 'value_type', 'yes', 'zmq', 'zmq_host', 'zmq_hwm', 'zmq_port']

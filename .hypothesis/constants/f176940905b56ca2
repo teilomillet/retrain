@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/inference_engine/openai_engine.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-07, 120, '/', '/v1/completions', 'adapters', 'choices', 'default', 'logprobs', 'lora_name', 'lora_path', 'max_tokens', 'mlx', 'model', 'n', 'openai', 'prompt', 'temperature', 'text', 'token_logprobs', 'tokens', 'top_p']

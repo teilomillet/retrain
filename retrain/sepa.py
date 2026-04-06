@@ -8,11 +8,13 @@ this class handles when and how much to pool.
 from __future__ import annotations
 
 import math
+import sys
 from typing import TypeAlias
 
 
 SEPAStateValue: TypeAlias = str | int | float | bool | None
 SEPAStateDict: TypeAlias = dict[str, SEPAStateValue]
+_MAX_SAFE_ENTROPY = math.sqrt(sys.float_info.max)
 
 
 class SEPAController:
@@ -125,9 +127,19 @@ class SEPAController:
         if self.sepa_schedule != "auto" or not exec_entropies:
             return
 
-        n = len(exec_entropies)
-        mean_h = sum(exec_entropies) / n
-        var_batch = sum((e - mean_h) ** 2 for e in exec_entropies) / n
+        # Ignore invalid or numerically unsafe entropy values rather than
+        # letting one bad observation poison the scheduler state.
+        valid_entropies = [
+            e
+            for e in exec_entropies
+            if math.isfinite(e) and 0.0 <= e <= _MAX_SAFE_ENTROPY
+        ]
+        if not valid_entropies:
+            return
+
+        n = len(valid_entropies)
+        mean_h = math.fsum(valid_entropies) / n
+        var_batch = math.fsum((e - mean_h) ** 2 for e in valid_entropies) / n
 
         if not math.isfinite(var_batch):
             return

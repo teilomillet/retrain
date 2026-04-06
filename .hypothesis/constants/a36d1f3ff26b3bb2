@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/faults/__init__.py
+# hypothesis_version: 6.151.10
+
+['.', '_lock_attrs']

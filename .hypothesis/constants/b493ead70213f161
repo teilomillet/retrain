@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/metamorphic.py
+# hypothesis_version: 6.151.10
+
+[100, 'commutative', 'deterministic', 'self']

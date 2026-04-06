@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/retrain/retrain/prime_rl_backend.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-09, 1e-07, 1e-06, 0.01, 0.2, 1.0, 120, 5555, '/', '/v1', 'STABLE', '_', 'backend', 'broadcasts', 'checkpoints', 'choices', 'completion_ids', 'completion_logprobs', 'content', 'filesystem', 'inference_base_url', 'last_loaded_step', 'last_sent_step', 'localhost', 'logprob', 'logprobs', 'max_tokens', 'messages', 'min_p', 'model', 'n', 'output_dir', 'prime_rl', 'return_token_ids', 'role', 'skip_special_tokens', 'step_', 'step_*', 'temperature', 'token_id', 'token_ids', 'token_logprobs', 'tokens', 'top_k', 'top_p', 'user', 'weight', 'weight_dir', 'zmq']

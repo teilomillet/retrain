@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/equivalence.py
+# hypothesis_version: 6.151.10
+
+[b'\x00', b'ab', -2.0, -1.0, -0.5, 0.0, 0.001308, 0.010328, 0.189269, 0.5, 0.802853, 0.9, 0.95, 0.99, 0.999, 1.0, 1.432788, 1.645, 1.96, 2.0, 2.515517, 2.576, 3.291, 4.0, 100, 1000, '__origin__', '_fn', 'a', 'ab', 'as_fraction', 'as_long', 'formal', 'ignore', 'inconclusive', 'self', 'statistical', 'structural', 'timeout']

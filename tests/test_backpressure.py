@@ -267,6 +267,27 @@ class TestRecommendActions:
         dec = bp.recommend()
         assert dec.utilization == pytest.approx(1.0, abs=0.15)
 
+    def test_invalid_observation_is_sanitized(self):
+        bp = USLBackPressure(
+            warmup_steps=0,
+            min_batch_size=1,
+            max_batch_size=32,
+            min_group_size=2,
+            max_group_size=32,
+        )
+        bp.observe(
+            StepObservation(
+                step_time_s=3.7287724155860307,
+                batch_size=2305843009213693951,
+                group_size=-1,
+                total_tokens=4503599627385876,
+            )
+        )
+        dec = bp.recommend()
+        assert dec.utilization >= 0.0
+        assert bp.min_batch_size <= dec.recommended_batch_size <= bp.max_batch_size
+        assert 1 <= dec.recommended_group_size <= bp.max_group_size
+
 
 class TestReset:
     def test_clears_all_state(self):

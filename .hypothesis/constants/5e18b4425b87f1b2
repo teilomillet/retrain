@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/supervisor.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1000, 1592614637, 'PYTHONHASHSEED', '_DeterministicPopen', '_check_output_patch', '_open_patch', '_popen_patch', '_sleep_patch', '_socket_patch', '_thread_patch', '_time_patch', 'action_from_parent', 'args', 'b', 'builtins.open', 'capture_output', 'check', 'children', 'completed_tasks', 'contains', 'current', 'delay must be >= 0', 'depth', 'edges_at_checkpoint', 'encoding', 'errors', 'exact', 'final_state', 'has_snapshot', 'hash_seed', 'nodes', 'parent_id', 'patch_io', 'pending_tasks', 'r', 'random', 'root', 'scheduler_steps', 'seconds must be >= 0', 'seed', 'seed_at_checkpoint', 'sleep', 'start', 'state_id', 'stderr', 'stdout', 'steps', 'strict', 'subprocess.Popen', 'subprocess.run', 'subprocess_calls', 'text', 'time.sleep', 'time.time', 'timeout', 'unique_states', 'unique_transitions', 'universal_newlines', 'utf-8', 'w', 'yield']

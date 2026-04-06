@@ -1,0 +1,87 @@
+{
+  "run_id": 782,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "load_and_verify",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0004796249995706603,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": -3,
+        "correct": 0
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0006358749960782006,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 20,
+        "correct": 0
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.000733834007405676,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 15,
+        "correct": 11
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0008152090013027191,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "advance",
+      "params": {
+        "completions": 16,
+        "correct": 5
+      },
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0009455840045120567,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "save",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 0,
+      "timestamp_offset": 0.0010408340021967888,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "FileNotFoundError",
+    "error_message": "[Errno 2] No such file or directory: '/var/folders/j5/d3tnw1ss41g29qttjgv4dhjr0000gn/T/tmpjdq9h2x8/trainer_state.json.tmp'",
+    "step": 5
+  },
+  "edges_discovered": 0,
+  "duration": 0.0011620840086834505
+}

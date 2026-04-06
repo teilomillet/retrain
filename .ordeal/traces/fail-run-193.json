@@ -1,0 +1,85 @@
+{
+  "run_id": 193,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": 12,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.00046779100375715643,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0006009580101817846,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 10,
+        "group_size": 4,
+        "step_time": 8.410181711003013,
+        "total_tokens": 30487
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0006694580079056323,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.000855291000334546,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 30,
+        "group_size": 2,
+        "step_time": 0.7975790866866054,
+        "total_tokens": 95620
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0009329160093329847,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0010997080098604783,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "AssertionError",
+    "error_message": "always violated: utilization non-negative",
+    "step": 5
+  },
+  "edges_discovered": 0,
+  "duration": 0.0011524580040713772
+}

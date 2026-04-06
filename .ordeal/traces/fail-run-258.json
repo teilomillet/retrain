@@ -1,0 +1,380 @@
+{
+  "run_id": 258,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": 101,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 6,
+        "group_size": 19,
+        "step_time": 2.2729506618150532,
+        "total_tokens": 95111
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0004521249938989058,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 3,
+        "group_size": 15,
+        "step_time": 1.1,
+        "total_tokens": 96634
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0007070419960655272,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.000868874994921498,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0009414169908268377,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.001010416992357932,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 24,
+        "group_size": 12,
+        "step_time": 7.815526794751905,
+        "total_tokens": 24008
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0010754590039141476,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0011994590022368357,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 23,
+        "group_size": 31,
+        "step_time": 4.653785343898296,
+        "total_tokens": 24027
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0012652919976972044,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0013895839947508648,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0014603339950554073,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0015287919959519058,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0015928749926388264,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 32,
+        "group_size": 6,
+        "step_time": 0.8791393992173633,
+        "total_tokens": 73144
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0016606249992037192,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 25,
+        "group_size": 23,
+        "step_time": 8.000596114450149,
+        "total_tokens": 11164
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.029497625000658445,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.02963633400213439,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 21,
+        "group_size": 26,
+        "step_time": 1.6783709284967652,
+        "total_tokens": 8919
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.029712042000028305,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 18,
+        "group_size": 14,
+        "step_time": 8.605400741889307,
+        "total_tokens": 73255
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.029867541990824975,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 68719478792,
+        "group_size": -1,
+        "step_time": 2.5687234066340365,
+        "total_tokens": 22
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030019375000847504,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0301377089926973,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 1,
+        "group_size": 2,
+        "step_time": 4.902288223785555,
+        "total_tokens": 86823
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030210625001927838,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030331999994814396,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.03040179199888371,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.03046712499053683,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.0305380839999998,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030610083995270543,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 31,
+        "group_size": 22,
+        "step_time": 4.226351735672497,
+        "total_tokens": 44454
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030678291994263418,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 19,
+        "group_size": 11,
+        "step_time": 3.1224203730857454,
+        "total_tokens": 55093
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030799000000115484,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "reset_and_continue",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.03092024999205023,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 2056,
+        "group_size": -1,
+        "step_time": 2.5687234066340365,
+        "total_tokens": 25
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.030987374993856065,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.03107245899445843,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "AssertionError",
+    "error_message": "always violated: recommended batch size within bounds",
+    "step": 29
+  },
+  "edges_discovered": 0,
+  "duration": 0.03111770898976829
+}

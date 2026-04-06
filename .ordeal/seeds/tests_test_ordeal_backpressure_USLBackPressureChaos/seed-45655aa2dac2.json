@@ -1,0 +1,40 @@
+{
+  "run_id": 236,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 2147483647,
+        "group_size": 22,
+        "step_time": -8.15684893561784,
+        "total_tokens": 40371
+      },
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.029624292001244612,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 237,
+      "timestamp_offset": 0.029712874995311722,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "AssertionError",
+    "error_message": "always violated: recommended batch size within bounds",
+    "step": 20
+  },
+  "edges_discovered": 0,
+  "duration": 0.029756249990896322
+}

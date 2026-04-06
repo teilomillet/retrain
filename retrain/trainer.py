@@ -336,6 +336,7 @@ def _save_trainer_state(
     delight_eta_ema: float | None = None,
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
+    path.mkdir(parents=True, exist_ok=True)
     state: dict[str, object] = {
         "step": step,
         "example_idx": example_idx,
@@ -354,11 +355,11 @@ def _save_trainer_state(
         state["delight_eta_ema"] = delight_eta_ema
     tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
     tmp.write_text(json.dumps(state, indent=2) + "\n")
-    tmp.rename(path / _TRAINER_STATE_FILE)
+    tmp.replace(path / _TRAINER_STATE_FILE)
     if checkpoint_path:
         latest_tmp = path / "latest_sampler_path.txt.tmp"
         latest_tmp.write_text(f"{checkpoint_path}\n")
-        latest_tmp.rename(path / "latest_sampler_path.txt")
+        latest_tmp.replace(path / "latest_sampler_path.txt")
 
 
 def _load_trainer_state(resume_dir: str) -> TrainerState:

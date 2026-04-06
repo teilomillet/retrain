@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/auto.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-10, 0.1, 1.0, 2.0, 100, 200, 300, 500, 1000, '_', '_count', '_enabled', '_flag', '_path', '_prob', '_rate', '_size', '_text', '_threshold', '_weight', 'alpha', 'batch_size', 'cls', 'content', 'count', 'description', 'faults', 'input', 'key', 'label', 'max_iterations', 'max_tokens', 'message', 'missing type hints', 'n', 'name', 'normalize', 'num_prompts', 'output', 'probability', 'prompt', 'query', 'random_seed', 'response', 'return', 'seed', 'self', 'size', 'strict', 'text', 'threshold', 'tol', 'tolerance', 'top_k', 'verbose', 'weight']

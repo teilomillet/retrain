@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/faults/timing.py
+# hypothesis_version: 6.151.10
+
+[0.01, 1.0, 30.0, 'real', 'simulate']

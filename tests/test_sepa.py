@@ -126,6 +126,20 @@ class TestAutoSchedule:
         lam = ctrl.resolve_lambda(step=50.0)
         assert lam == pytest.approx(1.0)
 
+    def test_ignores_invalid_and_numerically_unsafe_entropies(self):
+        ctrl = SEPAController(
+            sepa_steps=50,
+            sepa_schedule="auto",
+            sepa_correct_rate_gate=0.0,
+            sepa_warmup=3,
+        )
+        ctrl.update_auto_state(
+            [8.0, 4.0, -12.0, 1e300, 6.0, float("nan"), 0.5, float("inf")]
+        )
+        assert ctrl._warmup_seen == 1
+        assert ctrl._var_ema is not None
+        assert math.isfinite(ctrl._var_ema)
+
 
 class TestEnabled:
     def test_enabled_with_steps(self):

@@ -1,0 +1,100 @@
+{
+  "run_id": 75,
+  "seed": 42,
+  "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
+  "from_checkpoint": null,
+  "steps": [
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.00036466600431595,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.00048299999616574496,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 28,
+        "group_size": 5,
+        "step_time": 5.226879122879545,
+        "total_tokens": 2429
+      },
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.0005447080038720742,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.0007183330017141998,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 24,
+        "group_size": 11,
+        "step_time": 0.010000000000000002,
+        "total_tokens": 61383
+      },
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.0007843750063329935,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "observe",
+      "params": {
+        "batch_size": 20,
+        "group_size": 8,
+        "step_time": 3.87684666062332,
+        "total_tokens": 11971
+      },
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.027887749994988553,
+      "status_code": null,
+      "endpoint": null
+    },
+    {
+      "kind": "rule",
+      "name": "recommend",
+      "params": {},
+      "active_faults": [],
+      "edge_count": 204,
+      "timestamp_offset": 0.028049415996065363,
+      "status_code": null,
+      "endpoint": null
+    }
+  ],
+  "failure": {
+    "error_type": "AssertionError",
+    "error_message": "always violated: utilization non-negative",
+    "step": 6
+  },
+  "edges_discovered": 0,
+  "duration": 0.028103958000428975
+}

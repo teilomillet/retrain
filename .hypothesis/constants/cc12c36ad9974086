@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/invariants.py
+# hypothesis_version: 6.151.10
+
+[0.0, 1e-06, 1.0, ' & ', 'Invariant', '_', '__array__', '__doc__', '__name__', 'catalog', 'doc', 'factory', 'instance', 'monotonic', 'name', 'no_inf', 'no_nan', 'non_empty', 'orthonormal', 'shape', 'signature', 'strictly_increasing', 'symmetric', 'type', 'unique', 'unit_normalized']

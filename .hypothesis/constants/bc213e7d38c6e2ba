@@ -1,0 +1,4 @@
+# file: /Users/teilomillet/Code/ordeal/ordeal/faults/numerical.py
+# hypothesis_version: 6.151.10
+
+[0.0, 5e-324, 1.7976931348623157e+308, '-inf', 'copy', 'flat', 'inf', 'max', 'min', 'nan', 'shape']
