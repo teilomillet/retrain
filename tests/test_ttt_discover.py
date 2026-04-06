@@ -18,6 +18,7 @@ from retrain.ttt_discover import (
     TTTDiscoverRunner,
     build_discovery_prompt,
 )
+from retrain.training_runner import TrainingRunResult
 
 
 def _bare_config(**overrides: object) -> TrainConfig:
@@ -243,7 +244,9 @@ class TestTTTDiscoverRunner:
         runner = TTTDiscoverRunner()
         result = runner.run(config)
 
-        assert result == str(tmp_path / "adapter")
+        assert isinstance(result, TrainingRunResult)
+        assert result.ok
+        assert result.policy_ref == str(tmp_path / "adapter")
         assert helper.checkpoints == ["step_0"]
         assert len(helper.train_calls) == 1
 

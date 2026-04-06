@@ -11,6 +11,7 @@ from retrain.ttt_discover import TTTDiscoverRunner
 from retrain.training_runner import (
     CommandRunner,
     RetainRunner,
+    TrainingRunResult,
     TrainingRunner,
 )
 
@@ -57,14 +58,26 @@ class TestRetainRunner:
         config = TrainConfig()
         result = runner.run(config)
         mock_train.assert_called_once_with(config)
-        assert result == "/tmp/adapter"
+        assert isinstance(result, TrainingRunResult)
+        assert result.ok
+        assert result.policy_ref == "/tmp/adapter"
 
     @patch("retrain.trainer.train")
-    def test_returns_none_when_train_returns_none(self, mock_train):
+    def test_returns_failed_result_when_train_returns_none(self, mock_train):
         mock_train.return_value = None
         runner = RetainRunner()
         result = runner.run(TrainConfig())
-        assert result is None
+        assert not result.ok
+        assert result.failure_status == "missing_policy_ref"
+
+    @patch("retrain.trainer.train")
+    def test_returns_failed_result_when_train_raises(self, mock_train):
+        mock_train.side_effect = RuntimeError("boom")
+        runner = RetainRunner()
+        result = runner.run(TrainConfig())
+        assert not result.ok
+        assert result.failure_status == "exception:RuntimeError"
+        assert result.error_message == "boom"
 
 
 # ---------------------------------------------------------------------------
@@ -76,17 +89,24 @@ class TestCommandRunner:
     def test_runs_command_and_returns_adapter_path(self, tmp_path):
         adapter_dir = tmp_path / "adapter"
         adapter_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / "metrics.jsonl").write_text('{"step": 1, "loss": 0.5}\n')
         config = _bare_config(
-            log_dir=str(tmp_path / "logs"),
+            log_dir=str(log_dir),
             adapter_path=str(adapter_dir),
             model="test-model",
         )
 
         runner = CommandRunner("echo training with {model}")
         result = runner.run(config)
-        assert result == str(adapter_dir)
+        assert result.ok
+        assert result.policy_ref == str(adapter_dir)
+        assert result.run_id == "logs"
+        assert result.metrics["loss"] == pytest.approx(0.5)
+        assert "metrics.jsonl" in result.artifacts
 
-    def test_returns_none_on_failure(self, tmp_path):
+    def test_returns_failed_result_on_failure(self, tmp_path):
         config = _bare_config(
             log_dir=str(tmp_path / "logs"),
             adapter_path=str(tmp_path / "nonexistent_adapter"),
@@ -95,9 +115,10 @@ class TestCommandRunner:
 
         runner = CommandRunner("exit 1")
         result = runner.run(config)
-        assert result is None
+        assert not result.ok
+        assert result.failure_status == "exit_code:1"
 
-    def test_returns_none_when_adapter_missing(self, tmp_path):
+    def test_returns_failed_result_when_adapter_missing(self, tmp_path):
         config = _bare_config(
             log_dir=str(tmp_path / "logs"),
             adapter_path=str(tmp_path / "no_adapter"),
@@ -106,7 +127,8 @@ class TestCommandRunner:
 
         runner = CommandRunner("echo ok")
         result = runner.run(config)
-        assert result is None
+        assert not result.ok
+        assert result.failure_status == "missing_policy_ref"
 
 
 class TestCommandRunnerConfigExport:
