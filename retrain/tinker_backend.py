@@ -12,6 +12,11 @@ Ports src/tinker_backend.mojo into pure Python.
 
 from __future__ import annotations
 
+import json
+import threading
+import time
+from pathlib import Path
+
 from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
 
 
@@ -32,6 +37,7 @@ class TinkerTrainHelper:
         clip_eps_high: float = 0.0,
         grad_clip_norm: float = 0.0,
         clip_ratio_c: float = 0.0,
+        sample_log_dir: str = "",
     ) -> None:
         """Create Tinker service client and LoRA training client."""
         import tinker
@@ -64,6 +70,13 @@ class TinkerTrainHelper:
         self._clip_eps_high = clip_eps_high
         self._grad_clip_norm = grad_clip_norm
         self._clip_ratio_c = clip_ratio_c
+        self._sample_diag_path: Path | None = None
+        self._sample_diag_lock = threading.Lock()
+        if sample_log_dir:
+            diag_dir = Path(sample_log_dir).resolve()
+            diag_dir.mkdir(parents=True, exist_ok=True)
+            self._sample_diag_path = diag_dir / "tinker_sample_diagnostics.jsonl"
+            print(f"Tinker sample diagnostics: {self._sample_diag_path}")
         self._use_custom_ppo = clip_eps > 0
         if clip_eps > 0:
             eps_hi = clip_eps_high or clip_eps
@@ -73,6 +86,25 @@ class TinkerTrainHelper:
         if grad_clip_norm > 0:
             print(f"Gradient clipping enabled (max_norm={grad_clip_norm})")
         print("Training client ready.")
+        self._write_sample_diag(
+            {
+                "event": "helper_initialized",
+                "sample_log_dir": str(self._sample_diag_path.parent)
+                if self._sample_diag_path is not None
+                else "",
+            }
+        )
+
+    def _write_sample_diag(self, payload: dict[str, object]) -> None:
+        if self._sample_diag_path is None:
+            return
+        record = dict(payload)
+        record.setdefault("ts", time.time())
+        line = json.dumps(record, sort_keys=True) + "\n"
+        with self._sample_diag_lock:
+            self._sample_diag_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._sample_diag_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
 
     def checkpoint(self, name: str) -> None:
         """Save weights and get a sampling client for the current checkpoint."""
@@ -104,40 +136,94 @@ class TinkerTrainHelper:
         with self._throttle:
             # Fire all sampling futures
             futures = []
-            for prompt_ids in prompt_ids_list:
+            for prompt_idx, prompt_ids in enumerate(prompt_ids_list):
                 model_input = types.ModelInput.from_ints(prompt_ids)
                 sampling_params = types.SamplingParams(
                     max_tokens=max_tokens,
                     temperature=temperature,
                     top_p=top_p,
                 )
+                dispatch_started_at = time.perf_counter()
                 futures.append(
-                    self.sampling_client.sample(
-                        prompt=model_input,
-                        num_samples=num_samples,
-                        sampling_params=sampling_params,
+                    (
+                        prompt_idx,
+                        len(prompt_ids),
+                        dispatch_started_at,
+                        self.sampling_client.sample(
+                            prompt=model_input,
+                            num_samples=num_samples,
+                            sampling_params=sampling_params,
+                        ),
                     )
+                )
+                self._write_sample_diag(
+                    {
+                        "event": "dispatch",
+                        "prompt_idx": prompt_idx,
+                        "prompt_tokens": len(prompt_ids),
+                        "num_samples": num_samples,
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "top_p": top_p,
+                    }
                 )
 
             # Collect results (with timeout to prevent hanging on context overflow)
             results: list[list[tuple[list[int], list[float]]]] = []
-            for i, future in enumerate(futures):
+            for prompt_idx, prompt_tokens, dispatch_started_at, future in futures:
+                wait_started_at = time.perf_counter()
                 try:
                     sample_result = future.result(timeout=300)  # 5 min timeout per sample
                     group: list[tuple[list[int], list[float]]] = []
+                    completion_lengths: list[int] = []
                     for seq in sample_result.sequences:
                         token_ids = list(seq.tokens)
                         logprobs = [float(lp) for lp in seq.logprobs]
+                        completion_lengths.append(len(token_ids))
                         group.append((token_ids, logprobs))
                     results.append(group)
+                    self._write_sample_diag(
+                        {
+                            "event": "result",
+                            "prompt_idx": prompt_idx,
+                            "prompt_tokens": prompt_tokens,
+                            "completion_count": len(group),
+                            "completion_tokens": completion_lengths,
+                            "dispatch_latency_s": round(
+                                wait_started_at - dispatch_started_at, 6
+                            ),
+                            "result_latency_s": round(
+                                time.perf_counter() - wait_started_at, 6
+                            ),
+                            "status": "ok",
+                        }
+                    )
                 except Exception as exc:
                     # Context overflow or timeout — return empty sequence
                     # instead of hanging forever.
                     import sys
                     print(
-                        f"WARNING: Tinker sample {i} failed: {type(exc).__name__}: {exc}",
+                        f"WARNING: Tinker sample {prompt_idx} failed: {type(exc).__name__}: {exc}",
                         file=sys.stderr,
                         flush=True,
+                    )
+                    self._write_sample_diag(
+                        {
+                            "event": "result",
+                            "prompt_idx": prompt_idx,
+                            "prompt_tokens": prompt_tokens,
+                            "completion_count": 0,
+                            "completion_tokens": [],
+                            "dispatch_latency_s": round(
+                                wait_started_at - dispatch_started_at, 6
+                            ),
+                            "result_latency_s": round(
+                                time.perf_counter() - wait_started_at, 6
+                            ),
+                            "status": "error",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
                     )
                     results.append([])
             return results
@@ -447,7 +533,11 @@ class TinkerTrainHelper:
                 f"Cannot resume from checkpoint '{name}'. "
                 f"Check your Tinker SDK version supports checkpoint loading."
             )
-        self.training_client.load_state(name=name)
+        try:
+            self.training_client.load_state(name=name)
+        except TypeError:
+            # Some SDK builds expose load_state(path_or_name) positionally only.
+            self.training_client.load_state(name)
         print(f"Tinker checkpoint loaded: {name}")
 
     def save_adapter(self, path: str, name: str) -> str:

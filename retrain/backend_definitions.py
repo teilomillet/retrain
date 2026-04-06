@@ -7,6 +7,7 @@ import importlib
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
 if TYPE_CHECKING:
@@ -108,6 +109,7 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         clip_eps_high=config.clip_eps_high,
         grad_clip_norm=config.grad_clip_norm,
         clip_ratio_c=config.clip_ratio_c,
+        sample_log_dir=str(Path(config.log_dir).resolve()),
     )
     helper.sft_loss_fn = config.sft_loss_fn
     return helper

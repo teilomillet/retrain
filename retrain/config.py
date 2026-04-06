@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 import sys
 import tomllib
@@ -30,6 +31,14 @@ from retrain.plugin_resolver import set_plugin_runtime
 
 _VALID_ENVIRONMENT_PROVIDERS = {"", "verifiers"}
 _DEFAULT_ADAPTER_PATH = "/tmp/retrain_adapter"
+
+
+def _first_non_empty_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
 
 
 @dataclass
@@ -225,6 +234,29 @@ class TrainConfig:
     plugins_strict: bool = True
 
     def __post_init__(self) -> None:
+        if not self.wandb_project:
+            self.wandb_project = _first_non_empty_env(
+                "SOMA_WANDB_PROJECT",
+                "RETRAIN_WANDB_PROJECT",
+                "WANDB_PROJECT",
+            )
+        if not self.wandb_entity:
+            self.wandb_entity = _first_non_empty_env(
+                "SOMA_WANDB_ENTITY",
+                "RETRAIN_WANDB_ENTITY",
+                "WANDB_ENTITY",
+            )
+        if not self.wandb_group:
+            self.wandb_group = _first_non_empty_env(
+                "SOMA_WANDB_GROUP",
+                "RETRAIN_WANDB_GROUP",
+            )
+        if not self.wandb_tags:
+            self.wandb_tags = _first_non_empty_env(
+                "SOMA_WANDB_TAGS",
+                "RETRAIN_WANDB_TAGS",
+            )
+
         # --- Hard errors (batched) ---
         errors: list[str] = []
 

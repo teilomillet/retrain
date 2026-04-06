@@ -209,6 +209,24 @@ wandb_run_name = "run-1"
         assert c.wandb_group == "sweep-1"
         assert c.wandb_tags == "baseline,seed42"
 
+    def test_wandb_defaults_from_env(self, monkeypatch):
+        monkeypatch.setenv("SOMA_WANDB_PROJECT", "soma-default")
+        monkeypatch.setenv("SOMA_WANDB_ENTITY", "team-soma")
+        monkeypatch.setenv("SOMA_WANDB_GROUP", "energy")
+        monkeypatch.setenv("SOMA_WANDB_TAGS", "energy,rl")
+        c = TrainConfig()
+        assert c.wandb_project == "soma-default"
+        assert c.wandb_entity == "team-soma"
+        assert c.wandb_group == "energy"
+        assert c.wandb_tags == "energy,rl"
+
+    def test_toml_wandb_values_override_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SOMA_WANDB_PROJECT", "soma-default")
+        toml = tmp_path / "config.toml"
+        toml.write_text('[logging]\nwandb_project = "explicit-project"\n')
+        c = load_config(str(toml))
+        assert c.wandb_project == "explicit-project"
+
     def test_new_fields_defaults(self):
         c = TrainConfig()
         assert c.top_p == pytest.approx(0.95)

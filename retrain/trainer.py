@@ -103,6 +103,7 @@ class TrainerState(TypedDict):
     current_batch_size: int
     current_group_size: int
     checkpoint_name: str
+    checkpoint_path: NotRequired[str]
     sepa: SEPAStateDict
     tl_grpo_ema: NotRequired[float]
     delight_eta_ema: NotRequired[float]
@@ -329,6 +330,7 @@ def _save_trainer_state(
     current_batch_size: int,
     current_group_size: int,
     checkpoint_name: str,
+    checkpoint_path: str | None = None,
     sepa_state: SEPAStateDict,
     tl_grpo_ema: float | None = None,
     delight_eta_ema: float | None = None,
@@ -344,6 +346,8 @@ def _save_trainer_state(
         "checkpoint_name": checkpoint_name,
         "sepa": sepa_state,
     }
+    if checkpoint_path:
+        state["checkpoint_path"] = checkpoint_path
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema
     if delight_eta_ema is not None:
@@ -351,6 +355,10 @@ def _save_trainer_state(
     tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
     tmp.write_text(json.dumps(state, indent=2) + "\n")
     tmp.rename(path / _TRAINER_STATE_FILE)
+    if checkpoint_path:
+        latest_tmp = path / "latest_sampler_path.txt.tmp"
+        latest_tmp.write_text(f"{checkpoint_path}\n")
+        latest_tmp.rename(path / "latest_sampler_path.txt")
 
 
 def _load_trainer_state(resume_dir: str) -> TrainerState:
@@ -378,6 +386,15 @@ def _load_trainer_state(resume_dir: str) -> TrainerState:
         "checkpoint_name": _optional_str_field(payload_map, "checkpoint_name"),
         "sepa": _optional_sepa_state(payload_map),
     }
+    checkpoint_path = _optional_str_field(payload_map, "checkpoint_path")
+    if checkpoint_path:
+        state["checkpoint_path"] = checkpoint_path
+    else:
+        latest_sampler_path = p / "latest_sampler_path.txt"
+        if latest_sampler_path.is_file():
+            fallback_path = latest_sampler_path.read_text().strip()
+            if fallback_path:
+                state["checkpoint_path"] = fallback_path
     tl_grpo_ema = _optional_float_field(payload_map, "tl_grpo_ema")
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema
@@ -523,7 +540,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         import wandb  # type: ignore[unresolved-import]
 
         condition_label = _condition_label(config)
-        run_name = config.wandb_run_name or condition_label
+        default_run_name = Path(config.log_dir).name or condition_label
+        run_name = config.wandb_run_name or default_run_name
         wandb_tags = (
             [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
             if config.wandb_tags
@@ -618,12 +636,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
         # Restore backend model state
         ckpt_name = saved.get("checkpoint_name", "")
-        if ckpt_name:
-            helper.load_state(ckpt_name)  # type: ignore[unresolved-attribute]
+        checkpoint_ref = saved.get("checkpoint_path", "") or ckpt_name
+        if checkpoint_ref:
+            helper.load_state(checkpoint_ref)  # type: ignore[unresolved-attribute]
 
         print(
             f"Resumed from step {saved['step']} "
-            f"(checkpoint: {ckpt_name}), continuing from step {start_step}"
+            f"(checkpoint: {checkpoint_ref or ckpt_name}), continuing from step {start_step}"
         )
 
     # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
@@ -1674,7 +1693,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # Periodic checkpoint
         if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
             ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-            helper.save_adapter(config.adapter_path, ckpt_name)  # type: ignore[unresolved-attribute]
+            checkpoint_path = helper.save_adapter(  # type: ignore[unresolved-attribute]
+                config.adapter_path,
+                ckpt_name,
+            )
             _save_trainer_state(
                 log_path,
                 step=batch_idx,
@@ -1684,6 +1706,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 current_batch_size=current_batch_size,
                 current_group_size=current_group_size,
                 checkpoint_name=ckpt_name,
+                checkpoint_path=checkpoint_path,
                 sepa_state=sepa_controller.state_dict(),
                 tl_grpo_ema=tl_grpo_ema,
                 delight_eta_ema=delight_eta_ema,
@@ -1703,6 +1726,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         current_batch_size=current_batch_size,
         current_group_size=current_group_size,
         checkpoint_name="final",
+        checkpoint_path=final_path,
         sepa_state=sepa_controller.state_dict(),
         tl_grpo_ema=tl_grpo_ema,
         delight_eta_ema=delight_eta_ema,
