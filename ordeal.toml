@@ -1,5 +1,13 @@
 [explorer]
-target_modules = ["retrain.advantages", "retrain.registry", "retrain.sepa", "retrain.backpressure", "retrain.rewards", "retrain.config"]
+target_modules = [
+  "retrain.advantages",
+  "retrain.registry",
+  "retrain.sepa",
+  "retrain.backpressure",
+  "retrain.rewards",
+  "retrain.config",
+  "tests.test_ordeal_backend_workflow",
+]
 max_time = 60
 seed = 42
 checkpoint_strategy = "energy"
@@ -8,6 +16,8 @@ steps_per_run = 50
 fault_toggle_prob = 0.3
 max_checkpoints = 256
 workers = 1
+ngram = 2
+rule_swarm = true
 
 [[tests]]
 class = "tests.test_ordeal_sepa:SEPAControllerChaos"
@@ -20,6 +30,11 @@ class = "tests.test_ordeal_backpressure:USLBackPressureChaos"
 
 [[tests]]
 class = "tests.test_ordeal_trainer_state:TrainerStateChaos"
+
+[[tests]]
+class = "tests.test_ordeal_backend_workflow:BackendWorkflowChaos"
+steps_per_run = 80
+rule_timeout = 5
 
 [report]
 format = "both"

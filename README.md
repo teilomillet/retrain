@@ -170,4 +170,4 @@ Full docs: [retrain.readthedocs.io](https://retrain.readthedocs.io)
 - [Reward Functions](https://retrain.readthedocs.io/rewards/)
 - [Inference Engines](https://retrain.readthedocs.io/inference-engines/)
 
-Contributor note: run `retrain man --check` in CI to detect stale auto-generated manual blocks, run `retrain man --sync` locally to refresh them, and run `uv run mkdocs build --strict` before publishing docs changes.
+Contributor note: run `retrain man --check` in CI to detect stale auto-generated manual blocks, run `retrain man --sync` locally to refresh them, run `uv run mkdocs build --strict` before publishing docs changes, and run `make chaos-backend-workflow` before pushing backend/orchestrator changes.

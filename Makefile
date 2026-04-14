@@ -1,4 +1,4 @@
-.PHONY: setup build test test-python test-mojo lint typecheck run clean all
+.PHONY: setup build test test-python test-mojo lint typecheck chaos-backend-workflow run clean all
 
 TYPECHECK_PATHS = \
 	retrain/type_defs.py \
@@ -44,6 +44,9 @@ lint:
 
 typecheck:
 	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
+
+chaos-backend-workflow:
+	UV_CACHE_DIR=$(CURDIR)/.uv-cache uv run python scripts/run_backend_workflow_chaos.py
 
 run: retrain-tinker
 	./retrain-tinker

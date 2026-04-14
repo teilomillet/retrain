@@ -13,12 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@v4
       - name: Install package and quality tooling
         run: |
           uv venv
-          uv pip install -e ".[docs]" pytest ruff ty
+          uv pip install -e ".[docs]" pytest ruff ty "ordeal==0.3.39"
       - name: Run ruff
         run: uv run ruff check retrain tests
       - name: Run staged ty checks
@@ -42,3 +42,5 @@ jobs:
         run: uv run mkdocs build --strict
       - name: Run tests
         run: uv run pytest -q
+      - name: Run backend workflow chaos gate
+        run: make chaos-backend-workflow

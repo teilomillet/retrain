@@ -15,6 +15,7 @@ dist/
 .venv
 env/
 venv/
+.uv-cache/
 
 # IDE
 .idea/
@@ -35,6 +36,8 @@ Thumbs.db
 trainer_output/
 wandb/
 *.db
+.ordeal/
+.hypothesis/
 # Build artifacts
 retrain-tinker
 logs/

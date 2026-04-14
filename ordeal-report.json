@@ -2,39 +2,61 @@
   "results": [
     {
       "test_class": "tests.test_ordeal_sepa:SEPAControllerChaos",
-      "total_runs": 170,
-      "total_steps": 4538,
+      "total_runs": 114,
+      "total_steps": 2974,
       "unique_edges": 111,
-      "checkpoints_saved": 19,
-      "duration_seconds": 3.007474291996914,
+      "checkpoints_saved": 16,
+      "duration_seconds": 5.0479747080007655,
       "failures": []
     },
     {
       "test_class": "tests.test_ordeal_sepa:SEPAAutoScheduleChaos",
-      "total_runs": 145,
-      "total_steps": 3946,
-      "unique_edges": 62,
-      "checkpoints_saved": 7,
-      "duration_seconds": 3.0054478329984704,
+      "total_runs": 118,
+      "total_steps": 3256,
+      "unique_edges": 59,
+      "checkpoints_saved": 8,
+      "duration_seconds": 5.017916082999363,
       "failures": []
     },
     {
       "test_class": "tests.test_ordeal_backpressure:USLBackPressureChaos",
-      "total_runs": 127,
-      "total_steps": 3226,
-      "unique_edges": 235,
-      "checkpoints_saved": 31,
-      "duration_seconds": 3.007652500004042,
+      "total_runs": 91,
+      "total_steps": 2442,
+      "unique_edges": 240,
+      "checkpoints_saved": 37,
+      "duration_seconds": 5.086816708000697,
       "failures": []
     },
     {
       "test_class": "tests.test_ordeal_trainer_state:TrainerStateChaos",
-      "total_runs": 197,
-      "total_steps": 4890,
+      "total_runs": 75,
+      "total_steps": 1801,
       "unique_edges": 0,
-      "checkpoints_saved": 0,
-      "duration_seconds": 3.0031421669991687,
+      "checkpoints_saved": 2,
+      "duration_seconds": 5.06673737500023,
       "failures": []
+    },
+    {
+      "test_class": "tests.test_ordeal_backend_workflow:BackendWorkflowChaos",
+      "total_runs": 2,
+      "total_steps": 89,
+      "unique_edges": 418,
+      "checkpoints_saved": 36,
+      "duration_seconds": 267.730554374999,
+      "failures": [
+        {
+          "error_type": "RuleTimeoutError",
+          "error_message": "ChaosTest rule 'train' timed out after 30.0s. A fault likely caused the code under test to block (buggify-induced hang, slow I/O, unresponsive inference, etc.). This is a real resilience finding \u2014 the code has no timeout. Set rule_timeout = 0 to disable.",
+          "step": 18,
+          "run_id": 2,
+          "active_faults": [
+            "intermittent_http_error(tests.test_ordeal_backend_workflow._transport_sample, every 3, 503)",
+            "error_on_call(tests.test_ordeal_backend_workflow._write_state_slot)",
+            "truncate_output(tests.test_ordeal_backend_workflow._read_state_slot, 0.5)"
+          ],
+          "trace_steps": 1
+        }
+      ]
     }
   ]
 }
