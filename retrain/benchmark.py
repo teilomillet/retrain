@@ -10,9 +10,7 @@ from statistics import mean, median, pstdev
 from typing import Protocol
 
 from retrain.config import TrainConfig
-
-
-JsonDict = dict[str, object]
+from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
 
 
 class _RunnerLike(Protocol):
@@ -67,48 +65,6 @@ class BenchmarkSuiteSummary:
     runs: list[RunBenchmarkSummary]
     aggregates: dict[str, SummaryStat]
 
-
-def _load_jsonl(path: Path) -> list[JsonDict]:
-    rows: list[JsonDict] = []
-    if not path.is_file():
-        return rows
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                rows.append(payload)
-    return rows
-
-
-def _float_or_none(value: object) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    return None
-
-
-def _int_or_none(value: object) -> int | None:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
-    return None
-
-
-def _metric_list(rows: list[JsonDict], key: str, fallback_key: str | None = None) -> list[float]:
-    values: list[float] = []
-    for row in rows:
-        value = _float_or_none(row.get(key))
-        if value is None and fallback_key is not None:
-            value = _float_or_none(row.get(fallback_key))
-        if value is not None:
-            values.append(value)
-    return values
-
-
 def _summary_stat(values: list[float]) -> SummaryStat | None:
     if not values:
         return None
@@ -130,51 +86,58 @@ def _p95(values: list[float]) -> float:
 
 def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
     """Summarize one completed run directory."""
-    metrics_rows = _load_jsonl(run_dir / "metrics.jsonl")
-    if not metrics_rows:
+    metrics_summary = scan_metrics_file(
+        run_dir / "metrics.jsonl",
+        mean_fields=(
+            "sample_time_s",
+            "train_time_s",
+            "sample_share",
+            "train_share",
+            "tokens_per_step",
+            "tokens_per_second",
+        ),
+        max_fields=("process_max_rss_mb",),
+        collect_step_times=True,
+    )
+    if metrics_summary.rows <= 0 or metrics_summary.last is None:
         raise FileNotFoundError(f"No metrics.jsonl in {run_dir}")
 
-    step_times = _metric_list(metrics_rows, "step_time_s", fallback_key="time_s")
-    sample_times = _metric_list(metrics_rows, "sample_time_s")
-    train_times = _metric_list(metrics_rows, "train_time_s")
-    sample_shares = _metric_list(metrics_rows, "sample_share")
-    train_shares = _metric_list(metrics_rows, "train_share")
-    tokens_per_step = _metric_list(metrics_rows, "tokens_per_step")
-    tokens_per_second = _metric_list(metrics_rows, "tokens_per_second")
-    rss_values = _metric_list(metrics_rows, "process_max_rss_mb")
-    last = metrics_rows[-1]
+    last = metrics_summary.last
     generations_path = run_dir / "emergence" / "generations.jsonl"
     generations_bytes = generations_path.stat().st_size if generations_path.is_file() else 0
 
     return RunBenchmarkSummary(
         label=run_dir.name,
         path=str(run_dir),
-        steps=len(metrics_rows),
-        wall_time_s=sum(step_times),
-        mean_step_time_s=mean(step_times) if step_times else 0.0,
-        median_step_time_s=median(step_times) if step_times else 0.0,
-        p95_step_time_s=_p95(step_times),
-        mean_sample_time_s=mean(sample_times) if sample_times else 0.0,
-        mean_train_time_s=mean(train_times) if train_times else 0.0,
-        mean_sample_share=mean(sample_shares) if sample_shares else 0.0,
-        mean_train_share=mean(train_shares) if train_shares else 0.0,
-        mean_tokens_per_step=mean(tokens_per_step) if tokens_per_step else 0.0,
-        mean_tokens_per_second=mean(tokens_per_second) if tokens_per_second else 0.0,
-        peak_process_max_rss_mb=max(rss_values) if rss_values else None,
+        steps=metrics_summary.rows,
+        wall_time_s=metrics_summary.wall_time_s,
+        mean_step_time_s=(
+            metrics_summary.wall_time_s / metrics_summary.step_time_count
+            if metrics_summary.step_time_count > 0 else 0.0
+        ),
+        median_step_time_s=median(metrics_summary.step_times) if metrics_summary.step_times else 0.0,
+        p95_step_time_s=_p95(metrics_summary.step_times),
+        mean_sample_time_s=metrics_summary.mean("sample_time_s") or 0.0,
+        mean_train_time_s=metrics_summary.mean("train_time_s") or 0.0,
+        mean_sample_share=metrics_summary.mean("sample_share") or 0.0,
+        mean_train_share=metrics_summary.mean("train_share") or 0.0,
+        mean_tokens_per_step=metrics_summary.mean("tokens_per_step") or 0.0,
+        mean_tokens_per_second=metrics_summary.mean("tokens_per_second") or 0.0,
+        peak_process_max_rss_mb=metrics_summary.maximum("process_max_rss_mb"),
         generations_bytes=generations_bytes,
-        final_loss=_float_or_none(last.get("loss")),
-        final_mean_reward=_float_or_none(last.get("mean_reward")),
-        final_correct_rate=_float_or_none(last.get("correct_rate")),
-        prompt_encode_calls=_int_or_none(last.get("prompt_encode_calls")),
-        prompt_preview_calls=_int_or_none(last.get("prompt_preview_calls")),
-        token_lookup_requests=_int_or_none(last.get("token_lookup_requests")),
-        token_lookup_convert_calls=_int_or_none(last.get("token_lookup_convert_calls")),
-        token_lookup_cache_misses=_int_or_none(last.get("token_lookup_cache_misses")),
-        batch_decode_calls=_int_or_none(last.get("batch_decode_calls")),
-        batch_decoded_sequences=_int_or_none(last.get("batch_decoded_sequences")),
-        engine_prompt_decode_calls=_int_or_none(last.get("engine_prompt_decode_calls")),
-        engine_prompt_cache_hits=_int_or_none(last.get("engine_prompt_cache_hits")),
-        engine_prompt_cache_size=_int_or_none(last.get("engine_prompt_cache_size")),
+        final_loss=float_or_none(last.get("loss")),
+        final_mean_reward=float_or_none(last.get("mean_reward")),
+        final_correct_rate=float_or_none(last.get("correct_rate")),
+        prompt_encode_calls=int_or_none(last.get("prompt_encode_calls")),
+        prompt_preview_calls=int_or_none(last.get("prompt_preview_calls")),
+        token_lookup_requests=int_or_none(last.get("token_lookup_requests")),
+        token_lookup_convert_calls=int_or_none(last.get("token_lookup_convert_calls")),
+        token_lookup_cache_misses=int_or_none(last.get("token_lookup_cache_misses")),
+        batch_decode_calls=int_or_none(last.get("batch_decode_calls")),
+        batch_decoded_sequences=int_or_none(last.get("batch_decoded_sequences")),
+        engine_prompt_decode_calls=int_or_none(last.get("engine_prompt_decode_calls")),
+        engine_prompt_cache_hits=int_or_none(last.get("engine_prompt_cache_hits")),
+        engine_prompt_cache_size=int_or_none(last.get("engine_prompt_cache_size")),
     )
 
 

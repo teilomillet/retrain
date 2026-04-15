@@ -10,6 +10,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from retrain.metrics_scan import float_or_none, iter_jsonl_objects
 from retrain.status import format_time
 
 
@@ -98,13 +99,6 @@ def _winner(metric: str, val_a: float, val_b: float) -> str:
         return "<" if val_a < val_b else ">"
     return ">" if val_a > val_b else "<"
 
-
-def _float_or_none(value: object) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    return None
-
-
 def load_metrics(run_dir: Path) -> list[MetricsEntry]:
     """Read metrics.jsonl from a run directory into a list of MetricsEntry."""
     metrics_path = run_dir / "metrics.jsonl"
@@ -112,30 +106,22 @@ def load_metrics(run_dir: Path) -> list[MetricsEntry]:
         raise FileNotFoundError(f"No metrics.jsonl in {run_dir}")
 
     entries: list[MetricsEntry] = []
-    with open(metrics_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            entries.append(
-                MetricsEntry(
-                    step=d.get("step", 0),
-                    loss=d.get("loss", 0.0),
-                    correct_rate=d.get("correct_rate", 0.0),
-                    mean_reward=d.get("mean_reward", 0.0),
-                    step_time_s=d.get("step_time_s", 0.0),
-                    sample_time_s=_float_or_none(d.get("sample_time_s")),
-                    train_time_s=_float_or_none(d.get("train_time_s")),
-                    tokens_per_second=_float_or_none(d.get("tokens_per_second")),
-                    sample_share=_float_or_none(d.get("sample_share")),
-                    train_share=_float_or_none(d.get("train_share")),
-                    process_max_rss_mb=_float_or_none(d.get("process_max_rss_mb")),
-                )
+    for d in iter_jsonl_objects(metrics_path):
+        entries.append(
+            MetricsEntry(
+                step=d.get("step", 0),
+                loss=d.get("loss", 0.0),
+                correct_rate=d.get("correct_rate", 0.0),
+                mean_reward=d.get("mean_reward", 0.0),
+                step_time_s=d.get("step_time_s", 0.0),
+                sample_time_s=float_or_none(d.get("sample_time_s")),
+                train_time_s=float_or_none(d.get("train_time_s")),
+                tokens_per_second=float_or_none(d.get("tokens_per_second")),
+                sample_share=float_or_none(d.get("sample_share")),
+                train_share=float_or_none(d.get("train_share")),
+                process_max_rss_mb=float_or_none(d.get("process_max_rss_mb")),
             )
+        )
     return entries
 
 

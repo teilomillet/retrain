@@ -103,6 +103,71 @@ def test_summarize_run_reads_perf_fields(tmp_path) -> None:
     assert summary.engine_prompt_decode_calls == 3
 
 
+def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    emergence_dir = run_dir / "emergence"
+    emergence_dir.mkdir(parents=True)
+    with (run_dir / "metrics.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "step": 0,
+                    "loss": 0.9,
+                    "mean_reward": 0.1,
+                    "correct_rate": 0.2,
+                    "step_time_s": 2.0,
+                    "sample_time_s": 1.0,
+                    "train_time_s": 0.5,
+                    "sample_share": 0.5,
+                    "train_share": 0.25,
+                    "tokens_per_step": 100,
+                    "tokens_per_second": 50.0,
+                    "process_max_rss_mb": 256.0,
+                }
+            )
+            + "\n"
+        )
+        handle.write("not json\n")
+        handle.write(
+            json.dumps(
+                {
+                    "step": 1,
+                    "loss": 0.4,
+                    "mean_reward": 0.7,
+                    "correct_rate": 0.8,
+                    "step_time_s": 4.0,
+                    "sample_time_s": 3.0,
+                    "train_time_s": 1.5,
+                    "sample_share": 0.75,
+                    "train_share": 0.2,
+                    "tokens_per_step": 140,
+                    "tokens_per_second": 70.0,
+                    "process_max_rss_mb": 768.0,
+                    "prompt_encode_calls": 8,
+                }
+            )
+            + "\n"
+        )
+    (emergence_dir / "generations.jsonl").write_text("abcd", encoding="utf-8")
+
+    summary = summarize_run(run_dir)
+
+    assert summary.steps == 2
+    assert summary.wall_time_s == 6.0
+    assert summary.mean_step_time_s == 3.0
+    assert summary.median_step_time_s == 3.0
+    assert summary.mean_sample_time_s == 2.0
+    assert summary.mean_train_time_s == 1.0
+    assert summary.mean_sample_share == 0.625
+    assert summary.mean_train_share == 0.225
+    assert summary.mean_tokens_per_step == 120.0
+    assert summary.mean_tokens_per_second == 60.0
+    assert summary.peak_process_max_rss_mb == 768.0
+    assert summary.final_loss == 0.4
+    assert summary.final_correct_rate == 0.8
+    assert summary.prompt_encode_calls == 8
+
+
 def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
     config = TrainConfig(
         log_dir=str(tmp_path / "base-log"),
