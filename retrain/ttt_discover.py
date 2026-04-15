@@ -31,6 +31,10 @@ from retrain.backpressure import StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
 from retrain.logging_utils import JsonlLogger
+from retrain.runtime_support import (
+    TokenTextLookup,
+    decode_sequence_groups,
+)
 from retrain.trainer import (
     _CORRECT_THRESHOLD,
     _TRAINER_STATE_FILE,
@@ -399,20 +403,13 @@ def _score_completion_texts(
         completion_texts=completion_texts,
     )
 
-
-def _prepare_vocab_table(tokenizer: object) -> list[str]:
-    vocab_size = tokenizer.vocab_size  # type: ignore[unresolved-attribute]
-    if hasattr(tokenizer, "added_tokens_encoder"):
-        vocab_size += len(tokenizer.added_tokens_encoder)
-    all_ids = list(range(vocab_size))
-    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)  # type: ignore[unresolved-attribute]
-    return [str(tok) if tok is not None else "" for tok in py_tokens]
-
-
 class TTTDiscoverRunner:
     """Online discovery runner with reusable start states."""
 
     def run(self, config) -> TrainingRunResult:
+        metrics_logger: JsonlLogger | None = None
+        steps_logger: JsonlLogger | None = None
+        generations_logger: JsonlLogger | None = None
         try:
             if config.resume_from:
                 raise NotImplementedError(
@@ -437,7 +434,11 @@ class TTTDiscoverRunner:
             log_dir.mkdir(parents=True, exist_ok=True)
             metrics_logger = JsonlLogger(str(log_dir / "metrics.jsonl"))
             steps_logger = JsonlLogger(str(log_dir / "steps.jsonl"))
-            generations_logger = JsonlLogger(str(log_dir / "generations.jsonl"))
+            generations_logger = JsonlLogger(
+                str(log_dir / "generations.jsonl"),
+                flush_every=32,
+                flush_interval_s=1.0,
+            )
 
             _print_config_summary(config)
 
@@ -467,7 +468,7 @@ class TTTDiscoverRunner:
                 config.model,
                 trust_remote_code=True,
             )
-            vocab_table = _prepare_vocab_table(tokenizer) if flow.needs_planning else []
+            token_lookup = TokenTextLookup(tokenizer)
 
             empty_reward = _score_completion_texts(
                 verifiers_env=verifiers_env,
@@ -571,47 +572,31 @@ class TTTDiscoverRunner:
                     )
                 sample_time = time.perf_counter() - sample_start
 
-                all_token_seqs_flat: list[list[int]] = []
-                group_flat_offsets: list[int] = []
-                for group in all_group_sequences:
-                    group_flat_offsets.append(len(all_token_seqs_flat))
-                    for token_ids, _logprobs in group:
-                        all_token_seqs_flat.append(list(token_ids))
-                all_decoded_texts = tokenizer.batch_decode(  # type: ignore[unresolved-attribute]
-                    all_token_seqs_flat,
-                    skip_special_tokens=True,
+                decoded_groups = decode_sequence_groups(
+                    tokenizer,
+                    all_group_sequences,
+                    needs_planning=flow.needs_planning,
+                    token_lookup=token_lookup if flow.needs_planning else None,
+                    detector=detector if flow.needs_planning else None,
                 )
 
-                for f_idx, group in enumerate(all_group_sequences):
-                    if not group:
+                for f_idx, decoded_group in enumerate(decoded_groups):
+                    if not decoded_group:
                         continue
                     start_entry = selected_entries[f_idx]
                     archive.record_selection(start_entry.entry_id)
                     prompt_ids = batch_prompt_ids[f_idx]
                     prompt_obj = batch_prompt_objs[f_idx]
-                    flat_offset = group_flat_offsets[f_idx]
 
                     rewards_G: list[float] = []
                     logprobs_G: list[list[float]] = []
                     planning_masks_G: list[list[int]] = []
                     completion_texts_G: list[str] = []
 
-                    for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
-                        text = all_decoded_texts[flat_offset + s_idx]
-                        completion_texts_G.append(text)
-                        logprobs = list(seq_logprobs)
-                        logprobs_G.append(logprobs)
-                        if flow.needs_planning:
-                            token_strs = [
-                                vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
-                                for tid in seq_tokens
-                            ]
-                            assert detector is not None
-                            planning_masks_G.append(
-                                detector.detect(token_strs)  # type: ignore[unresolved-attribute]
-                            )
-                        else:
-                            planning_masks_G.append([0] * len(logprobs))
+                    for sample in decoded_group:
+                        completion_texts_G.append(sample.text)
+                        logprobs_G.append(sample.logprobs)
+                        planning_masks_G.append(sample.planning_mask)
 
                     rewards_G = _score_completion_texts(
                         verifiers_env=verifiers_env,
@@ -629,7 +614,9 @@ class TTTDiscoverRunner:
                     batch_correct += sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
                     batch_total_completions += len(rewards_G)
                     batch_max_token_hits += sum(
-                        1 for seq_tokens, _ in group if len(seq_tokens) >= config.max_tokens
+                        1
+                        for sample in decoded_group
+                        if len(sample.token_ids) >= config.max_tokens
                     )
 
                     for reward, comp_text in zip(rewards_G, completion_texts_G):
@@ -704,10 +691,10 @@ class TTTDiscoverRunner:
                     if adv_result.extra_metrics:
                         batch_adv_results.append(adv_result)
 
-                    for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
+                    for s_idx, sample in enumerate(decoded_group):
                         seq_advs = adv_result.token_advs[s_idx]
-                        full_tokens = list(prompt_ids) + list(seq_tokens)
-                        padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
+                        full_tokens = list(prompt_ids) + list(sample.token_ids)
+                        padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
                         padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
                         all_datum_tokens.append(full_tokens)
                         all_datum_logprobs.append(padded_logprobs)
@@ -720,7 +707,7 @@ class TTTDiscoverRunner:
                                 "reward": rewards_G[s_idx],
                                 "completion": completion_texts_G[s_idx][:800],
                                 "prompt": batch_prompt_previews[f_idx],
-                                "num_tokens": len(seq_logprobs),
+                                "num_tokens": len(sample.logprobs),
                             }
                         )
 
@@ -948,3 +935,10 @@ class TTTDiscoverRunner:
                 failure_status=f"exception:{type(exc).__name__}",
                 error_message=str(exc),
             )
+        finally:
+            if metrics_logger is not None:
+                metrics_logger.close()
+            if steps_logger is not None:
+                steps_logger.close()
+            if generations_logger is not None:
+                generations_logger.close()

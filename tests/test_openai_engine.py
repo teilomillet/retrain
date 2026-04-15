@@ -6,7 +6,11 @@ from retrain.inference_engine.openai_engine import OpenAIEngine
 
 
 class _FakeTokenizer:
+    def __init__(self) -> None:
+        self.decode_calls = 0
+
     def decode(self, token_ids, skip_special_tokens=False):
+        self.decode_calls += 1
         return "prompt"
 
     def encode(self, text, add_special_tokens=False):
@@ -89,3 +93,62 @@ def test_vllm_reload_calls_lora_endpoint(monkeypatch):
             },
         )
     ]
+
+
+def test_generate_reuses_cached_prompt_decode(monkeypatch):
+    tokenizer = _FakeTokenizer()
+    monkeypatch.setattr(
+        "retrain.inference_engine.openai_engine.AutoTokenizer.from_pretrained",
+        lambda _model_name: tokenizer,
+    )
+
+    engine = OpenAIEngine(
+        base_url="http://localhost:8000",
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        engine_type="vllm",
+    )
+
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: {"choices": []})  # noqa: ARG005
+
+    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+
+    assert tokenizer.decode_calls == 1
+
+
+def test_direct_token_ids_payload_is_used(monkeypatch):
+    monkeypatch.setattr(
+        "retrain.inference_engine.openai_engine.AutoTokenizer.from_pretrained",
+        lambda _model_name: _FakeTokenizer(),
+    )
+
+    engine = OpenAIEngine(
+        base_url="http://localhost:8000",
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        engine_type="vllm",
+    )
+
+    response = {
+        "choices": [
+            {
+                "text": "world",
+                "token_ids": [101, 102],
+                "logprobs": {
+                    "token_logprobs": [-0.5, -0.3],
+                    "tokens": ["wor", "ld"],
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)  # noqa: ARG005
+
+    results = engine.generate(
+        [[1, 2, 3]],
+        num_samples=1,
+        max_tokens=10,
+        temperature=0.7,
+        top_p=0.95,
+    )
+
+    assert results[0][0].token_ids == [101, 102]
+    assert results[0][0].logprobs == [-0.5, -0.3]

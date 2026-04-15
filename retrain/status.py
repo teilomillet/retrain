@@ -341,7 +341,8 @@ def scan_all(root: Path) -> tuple[list[RunSummary], list[CampaignSummary]]:
         return runs, campaigns
 
     # Track campaign run dirs so we don't double-count
-    campaign_run_dirs: set[str] = set()
+    campaign_dirs: set[Path] = set()
+    campaign_run_dirs: set[Path] = set()
 
     # First pass: find campaigns
     for candidate in sorted(root.iterdir()):
@@ -350,8 +351,9 @@ def scan_all(root: Path) -> tuple[list[RunSummary], list[CampaignSummary]]:
         camp = scan_campaign(candidate)
         if camp is not None:
             campaigns.append(camp)
+            campaign_dirs.add(candidate)
             for r in camp.runs:
-                campaign_run_dirs.add(r.path)
+                campaign_run_dirs.add(Path(r.path))
             continue
 
     # Sort campaigns newest-first (directory names contain timestamps)
@@ -360,10 +362,10 @@ def scan_all(root: Path) -> tuple[list[RunSummary], list[CampaignSummary]]:
     # Second pass: find standalone runs (not part of a campaign)
     for candidate in sorted(root.rglob("metrics.jsonl")):
         run_dir = candidate.parent
-        if str(run_dir) in campaign_run_dirs:
+        if run_dir in campaign_run_dirs:
             continue
         # Skip if this is inside a campaign runs/ subdir
-        if any(str(run_dir).startswith(cd) for cd in campaign_run_dirs):
+        if any(parent in campaign_dirs for parent in run_dir.parents):
             continue
         run = scan_run(run_dir)
         if run is not None:

@@ -51,3 +51,15 @@ class TestJsonlLogger:
         with open(path) as f:
             data = json.loads(f.readline())
         assert data["metrics"]["loss"] == 0.5
+
+    def test_buffered_logger_flushes_on_close(self, tmp_path):
+        path = str(tmp_path / "buffered.jsonl")
+        logger = JsonlLogger(path, flush_every=8)
+        logger.log({"step": 0})
+        logger.log({"step": 1})
+        logger.close()
+
+        with open(path) as f:
+            lines = [json.loads(line) for line in f]
+
+        assert lines == [{"step": 0}, {"step": 1}]

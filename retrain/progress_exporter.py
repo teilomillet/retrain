@@ -57,21 +57,41 @@ class RunSnapshot:
 def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
     if not path.is_file():
         return []
-    rows: deque[JsonObject] = deque(maxlen=limit)
+    if limit <= 0:
+        return []
+
+    lines: list[bytes]
     try:
-        with path.open(encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(payload, dict):
-                    rows.append(payload)
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            position = handle.tell()
+            chunks: list[bytes] = []
+            newline_count = 0
+            while position > 0 and newline_count <= limit:
+                read_size = min(8192, position)
+                position -= read_size
+                handle.seek(position)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
     except OSError:
         return []
+
+    if not chunks:
+        return []
+
+    lines = b"".join(reversed(chunks)).splitlines()[-limit:]
+    rows: deque[JsonObject] = deque(maxlen=limit)
+    for raw_line in lines:
+        line = raw_line.decode("utf-8", errors="ignore").strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
     return list(rows)
 
 

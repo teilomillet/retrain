@@ -39,6 +39,7 @@ class OpenAIEngine(InferenceEngine):
 
         # Adapter tracking
         self._current_adapter_path = None
+        self._prompt_text_cache: dict[tuple[int, ...], str] = {}
 
         print(f"OpenAIEngine ready ({engine_type} @ {self.base_url}).")
 
@@ -53,7 +54,7 @@ class OpenAIEngine(InferenceEngine):
 
         for prompt_ids in prompt_ids_list:
             # Decode prompt to text for the API
-            prompt_text = self.tokenizer.decode(prompt_ids, skip_special_tokens=False)
+            prompt_text = self._prompt_text(prompt_ids)
 
             payload = {
                 "model": self.model_name,
@@ -76,14 +77,31 @@ class OpenAIEngine(InferenceEngine):
                 text = choice.get("text", "")
                 lp_info = choice.get("logprobs", {})
 
-                token_ids, logprobs = self._recover_tokens(text, lp_info)
+                token_ids, logprobs = self._recover_tokens(
+                    prompt_ids,
+                    text,
+                    lp_info,
+                    choice,
+                )
                 group.append(SampleResult(token_ids=token_ids, logprobs=logprobs))
 
             results.append(group)
 
         return results
 
-    def _recover_tokens(self, text, logprobs_info):
+    def _prompt_text(self, prompt_ids):
+        """Decode prompt ids to text once per unique prompt."""
+        key = tuple(prompt_ids)
+        prompt_text = self._prompt_text_cache.get(key)
+        if prompt_text is None:
+            prompt_text = self.tokenizer.decode(
+                prompt_ids,
+                skip_special_tokens=False,
+            )
+            self._prompt_text_cache[key] = prompt_text
+        return prompt_text
+
+    def _recover_tokens(self, prompt_ids, text, logprobs_info, choice=None):
         """Recover token IDs and logprobs from API response.
 
         Primary path: use tokenizer.convert_tokens_to_ids() on the API's
@@ -97,13 +115,44 @@ class OpenAIEngine(InferenceEngine):
         Returns:
             (token_ids, logprobs) tuple.
         """
-        if not logprobs_info:
+        if not isinstance(logprobs_info, dict):
             # No logprobs returned — fallback to re-encoding
+            direct_ids = None if not isinstance(choice, dict) else self._choice_token_ids(choice)
+            if isinstance(direct_ids, list):
+                return direct_ids, [0.0] * len(direct_ids)
             token_ids = self.tokenizer.encode(text, add_special_tokens=False)
             return token_ids, [0.0] * len(token_ids)
 
+        content = logprobs_info.get("content", [])
+        if isinstance(content, list):
+            ids = []
+            logprobs = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                logprob = item.get("logprob")
+                if logprob is None:
+                    continue
+                token_id = item.get("token_id")
+                if token_id is None:
+                    ids = []
+                    break
+                ids.append(int(token_id))
+                logprobs.append(float(logprob))
+            if ids and len(ids) == len(logprobs):
+                return ids, logprobs
+
         tokens = logprobs_info.get("tokens", [])
         token_logprobs = logprobs_info.get("token_logprobs", [])
+        direct_ids = self._choice_token_ids(logprobs_info)
+        if direct_ids is None and isinstance(choice, dict):
+            direct_ids = self._choice_token_ids(choice)
+        if isinstance(direct_ids, list) and isinstance(token_logprobs, list):
+            logprobs = [
+                float(lp) if lp is not None else 0.0
+                for lp in token_logprobs
+            ]
+            return self._align_ids_and_logprobs(direct_ids, logprobs, prompt_ids)
 
         if tokens:
             # Primary path: convert token strings to IDs via tokenizer
@@ -122,6 +171,24 @@ class OpenAIEngine(InferenceEngine):
         # Fallback: re-encode text
         token_ids = self.tokenizer.encode(text, add_special_tokens=False)
         return token_ids, [0.0] * len(token_ids)
+
+    @staticmethod
+    def _choice_token_ids(payload):
+        raw_ids = payload.get("completion_ids") or payload.get("token_ids")
+        if isinstance(raw_ids, list):
+            return [int(token_id) for token_id in raw_ids]
+        return None
+
+    @staticmethod
+    def _align_ids_and_logprobs(ids, logprobs, prompt_ids):
+        if len(ids) > len(logprobs) and len(logprobs) > 0:
+            ids = ids[-len(logprobs):]
+        if len(ids) >= len(prompt_ids) and ids[:len(prompt_ids)] == prompt_ids:
+            ids = ids[len(prompt_ids):]
+            if len(logprobs) > len(ids):
+                logprobs = logprobs[-len(ids):]
+        n = min(len(ids), len(logprobs))
+        return list(ids[:n]), list(logprobs[:n])
 
     def reload_weights(self, adapter_path):
         """Tell the server to load/reload a LoRA adapter.

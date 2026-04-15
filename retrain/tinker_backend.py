@@ -12,11 +12,10 @@ Ports src/tinker_backend.mojo into pure Python.
 
 from __future__ import annotations
 
-import json
-import threading
 import time
 from pathlib import Path
 
+from retrain.logging_utils import JsonlLogger
 from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
 
 
@@ -71,11 +70,16 @@ class TinkerTrainHelper:
         self._grad_clip_norm = grad_clip_norm
         self._clip_ratio_c = clip_ratio_c
         self._sample_diag_path: Path | None = None
-        self._sample_diag_lock = threading.Lock()
+        self._sample_diag_logger: JsonlLogger | None = None
         if sample_log_dir:
             diag_dir = Path(sample_log_dir).resolve()
             diag_dir.mkdir(parents=True, exist_ok=True)
             self._sample_diag_path = diag_dir / "tinker_sample_diagnostics.jsonl"
+            self._sample_diag_logger = JsonlLogger(
+                str(self._sample_diag_path),
+                flush_every=8,
+                flush_interval_s=1.0,
+            )
             print(f"Tinker sample diagnostics: {self._sample_diag_path}")
         self._use_custom_ppo = clip_eps > 0
         if clip_eps > 0:
@@ -96,15 +100,11 @@ class TinkerTrainHelper:
         )
 
     def _write_sample_diag(self, payload: dict[str, object]) -> None:
-        if self._sample_diag_path is None:
+        if self._sample_diag_logger is None:
             return
         record = dict(payload)
         record.setdefault("ts", time.time())
-        line = json.dumps(record, sort_keys=True) + "\n"
-        with self._sample_diag_lock:
-            self._sample_diag_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._sample_diag_path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+        self._sample_diag_logger.log(record)
 
     def checkpoint(self, name: str) -> None:
         """Save weights and get a sampling client for the current checkpoint."""

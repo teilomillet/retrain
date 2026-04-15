@@ -32,6 +32,12 @@ from retrain.flow import (
 )
 from retrain.logging_utils import JsonlLogger
 from retrain.registry import get_registry
+from retrain.runtime_support import (
+    ExamplePromptCache,
+    TokenTextLookup,
+    decode_sequence_groups,
+    top_surprisal_entries,
+)
 from retrain.sepa import SEPAStateDict
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
@@ -484,7 +490,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
     metrics_logger = JsonlLogger(str(log_path / "metrics.jsonl"))
     steps_logger = JsonlLogger(str(emergence_dir / "steps.jsonl"))
-    generations_logger = JsonlLogger(str(emergence_dir / "generations.jsonl"))
+    generations_logger = JsonlLogger(
+        str(emergence_dir / "generations.jsonl"),
+        flush_every=32,
+        flush_interval_s=1.0,
+    )
 
     # -----------------------------------------------------------------------
     # 1. Seed for reproducibility
@@ -545,35 +555,25 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     )
 
     # -----------------------------------------------------------------------
-    # 4. Load tokenizer + vocab table
+    # 4. Load tokenizer + lazy token/prompt caches
     # -----------------------------------------------------------------------
     print(f"Loading tokenizer for {config.model} ...")
     tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
-    print("Loading vocabulary table...")
-    vocab_size = tokenizer.vocab_size  # type: ignore[unresolved-attribute]
-    if hasattr(tokenizer, "added_tokens_encoder"):
-        vocab_size += len(tokenizer.added_tokens_encoder)
-    all_ids = list(range(vocab_size))
-    vocab_table: list[str] = []
-    py_tokens = tokenizer.convert_ids_to_tokens(all_ids)  # type: ignore[unresolved-attribute]
-    for tok in py_tokens:
-        vocab_table.append(str(tok) if tok is not None else "")
-    print(f"Vocabulary table: {len(vocab_table)} entries")
+    token_lookup = TokenTextLookup(tokenizer)
+    prompt_cache = ExamplePromptCache(
+        tokenizer,
+        [ex.prompt for ex in examples],
+        encoder=encode_prompt_for_sampling,
+        preview_renderer=prompt_preview,
+    )
+    print("Token lookup: lazy")
+    print("Prompt encoding cache: lazy")
 
     # -----------------------------------------------------------------------
     # 4b. Planning detector
     # -----------------------------------------------------------------------
     detector = flow.planning_detector
     print(f"Planning detector: {config.planning_detector}")
-
-    # -----------------------------------------------------------------------
-    # 5. Pre-encode all prompts
-    # -----------------------------------------------------------------------
-    print("Pre-encoding prompts...")
-    pre_encoded_prompts: list[list[int]] = []
-    for ex in examples:
-        pre_encoded_prompts.append(encode_prompt_for_sampling(tokenizer, ex.prompt))
-    print(f"Pre-encoded {len(pre_encoded_prompts)} prompts")
 
     # -----------------------------------------------------------------------
     # 5. SEPA controller
@@ -880,8 +880,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             example_idx += 1
             ex = examples[ex_idx]
             batch_prompt_objs.append(ex.prompt)
-            batch_prompt_previews.append(prompt_preview(ex.prompt))
-            batch_prompt_ids.append(list(pre_encoded_prompts[ex_idx]))
+            batch_prompt_previews.append(prompt_cache.preview(ex_idx))
+            batch_prompt_ids.append(list(prompt_cache.prompt_ids(ex_idx)))
             batch_answers.append(ex.reference)
             batch_tasks.append(ex.task)
             batch_infos.append(ex.info)
@@ -962,7 +962,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 for turns in turns_G:
                     seq_logprobs: list[float] = []
                     seq_token_ids: list[int] = []
-                    seq_token_strs: list[str] = []
                     turn_logprobs: list[list[float]] = []
                     turn_token_ids: list[list[int]] = []
                     turn_prompt_ids: list[list[int]] = []
@@ -972,16 +971,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         turn_logprobs.append(list(turn.completion_logprobs))
                         seq_logprobs.extend(turn.completion_logprobs)
                         seq_token_ids.extend(turn.completion_ids)
-                        for tid in turn.completion_ids:
-                            seq_token_strs.append(
-                                vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
-                            )
                     logprobs_G.append(seq_logprobs)
                     turns_logprobs_G.append(turn_logprobs)
                     turns_token_ids_G.append(turn_token_ids)
                     turns_prompt_ids_G.append(turn_prompt_ids)
                     if needs_planning:
-                        planning_masks_G.append(detector.detect(seq_token_strs))  # type: ignore[unresolved-attribute]
+                        planning_masks_G.append(
+                            detector.detect(token_lookup.get_many(seq_token_ids))  # type: ignore[unresolved-attribute]
+                        )
                     else:
                         planning_masks_G.append([0] * len(seq_logprobs))
 
@@ -1163,29 +1160,17 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     # Useful for debugging DG gating and blog post analysis:
                     # shows which tokens the gate considers "fork-points".
                     if s_idx < len(logprobs_G) and logprobs_G[s_idx]:
-                        lps = logprobs_G[s_idx]
                         # Flatten token IDs for this sample
                         s_tids: list[int] = []
                         for t_idx2 in range(len(turns_token_ids_G[s_idx])):
                             s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
-                        n_tok = min(len(lps), len(s_tids))
-                        if n_tok > 0:
-                            indexed = [
-                                (i, -lps[i], s_tids[i])
-                                for i in range(n_tok)
-                            ]
-                            indexed.sort(key=lambda x: x[1], reverse=True)
-                            top_k = indexed[:10]
-                            gen_entry["top_surprisal_tokens"] = [
-                                {
-                                    "pos": pos,
-                                    "surprisal": round(surp, 4),
-                                    "token": vocab_table[tid]
-                                    if 0 <= tid < len(vocab_table)
-                                    else f"<{tid}>",
-                                }
-                                for pos, surp, tid in top_k
-                            ]
+                        top_entries = top_surprisal_entries(
+                            logprobs_G[s_idx],
+                            s_tids,
+                            token_lookup,
+                        )
+                        if top_entries:
+                            gen_entry["top_surprisal_tokens"] = top_entries
                     generations_logger.log(gen_entry)
             sample_time = time.perf_counter() - sample_start
         else:
@@ -1223,53 +1208,29 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 )
             sample_time = time.perf_counter() - sample_start
 
-            # Build flat token sequences for batch decode
-            all_token_seqs_flat: list[list[int]] = []
-            group_flat_offsets: list[int] = []
-
-            for group in all_group_sequences:
-                group_flat_offsets.append(len(all_token_seqs_flat))
-                for token_ids, _logprobs in group:
-                    all_token_seqs_flat.append(list(token_ids))
-
-            all_decoded_texts = tokenizer.batch_decode(  # type: ignore[unresolved-attribute]
-                all_token_seqs_flat, skip_special_tokens=True
+            decoded_groups = decode_sequence_groups(
+                tokenizer,
+                all_group_sequences,
+                needs_planning=needs_planning,
+                token_lookup=token_lookup if needs_planning else None,
+                detector=detector if needs_planning else None,
             )
 
-            for f_idx, group in enumerate(all_group_sequences):
+            for f_idx, decoded_group in enumerate(decoded_groups):
                 prompt_ids = batch_prompt_ids[f_idx]
                 answer = batch_answers[f_idx]
                 task = batch_tasks[f_idx]
                 info = batch_infos[f_idx]
                 prompt_obj = batch_prompt_objs[f_idx]
-                ob_len = len(prompt_ids)
-                flat_offset = group_flat_offsets[f_idx]
 
                 rewards_G: list[float] = []
                 logprobs_G: list[list[float]] = []
                 planning_masks_G: list[list[int]] = []
                 completion_texts_G: list[str] = []
-                turns_prompt_ids_G: list[list[list[int]]] = []
-                turns_token_ids_G: list[list[list[int]]] = []
-                turns_logprobs_G: list[list[list[float]]] = []
-
-                for s_idx, (seq_tokens, seq_logprobs) in enumerate(group):
-                    text = all_decoded_texts[flat_offset + s_idx]
-                    completion_texts_G.append(text)
-                    logprobs = list(seq_logprobs)
-                    logprobs_G.append(logprobs)
-                    turns_prompt_ids_G.append([list(prompt_ids)])
-                    turns_token_ids_G.append([list(seq_tokens)])
-                    turns_logprobs_G.append([logprobs])
-
-                    if needs_planning:
-                        token_strs = [
-                            vocab_table[tid] if 0 <= tid < len(vocab_table) else ""
-                            for tid in seq_tokens
-                        ]
-                        planning_masks_G.append(detector.detect(token_strs))  # type: ignore[unresolved-attribute]
-                    else:
-                        planning_masks_G.append([0] * len(logprobs))
+                for sample in decoded_group:
+                    completion_texts_G.append(sample.text)
+                    logprobs_G.append(sample.logprobs)
+                    planning_masks_G.append(sample.planning_mask)
 
                 if verifiers_env is None:
                     assert reward_fn is not None
@@ -1293,9 +1254,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     if r > _CORRECT_THRESHOLD:
                         batch_correct += 1
 
-                for seq_tokens, _ in group:
+                for sample in decoded_group:
                     batch_total_completions += 1
-                    if len(seq_tokens) >= config.max_tokens:
+                    if len(sample.token_ids) >= config.max_tokens:
                         batch_max_token_hits += 1
 
                 group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
@@ -1368,51 +1329,30 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 if adv_result.extra_metrics:
                     batch_adv_results.append(adv_result)
 
-                for s_idx in range(len(rewards_G)):
-                    token_advs = all_token_advs_G[s_idx]
-                    offset = 0
-                    for t_idx in range(len(turns_token_ids_G[s_idx])):
-                        seq_tokens = turns_token_ids_G[s_idx][t_idx]
-                        seq_logprobs = turns_logprobs_G[s_idx][t_idx]
-                        turn_prompt_ids = turns_prompt_ids_G[s_idx][t_idx]
-                        seq_advs = token_advs[offset : offset + len(seq_tokens)]
-                        offset += len(seq_tokens)
-                        full_tokens = list(turn_prompt_ids) + list(seq_tokens)
-                        padded_logprobs = [0.0] * len(turn_prompt_ids) + list(seq_logprobs)
-                        padded_advantages = [0.0] * len(turn_prompt_ids) + list(seq_advs)
-                        all_datum_tokens.append(full_tokens)
-                        all_datum_logprobs.append(padded_logprobs)
-                        all_datum_advantages.append(padded_advantages)
+                for sample, token_advs in zip(decoded_group, all_token_advs_G):
+                    full_tokens = list(prompt_ids) + list(sample.token_ids)
+                    padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
+                    padded_advantages = [0.0] * len(prompt_ids) + list(token_advs)
+                    all_datum_tokens.append(full_tokens)
+                    all_datum_logprobs.append(padded_logprobs)
+                    all_datum_advantages.append(padded_advantages)
 
-                for s_idx, comp_text in enumerate(completion_texts_G):
+                for s_idx, sample in enumerate(decoded_group):
                     gen_entry: dict[str, object] = {
                         "step": batch_idx,
                         "prompt": batch_prompt_previews[f_idx],
-                        "completion": comp_text[:500],
+                        "completion": sample.text[:500],
                         "reward": rewards_G[s_idx],
-                        "num_tokens": len(logprobs_G[s_idx]),
+                        "num_tokens": len(sample.logprobs),
                     }
                     # Top-K highest surprisal tokens with decoded text
-                    if s_idx < len(logprobs_G) and logprobs_G[s_idx]:
-                        lps = logprobs_G[s_idx]
-                        tids = turns_token_ids_G[s_idx][0] if turns_token_ids_G[s_idx] else []
-                        n_tok = min(len(lps), len(tids))
-                        if n_tok > 0:
-                            indexed = sorted(
-                                [(i, -lps[i], tids[i]) for i in range(n_tok)],
-                                key=lambda x: x[1],
-                                reverse=True,
-                            )
-                            gen_entry["top_surprisal_tokens"] = [
-                                {
-                                    "pos": p,
-                                    "surprisal": round(s, 4),
-                                    "token": vocab_table[t]
-                                    if 0 <= t < len(vocab_table)
-                                    else f"<{t}>",
-                                }
-                                for p, s, t in indexed[:10]
-                            ]
+                    top_entries = top_surprisal_entries(
+                        sample.logprobs,
+                        sample.token_ids,
+                        token_lookup,
+                    )
+                    if top_entries:
+                        gen_entry["top_surprisal_tokens"] = top_entries
                     generations_logger.log(gen_entry)
 
         # 10e. SEPA state updates
@@ -1820,5 +1760,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
     if wandb_enabled and wandb_run is not None:
         wandb_run.finish()
+    metrics_logger.close()
+    steps_logger.close()
+    generations_logger.close()
 
     return final_path
