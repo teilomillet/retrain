@@ -34,10 +34,20 @@ class RegexPlanningDetector:
     """Backward-compatible regex/strategic-gram detector."""
 
     def __init__(self, strategic_grams: list[str]) -> None:
-        from retrain.advantages import _get_gram_patterns
-
         self._grams = strategic_grams
-        self._patterns = _get_gram_patterns(strategic_grams)
+        self._pattern = (
+            re.compile(
+                "(?:"
+                + "|".join(
+                    r"\b" + re.escape(gram) + r"\b"
+                    for gram in strategic_grams
+                )
+                + ")",
+                re.IGNORECASE,
+            )
+            if strategic_grams
+            else None
+        )
         self._effective_window = (
             max(5, max(len(gram.split()) for gram in strategic_grams))
             if strategic_grams
@@ -49,7 +59,7 @@ class RegexPlanningDetector:
         n_tokens = len(token_strs)
         if n_tokens == 0:
             return []
-        if not self._patterns:
+        if self._pattern is None:
             return [0] * n_tokens
 
         cleaned: list[str] = []
@@ -63,25 +73,20 @@ class RegexPlanningDetector:
             cleaned.append(cleaned_token)
 
         mask = [0] * n_tokens
-        patterns = self._patterns
+        pattern = self._pattern
         effective_window = self._effective_window
         for start in range(n_tokens):
             window_text = ""
             window_end = min(start + effective_window, n_tokens)
-            matched = False
             for end in range(start, window_end):
                 if cleaned[end]:
                     if window_text:
                         window_text += " " + cleaned[end]
                     else:
                         window_text = cleaned[end]
-                for pat in patterns:
-                    if pat.search(window_text):
-                        for idx in range(start, end + 1):
-                            mask[idx] = 1
-                        matched = True
-                        break
-                if matched:
+                if pattern.search(window_text):
+                    for idx in range(start, end + 1):
+                        mask[idx] = 1
                     break
         return mask
 
