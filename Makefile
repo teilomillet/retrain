@@ -12,6 +12,8 @@ TYPECHECK_PATHS = \
 	retrain/prime_rl_backend.py \
 	retrain/verifiers_bridge.py
 
+VENV_PYTHON = .venv/bin/python
+
 all: setup build
 
 setup:
@@ -46,7 +48,7 @@ typecheck:
 	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
 
 chaos-backend-workflow:
-	UV_CACHE_DIR=$(CURDIR)/.uv-cache uv run python scripts/run_backend_workflow_chaos.py
+	UV_CACHE_DIR=$(CURDIR)/.uv-cache $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),uv run python) scripts/run_backend_workflow_chaos.py
 
 run: retrain-tinker
 	./retrain-tinker
