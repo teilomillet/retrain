@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+
+from retrain.json_utils import JSONDecodeError, loads
 
 
 JsonObject = dict[str, object]
@@ -25,14 +26,14 @@ def int_or_none(value: object) -> int | None:
 
 def iter_jsonl_objects(path: Path) -> Iterator[JsonObject]:
     """Yield JSON-object rows from a JSONL file, skipping blank/bad lines."""
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
+    with open(path, "rb") as handle:
+        for raw_line in handle:
+            raw_line = raw_line.strip()
+            if not raw_line:
                 continue
             try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
+                payload = loads(raw_line)
+            except JSONDecodeError:
                 continue
             if isinstance(payload, dict):
                 yield payload

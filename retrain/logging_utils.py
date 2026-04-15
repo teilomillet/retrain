@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
+
+from retrain.json_utils import dumps_jsonl
 
 
 class JsonlLogger:
@@ -115,4 +116,4 @@ class JsonlLogger:
             self._flush_locked()
 
     def _encode_entry(self, entry: dict) -> str:
-        return json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
+        return dumps_jsonl(entry)

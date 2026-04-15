@@ -17,6 +17,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from retrain.json_utils import JSONDecodeError, loads
+
 
 _RECENT_DIAG_LIMIT = 256
 _ACTIVE_AGE_SECONDS = 10 * 60
@@ -87,12 +89,12 @@ def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
     lines = b"".join(reversed(chunks)).splitlines()[-limit:]
     rows: deque[JsonObject] = deque(maxlen=limit)
     for raw_line in lines:
-        line = raw_line.decode("utf-8", errors="ignore").strip()
-        if not line:
+        raw_line = raw_line.strip()
+        if not raw_line:
             continue
         try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
+            payload = loads(raw_line)
+        except JSONDecodeError:
             continue
         if isinstance(payload, dict):
             rows.append(payload)
