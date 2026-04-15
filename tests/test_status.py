@@ -76,7 +76,18 @@ class TestScanRun:
             run_dir / "metrics.jsonl",
             [
                 {"step": 0, "condition": "grpo+none", "loss": 1.0, "mean_reward": 0.1, "correct_rate": 0.05, "step_time_s": 10.0},
-                {"step": 1, "condition": "grpo+none", "loss": 0.8, "mean_reward": 0.3, "correct_rate": 0.15, "step_time_s": 12.0},
+                {
+                    "step": 1,
+                    "condition": "grpo+none",
+                    "loss": 0.8,
+                    "mean_reward": 0.3,
+                    "correct_rate": 0.15,
+                    "step_time_s": 12.0,
+                    "tokens_per_second": 96.0,
+                    "sample_share": 0.6,
+                    "train_share": 0.3,
+                    "process_max_rss_mb": 1024.0,
+                },
             ],
         )
         result = scan_run(run_dir)
@@ -86,6 +97,10 @@ class TestScanRun:
         assert result.loss == 0.8
         assert result.correct_rate == 0.15
         assert result.wall_time_s == pytest.approx(22.0)
+        assert result.tokens_per_second == pytest.approx(96.0)
+        assert result.sample_share == pytest.approx(0.6)
+        assert result.train_share == pytest.approx(0.3)
+        assert result.process_max_rss_mb == pytest.approx(1024.0)
         assert not result.completed
 
     def test_completed_run(self, tmp_path):
@@ -259,6 +274,29 @@ class TestCampaignStatus:
             RunSummary(path="r2", completed=False, stale=True, step=20),
         ]
         assert campaign_status(runs, num_runs=2) == "dead"
+
+
+class TestFormattingPerf:
+    def test_format_run_includes_perf_metrics(self):
+        run = RunSummary(
+            path="/tmp/run",
+            condition="grpo+none",
+            step=3,
+            correct_rate=0.25,
+            loss=0.5,
+            wall_time_s=12.0,
+            latest_step_time_s=3.5,
+            tokens_per_second=64.0,
+            sample_share=0.5,
+            process_max_rss_mb=512.0,
+        )
+
+        text = format_run(run)
+
+        assert "tok/s=64.0" in text
+        assert "sample=50%" in text
+        assert "step_t=3.5s" in text
+        assert "rss=512MB" in text
 
     def test_dead_when_no_runs(self):
         assert campaign_status([], num_runs=4) == "dead"

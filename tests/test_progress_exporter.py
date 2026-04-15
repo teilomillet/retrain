@@ -31,6 +31,10 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
                 "behavior/invalid_action_rate": 0.25,
                 "behavior/avg_response_chars": 612.0,
                 "step_time_s": 91.5,
+                "tokens_per_second": 128.0,
+                "sample_share": 0.7,
+                "train_share": 0.2,
+                "process_max_rss_mb": 2048.0,
             }
         ],
     )
@@ -76,6 +80,10 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
     assert snapshot.latest_max_token_hit_rate == 0.125
     assert snapshot.latest_invalid_action_rate == 0.25
     assert snapshot.latest_avg_response_chars == 612.0
+    assert snapshot.latest_tokens_per_second == 128.0
+    assert snapshot.latest_sample_share == 0.7
+    assert snapshot.latest_train_share == 0.2
+    assert snapshot.latest_process_max_rss_mb == 2048.0
     assert snapshot.recent_dispatch_count == 2
     assert snapshot.recent_result_count == 2
     assert snapshot.recent_error_count == 1
@@ -112,3 +120,4 @@ def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> Non
     assert 'run="energy-sft-demo"' in text
     assert "soma_retrain_recent_completion_tokens_max" in text
     assert "soma_retrain_sample_result_age_seconds" in text
+    assert "soma_retrain_latest_tokens_per_second" in text

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Protocol
 
 from retrain.type_defs import PromptLike
@@ -26,15 +26,40 @@ class _PlanningDetector(Protocol):
     def detect(self, token_strs: list[str]) -> list[int]: ...
 
 
+@dataclass
+class RuntimeCounters:
+    """Cumulative runtime counters for trainer-side decode/cache work."""
+
+    prompt_encode_calls: int = 0
+    prompt_preview_calls: int = 0
+    token_lookup_requests: int = 0
+    token_lookup_convert_calls: int = 0
+    token_lookup_cache_misses: int = 0
+    batch_decode_calls: int = 0
+    batch_decoded_sequences: int = 0
+
+    def metrics(self) -> dict[str, int]:
+        """Return a JSON-friendly snapshot of the counters."""
+        return dict(asdict(self))
+
+
 class TokenTextLookup:
     """Lazy token-id to string lookup with incremental caching."""
 
-    def __init__(self, tokenizer: object) -> None:
+    def __init__(
+        self,
+        tokenizer: object,
+        *,
+        counters: RuntimeCounters | None = None,
+    ) -> None:
         self._tokenizer = tokenizer
         self._cache: dict[int, str] = {}
+        self._counters = counters
 
     def get_many(self, token_ids: Sequence[int]) -> list[str]:
         """Resolve token ids to strings, batching only the cache misses."""
+        if self._counters is not None:
+            self._counters.token_lookup_requests += len(token_ids)
         missing: list[int] = []
         seen_missing: set[int] = set()
         for token_id in token_ids:
@@ -53,6 +78,9 @@ class TokenTextLookup:
             raw_tokens = tokenizer_typed.convert_ids_to_tokens(missing)  # type: ignore[unresolved-attribute]
             for token_id, token in zip(missing, raw_tokens):
                 self._cache[token_id] = str(token) if token is not None else ""
+            if self._counters is not None:
+                self._counters.token_lookup_convert_calls += 1
+                self._counters.token_lookup_cache_misses += len(missing)
 
         return [self._cache.get(token_id, "") if token_id >= 0 else "" for token_id in token_ids]
 
@@ -72,6 +100,7 @@ class ExamplePromptCache:
         *,
         encoder: Callable[[object, PromptLike], list[int]] = encode_prompt_for_sampling,
         preview_renderer: Callable[[PromptLike], str] = prompt_preview,
+        counters: RuntimeCounters | None = None,
     ) -> None:
         self._tokenizer = tokenizer
         self._prompts = list(prompts)
@@ -79,6 +108,7 @@ class ExamplePromptCache:
         self._preview_renderer = preview_renderer
         self._prompt_ids: dict[int, list[int]] = {}
         self._previews: dict[int, str] = {}
+        self._counters = counters
 
     def prompt_ids(self, index: int) -> list[int]:
         """Return cached prompt ids for ``index``, encoding on first use."""
@@ -87,12 +117,16 @@ class ExamplePromptCache:
                 self._tokenizer,
                 self._prompts[index],
             )
+            if self._counters is not None:
+                self._counters.prompt_encode_calls += 1
         return self._prompt_ids[index]
 
     def preview(self, index: int) -> str:
         """Return cached prompt preview text for ``index``."""
         if index not in self._previews:
             self._previews[index] = self._preview_renderer(self._prompts[index])
+            if self._counters is not None:
+                self._counters.prompt_preview_calls += 1
         return self._previews[index]
 
 
@@ -113,6 +147,7 @@ def decode_sequence_groups(
     needs_planning: bool,
     token_lookup: TokenTextLookup | None = None,
     detector: object | None = None,
+    counters: RuntimeCounters | None = None,
 ) -> list[list[DecodedSequence]]:
     """Decode grouped token sequences once and attach planning masks."""
     flat_token_ids: list[list[int]] = []
@@ -132,6 +167,9 @@ def decode_sequence_groups(
             flat_token_ids,
             skip_special_tokens=True,
         )
+        if counters is not None:
+            counters.batch_decode_calls += 1
+            counters.batch_decoded_sequences += len(flat_token_ids)
     else:
         decoded_texts = []
 

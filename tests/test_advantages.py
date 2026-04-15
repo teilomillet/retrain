@@ -256,6 +256,12 @@ class TestPlanningTokens:
         mask = identify_planning_tokens(tokens, grams)
         assert mask == [1, 1, 1]
 
+    def test_punctuation_and_apostrophes(self):
+        tokens = ["that's", "not", "right,", "let", "me", "check."]
+        grams = ["that's not right", "let me check"]
+        mask = identify_planning_tokens(tokens, grams)
+        assert mask == [1, 1, 1, 1, 1, 1]
+
 
 # ---------------------------------------------------------------------------
 # Entropy masking (Yue et al.)

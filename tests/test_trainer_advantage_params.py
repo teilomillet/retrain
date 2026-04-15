@@ -85,6 +85,27 @@ class _FakeHelper:
         _ = name
 
 
+class _RewardOrderedFakeHelper(_FakeHelper):
+    def sample(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> list[list[tuple[list[int], list[float]]]]:
+        _ = num_samples, max_tokens, temperature, top_p
+        groups: list[list[tuple[list[int], list[float]]]] = []
+        for _prompt_ids in prompt_ids_list:
+            groups.append(
+                [
+                    ([13], [-0.2]),
+                    ([42], [-0.1]),
+                ]
+            )
+        return groups
+
+
 def _make_fake_flow(cfg, helper):
     """Build a Tier-1 flow, then inject fake Tier-2 objects."""
     from retrain.sepa import SEPAController
@@ -462,3 +483,282 @@ def test_tinker_entropy_stats_pipeline_does_not_break(monkeypatch, tmp_path):
     assert "exec_entropy_var" in step_metrics
     assert math.isfinite(float(step_metrics["exec_entropy_mean"]))
     assert math.isfinite(float(step_metrics["exec_entropy_var"]))
+
+
+def test_train_generation_logging_defaults_skip_surprisal_tokens(
+    monkeypatch,
+    tmp_path,
+):
+    helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="grpo",
+        transform_mode="none",
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    generations_path = Path(cfg.log_dir) / "emergence" / "generations.jsonl"
+    entries = [
+        json.loads(line)
+        for line in generations_path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(entries) == 1
+    assert entries[0]["completion"] == "\\boxed{42}"
+    assert all("top_surprisal_tokens" not in entry for entry in entries)
+
+
+def test_train_generation_logging_can_limit_density_and_enable_surprisal(
+    monkeypatch,
+    tmp_path,
+):
+    helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="grpo",
+        transform_mode="none",
+        generation_log_samples_per_prompt=1,
+        generation_top_surprisal_limit=1,
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    generations_path = Path(cfg.log_dir) / "emergence" / "generations.jsonl"
+    entries = [
+        json.loads(line)
+        for line in generations_path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(entries) == 1
+    assert entries[0]["completion"] == "\\boxed{42}"
+    assert entries[0]["top_surprisal_tokens"] == [
+        {"pos": 0, "surprisal": 0.1, "token": "42"},
+    ]
+
+
+def test_train_generation_logging_prefers_high_reward_samples(
+    monkeypatch,
+    tmp_path,
+):
+    helper = _RewardOrderedFakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="grpo",
+        transform_mode="none",
+        generation_log_samples_per_prompt=1,
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    generations_path = Path(cfg.log_dir) / "emergence" / "generations.jsonl"
+    entries = [
+        json.loads(line)
+        for line in generations_path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(entries) == 1
+    assert entries[0]["completion"] == "\\boxed{42}"
+
+
+def test_train_can_disable_generation_logging(monkeypatch, tmp_path):
+    helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="2+2?",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda response, reference: (
+                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                    )
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        advantage_mode="grpo",
+        transform_mode="none",
+        log_generations=False,
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    generations_path = Path(cfg.log_dir) / "emergence" / "generations.jsonl"
+    assert not generations_path.exists()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
@@ -44,24 +45,18 @@ class JsonlLogger:
         if not self.enabled:
             return
 
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        line = self._encode_entry(entry)
         with self._lock:
-            self._buffer.append(line)
-            should_flush = len(self._buffer) >= self.flush_every
-            if (
-                not should_flush
-                and self.flush_interval_s is not None
-                and self.flush_interval_s == 0.0
-            ):
-                should_flush = True
-            if (
-                not should_flush
-                and self.flush_interval_s is not None
-                and (time.monotonic() - self._last_flush) >= self.flush_interval_s
-            ):
-                should_flush = True
-            if should_flush:
-                self._flush_locked()
+            self._append_lines_locked([line])
+
+    def log_many(self, entries: Sequence[dict]) -> None:
+        """Write multiple dicts as JSONL records with one lock acquisition."""
+        if not self.enabled or not entries:
+            return
+
+        lines = [self._encode_entry(entry) for entry in entries]
+        with self._lock:
+            self._append_lines_locked(lines)
 
     def flush(self) -> None:
         """Flush buffered rows to disk."""
@@ -100,3 +95,24 @@ class JsonlLogger:
         self._handle.flush()
         self._buffer.clear()
         self._last_flush = time.monotonic()
+
+    def _append_lines_locked(self, lines: Sequence[str]) -> None:
+        self._buffer.extend(lines)
+        should_flush = len(self._buffer) >= self.flush_every
+        if (
+            not should_flush
+            and self.flush_interval_s is not None
+            and self.flush_interval_s == 0.0
+        ):
+            should_flush = True
+        if (
+            not should_flush
+            and self.flush_interval_s is not None
+            and (time.monotonic() - self._last_flush) >= self.flush_interval_s
+        ):
+            should_flush = True
+        if should_flush:
+            self._flush_locked()
+
+    def _encode_entry(self, entry: dict) -> str:
+        return json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"

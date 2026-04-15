@@ -40,6 +40,8 @@ class OpenAIEngine(InferenceEngine):
         # Adapter tracking
         self._current_adapter_path = None
         self._prompt_text_cache: dict[tuple[int, ...], str] = {}
+        self._prompt_decode_calls = 0
+        self._prompt_cache_hits = 0
 
         print(f"OpenAIEngine ready ({engine_type} @ {self.base_url}).")
 
@@ -94,12 +96,23 @@ class OpenAIEngine(InferenceEngine):
         key = tuple(prompt_ids)
         prompt_text = self._prompt_text_cache.get(key)
         if prompt_text is None:
+            self._prompt_decode_calls += 1
             prompt_text = self.tokenizer.decode(
                 prompt_ids,
                 skip_special_tokens=False,
             )
             self._prompt_text_cache[key] = prompt_text
+        else:
+            self._prompt_cache_hits += 1
         return prompt_text
+
+    def performance_counters(self):
+        """Return cumulative prompt-decode cache counters."""
+        return {
+            "engine_prompt_decode_calls": self._prompt_decode_calls,
+            "engine_prompt_cache_hits": self._prompt_cache_hits,
+            "engine_prompt_cache_size": len(self._prompt_text_cache),
+        }
 
     def _recover_tokens(self, prompt_ids, text, logprobs_info, choice=None):
         """Recover token IDs and logprobs from API response.

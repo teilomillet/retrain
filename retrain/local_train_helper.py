@@ -314,6 +314,14 @@ class LocalTrainHelper:
             results.append(converted)
         return results
 
+    def runtime_metrics(self):
+        """Expose optional engine-level runtime counters to the trainer."""
+        if hasattr(self.engine, "performance_counters"):
+            counters = self.engine.performance_counters()
+            if isinstance(counters, dict):
+                return dict(counters)
+        return {}
+
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
         """Execute training forward/backward/step on pre-prepared tensors.
 

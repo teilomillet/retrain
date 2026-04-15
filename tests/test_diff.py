@@ -37,6 +37,12 @@ def _make_entries(n: int, loss_start: float = 1.0, cr_end: float = 0.5) -> list[
                 "correct_rate": cr_end * t,
                 "mean_reward": cr_end * t * 2,
                 "step_time_s": 1.0,
+                "sample_time_s": 0.6,
+                "train_time_s": 0.3,
+                "tokens_per_second": 100.0 + i,
+                "sample_share": 0.6,
+                "train_share": 0.3,
+                "process_max_rss_mb": 512.0 + i,
             }
         )
     return entries
@@ -121,6 +127,8 @@ class TestDiffRuns:
         assert result.final_a["correct_rate"] < result.final_b["correct_rate"]
         assert len(result.curve_a) == 10
         assert len(result.curve_b) == 10
+        assert result.perf_a["mean_step_time_s"] == pytest.approx(1.0)
+        assert result.perf_a["mean_sample_share"] == pytest.approx(0.6)
 
     def test_diff_missing_run(self, tmp_path):
         _write_metrics(tmp_path / "a", _make_entries(5))
@@ -199,6 +207,8 @@ class TestFormatDiff:
         assert "mean_reward" in text
         assert "wall_time" in text
         assert "steps" in text
+        assert "performance:" in text
+        assert "mean_tokens_per_second" in text
         assert "correct_rate curves:" in text
 
     def test_format_shows_winner(self, tmp_path):

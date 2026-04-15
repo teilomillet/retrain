@@ -63,3 +63,14 @@ class TestJsonlLogger:
             lines = [json.loads(line) for line in f]
 
         assert lines == [{"step": 0}, {"step": 1}]
+
+    def test_log_many_writes_multiple_rows(self, tmp_path):
+        path = str(tmp_path / "many.jsonl")
+        logger = JsonlLogger(path, flush_every=8)
+        logger.log_many([{"step": 0}, {"step": 1}, {"step": 2}])
+        logger.close()
+
+        with open(path) as f:
+            lines = [json.loads(line) for line in f]
+
+        assert lines == [{"step": 0}, {"step": 1}, {"step": 2}]

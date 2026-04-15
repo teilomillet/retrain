@@ -228,6 +228,9 @@ class TrainConfig:
     wandb_entity: str = ""
     wandb_group: str = ""
     wandb_tags: str = ""
+    log_generations: bool = True
+    generation_log_samples_per_prompt: int = 1
+    generation_top_surprisal_limit: int = 0
 
     # Plugin loading
     plugins_search_paths: list[str] = field(default_factory=lambda: ["plugins"])
@@ -296,6 +299,16 @@ class TrainConfig:
         if self.adv_clip_max < 0:
             errors.append(
                 "adv_clip_max must be >= 0. Try: adv_clip_max = 5.0"
+            )
+        if self.generation_log_samples_per_prompt < 0:
+            errors.append(
+                "generation_log_samples_per_prompt must be >= 0. "
+                "Try: generation_log_samples_per_prompt = 2"
+            )
+        if self.generation_top_surprisal_limit < 0:
+            errors.append(
+                "generation_top_surprisal_limit must be >= 0. "
+                "Try: generation_top_surprisal_limit = 5"
             )
         try:
             self.uncertainty_kind = canonicalize_uncertainty_kind(
@@ -642,6 +655,9 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "wandb_entity": "wandb_entity",
         "wandb_group": "wandb_group",
         "wandb_tags": "wandb_tags",
+        "log_generations": "log_generations",
+        "generation_log_samples_per_prompt": "generation_log_samples_per_prompt",
+        "generation_top_surprisal_limit": "generation_top_surprisal_limit",
         "strategic_grams": "strategic_grams",
     },
     "plugins": {

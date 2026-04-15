@@ -88,6 +88,11 @@ class RunSummary:
     pid: int = 0
     alive: bool = False
     trainer: str = ""
+    latest_step_time_s: float = 0.0
+    tokens_per_second: float = 0.0
+    sample_share: float = 0.0
+    train_share: float = 0.0
+    process_max_rss_mb: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -212,6 +217,11 @@ def scan_run(run_dir: Path) -> RunSummary | None:
         summary.correct_rate = last_entry.get("correct_rate", 0.0)
         summary.loss = last_entry.get("loss", 0.0)
         summary.mean_reward = last_entry.get("mean_reward", 0.0)
+        summary.latest_step_time_s = last_entry.get("step_time_s", 0.0)
+        summary.tokens_per_second = last_entry.get("tokens_per_second", 0.0)
+        summary.sample_share = last_entry.get("sample_share", 0.0)
+        summary.train_share = last_entry.get("train_share", 0.0)
+        summary.process_max_rss_mb = last_entry.get("process_max_rss_mb", 0.0)
     summary.wall_time_s = wall_time
 
     # Check trainer_state.json for completion
@@ -453,11 +463,21 @@ def format_run(run: RunSummary) -> str:
     status = "done" if run.completed else ("stale" if run.stale else "running")
     cond = run.condition or "unknown"
     t = format_time(run.wall_time_s)
+    perf_parts: list[str] = []
+    if run.tokens_per_second > 0:
+        perf_parts.append(f"tok/s={run.tokens_per_second:.1f}")
+    if run.sample_share > 0:
+        perf_parts.append(f"sample={run.sample_share:.0%}")
+    if run.latest_step_time_s > 0:
+        perf_parts.append(f"step_t={run.latest_step_time_s:.1f}s")
+    if run.process_max_rss_mb > 0:
+        perf_parts.append(f"rss={run.process_max_rss_mb:.0f}MB")
+    perf_tag = f"  {'  '.join(perf_parts)}" if perf_parts else ""
     trainer_tag = f"  trainer={run.trainer}" if run.trainer else ""
     return (
         f"  {run.path:40s}  {cond:20s}  step={run.step:>4d}  "
         f"cr={run.correct_rate:.1%}  loss={run.loss:.4f}  "
-        f"time={t:>8s}  [{status}]{trainer_tag}"
+        f"time={t:>8s}  [{status}]{perf_tag}{trainer_tag}"
     )
 
 

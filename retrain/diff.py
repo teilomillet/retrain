@@ -22,6 +22,12 @@ class MetricsEntry:
     correct_rate: float
     mean_reward: float
     step_time_s: float
+    sample_time_s: float | None = None
+    train_time_s: float | None = None
+    tokens_per_second: float | None = None
+    sample_share: float | None = None
+    train_share: float | None = None
+    process_max_rss_mb: float | None = None
 
 
 @dataclass
@@ -32,6 +38,8 @@ class DiffResult:
     label_b: str
     final_a: dict[str, float] = field(default_factory=dict)
     final_b: dict[str, float] = field(default_factory=dict)
+    perf_a: dict[str, float] = field(default_factory=dict)
+    perf_b: dict[str, float] = field(default_factory=dict)
     wall_time_a: float = 0.0
     wall_time_b: float = 0.0
     steps_a: int = 0
@@ -80,9 +88,21 @@ def _winner(metric: str, val_a: float, val_b: float) -> str:
     """
     if abs(val_a - val_b) < 1e-9:
         return "="
-    if metric == "loss":
+    if metric in {
+        "loss",
+        "mean_step_time_s",
+        "mean_sample_time_s",
+        "mean_train_time_s",
+        "peak_process_max_rss_mb",
+    }:
         return "<" if val_a < val_b else ">"
     return ">" if val_a > val_b else "<"
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
 
 
 def load_metrics(run_dir: Path) -> list[MetricsEntry]:
@@ -108,6 +128,12 @@ def load_metrics(run_dir: Path) -> list[MetricsEntry]:
                     correct_rate=d.get("correct_rate", 0.0),
                     mean_reward=d.get("mean_reward", 0.0),
                     step_time_s=d.get("step_time_s", 0.0),
+                    sample_time_s=_float_or_none(d.get("sample_time_s")),
+                    train_time_s=_float_or_none(d.get("train_time_s")),
+                    tokens_per_second=_float_or_none(d.get("tokens_per_second")),
+                    sample_share=_float_or_none(d.get("sample_share")),
+                    train_share=_float_or_none(d.get("train_share")),
+                    process_max_rss_mb=_float_or_none(d.get("process_max_rss_mb")),
                 )
             )
     return entries
@@ -129,6 +155,42 @@ def _wall_time(entries: list[MetricsEntry]) -> float:
     return sum(e.step_time_s for e in entries)
 
 
+def _mean_optional(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return sum(present) / len(present)
+
+
+def _max_optional(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return max(present)
+
+
+def _perf_metrics(entries: list[MetricsEntry]) -> dict[str, float]:
+    if not entries:
+        return {}
+    perf: dict[str, float] = {
+        "mean_step_time_s": _wall_time(entries) / len(entries),
+    }
+    optional_means = {
+        "mean_sample_time_s": _mean_optional([e.sample_time_s for e in entries]),
+        "mean_train_time_s": _mean_optional([e.train_time_s for e in entries]),
+        "mean_tokens_per_second": _mean_optional([e.tokens_per_second for e in entries]),
+        "mean_sample_share": _mean_optional([e.sample_share for e in entries]),
+        "mean_train_share": _mean_optional([e.train_share for e in entries]),
+    }
+    for key, value in optional_means.items():
+        if value is not None:
+            perf[key] = value
+    peak_rss = _max_optional([e.process_max_rss_mb for e in entries])
+    if peak_rss is not None:
+        perf["peak_process_max_rss_mb"] = peak_rss
+    return perf
+
+
 def diff_runs(dir_a: Path, dir_b: Path) -> DiffResult:
     """Compare two individual run directories."""
     entries_a = load_metrics(dir_a)
@@ -139,6 +201,8 @@ def diff_runs(dir_a: Path, dir_b: Path) -> DiffResult:
         label_b=str(dir_b),
         final_a=_final_metrics(entries_a),
         final_b=_final_metrics(entries_b),
+        perf_a=_perf_metrics(entries_a),
+        perf_b=_perf_metrics(entries_b),
         wall_time_a=_wall_time(entries_a),
         wall_time_b=_wall_time(entries_b),
         steps_a=len(entries_a),
@@ -189,6 +253,16 @@ def diff_conditions(
     def _avg_wall(runs: list[list[MetricsEntry]]) -> float:
         return sum(_wall_time(r) for r in runs) / len(runs)
 
+    def _avg_perf(runs: list[list[MetricsEntry]]) -> dict[str, float]:
+        per_run = [_perf_metrics(run) for run in runs]
+        keys = {key for metrics in per_run for key in metrics}
+        result: dict[str, float] = {}
+        for key in keys:
+            vals = [metrics[key] for metrics in per_run if key in metrics]
+            if vals:
+                result[key] = sum(vals) / len(vals)
+        return result
+
     def _avg_curve(runs: list[list[MetricsEntry]]) -> list[float]:
         max_len = max(len(r) for r in runs)
         curve = []
@@ -205,6 +279,8 @@ def diff_conditions(
         label_b=cond_b,
         final_a=_avg_finals(runs_a),
         final_b=_avg_finals(runs_b),
+        perf_a=_avg_perf(runs_a),
+        perf_b=_avg_perf(runs_b),
         wall_time_a=_avg_wall(runs_a),
         wall_time_b=_avg_wall(runs_b),
         steps_a=_avg_steps(runs_a),
@@ -243,6 +319,40 @@ def format_diff(result: DiffResult) -> str:
 
     # Steps
     lines.append(f"  {'steps':>15s}  {str(result.steps_a):>{w_label}s}  {str(result.steps_b):>{w_label}s}")
+
+    perf_order = [
+        ("mean_step_time_s", "s"),
+        ("mean_sample_time_s", "s"),
+        ("mean_train_time_s", "s"),
+        ("mean_tokens_per_second", ""),
+        ("mean_sample_share", "%"),
+        ("mean_train_share", "%"),
+        ("peak_process_max_rss_mb", "MB"),
+    ]
+    perf_lines: list[str] = []
+    for metric, unit in perf_order:
+        if metric not in result.perf_a and metric not in result.perf_b:
+            continue
+        va = result.perf_a.get(metric)
+        vb = result.perf_b.get(metric)
+        if va is None or vb is None:
+            continue
+        win = _winner(metric, va, vb)
+        if unit == "%":
+            fmt_a, fmt_b = f"{va:.1%}", f"{vb:.1%}"
+        elif unit == "MB":
+            fmt_a, fmt_b = f"{va:.1f}MB", f"{vb:.1f}MB"
+        elif unit == "s":
+            fmt_a, fmt_b = f"{va:.3f}s", f"{vb:.3f}s"
+        else:
+            fmt_a, fmt_b = f"{va:.3f}", f"{vb:.3f}"
+        perf_lines.append(
+            f"  {metric:>15s}  {fmt_a:>{w_label}s}  {fmt_b:>{w_label}s}   {win}"
+        )
+    if perf_lines:
+        lines.append("")
+        lines.append("  performance:")
+        lines.extend(perf_lines)
 
     # Sparklines
     if result.curve_a or result.curve_b:

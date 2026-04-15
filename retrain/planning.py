@@ -34,13 +34,56 @@ class RegexPlanningDetector:
     """Backward-compatible regex/strategic-gram detector."""
 
     def __init__(self, strategic_grams: list[str]) -> None:
-        from retrain.advantages import identify_planning_tokens
+        from retrain.advantages import _get_gram_patterns
 
         self._grams = strategic_grams
-        self._identify = identify_planning_tokens
+        self._patterns = _get_gram_patterns(strategic_grams)
+        self._effective_window = (
+            max(5, max(len(gram.split()) for gram in strategic_grams))
+            if strategic_grams
+            else 5
+        )
+        self._clean_cache: dict[str, str] = {}
 
     def detect(self, token_strs: list[str]) -> list[int]:
-        return self._identify(token_strs, self._grams)
+        n_tokens = len(token_strs)
+        if n_tokens == 0:
+            return []
+        if not self._patterns:
+            return [0] * n_tokens
+
+        cleaned: list[str] = []
+        clean_cache = self._clean_cache
+        for token in token_strs:
+            cleaned_token = clean_cache.get(token)
+            if cleaned_token is None:
+                cleaned_token = _clean_fragment(token)
+                if len(clean_cache) < 8192:
+                    clean_cache[token] = cleaned_token
+            cleaned.append(cleaned_token)
+
+        mask = [0] * n_tokens
+        patterns = self._patterns
+        effective_window = self._effective_window
+        for start in range(n_tokens):
+            window_text = ""
+            window_end = min(start + effective_window, n_tokens)
+            matched = False
+            for end in range(start, window_end):
+                if cleaned[end]:
+                    if window_text:
+                        window_text += " " + cleaned[end]
+                    else:
+                        window_text = cleaned[end]
+                for pat in patterns:
+                    if pat.search(window_text):
+                        for idx in range(start, end + 1):
+                            mask[idx] = 1
+                        matched = True
+                        break
+                if matched:
+                    break
+        return mask
 
 
 # ---------------------------------------------------------------------------

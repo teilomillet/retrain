@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import random
+import sys
 import time
+from heapq import nlargest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NotRequired, Protocol, TypedDict, cast
@@ -34,6 +36,7 @@ from retrain.logging_utils import JsonlLogger
 from retrain.registry import get_registry
 from retrain.runtime_support import (
     ExamplePromptCache,
+    RuntimeCounters,
     TokenTextLookup,
     decode_sequence_groups,
     top_surprisal_entries,
@@ -107,6 +110,83 @@ def _select_sft_batch_indices(
     start = step * batch_size
     size = len(example_order)
     return [example_order[(start + offset) % size] for offset in range(batch_size)]
+
+
+def _process_max_rss_mb() -> float | None:
+    """Best-effort process peak RSS in MiB."""
+    try:
+        import resource
+    except ImportError:
+        return None
+
+    raw_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if raw_rss <= 0:
+        return 0.0
+    if sys.platform == "darwin":
+        return raw_rss / (1024.0 * 1024.0)
+    return raw_rss / 1024.0
+
+
+def _helper_runtime_metrics(helper: object) -> dict[str, object]:
+    """Collect optional backend-helper runtime counters."""
+    if not hasattr(helper, "runtime_metrics"):
+        return {}
+    metrics = helper.runtime_metrics()  # type: ignore[unresolved-attribute]
+    if isinstance(metrics, dict):
+        return dict(metrics)
+    return {}
+
+
+def _generation_log_indices(
+    sample_count: int,
+    *,
+    samples_per_prompt: int,
+    rewards: list[float] | None = None,
+) -> list[int]:
+    """Select the generation indices to log for one prompt.
+
+    When a cap is active, prefer the highest-reward completions because they
+    are the most representative of the learning signal. Ties are broken by the
+    earlier sample index to keep the result deterministic.
+    """
+    if sample_count <= 0:
+        return []
+    if samples_per_prompt <= 0 or samples_per_prompt >= sample_count:
+        return list(range(sample_count))
+    if rewards is None or len(rewards) != sample_count:
+        return list(range(samples_per_prompt))
+    if samples_per_prompt == 1:
+        return [
+            max(
+                range(sample_count),
+                key=lambda idx: (rewards[idx], -idx),
+            )
+        ]
+
+    ranked = nlargest(
+        samples_per_prompt,
+        range(sample_count),
+        key=lambda idx: (rewards[idx], -idx),
+    )
+    return ranked
+
+
+def _top_surprisal_payload(
+    logprobs: list[float],
+    token_ids: list[int],
+    token_lookup: TokenTextLookup,
+    *,
+    limit: int,
+) -> list[dict[str, int | float | str]]:
+    """Build optional top-surprisal diagnostics for one sampled completion."""
+    if limit <= 0 or not logprobs or not token_ids:
+        return []
+    return top_surprisal_entries(
+        logprobs,
+        token_ids,
+        token_lookup,
+        limit=limit,
+    )
 
 
 def _apply_advantage_cap(
@@ -494,1274 +574,1334 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         str(emergence_dir / "generations.jsonl"),
         flush_every=32,
         flush_interval_s=1.0,
+        enabled=config.log_generations,
     )
 
-    # -----------------------------------------------------------------------
-    # 1. Seed for reproducibility
-    # -----------------------------------------------------------------------
-    if config.seed >= 0:
-        import random
-
-        import numpy as np
-        import torch
-
-        random.seed(config.seed)
-        np.random.seed(config.seed)
-        torch.manual_seed(config.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(config.seed)
-        print(f"Seeded RNGs with {config.seed}")
-
-    # -----------------------------------------------------------------------
-    # 2. Load dataset (fail fast before backend/tokenizer setup)
-    # -----------------------------------------------------------------------
-    print("Loading dataset...")
-    verifiers_env = None
-    if config.environment_provider == "verifiers":
-        verifiers_env = load_verifiers_environment(config)
-        examples = load_examples_from_environment(verifiers_env, config)
-        print(
-            f"Loaded {len(examples)} examples from verifiers env "
-            f"'{config.environment_id}'"
-        )
-        if config.data_source != "math":
-            print(
-                "NOTE: [data].source is ignored when [environment].provider is set."
-            )
-        if config.reward_type != "match":
-            print(
-                "NOTE: [reward] settings are ignored with [environment].provider="
-                "'verifiers'; the environment rubric is used."
-            )
-    else:
-        examples = get_registry("data_source").create(config.data_source, config).load()
-    if not examples:
-        raise RuntimeError("Dataset is empty — cannot train with zero examples.")
-    if verifiers_env is None:
-        print(f"Loaded {len(examples)} examples")
-
-    # -----------------------------------------------------------------------
-    # 3. Use flow-resolved backend + capabilities
-    # -----------------------------------------------------------------------
-    helper = flow.backend
-    backend_caps = flow.backend_capabilities
-    _print_backend_capability_summary(
-        config.backend,
-        flow.backend_capability_source,
-        backend_caps.reports_sync_loss,
-        backend_caps.preserves_token_advantages,
-        backend_caps.supports_checkpoint_resume,
-        backend_caps.resume_runtime_dependent,
-    )
-
-    # -----------------------------------------------------------------------
-    # 4. Load tokenizer + lazy token/prompt caches
-    # -----------------------------------------------------------------------
-    print(f"Loading tokenizer for {config.model} ...")
-    tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
-    token_lookup = TokenTextLookup(tokenizer)
-    prompt_cache = ExamplePromptCache(
-        tokenizer,
-        [ex.prompt for ex in examples],
-        encoder=encode_prompt_for_sampling,
-        preview_renderer=prompt_preview,
-    )
-    print("Token lookup: lazy")
-    print("Prompt encoding cache: lazy")
-
-    # -----------------------------------------------------------------------
-    # 4b. Planning detector
-    # -----------------------------------------------------------------------
-    detector = flow.planning_detector
-    print(f"Planning detector: {config.planning_detector}")
-
-    # -----------------------------------------------------------------------
-    # 5. SEPA controller
-    # -----------------------------------------------------------------------
-    sepa_controller = flow.sepa_controller
-    assert sepa_controller is not None
-
-    # -----------------------------------------------------------------------
-    # 6. Back pressure
-    # -----------------------------------------------------------------------
-    backpressure = flow.backpressure
-
-    # -----------------------------------------------------------------------
-    # 8. Optional wandb
-    # -----------------------------------------------------------------------
     wandb_run: WandbRunLike | None = None
-    wandb_enabled = bool(config.wandb_project)
-    if wandb_enabled:
-        import wandb as wandb_module
+    wandb_enabled = False
 
-        wandb = cast(WandbModuleLike, wandb_module)
+    try:
+        # -----------------------------------------------------------------------
+        # 1. Seed for reproducibility
+        # -----------------------------------------------------------------------
+        if config.seed >= 0:
+            import random
 
-        condition_label = _condition_label(config)
-        default_run_name = Path(config.log_dir).name or condition_label
-        run_name = config.wandb_run_name or default_run_name
-        wandb_tags = (
-            [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
-            if config.wandb_tags
-            else None
-        )
-        wandb_config: dict[str, str | int | float] = {
-            "algorithm_mode": config.algorithm_mode,
-            "advantage_mode": config.advantage_mode,
-            "transform_mode": config.transform_mode,
-            "uncertainty_kind": config.uncertainty_kind,
-            "condition": condition_label,
-            "model": config.model,
-            "lora_rank": config.lora_rank,
-            "lr": config.lr,
-            "batch_size": config.batch_size,
-            "group_size": config.group_size,
-            "max_tokens": config.max_tokens,
-            "temperature": config.temperature,
-            "gtpo_beta": config.gtpo_beta,
-            "hicra_alpha": config.hicra_alpha,
-            "sepa_steps": config.sepa_steps,
-            "sepa_delay_steps": config.sepa_delay_steps,
-            "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
-            "max_steps": config.max_steps,
-            "backend": config.backend,
-            "seed": config.seed,
-            "batch_advantage_norm": int(config.batch_advantage_norm),
-            "clip_eps": config.clip_eps,
-            "clip_eps_high": config.clip_eps_high,
-            "adv_clip_max": config.adv_clip_max,
-            "sft_warmup_steps": config.sft_warmup_steps,
-            "tl_grpo": int(config.tl_grpo),
-        }
-        wandb_run = wandb.init(
-            project=config.wandb_project,
-            name=run_name,
-            config=wandb_config,
-            entity=config.wandb_entity or None,
-            group=config.wandb_group or None,
-            tags=wandb_tags,
-        )
-        print(f"Wandb initialized: {config.wandb_project}/{run_name}")
+            import numpy as np
+            import torch
 
-    # -----------------------------------------------------------------------
-    # 9. Training loop
-    # -----------------------------------------------------------------------
-    reward_fn = None
-    if verifiers_env is None:
-        reward_fn = get_registry("reward").create(config.reward_type, config)
-    verifiers_multiturn = (
-        verifiers_env is not None and is_multiturn_environment(verifiers_env)
-    )
-    example_idx = 0
-    total_correct = 0
-    total_completions = 0
-    sepa_lambda_val = 0.0
-    current_batch_size = config.batch_size
-    current_group_size = config.group_size
-    needs_planning = flow.needs_planning
-    uses_sepa_controller = flow.uses_sepa_controller
-    if config.algorithm_mode:
-        print(
-            "Algorithm mode active: "
-            f"{config.algorithm_mode}. "
-            "Ignoring advantage_mode/transform_mode composition."
-        )
-    start_step = 0
-    tl_grpo_ema: float | None = config.tl_grpo_ema_init if config.tl_grpo else None
-    delight_eta_ema: float | None = None
+            random.seed(config.seed)
+            np.random.seed(config.seed)
+            torch.manual_seed(config.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(config.seed)
+            print(f"Seeded RNGs with {config.seed}")
 
-    # -----------------------------------------------------------------------
-    # 10b. Resume from checkpoint (if requested)
-    # -----------------------------------------------------------------------
-    if config.resume_from:
-        saved = _load_trainer_state(config.resume_from)
-        start_step = saved["step"] + 1
-        example_idx = saved["example_idx"]
-        total_correct = saved["total_correct"]
-        total_completions = saved["total_completions"]
-        current_batch_size = saved["current_batch_size"]
-        current_group_size = saved["current_group_size"]
-
-        # Restore SEPA controller state
-        if "sepa" in saved:
-            sepa_controller.load_state_dict(saved["sepa"])
-
-        # Restore TL-GRPO EMA baseline
-        if "tl_grpo_ema" in saved and tl_grpo_ema is not None:
-            tl_grpo_ema = float(saved["tl_grpo_ema"])
-        if "delight_eta_ema" in saved:
-            delight_eta_ema = float(saved["delight_eta_ema"])
-
-        # Restore backend model state
-        ckpt_name = saved.get("checkpoint_name", "")
-        checkpoint_ref = saved.get("checkpoint_path", "") or ckpt_name
-        if checkpoint_ref:
-            helper.load_state(checkpoint_ref)  # type: ignore[unresolved-attribute]
-
-        print(
-            f"Resumed from step {saved['step']} "
-            f"(checkpoint: {checkpoint_ref or ckpt_name}), continuing from step {start_step}"
-        )
-
-    # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
-    warmup_batch_sizes: list[int] = []
-    if config.bp_enabled:
-        bs = max(1, config.bp_min_batch_size)
-        while bs <= config.bp_max_batch_size:
-            warmup_batch_sizes.append(bs)
-            bs *= 2
-        if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
-            warmup_batch_sizes.append(config.bp_max_batch_size)
-
-    # -----------------------------------------------------------------------
-    # SFT warmup data (load once if configured)
-    # -----------------------------------------------------------------------
-    sft_examples: list[list[dict[str, str]]] = []
-    sft_example_order: list[int] = []
-    if config.sft_warmup_steps > 0 and config.sft_data_path:
-        sft_path = Path(config.sft_data_path)
-        if sft_path.exists():
-            import json as _json
-            with open(sft_path) as _f:
-                for _line in _f:
-                    row = _json.loads(_line)
-                    sft_examples.append(row["messages"])
-            sft_example_order = _build_sft_example_order(
-                len(sft_examples),
-                config.seed,
+        # -----------------------------------------------------------------------
+        # 2. Load dataset (fail fast before backend/tokenizer setup)
+        # -----------------------------------------------------------------------
+        print("Loading dataset...")
+        verifiers_env = None
+        if config.environment_provider == "verifiers":
+            verifiers_env = load_verifiers_environment(config)
+            examples = load_examples_from_environment(verifiers_env, config)
+            print(
+                f"Loaded {len(examples)} examples from verifiers env "
+                f"'{config.environment_id}'"
             )
-            print(f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path}")
+            if config.data_source != "math":
+                print(
+                    "NOTE: [data].source is ignored when [environment].provider is set."
+                )
+            if config.reward_type != "match":
+                print(
+                    "NOTE: [reward] settings are ignored with [environment].provider="
+                    "'verifiers'; the environment rubric is used."
+                )
         else:
-            print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
+            examples = get_registry("data_source").create(config.data_source, config).load()
+        if not examples:
+            raise RuntimeError("Dataset is empty — cannot train with zero examples.")
+        if verifiers_env is None:
+            print(f"Loaded {len(examples)} examples")
 
-    for batch_idx in range(start_step, config.max_steps):
-        step_start = time.perf_counter()
+        # -----------------------------------------------------------------------
+        # 3. Use flow-resolved backend + capabilities
+        # -----------------------------------------------------------------------
+        helper = flow.backend
+        backend_caps = flow.backend_capabilities
+        _print_backend_capability_summary(
+            config.backend,
+            flow.backend_capability_source,
+            backend_caps.reports_sync_loss,
+            backend_caps.preserves_token_advantages,
+            backend_caps.supports_checkpoint_resume,
+            backend_caps.resume_runtime_dependent,
+        )
 
-        # =================================================================
-        # SFT warmup: supervised training from oracle demonstrations
-        # =================================================================
-        if batch_idx < config.sft_warmup_steps and sft_examples:
-            helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
+        # -----------------------------------------------------------------------
+        # 4. Load tokenizer + lazy token/prompt caches
+        # -----------------------------------------------------------------------
+        print(f"Loading tokenizer for {config.model} ...")
+        tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
+        runtime_counters = RuntimeCounters()
+        token_lookup = TokenTextLookup(tokenizer, counters=runtime_counters)
+        prompt_cache = ExamplePromptCache(
+            tokenizer,
+            [ex.prompt for ex in examples],
+            encoder=encode_prompt_for_sampling,
+            preview_renderer=prompt_preview,
+            counters=runtime_counters,
+        )
+        print("Token lookup: lazy")
+        print("Prompt encoding cache: lazy")
 
-            # Sample a batch of SFT examples
-            sft_batch_size = min(16, len(sft_examples))
-            sft_batch_indices = _select_sft_batch_indices(
-                sft_example_order,
-                batch_size=sft_batch_size,
-                step=batch_idx,
+        # -----------------------------------------------------------------------
+        # 4b. Planning detector
+        # -----------------------------------------------------------------------
+        detector = flow.planning_detector
+        print(f"Planning detector: {config.planning_detector}")
+
+        # -----------------------------------------------------------------------
+        # 5. SEPA controller
+        # -----------------------------------------------------------------------
+        sepa_controller = flow.sepa_controller
+        assert sepa_controller is not None
+
+        # -----------------------------------------------------------------------
+        # 6. Back pressure
+        # -----------------------------------------------------------------------
+        backpressure = flow.backpressure
+
+        # -----------------------------------------------------------------------
+        # 8. Optional wandb
+        # -----------------------------------------------------------------------
+        wandb_enabled = bool(config.wandb_project)
+        if wandb_enabled:
+            import wandb as wandb_module
+
+            wandb = cast(WandbModuleLike, wandb_module)
+
+            condition_label = _condition_label(config)
+            default_run_name = Path(config.log_dir).name or condition_label
+            run_name = config.wandb_run_name or default_run_name
+            wandb_tags = (
+                [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
+                if config.wandb_tags
+                else None
             )
-            sft_batch = [sft_examples[idx] for idx in sft_batch_indices]
-
-            # Tokenize: full conversation (system + user + assistant)
-            sft_tokens_list: list[list[int]] = []
-            sft_logprobs_list: list[list[float]] = []
-            sft_advantages_list: list[list[float]] = []
-
-            for msgs in sft_batch:
-                # Tokenize prompt (system + user) and response (assistant) separately
-                # to create a mask: advantages=0 for prompt, advantages=1 for response
-                prompt_msgs = msgs[:2]  # system + user
-                full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)  # type: ignore[unresolved-attribute]
-                prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)  # type: ignore[unresolved-attribute]
-                prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
-                full_tokens = tokenizer.encode(full_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
-                if len(full_tokens) > config.max_tokens + 512:
-                    full_tokens = full_tokens[: config.max_tokens + 512]
-                # Mask: 0 for prompt tokens, 1 for response tokens
-                n_prompt = min(len(prompt_tokens), len(full_tokens))
-                advantages = [0.0] * n_prompt + [1.0] * (len(full_tokens) - n_prompt)
-                sft_tokens_list.append(full_tokens)
-                sft_logprobs_list.append([0.0] * len(full_tokens))
-                sft_advantages_list.append(advantages)
-
-            # Train with cross-entropy loss (actual SFT, not importance sampling)
-            # Use sft_lr if set, otherwise fall back to main lr
-            effective_sft_lr = config.sft_lr if config.sft_lr > 0 else config.lr
-            print(
-                f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples "
-                f"(lr={effective_sft_lr:.1e})...",
-                flush=True,
-            )
-            if hasattr(helper, "sft_train_step"):
-                loss = helper.sft_train_step(  # type: ignore[call-non-callable]
-                    sft_tokens_list,
-                    sft_advantages_list,
-                    effective_sft_lr,
-                    config.weight_decay,
-                )
-            else:
-                # Fallback: use standard train_step with importance_sampling
-                loss = helper.train_step(  # type: ignore[unresolved-attribute]
-                    sft_tokens_list,
-                    sft_logprobs_list,
-                    sft_advantages_list,
-                    effective_sft_lr,
-                    config.weight_decay,
-                )
-            elapsed = time.perf_counter() - step_start
-            # Note: tinker's importance_sampling loss with logprobs=0 produces
-            # negative values that get MORE negative as the model learns
-            # (-exp(logprob) * advantage).  We report both the raw IS loss
-            # and the flipped "sft_signal" (= -loss, higher = better) so
-            # the learning curve is intuitive.
-            sft_signal = -loss
-            print(
-                f"Step {batch_idx} [SFT warmup] | is_loss={loss:.4f} | "
-                f"sft_signal={sft_signal:.4f} | "
-                f"datums={len(sft_batch)} | time={elapsed:.1f}s",
-                flush=True,
-            )
-
-            # Log to metrics.jsonl (trace every SFT step)
-            sft_metrics: dict[str, int | float | str] = {
-                "step": batch_idx,
-                "loss": loss,
-                "sft_signal": sft_signal,
-                "phase": "sft",
-                "datums": len(sft_batch),
-                "sft_unique_examples_seen": min(
-                    len(sft_examples),
-                    (batch_idx + 1) * sft_batch_size,
-                ),
-                "sft_dataset_coverage": min(
-                    1.0,
-                    ((batch_idx + 1) * sft_batch_size) / max(len(sft_examples), 1),
-                ),
-                "time_s": round(elapsed, 2),
+            wandb_config: dict[str, str | int | float] = {
+                "algorithm_mode": config.algorithm_mode,
                 "advantage_mode": config.advantage_mode,
-                "lr": effective_sft_lr,
+                "transform_mode": config.transform_mode,
+                "uncertainty_kind": config.uncertainty_kind,
+                "condition": condition_label,
+                "model": config.model,
+                "lora_rank": config.lora_rank,
+                "lr": config.lr,
+                "batch_size": config.batch_size,
+                "group_size": config.group_size,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "gtpo_beta": config.gtpo_beta,
+                "hicra_alpha": config.hicra_alpha,
+                "sepa_steps": config.sepa_steps,
+                "sepa_delay_steps": config.sepa_delay_steps,
+                "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
+                "max_steps": config.max_steps,
+                "backend": config.backend,
+                "seed": config.seed,
+                "batch_advantage_norm": int(config.batch_advantage_norm),
+                "clip_eps": config.clip_eps,
+                "clip_eps_high": config.clip_eps_high,
+                "adv_clip_max": config.adv_clip_max,
+                "sft_warmup_steps": config.sft_warmup_steps,
+                "tl_grpo": int(config.tl_grpo),
             }
-            metrics_logger.log(sft_metrics)
-            steps_logger.log(sft_metrics)
+            wandb_run = wandb.init(
+                project=config.wandb_project,
+                name=run_name,
+                config=wandb_config,
+                entity=config.wandb_entity or None,
+                group=config.wandb_group or None,
+                tags=wandb_tags,
+            )
+            print(f"Wandb initialized: {config.wandb_project}/{run_name}")
 
-            # Wandb
-            if wandb_run is not None:
-                wandb_run.log(
-                    {
-                        "train/loss": loss,
-                        "train/sft_signal": sft_signal,
-                        "train/sft_warmup": 1,
-                        "train/step": batch_idx,
-                        "train/lr": effective_sft_lr,
-                    },
+        # -----------------------------------------------------------------------
+        # 9. Training loop
+        # -----------------------------------------------------------------------
+        reward_fn = None
+        if verifiers_env is None:
+            reward_fn = get_registry("reward").create(config.reward_type, config)
+        verifiers_multiturn = (
+            verifiers_env is not None and is_multiturn_environment(verifiers_env)
+        )
+        example_idx = 0
+        total_correct = 0
+        total_completions = 0
+        sepa_lambda_val = 0.0
+        current_batch_size = config.batch_size
+        current_group_size = config.group_size
+        needs_planning = flow.needs_planning
+        uses_sepa_controller = flow.uses_sepa_controller
+        generation_log_samples_per_prompt = config.generation_log_samples_per_prompt
+        generation_top_surprisal_limit = config.generation_top_surprisal_limit
+        if config.algorithm_mode:
+            print(
+                "Algorithm mode active: "
+                f"{config.algorithm_mode}. "
+                "Ignoring advantage_mode/transform_mode composition."
+            )
+        start_step = 0
+        tl_grpo_ema: float | None = config.tl_grpo_ema_init if config.tl_grpo else None
+        delight_eta_ema: float | None = None
+
+        # -----------------------------------------------------------------------
+        # 10b. Resume from checkpoint (if requested)
+        # -----------------------------------------------------------------------
+        if config.resume_from:
+            saved = _load_trainer_state(config.resume_from)
+            start_step = saved["step"] + 1
+            example_idx = saved["example_idx"]
+            total_correct = saved["total_correct"]
+            total_completions = saved["total_completions"]
+            current_batch_size = saved["current_batch_size"]
+            current_group_size = saved["current_group_size"]
+
+            # Restore SEPA controller state
+            if "sepa" in saved:
+                sepa_controller.load_state_dict(saved["sepa"])
+
+            # Restore TL-GRPO EMA baseline
+            if "tl_grpo_ema" in saved and tl_grpo_ema is not None:
+                tl_grpo_ema = float(saved["tl_grpo_ema"])
+            if "delight_eta_ema" in saved:
+                delight_eta_ema = float(saved["delight_eta_ema"])
+
+            # Restore backend model state
+            ckpt_name = saved.get("checkpoint_name", "")
+            checkpoint_ref = saved.get("checkpoint_path", "") or ckpt_name
+            if checkpoint_ref:
+                helper.load_state(checkpoint_ref)  # type: ignore[unresolved-attribute]
+
+            print(
+                f"Resumed from step {saved['step']} "
+                f"(checkpoint: {checkpoint_ref or ckpt_name}), continuing from step {start_step}"
+            )
+
+        # Warmup sweep schedule: geometric [1,2,4,...] clamped to [min, max]
+        warmup_batch_sizes: list[int] = []
+        if config.bp_enabled:
+            bs = max(1, config.bp_min_batch_size)
+            while bs <= config.bp_max_batch_size:
+                warmup_batch_sizes.append(bs)
+                bs *= 2
+            if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
+                warmup_batch_sizes.append(config.bp_max_batch_size)
+
+        # -----------------------------------------------------------------------
+        # SFT warmup data (load once if configured)
+        # -----------------------------------------------------------------------
+        sft_examples: list[list[dict[str, str]]] = []
+        sft_example_order: list[int] = []
+        if config.sft_warmup_steps > 0 and config.sft_data_path:
+            sft_path = Path(config.sft_data_path)
+            if sft_path.exists():
+                import json as _json
+                with open(sft_path) as _f:
+                    for _line in _f:
+                        row = _json.loads(_line)
+                        sft_examples.append(row["messages"])
+                sft_example_order = _build_sft_example_order(
+                    len(sft_examples),
+                    config.seed,
+                )
+                print(f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path}")
+            else:
+                print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
+
+        for batch_idx in range(start_step, config.max_steps):
+            step_start = time.perf_counter()
+
+            # =================================================================
+            # SFT warmup: supervised training from oracle demonstrations
+            # =================================================================
+            if batch_idx < config.sft_warmup_steps and sft_examples:
+                helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
+
+                # Sample a batch of SFT examples
+                sft_batch_size = min(16, len(sft_examples))
+                sft_batch_indices = _select_sft_batch_indices(
+                    sft_example_order,
+                    batch_size=sft_batch_size,
                     step=batch_idx,
                 )
+                sft_batch = [sft_examples[idx] for idx in sft_batch_indices]
 
-            # Save checkpoint
-            if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
-                ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-                helper.save_adapter(config.adapter_path, ckpt_name)  # type: ignore[unresolved-attribute]
-                print(f"Saved checkpoint: {ckpt_name}")
+                # Tokenize: full conversation (system + user + assistant)
+                sft_tokens_list: list[list[int]] = []
+                sft_logprobs_list: list[list[float]] = []
+                sft_advantages_list: list[list[float]] = []
 
-            # Note: SFT→GRPO transition eval removed (caused context overflow).
-            # The first GRPO step (step 10) serves as the eval — if reward > 0,
-            # the SFT produced valid actions.
+                for msgs in sft_batch:
+                    # Tokenize prompt (system + user) and response (assistant) separately
+                    # to create a mask: advantages=0 for prompt, advantages=1 for response
+                    prompt_msgs = msgs[:2]  # system + user
+                    full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)  # type: ignore[unresolved-attribute]
+                    prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)  # type: ignore[unresolved-attribute]
+                    prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
+                    full_tokens = tokenizer.encode(full_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
+                    if len(full_tokens) > config.max_tokens + 512:
+                        full_tokens = full_tokens[: config.max_tokens + 512]
+                    # Mask: 0 for prompt tokens, 1 for response tokens
+                    n_prompt = min(len(prompt_tokens), len(full_tokens))
+                    advantages = [0.0] * n_prompt + [1.0] * (len(full_tokens) - n_prompt)
+                    sft_tokens_list.append(full_tokens)
+                    sft_logprobs_list.append([0.0] * len(full_tokens))
+                    sft_advantages_list.append(advantages)
 
-            continue  # Skip the RL pipeline for this step
-
-        # Back pressure warmup sweep
-        bp_warmup = False
-        if config.bp_enabled and warmup_batch_sizes and batch_idx < config.bp_warmup_steps:
-            bp_warmup = True
-            current_batch_size = warmup_batch_sizes[batch_idx % len(warmup_batch_sizes)]
-
-        # 10a. Checkpoint for sampling
-        helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
-
-        # 10b. Select prompts
-        batch_prompt_objs: list[PromptLike] = []
-        batch_prompt_previews: list[str] = []
-        batch_prompt_ids: list[list[int]] = []
-        batch_answers: list[str] = []
-        batch_tasks: list[str] = []
-        batch_infos: list[ExampleInfoLike] = []
-
-        for _ in range(current_batch_size):
-            ex_idx = example_idx % len(examples)
-            example_idx += 1
-            ex = examples[ex_idx]
-            batch_prompt_objs.append(ex.prompt)
-            batch_prompt_previews.append(prompt_cache.preview(ex_idx))
-            batch_prompt_ids.append(list(prompt_cache.prompt_ids(ex_idx)))
-            batch_answers.append(ex.reference)
-            batch_tasks.append(ex.task)
-            batch_infos.append(ex.info)
-
-        # 10d. Process groups, compute advantages
-        batch_rewards: list[float] = []
-        batch_correct = 0
-        batch_max_token_hits = 0
-        batch_total_completions = 0
-        batch_reward_tie_eligible_groups = 0
-        batch_reward_tie_groups = 0
-        batch_reward_uniform_groups = 0
-        batch_reward_tied_pairs = 0
-        batch_reward_total_pairs = 0
-        batch_reward_unique_fraction_sum = 0.0
-        batch_surprisal_stats: list[EntropyStats] = []
-        batch_adv_results: list = []
-        all_logprobs_sepa: list[list[float]] = []
-        all_planning_masks_sepa: list[list[int]] = []
-        all_datum_tokens: list[list[int]] = []
-        all_datum_logprobs: list[list[float]] = []
-        all_datum_advantages: list[list[float]] = []
-        step_transform_params = _prepare_transform_params_for_step(
-            config.transform_params,
-            delight_eta_prev=delight_eta_ema,
-        )
-        step_algorithm_params = _prepare_algorithm_params_for_step(
-            config.effective_algorithm_params,
-            delight_eta_prev=delight_eta_ema,
-        )
-
-        # Resolve SEPA lambda once per step (before group loop)
-        if uses_sepa_controller:
-            sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
-
-        # Behavior monitoring accumulators for this step.
-        _step_behavior_turns = 0
-        _step_behavior_invalid = 0
-        _step_behavior_actions: dict[str, int] = {}
-        _step_behavior_resp_lens: list[int] = []
-
-        if verifiers_multiturn:
-            all_group_sequences: list[list[tuple[list[int], list[float]]]] = []
-            sample_start = time.perf_counter()
-            for f_idx in range(len(batch_prompt_ids)):
-                prompt_obj = batch_prompt_objs[f_idx]
-                answer = batch_answers[f_idx]
-                task = batch_tasks[f_idx]
-                info = batch_infos[f_idx]
-
-                rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G, branch_rewards_G = run_multiturn_group(
-                    verifiers_env,
-                    helper=helper,  # type: ignore[invalid-argument-type]
-                    tokenizer=tokenizer,
-                    model_name=config.model,
-                    prompt=prompt_obj,
-                    answer=answer,
-                    task=task,
-                    info=info,
-                    num_rollouts=current_group_size,
-                    max_tokens=config.max_tokens,
-                    temperature=config.temperature,
-                    top_p=config.top_p,
-                    max_turns_override=config.environment_max_turns,
-                    tl_grpo=config.tl_grpo,
-                    tl_grpo_branch_mode=config.tl_grpo_branch_mode,
-                    tl_grpo_branch_size=config.tl_grpo_branch_size,
-                    tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
-                    tl_grpo_outcome_baseline=tl_grpo_ema,
-                )
-
-                logprobs_G: list[list[float]] = []
-                planning_masks_G: list[list[int]] = []
-                turns_logprobs_G: list[list[list[float]]] = []
-                turns_token_ids_G: list[list[list[int]]] = []
-                turns_prompt_ids_G: list[list[list[int]]] = []
-
-                for turns in turns_G:
-                    seq_logprobs: list[float] = []
-                    seq_token_ids: list[int] = []
-                    turn_logprobs: list[list[float]] = []
-                    turn_token_ids: list[list[int]] = []
-                    turn_prompt_ids: list[list[int]] = []
-                    for turn in turns:
-                        turn_prompt_ids.append(list(turn.prompt_ids))
-                        turn_token_ids.append(list(turn.completion_ids))
-                        turn_logprobs.append(list(turn.completion_logprobs))
-                        seq_logprobs.extend(turn.completion_logprobs)
-                        seq_token_ids.extend(turn.completion_ids)
-                    logprobs_G.append(seq_logprobs)
-                    turns_logprobs_G.append(turn_logprobs)
-                    turns_token_ids_G.append(turn_token_ids)
-                    turns_prompt_ids_G.append(turn_prompt_ids)
-                    if needs_planning:
-                        planning_masks_G.append(
-                            detector.detect(token_lookup.get_many(seq_token_ids))  # type: ignore[unresolved-attribute]
-                        )
-                    else:
-                        planning_masks_G.append([0] * len(seq_logprobs))
-
-                    batch_total_completions += 1
-                    if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
-                        batch_max_token_hits += 1
-
-                all_logprobs_sepa.extend(logprobs_G)
-                all_planning_masks_sepa.extend(planning_masks_G)
-
-                for r in rewards_G:
-                    batch_rewards.append(r)
-                    if r > _CORRECT_THRESHOLD:
-                        batch_correct += 1
-                    if tl_grpo_ema is not None:
-                        tl_grpo_ema = (
-                            config.tl_grpo_ema_decay * tl_grpo_ema
-                            + (1 - config.tl_grpo_ema_decay) * r
-                        )
-
-                group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
-                answer_preview = answer[:40] if len(answer) > 40 else answer
+                # Train with cross-entropy loss (actual SFT, not importance sampling)
+                # Use sft_lr if set, otherwise fall back to main lr
+                effective_sft_lr = config.sft_lr if config.sft_lr > 0 else config.lr
                 print(
-                    f"  group: {group_correct}/{len(rewards_G)} correct "
-                    f"| answer={answer_preview}"
+                    f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples "
+                    f"(lr={effective_sft_lr:.1e})...",
+                    flush=True,
                 )
-
-                reward_tie_stats = _summarize_reward_ties(rewards_G)
-                if reward_tie_stats["eligible"]:
-                    batch_reward_tie_eligible_groups += 1
-                    batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
-                    batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
-                    batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
-                    batch_reward_total_pairs += reward_tie_stats["total_pairs"]
-                    batch_reward_unique_fraction_sum += (
-                        reward_tie_stats["unique_count"] / len(rewards_G)
-                    )
-
-                if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-                    # With batch_advantage_norm, keep uniform groups — cross-group
-                    # reward differences provide signal after batch normalization.
-                    if config.batch_advantage_norm:
-                        print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
-                    elif rewards_G[0] > _CORRECT_THRESHOLD:
-                        print("    -> skipped (all correct)")
-                        continue
-                    else:
-                        print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
-                        continue
-
-                if config.algorithm_mode:
-                    adv_result = compute_algorithm_advantages(
-                        rewards_G,
-                        logprobs_G,
-                        planning_masks_G,
-                        algorithm_mode=config.algorithm_mode,
-                        params=step_algorithm_params,
-                        gtpo_beta=config.gtpo_beta,
-                        hicra_alpha=config.hicra_alpha,
-                        sepa_lambda=sepa_lambda_val,
-                        step=batch_idx,
-                        token_distributions_G=None,
+                if hasattr(helper, "sft_train_step"):
+                    loss = helper.sft_train_step(  # type: ignore[call-non-callable]
+                        sft_tokens_list,
+                        sft_advantages_list,
+                        effective_sft_lr,
+                        config.weight_decay,
                     )
                 else:
-                    adv_result = compute_composable_advantages(
-                        rewards_G,
-                        logprobs_G,
-                        planning_masks_G,
-                        advantage_mode=config.advantage_mode,
-                        transform_mode=config.transform_mode,
-                        gtpo_beta=config.gtpo_beta,
-                        hicra_alpha=config.hicra_alpha,
-                        sepa_lambda=sepa_lambda_val,
-                        advantage_params=config.effective_advantage_params,
-                        transform_params=step_transform_params,
-                        step=batch_idx,
-                        post_process_params=config.post_process_params,
-                        token_distributions_G=None,
+                    # Fallback: use standard train_step with importance_sampling
+                    loss = helper.train_step(  # type: ignore[unresolved-attribute]
+                        sft_tokens_list,
+                        sft_logprobs_list,
+                        sft_advantages_list,
+                        effective_sft_lr,
+                        config.weight_decay,
                     )
-                all_token_advs_G = adv_result.token_advs
-                if adv_result.has_stats:
-                    batch_surprisal_stats.append(adv_result.stats)
-                if adv_result.extra_metrics:
-                    batch_adv_results.append(adv_result)
+                elapsed = time.perf_counter() - step_start
+                # Note: tinker's importance_sampling loss with logprobs=0 produces
+                # negative values that get MORE negative as the model learns
+                # (-exp(logprob) * advantage).  We report both the raw IS loss
+                # and the flipped "sft_signal" (= -loss, higher = better) so
+                # the learning curve is intuitive.
+                sft_signal = -loss
+                print(
+                    f"Step {batch_idx} [SFT warmup] | is_loss={loss:.4f} | "
+                    f"sft_signal={sft_signal:.4f} | "
+                    f"datums={len(sft_batch)} | time={elapsed:.1f}s",
+                    flush=True,
+                )
 
-                for s_idx in range(len(rewards_G)):
-                    turn_prompt_ids = turns_prompt_ids_G[s_idx]
-                    turn_token_ids = turns_token_ids_G[s_idx]
-                    turn_logprobs = turns_logprobs_G[s_idx]
-                    token_advs = all_token_advs_G[s_idx]
+                # Log to metrics.jsonl (trace every SFT step)
+                sft_metrics: dict[str, int | float | str] = {
+                    "step": batch_idx,
+                    "loss": loss,
+                    "sft_signal": sft_signal,
+                    "phase": "sft",
+                    "datums": len(sft_batch),
+                    "sft_unique_examples_seen": min(
+                        len(sft_examples),
+                        (batch_idx + 1) * sft_batch_size,
+                    ),
+                    "sft_dataset_coverage": min(
+                        1.0,
+                        ((batch_idx + 1) * sft_batch_size) / max(len(sft_examples), 1),
+                    ),
+                    "time_s": round(elapsed, 2),
+                    "advantage_mode": config.advantage_mode,
+                    "lr": effective_sft_lr,
+                }
+                sft_rss_mb = _process_max_rss_mb()
+                if sft_rss_mb is not None:
+                    sft_metrics["process_max_rss_mb"] = round(sft_rss_mb, 3)
+                metrics_logger.log(sft_metrics)
+                steps_logger.log(sft_metrics)
 
-                    # MT-GRPO: when per-turn advantages are provided by the
-                    # environment rubric (e.g. soma's _compute_turn_advantages),
-                    # use them directly as the advantage for each turn's tokens
-                    # instead of the uniform episode-level expansion.
-                    # All-or-nothing per rollout: if turn_advantages covers all
-                    # turns, use it; otherwise fall back entirely to episode-level
-                    # to avoid offset drift between the two modes.
-                    s_turn_advs: list[float] | None = None
-                    if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
-                        candidate = turn_advantages_G[s_idx]
-                        if len(candidate) >= len(turn_token_ids):
-                            s_turn_advs = candidate
+                # Wandb
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "train/loss": loss,
+                            "train/sft_signal": sft_signal,
+                            "train/sft_warmup": 1,
+                            "train/step": batch_idx,
+                            "train/lr": effective_sft_lr,
+                        },
+                        step=batch_idx,
+                    )
 
-                    offset = 0
-                    for t_idx in range(len(turn_token_ids)):
-                        seq_tokens = turn_token_ids[t_idx]
-                        seq_logprobs = turn_logprobs[t_idx]
-                        prompt_ids = turn_prompt_ids[t_idx]
+                # Save checkpoint
+                if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
+                    ckpt_name = f"checkpoint_step_{batch_idx + 1}"
+                    helper.save_adapter(config.adapter_path, ckpt_name)  # type: ignore[unresolved-attribute]
+                    print(f"Saved checkpoint: {ckpt_name}")
 
-                        if s_turn_advs is not None:
-                            # Per-turn advantage: broadcast the turn's advantage
-                            # to all tokens in this turn's completion.
-                            seq_advs = [s_turn_advs[t_idx]] * len(seq_tokens)
-                        else:
-                            # Fallback: use episode-level token advantages.
-                            seq_advs = token_advs[offset : offset + len(seq_tokens)]
+                # Note: SFT→GRPO transition eval removed (caused context overflow).
+                # The first GRPO step (step 10) serves as the eval — if reward > 0,
+                # the SFT produced valid actions.
 
-                        offset += len(seq_tokens)
-                        full_tokens = list(prompt_ids) + list(seq_tokens)
-                        padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
-                        padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
-                        all_datum_tokens.append(full_tokens)
-                        all_datum_logprobs.append(padded_logprobs)
-                        all_datum_advantages.append(padded_advantages)
+                continue  # Skip the RL pipeline for this step
 
-                for s_idx, comp_text in enumerate(completion_texts_G):
-                    gen_entry: dict[str, object] = {
-                        "step": batch_idx,
-                        "prompt": batch_prompt_previews[f_idx],
-                        "completion": comp_text[:500],
-                        "reward": rewards_G[s_idx],
-                        "num_tokens": len(logprobs_G[s_idx]),
-                    }
-                    if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:
-                        turn_summary = []
-                        for tl in turn_logs_G[s_idx]:
-                            obs = tl.get("observation", {})
-                            entry: dict[str, object] = {
-                                "turn": tl.get("turn"),
-                                "tick": obs.get("tick", 0) if isinstance(obs, dict) else 0,  # type: ignore[no-matching-overload]
-                                "customer_waiting": obs.get("customer_waiting") if isinstance(obs, dict) else False,  # type: ignore[invalid-argument-type]
-                                "inventory": obs.get("inventory") if isinstance(obs, dict) else 0,  # type: ignore[invalid-argument-type]
-                                "operation": tl.get("operation"),
-                                "reward_delta": tl.get("reward_delta", 0.0),
-                                "valid": tl.get("valid", True),
-                            }
-                            if not tl.get("valid"):
-                                entry["error"] = tl.get("error", "")
-                            turn_summary.append(entry)
-                            # ── Behavior accumulation ──
-                            _step_behavior_turns += 1
-                            if not tl.get("valid", True):
-                                _step_behavior_invalid += 1
-                            _op = str(tl.get("operation", "unknown"))
-                            _step_behavior_actions[_op] = (
-                                _step_behavior_actions.get(_op, 0) + 1
-                            )
-                        gen_entry["turn_log"] = turn_summary
-                        _step_behavior_resp_lens.append(
-                            len(str(gen_entry.get("completion", "")))
-                        )
-                    if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
-                        gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
-                    if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
-                        gen_entry["branch_rewards"] = branch_rewards_G[s_idx]
-                    if s_idx < len(turns_logprobs_G) and turns_logprobs_G[s_idx]:
-                        turn_lps = turns_logprobs_G[s_idx]
-                        gen_entry["turn_mean_logprobs"] = [
-                            sum(lps) / len(lps) if lps else 0.0
-                            for lps in turn_lps
-                        ]
-                        gen_entry["turn_logprob_var"] = [
-                            (sum((x - sum(lps) / len(lps)) ** 2 for x in lps) / len(lps))
-                            if len(lps) > 1 else 0.0
-                            for lps in turn_lps
-                        ]
-                    # Log top-K highest surprisal tokens with decoded text.
-                    # Useful for debugging DG gating and blog post analysis:
-                    # shows which tokens the gate considers "fork-points".
-                    if s_idx < len(logprobs_G) and logprobs_G[s_idx]:
-                        # Flatten token IDs for this sample
-                        s_tids: list[int] = []
-                        for t_idx2 in range(len(turns_token_ids_G[s_idx])):
-                            s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
-                        top_entries = top_surprisal_entries(
-                            logprobs_G[s_idx],
-                            s_tids,
-                            token_lookup,
-                        )
-                        if top_entries:
-                            gen_entry["top_surprisal_tokens"] = top_entries
-                    generations_logger.log(gen_entry)
-            sample_time = time.perf_counter() - sample_start
-        else:
-            # 10c. Sample completions
-            sample_start = time.perf_counter()
-            use_entropy_sampling = (
-                config.uncertainty_kind == "shannon_entropy"
-                and hasattr(helper, "sample_with_entropy")
+            # Back pressure warmup sweep
+            bp_warmup = False
+            if config.bp_enabled and warmup_batch_sizes and batch_idx < config.bp_warmup_steps:
+                bp_warmup = True
+                current_batch_size = warmup_batch_sizes[batch_idx % len(warmup_batch_sizes)]
+
+            # 10a. Checkpoint for sampling
+            helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
+
+            # 10b. Select prompts
+            batch_prompt_objs: list[PromptLike] = []
+            batch_prompt_previews: list[str] = []
+            batch_prompt_ids: list[list[int]] = []
+            batch_answers: list[str] = []
+            batch_tasks: list[str] = []
+            batch_infos: list[ExampleInfoLike] = []
+
+            for _ in range(current_batch_size):
+                ex_idx = example_idx % len(examples)
+                example_idx += 1
+                ex = examples[ex_idx]
+                batch_prompt_objs.append(ex.prompt)
+                batch_prompt_previews.append(prompt_cache.preview(ex_idx))
+                batch_prompt_ids.append(list(prompt_cache.prompt_ids(ex_idx)))
+                batch_answers.append(ex.reference)
+                batch_tasks.append(ex.task)
+                batch_infos.append(ex.info)
+
+            # 10d. Process groups, compute advantages
+            batch_rewards: list[float] = []
+            batch_correct = 0
+            batch_max_token_hits = 0
+            batch_total_completions = 0
+            batch_reward_tie_eligible_groups = 0
+            batch_reward_tie_groups = 0
+            batch_reward_uniform_groups = 0
+            batch_reward_tied_pairs = 0
+            batch_reward_total_pairs = 0
+            batch_reward_unique_fraction_sum = 0.0
+            batch_surprisal_stats: list[EntropyStats] = []
+            batch_adv_results: list = []
+            all_logprobs_sepa: list[list[float]] = []
+            all_planning_masks_sepa: list[list[int]] = []
+            all_datum_tokens: list[list[int]] = []
+            all_datum_logprobs: list[list[float]] = []
+            all_datum_advantages: list[list[float]] = []
+            step_transform_params = _prepare_transform_params_for_step(
+                config.transform_params,
+                delight_eta_prev=delight_eta_ema,
             )
-            precomputed_entropies_batch: list[list[list[float]]] | None = None
-            if use_entropy_sampling:
-                enriched_sequences = helper.sample_with_entropy(  # type: ignore[unresolved-attribute]
-                    batch_prompt_ids,
-                    current_group_size,
-                    config.max_tokens,
-                    config.temperature,
-                    config.top_p,
-                )
-                # Separate into standard 2-tuples + entropy side channel
-                all_group_sequences = [
-                    [(ids, lps) for ids, lps, _ent in group]
-                    for group in enriched_sequences
-                ]
-                precomputed_entropies_batch = [
-                    [ent if ent is not None else [] for _ids, _lps, ent in group]
-                    for group in enriched_sequences
-                ]
-            else:
-                all_group_sequences = helper.sample(  # type: ignore[unresolved-attribute]
-                    batch_prompt_ids,
-                    current_group_size,
-                    config.max_tokens,
-                    config.temperature,
-                    config.top_p,
-                )
-            sample_time = time.perf_counter() - sample_start
-
-            decoded_groups = decode_sequence_groups(
-                tokenizer,
-                all_group_sequences,
-                needs_planning=needs_planning,
-                token_lookup=token_lookup if needs_planning else None,
-                detector=detector if needs_planning else None,
+            step_algorithm_params = _prepare_algorithm_params_for_step(
+                config.effective_algorithm_params,
+                delight_eta_prev=delight_eta_ema,
             )
 
-            for f_idx, decoded_group in enumerate(decoded_groups):
-                prompt_ids = batch_prompt_ids[f_idx]
-                answer = batch_answers[f_idx]
-                task = batch_tasks[f_idx]
-                info = batch_infos[f_idx]
-                prompt_obj = batch_prompt_objs[f_idx]
+            # Resolve SEPA lambda once per step (before group loop)
+            if uses_sepa_controller:
+                sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
-                rewards_G: list[float] = []
-                logprobs_G: list[list[float]] = []
-                planning_masks_G: list[list[int]] = []
-                completion_texts_G: list[str] = []
-                for sample in decoded_group:
-                    completion_texts_G.append(sample.text)
-                    logprobs_G.append(sample.logprobs)
-                    planning_masks_G.append(sample.planning_mask)
+            # Behavior monitoring accumulators for this step.
+            _step_behavior_turns = 0
+            _step_behavior_invalid = 0
+            _step_behavior_actions: dict[str, int] = {}
+            _step_behavior_resp_lens: list[int] = []
 
-                if verifiers_env is None:
-                    assert reward_fn is not None
-                    for text in completion_texts_G:
-                        rewards_G.append(reward_fn.score(text, answer))
-                else:
-                    rewards_G = score_singleturn_group(
+            if verifiers_multiturn:
+                all_group_sequences: list[list[tuple[list[int], list[float]]]] = []
+                sample_start = time.perf_counter()
+                for f_idx in range(len(batch_prompt_ids)):
+                    prompt_obj = batch_prompt_objs[f_idx]
+                    answer = batch_answers[f_idx]
+                    task = batch_tasks[f_idx]
+                    info = batch_infos[f_idx]
+
+                    rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G, branch_rewards_G = run_multiturn_group(
                         verifiers_env,
+                        helper=helper,  # type: ignore[invalid-argument-type]
+                        tokenizer=tokenizer,
+                        model_name=config.model,
                         prompt=prompt_obj,
                         answer=answer,
                         task=task,
                         info=info,
-                        completion_texts=completion_texts_G,
+                        num_rollouts=current_group_size,
+                        max_tokens=config.max_tokens,
+                        temperature=config.temperature,
+                        top_p=config.top_p,
+                        max_turns_override=config.environment_max_turns,
+                        tl_grpo=config.tl_grpo,
+                        tl_grpo_branch_mode=config.tl_grpo_branch_mode,
+                        tl_grpo_branch_size=config.tl_grpo_branch_size,
+                        tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
+                        tl_grpo_outcome_baseline=tl_grpo_ema,
                     )
 
-                all_logprobs_sepa.extend(logprobs_G)
-                all_planning_masks_sepa.extend(planning_masks_G)
+                    logprobs_G: list[list[float]] = []
+                    planning_masks_G: list[list[int]] = []
+                    turns_logprobs_G: list[list[list[float]]] = []
+                    turns_token_ids_G: list[list[list[int]]] = []
+                    turns_prompt_ids_G: list[list[list[int]]] = []
 
-                for r in rewards_G:
-                    batch_rewards.append(r)
-                    if r > _CORRECT_THRESHOLD:
-                        batch_correct += 1
+                    for turns in turns_G:
+                        seq_logprobs: list[float] = []
+                        seq_token_ids: list[int] = []
+                        turn_logprobs: list[list[float]] = []
+                        turn_token_ids: list[list[int]] = []
+                        turn_prompt_ids: list[list[int]] = []
+                        for turn in turns:
+                            turn_prompt_ids.append(list(turn.prompt_ids))
+                            turn_token_ids.append(list(turn.completion_ids))
+                            turn_logprobs.append(list(turn.completion_logprobs))
+                            seq_logprobs.extend(turn.completion_logprobs)
+                            seq_token_ids.extend(turn.completion_ids)
+                        logprobs_G.append(seq_logprobs)
+                        turns_logprobs_G.append(turn_logprobs)
+                        turns_token_ids_G.append(turn_token_ids)
+                        turns_prompt_ids_G.append(turn_prompt_ids)
+                        if needs_planning:
+                            planning_masks_G.append(
+                                detector.detect(token_lookup.get_many(seq_token_ids))  # type: ignore[unresolved-attribute]
+                            )
+                        else:
+                            planning_masks_G.append([0] * len(seq_logprobs))
 
-                for sample in decoded_group:
-                    batch_total_completions += 1
-                    if len(sample.token_ids) >= config.max_tokens:
-                        batch_max_token_hits += 1
+                        batch_total_completions += 1
+                        if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
+                            batch_max_token_hits += 1
 
-                group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
-                answer_preview = answer[:40] if len(answer) > 40 else answer
-                print(
-                    f"  group: {group_correct}/{len(rewards_G)} correct "
-                    f"| answer={answer_preview}"
+                    all_logprobs_sepa.extend(logprobs_G)
+                    all_planning_masks_sepa.extend(planning_masks_G)
+
+                    for r in rewards_G:
+                        batch_rewards.append(r)
+                        if r > _CORRECT_THRESHOLD:
+                            batch_correct += 1
+                        if tl_grpo_ema is not None:
+                            tl_grpo_ema = (
+                                config.tl_grpo_ema_decay * tl_grpo_ema
+                                + (1 - config.tl_grpo_ema_decay) * r
+                            )
+
+                    group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
+                    answer_preview = answer[:40] if len(answer) > 40 else answer
+                    print(
+                        f"  group: {group_correct}/{len(rewards_G)} correct "
+                        f"| answer={answer_preview}"
+                    )
+
+                    reward_tie_stats = _summarize_reward_ties(rewards_G)
+                    if reward_tie_stats["eligible"]:
+                        batch_reward_tie_eligible_groups += 1
+                        batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
+                        batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
+                        batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
+                        batch_reward_total_pairs += reward_tie_stats["total_pairs"]
+                        batch_reward_unique_fraction_sum += (
+                            reward_tie_stats["unique_count"] / len(rewards_G)
+                        )
+
+                    if reward_tie_stats["is_uniform"] and not config.tl_grpo:
+                        # With batch_advantage_norm, keep uniform groups — cross-group
+                        # reward differences provide signal after batch normalization.
+                        if config.batch_advantage_norm:
+                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                        elif rewards_G[0] > _CORRECT_THRESHOLD:
+                            print("    -> skipped (all correct)")
+                            continue
+                        else:
+                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                            continue
+
+                    if config.algorithm_mode:
+                        adv_result = compute_algorithm_advantages(
+                            rewards_G,
+                            logprobs_G,
+                            planning_masks_G,
+                            algorithm_mode=config.algorithm_mode,
+                            params=step_algorithm_params,
+                            gtpo_beta=config.gtpo_beta,
+                            hicra_alpha=config.hicra_alpha,
+                            sepa_lambda=sepa_lambda_val,
+                            step=batch_idx,
+                            token_distributions_G=None,
+                        )
+                    else:
+                        adv_result = compute_composable_advantages(
+                            rewards_G,
+                            logprobs_G,
+                            planning_masks_G,
+                            advantage_mode=config.advantage_mode,
+                            transform_mode=config.transform_mode,
+                            gtpo_beta=config.gtpo_beta,
+                            hicra_alpha=config.hicra_alpha,
+                            sepa_lambda=sepa_lambda_val,
+                            advantage_params=config.effective_advantage_params,
+                            transform_params=step_transform_params,
+                            step=batch_idx,
+                            post_process_params=config.post_process_params,
+                            token_distributions_G=None,
+                        )
+                    all_token_advs_G = adv_result.token_advs
+                    if adv_result.has_stats:
+                        batch_surprisal_stats.append(adv_result.stats)
+                    if adv_result.extra_metrics:
+                        batch_adv_results.append(adv_result)
+
+                    for s_idx in range(len(rewards_G)):
+                        turn_prompt_ids = turns_prompt_ids_G[s_idx]
+                        turn_token_ids = turns_token_ids_G[s_idx]
+                        turn_logprobs = turns_logprobs_G[s_idx]
+                        token_advs = all_token_advs_G[s_idx]
+
+                        # MT-GRPO: when per-turn advantages are provided by the
+                        # environment rubric (e.g. soma's _compute_turn_advantages),
+                        # use them directly as the advantage for each turn's tokens
+                        # instead of the uniform episode-level expansion.
+                        # All-or-nothing per rollout: if turn_advantages covers all
+                        # turns, use it; otherwise fall back entirely to episode-level
+                        # to avoid offset drift between the two modes.
+                        s_turn_advs: list[float] | None = None
+                        if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
+                            candidate = turn_advantages_G[s_idx]
+                            if len(candidate) >= len(turn_token_ids):
+                                s_turn_advs = candidate
+
+                        offset = 0
+                        for t_idx in range(len(turn_token_ids)):
+                            seq_tokens = turn_token_ids[t_idx]
+                            seq_logprobs = turn_logprobs[t_idx]
+                            prompt_ids = turn_prompt_ids[t_idx]
+
+                            if s_turn_advs is not None:
+                                # Per-turn advantage: broadcast the turn's advantage
+                                # to all tokens in this turn's completion.
+                                seq_advs = [s_turn_advs[t_idx]] * len(seq_tokens)
+                            else:
+                                # Fallback: use episode-level token advantages.
+                                seq_advs = token_advs[offset : offset + len(seq_tokens)]
+
+                            offset += len(seq_tokens)
+                            full_tokens = list(prompt_ids) + list(seq_tokens)
+                            padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
+                            padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
+                            all_datum_tokens.append(full_tokens)
+                            all_datum_logprobs.append(padded_logprobs)
+                            all_datum_advantages.append(padded_advantages)
+
+                    generation_entries: list[dict[str, object]] = []
+                    selected_generation_indices = (
+                        _generation_log_indices(
+                            len(completion_texts_G),
+                            samples_per_prompt=generation_log_samples_per_prompt,
+                            rewards=rewards_G,
+                        )
+                        if generations_logger.enabled
+                        else []
+                    )
+                    for s_idx in selected_generation_indices:
+                        comp_text = completion_texts_G[s_idx]
+                        gen_entry: dict[str, object] = {
+                            "step": batch_idx,
+                            "prompt": batch_prompt_previews[f_idx],
+                            "completion": comp_text[:500],
+                            "reward": rewards_G[s_idx],
+                            "num_tokens": len(logprobs_G[s_idx]),
+                        }
+                        if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:
+                            turn_summary = []
+                            for tl in turn_logs_G[s_idx]:
+                                obs = tl.get("observation", {})
+                                entry: dict[str, object] = {
+                                    "turn": tl.get("turn"),
+                                    "tick": obs.get("tick", 0) if isinstance(obs, dict) else 0,  # type: ignore[no-matching-overload]
+                                    "customer_waiting": obs.get("customer_waiting") if isinstance(obs, dict) else False,  # type: ignore[invalid-argument-type]
+                                    "inventory": obs.get("inventory") if isinstance(obs, dict) else 0,  # type: ignore[invalid-argument-type]
+                                    "operation": tl.get("operation"),
+                                    "reward_delta": tl.get("reward_delta", 0.0),
+                                    "valid": tl.get("valid", True),
+                                }
+                                if not tl.get("valid"):
+                                    entry["error"] = tl.get("error", "")
+                                turn_summary.append(entry)
+                                # ── Behavior accumulation ──
+                                _step_behavior_turns += 1
+                                if not tl.get("valid", True):
+                                    _step_behavior_invalid += 1
+                                _op = str(tl.get("operation", "unknown"))
+                                _step_behavior_actions[_op] = (
+                                    _step_behavior_actions.get(_op, 0) + 1
+                                )
+                            gen_entry["turn_log"] = turn_summary
+                            _step_behavior_resp_lens.append(
+                                len(str(gen_entry.get("completion", "")))
+                            )
+                        if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
+                            gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
+                        if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
+                            gen_entry["branch_rewards"] = branch_rewards_G[s_idx]
+                        if s_idx < len(turns_logprobs_G) and turns_logprobs_G[s_idx]:
+                            turn_lps = turns_logprobs_G[s_idx]
+                            gen_entry["turn_mean_logprobs"] = [
+                                sum(lps) / len(lps) if lps else 0.0
+                                for lps in turn_lps
+                            ]
+                            gen_entry["turn_logprob_var"] = [
+                                (sum((x - sum(lps) / len(lps)) ** 2 for x in lps) / len(lps))
+                                if len(lps) > 1 else 0.0
+                                for lps in turn_lps
+                            ]
+                        # Log top-K highest surprisal tokens with decoded text.
+                        # Useful for debugging DG gating and blog post analysis:
+                        # shows which tokens the gate considers "fork-points".
+                        if s_idx < len(logprobs_G):
+                            # Flatten token IDs for this sample
+                            s_tids: list[int] = []
+                            for t_idx2 in range(len(turns_token_ids_G[s_idx])):
+                                s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
+                            top_entries = _top_surprisal_payload(
+                                logprobs_G[s_idx],
+                                s_tids,
+                                token_lookup,
+                                limit=generation_top_surprisal_limit,
+                            )
+                            if top_entries:
+                                gen_entry["top_surprisal_tokens"] = top_entries
+                        generation_entries.append(gen_entry)
+                    if generation_entries:
+                        generations_logger.log_many(generation_entries)
+                sample_time = time.perf_counter() - sample_start
+            else:
+                # 10c. Sample completions
+                sample_start = time.perf_counter()
+                use_entropy_sampling = (
+                    config.uncertainty_kind == "shannon_entropy"
+                    and hasattr(helper, "sample_with_entropy")
+                )
+                precomputed_entropies_batch: list[list[list[float]]] | None = None
+                if use_entropy_sampling:
+                    enriched_sequences = helper.sample_with_entropy(  # type: ignore[unresolved-attribute]
+                        batch_prompt_ids,
+                        current_group_size,
+                        config.max_tokens,
+                        config.temperature,
+                        config.top_p,
+                    )
+                    # Separate into standard 2-tuples + entropy side channel
+                    all_group_sequences = [
+                        [(ids, lps) for ids, lps, _ent in group]
+                        for group in enriched_sequences
+                    ]
+                    precomputed_entropies_batch = [
+                        [ent if ent is not None else [] for _ids, _lps, ent in group]
+                        for group in enriched_sequences
+                    ]
+                else:
+                    all_group_sequences = helper.sample(  # type: ignore[unresolved-attribute]
+                        batch_prompt_ids,
+                        current_group_size,
+                        config.max_tokens,
+                        config.temperature,
+                        config.top_p,
+                    )
+                sample_time = time.perf_counter() - sample_start
+
+                decoded_groups = decode_sequence_groups(
+                    tokenizer,
+                    all_group_sequences,
+                    needs_planning=needs_planning,
+                    token_lookup=token_lookup if needs_planning else None,
+                    detector=detector if needs_planning else None,
+                    counters=runtime_counters,
                 )
 
-                reward_tie_stats = _summarize_reward_ties(rewards_G)
-                if reward_tie_stats["eligible"]:
-                    batch_reward_tie_eligible_groups += 1
-                    batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
-                    batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
-                    batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
-                    batch_reward_total_pairs += reward_tie_stats["total_pairs"]
-                    batch_reward_unique_fraction_sum += (
-                        reward_tie_stats["unique_count"] / len(rewards_G)
-                    )
+                for f_idx, decoded_group in enumerate(decoded_groups):
+                    prompt_ids = batch_prompt_ids[f_idx]
+                    answer = batch_answers[f_idx]
+                    task = batch_tasks[f_idx]
+                    info = batch_infos[f_idx]
+                    prompt_obj = batch_prompt_objs[f_idx]
 
-                if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-                    if config.batch_advantage_norm:
-                        print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
-                    elif rewards_G[0] > _CORRECT_THRESHOLD:
-                        print("    -> skipped (all correct)")
-                        continue
+                    rewards_G: list[float] = []
+                    logprobs_G: list[list[float]] = []
+                    planning_masks_G: list[list[int]] = []
+                    completion_texts_G: list[str] = []
+                    for sample in decoded_group:
+                        completion_texts_G.append(sample.text)
+                        logprobs_G.append(sample.logprobs)
+                        planning_masks_G.append(sample.planning_mask)
+
+                    if verifiers_env is None:
+                        assert reward_fn is not None
+                        for text in completion_texts_G:
+                            rewards_G.append(reward_fn.score(text, answer))
                     else:
-                        print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
-                        continue
+                        rewards_G = score_singleturn_group(
+                            verifiers_env,
+                            prompt=prompt_obj,
+                            answer=answer,
+                            task=task,
+                            info=info,
+                            completion_texts=completion_texts_G,
+                        )
 
-                # Resolve per-group precomputed entropies
-                group_entropies_G: list[list[float]] | None = None
-                if precomputed_entropies_batch is not None:
-                    group_entropies_G = precomputed_entropies_batch[f_idx]
+                    all_logprobs_sepa.extend(logprobs_G)
+                    all_planning_masks_sepa.extend(planning_masks_G)
 
-                if config.algorithm_mode:
-                    adv_result = compute_algorithm_advantages(
-                        rewards_G,
-                        logprobs_G,
-                        planning_masks_G,
-                        algorithm_mode=config.algorithm_mode,
-                        params=step_algorithm_params,
-                        gtpo_beta=config.gtpo_beta,
-                        hicra_alpha=config.hicra_alpha,
-                        sepa_lambda=sepa_lambda_val,
-                        step=batch_idx,
-                        token_distributions_G=None,
-                        precomputed_entropies_G=group_entropies_G,
+                    for r in rewards_G:
+                        batch_rewards.append(r)
+                        if r > _CORRECT_THRESHOLD:
+                            batch_correct += 1
+
+                    for sample in decoded_group:
+                        batch_total_completions += 1
+                        if len(sample.token_ids) >= config.max_tokens:
+                            batch_max_token_hits += 1
+
+                    group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
+                    answer_preview = answer[:40] if len(answer) > 40 else answer
+                    print(
+                        f"  group: {group_correct}/{len(rewards_G)} correct "
+                        f"| answer={answer_preview}"
                     )
-                else:
-                    adv_result = compute_composable_advantages(
-                        rewards_G,
-                        logprobs_G,
-                        planning_masks_G,
-                        advantage_mode=config.advantage_mode,
-                        transform_mode=config.transform_mode,
-                        gtpo_beta=config.gtpo_beta,
-                        hicra_alpha=config.hicra_alpha,
-                        sepa_lambda=sepa_lambda_val,
-                        advantage_params=config.effective_advantage_params,
-                        transform_params=step_transform_params,
-                        step=batch_idx,
-                        post_process_params=config.post_process_params,
-                        token_distributions_G=None,
-                        precomputed_entropies_G=group_entropies_G,
+
+                    reward_tie_stats = _summarize_reward_ties(rewards_G)
+                    if reward_tie_stats["eligible"]:
+                        batch_reward_tie_eligible_groups += 1
+                        batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
+                        batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
+                        batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
+                        batch_reward_total_pairs += reward_tie_stats["total_pairs"]
+                        batch_reward_unique_fraction_sum += (
+                            reward_tie_stats["unique_count"] / len(rewards_G)
+                        )
+
+                    if reward_tie_stats["is_uniform"] and not config.tl_grpo:
+                        if config.batch_advantage_norm:
+                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                        elif rewards_G[0] > _CORRECT_THRESHOLD:
+                            print("    -> skipped (all correct)")
+                            continue
+                        else:
+                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                            continue
+
+                    # Resolve per-group precomputed entropies
+                    group_entropies_G: list[list[float]] | None = None
+                    if precomputed_entropies_batch is not None:
+                        group_entropies_G = precomputed_entropies_batch[f_idx]
+
+                    if config.algorithm_mode:
+                        adv_result = compute_algorithm_advantages(
+                            rewards_G,
+                            logprobs_G,
+                            planning_masks_G,
+                            algorithm_mode=config.algorithm_mode,
+                            params=step_algorithm_params,
+                            gtpo_beta=config.gtpo_beta,
+                            hicra_alpha=config.hicra_alpha,
+                            sepa_lambda=sepa_lambda_val,
+                            step=batch_idx,
+                            token_distributions_G=None,
+                            precomputed_entropies_G=group_entropies_G,
+                        )
+                    else:
+                        adv_result = compute_composable_advantages(
+                            rewards_G,
+                            logprobs_G,
+                            planning_masks_G,
+                            advantage_mode=config.advantage_mode,
+                            transform_mode=config.transform_mode,
+                            gtpo_beta=config.gtpo_beta,
+                            hicra_alpha=config.hicra_alpha,
+                            sepa_lambda=sepa_lambda_val,
+                            advantage_params=config.effective_advantage_params,
+                            transform_params=step_transform_params,
+                            step=batch_idx,
+                            post_process_params=config.post_process_params,
+                            token_distributions_G=None,
+                            precomputed_entropies_G=group_entropies_G,
+                        )
+                    all_token_advs_G = adv_result.token_advs
+                    if adv_result.has_stats:
+                        batch_surprisal_stats.append(adv_result.stats)
+                    if adv_result.extra_metrics:
+                        batch_adv_results.append(adv_result)
+
+                    for sample, token_advs in zip(decoded_group, all_token_advs_G):
+                        full_tokens = list(prompt_ids) + list(sample.token_ids)
+                        padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
+                        padded_advantages = [0.0] * len(prompt_ids) + list(token_advs)
+                        all_datum_tokens.append(full_tokens)
+                        all_datum_logprobs.append(padded_logprobs)
+                        all_datum_advantages.append(padded_advantages)
+
+                    generation_entries: list[dict[str, object]] = []
+                    selected_generation_indices = (
+                        _generation_log_indices(
+                            len(decoded_group),
+                            samples_per_prompt=generation_log_samples_per_prompt,
+                            rewards=rewards_G,
+                        )
+                        if generations_logger.enabled
+                        else []
                     )
-                all_token_advs_G = adv_result.token_advs
-                if adv_result.has_stats:
-                    batch_surprisal_stats.append(adv_result.stats)
-                if adv_result.extra_metrics:
-                    batch_adv_results.append(adv_result)
+                    for s_idx in selected_generation_indices:
+                        sample = decoded_group[s_idx]
+                        gen_entry: dict[str, object] = {
+                            "step": batch_idx,
+                            "prompt": batch_prompt_previews[f_idx],
+                            "completion": sample.text[:500],
+                            "reward": rewards_G[s_idx],
+                            "num_tokens": len(sample.logprobs),
+                        }
+                        # Top-K highest surprisal tokens with decoded text
+                        top_entries = _top_surprisal_payload(
+                            sample.logprobs,
+                            sample.token_ids,
+                            token_lookup,
+                            limit=generation_top_surprisal_limit,
+                        )
+                        if top_entries:
+                            gen_entry["top_surprisal_tokens"] = top_entries
+                        generation_entries.append(gen_entry)
+                    if generation_entries:
+                        generations_logger.log_many(generation_entries)
 
-                for sample, token_advs in zip(decoded_group, all_token_advs_G):
-                    full_tokens = list(prompt_ids) + list(sample.token_ids)
-                    padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
-                    padded_advantages = [0.0] * len(prompt_ids) + list(token_advs)
-                    all_datum_tokens.append(full_tokens)
-                    all_datum_logprobs.append(padded_logprobs)
-                    all_datum_advantages.append(padded_advantages)
-
-                for s_idx, sample in enumerate(decoded_group):
-                    gen_entry: dict[str, object] = {
-                        "step": batch_idx,
-                        "prompt": batch_prompt_previews[f_idx],
-                        "completion": sample.text[:500],
-                        "reward": rewards_G[s_idx],
-                        "num_tokens": len(sample.logprobs),
-                    }
-                    # Top-K highest surprisal tokens with decoded text
-                    top_entries = top_surprisal_entries(
-                        sample.logprobs,
-                        sample.token_ids,
-                        token_lookup,
-                    )
-                    if top_entries:
-                        gen_entry["top_surprisal_tokens"] = top_entries
-                    generations_logger.log(gen_entry)
-
-        # 10e. SEPA state updates
-        total_completions += len(batch_rewards)
-        total_correct += batch_correct
-        correct_rate = (
-            batch_correct / len(batch_rewards) if batch_rewards else 0.0
-        )
-
-        if uses_sepa_controller:
-            sepa_controller.observe_correct_rate(correct_rate)
-
-            if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
-                for t_idx in range(len(all_logprobs_sepa)):
-                    logprobs = all_logprobs_sepa[t_idx]
-                    pmask = all_planning_masks_sepa[t_idx]
-                    exec_ent = [
-                        -logprobs[j]
-                        for j in range(len(logprobs))
-                        if pmask[j] == 0
-                    ]
-                    sepa_controller.update_auto_state(exec_ent)
-
-        # 10f. Train
-        num_datums = len(all_datum_tokens)
-        if num_datums == 0:
-            print(f"Step {batch_idx}: no informative datums, skipping.")
-            obs = StepObservation(
-                step_time_s=time.perf_counter() - step_start,
-                sample_time_s=sample_time,
-                batch_size=current_batch_size,
-                group_size=current_group_size,
-                skipped=True,
+            # 10e. SEPA state updates
+            total_completions += len(batch_rewards)
+            total_correct += batch_correct
+            correct_rate = (
+                batch_correct / len(batch_rewards) if batch_rewards else 0.0
             )
-            backpressure.observe(obs)  # type: ignore[unresolved-attribute]
-            continue
 
-        print(f"Step {batch_idx}: submitting {num_datums} datums for training...")
+            if uses_sepa_controller:
+                sepa_controller.observe_correct_rate(correct_rate)
 
-        if not backend_caps.preserves_token_advantages:
-            _assert_uniform_completion_advantages_for_non_preserving_backend(
+                if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
+                    for t_idx in range(len(all_logprobs_sepa)):
+                        logprobs = all_logprobs_sepa[t_idx]
+                        pmask = all_planning_masks_sepa[t_idx]
+                        exec_ent = [
+                            -logprobs[j]
+                            for j in range(len(logprobs))
+                            if pmask[j] == 0
+                        ]
+                        sepa_controller.update_auto_state(exec_ent)
+
+            # 10f. Train
+            num_datums = len(all_datum_tokens)
+            if num_datums == 0:
+                print(f"Step {batch_idx}: no informative datums, skipping.")
+                obs = StepObservation(
+                    step_time_s=time.perf_counter() - step_start,
+                    sample_time_s=sample_time,
+                    batch_size=current_batch_size,
+                    group_size=current_group_size,
+                    skipped=True,
+                )
+                backpressure.observe(obs)  # type: ignore[unresolved-attribute]
+                continue
+
+            print(f"Step {batch_idx}: submitting {num_datums} datums for training...")
+
+            if not backend_caps.preserves_token_advantages:
+                _assert_uniform_completion_advantages_for_non_preserving_backend(
+                    all_datum_logprobs,
+                    all_datum_advantages,
+                    backend_name=config.backend,
+                )
+
+            # REINFORCE++ batch normalization (before capping)
+            batch_norm_metrics: dict[str, float] = {}
+            if config.batch_advantage_norm:
+                all_datum_advantages, batch_norm_metrics = (
+                    apply_batch_advantage_normalization(all_datum_advantages)
+                )
+
+            # Advantage capping (pre-training, any backend)
+            adv_cap_fraction = 0.0
+            adv_cap_magnitude = 0.0
+            if config.adv_clip_max > 0:
+                all_datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
+                    _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
+                )
+
+            train_start = time.perf_counter()
+            loss_value = helper.train_step(  # type: ignore[unresolved-attribute]
+                all_datum_tokens,
                 all_datum_logprobs,
                 all_datum_advantages,
-                backend_name=config.backend,
+                config.lr,
+                config.weight_decay,
+            )
+            train_time = time.perf_counter() - train_start
+            clip_fraction = getattr(helper, '_clip_fraction', 0.0)
+
+            step_time = time.perf_counter() - step_start
+
+            # Back pressure
+            bp_total_tokens = sum(len(t) for t in all_datum_tokens)
+            obs = StepObservation(
+                step_time_s=step_time,
+                sample_time_s=sample_time,
+                train_time_s=train_time,
+                num_datums=num_datums,
+                batch_size=current_batch_size,
+                group_size=current_group_size,
+                total_tokens=bp_total_tokens,
+                loss=loss_value,
+                skipped=False,
+            )
+            backpressure.observe(obs)  # type: ignore[unresolved-attribute]
+            bp_decision = backpressure.recommend()  # type: ignore[unresolved-attribute]
+
+            if config.bp_enabled and not bp_warmup:
+                if bp_decision.action in ("throttle", "increase"):
+                    new_bs = bp_decision.recommended_batch_size
+                    new_bs = max(config.bp_min_batch_size, min(config.bp_max_batch_size, new_bs))
+                    if new_bs > 0:
+                        current_batch_size = new_bs
+
+            # 10g. Logging
+            mean_reward = (
+                sum(batch_rewards) / len(batch_rewards) if batch_rewards else 0.0
+            )
+            running_correct_rate = (
+                total_correct / total_completions if total_completions > 0 else 0.0
+            )
+            max_token_hit_rate = (
+                batch_max_token_hits / batch_total_completions
+                if batch_total_completions > 0
+                else 0.0
+            )
+            reward_tie_group_rate = (
+                batch_reward_tie_groups / batch_reward_tie_eligible_groups
+                if batch_reward_tie_eligible_groups > 0
+                else 0.0
+            )
+            reward_uniform_group_rate = (
+                batch_reward_uniform_groups / batch_reward_tie_eligible_groups
+                if batch_reward_tie_eligible_groups > 0
+                else 0.0
+            )
+            reward_tie_pair_rate = (
+                batch_reward_tied_pairs / batch_reward_total_pairs
+                if batch_reward_total_pairs > 0
+                else 0.0
+            )
+            reward_unique_fraction_mean = (
+                batch_reward_unique_fraction_sum / batch_reward_tie_eligible_groups
+                if batch_reward_tie_eligible_groups > 0
+                else 0.0
             )
 
-        # REINFORCE++ batch normalization (before capping)
-        batch_norm_metrics: dict[str, float] = {}
-        if config.batch_advantage_norm:
-            all_datum_advantages, batch_norm_metrics = (
-                apply_batch_advantage_normalization(all_datum_advantages)
+            # Aggregate entropy stats
+            step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
+            step_post_exec_mean = step_post_exec_var = 0.0
+            step_post_plan_mean = step_post_plan_var = 0.0
+            if batch_surprisal_stats:
+                n_stats = len(batch_surprisal_stats)
+                step_exec_mean = sum(s.exec_mean for s in batch_surprisal_stats) / n_stats
+                step_exec_var = sum(s.exec_var for s in batch_surprisal_stats) / n_stats
+                step_plan_mean = sum(s.plan_mean for s in batch_surprisal_stats) / n_stats
+                step_plan_var = sum(s.plan_var for s in batch_surprisal_stats) / n_stats
+                step_post_exec_mean = sum(s.post_exec_mean for s in batch_surprisal_stats) / n_stats
+                step_post_exec_var = sum(s.post_exec_var for s in batch_surprisal_stats) / n_stats
+                step_post_plan_mean = sum(s.post_plan_mean for s in batch_surprisal_stats) / n_stats
+                step_post_plan_var = sum(s.post_plan_var for s in batch_surprisal_stats) / n_stats
+
+            condition_label = _condition_label(config)
+            sepa_gate = (
+                sepa_controller.gate_open()
+                if uses_sepa_controller
+                else False
             )
 
-        # Advantage capping (pre-training, any backend)
-        adv_cap_fraction = 0.0
-        adv_cap_magnitude = 0.0
-        if config.adv_clip_max > 0:
-            all_datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
-                _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
-            )
-
-        train_start = time.perf_counter()
-        loss_value = helper.train_step(  # type: ignore[unresolved-attribute]
-            all_datum_tokens,
-            all_datum_logprobs,
-            all_datum_advantages,
-            config.lr,
-            config.weight_decay,
-        )
-        train_time = time.perf_counter() - train_start
-        clip_fraction = getattr(helper, '_clip_fraction', 0.0)
-
-        step_time = time.perf_counter() - step_start
-
-        # Back pressure
-        bp_total_tokens = sum(len(t) for t in all_datum_tokens)
-        obs = StepObservation(
-            step_time_s=step_time,
-            sample_time_s=sample_time,
-            train_time_s=train_time,
-            num_datums=num_datums,
-            batch_size=current_batch_size,
-            group_size=current_group_size,
-            total_tokens=bp_total_tokens,
-            loss=loss_value,
-            skipped=False,
-        )
-        backpressure.observe(obs)  # type: ignore[unresolved-attribute]
-        bp_decision = backpressure.recommend()  # type: ignore[unresolved-attribute]
-
-        if config.bp_enabled and not bp_warmup:
-            if bp_decision.action in ("throttle", "increase"):
-                new_bs = bp_decision.recommended_batch_size
-                new_bs = max(config.bp_min_batch_size, min(config.bp_max_batch_size, new_bs))
-                if new_bs > 0:
-                    current_batch_size = new_bs
-
-        # 10g. Logging
-        mean_reward = (
-            sum(batch_rewards) / len(batch_rewards) if batch_rewards else 0.0
-        )
-        running_correct_rate = (
-            total_correct / total_completions if total_completions > 0 else 0.0
-        )
-        max_token_hit_rate = (
-            batch_max_token_hits / batch_total_completions
-            if batch_total_completions > 0
-            else 0.0
-        )
-        reward_tie_group_rate = (
-            batch_reward_tie_groups / batch_reward_tie_eligible_groups
-            if batch_reward_tie_eligible_groups > 0
-            else 0.0
-        )
-        reward_uniform_group_rate = (
-            batch_reward_uniform_groups / batch_reward_tie_eligible_groups
-            if batch_reward_tie_eligible_groups > 0
-            else 0.0
-        )
-        reward_tie_pair_rate = (
-            batch_reward_tied_pairs / batch_reward_total_pairs
-            if batch_reward_total_pairs > 0
-            else 0.0
-        )
-        reward_unique_fraction_mean = (
-            batch_reward_unique_fraction_sum / batch_reward_tie_eligible_groups
-            if batch_reward_tie_eligible_groups > 0
-            else 0.0
-        )
-
-        # Aggregate entropy stats
-        step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
-        step_post_exec_mean = step_post_exec_var = 0.0
-        step_post_plan_mean = step_post_plan_var = 0.0
-        if batch_surprisal_stats:
-            n_stats = len(batch_surprisal_stats)
-            step_exec_mean = sum(s.exec_mean for s in batch_surprisal_stats) / n_stats
-            step_exec_var = sum(s.exec_var for s in batch_surprisal_stats) / n_stats
-            step_plan_mean = sum(s.plan_mean for s in batch_surprisal_stats) / n_stats
-            step_plan_var = sum(s.plan_var for s in batch_surprisal_stats) / n_stats
-            step_post_exec_mean = sum(s.post_exec_mean for s in batch_surprisal_stats) / n_stats
-            step_post_exec_var = sum(s.post_exec_var for s in batch_surprisal_stats) / n_stats
-            step_post_plan_mean = sum(s.post_plan_mean for s in batch_surprisal_stats) / n_stats
-            step_post_plan_var = sum(s.post_plan_var for s in batch_surprisal_stats) / n_stats
-
-        condition_label = _condition_label(config)
-        sepa_gate = (
-            sepa_controller.gate_open()
-            if uses_sepa_controller
-            else False
-        )
-
-        metrics: dict = {
-            "step": batch_idx,
-            "algorithm_mode": config.algorithm_mode,
-            "advantage_mode": config.advantage_mode,
-            "transform_mode": config.transform_mode,
-            "uncertainty_kind": config.uncertainty_kind,
-            "condition": condition_label,
-            "backend_reports_sync_loss": backend_caps.reports_sync_loss,
-            "backend_preserves_token_advantages": backend_caps.preserves_token_advantages,
-            "loss_is_placeholder": not backend_caps.reports_sync_loss,
-            "reported_loss": loss_value,
-            "loss": loss_value,
-            "mean_reward": mean_reward,
-            "correct_rate": correct_rate,
-            "running_correct_rate": running_correct_rate,
-            "reward_tie_eligible_groups": batch_reward_tie_eligible_groups,
-            "reward_tie_groups": batch_reward_tie_groups,
-            "reward_uniform_groups": batch_reward_uniform_groups,
-            "reward_tie_group_rate": reward_tie_group_rate,
-            "reward_uniform_group_rate": reward_uniform_group_rate,
-            "reward_tie_pair_rate": reward_tie_pair_rate,
-            "reward_unique_fraction_mean": reward_unique_fraction_mean,
-            "sepa_lambda": sepa_lambda_val,
-            "sepa_gate_open": sepa_gate,
-            "num_datums": num_datums,
-            "max_token_hit_rate": max_token_hit_rate,
-            "step_time_s": step_time,
-            "sample_time_s": sample_time,
-            "train_time_s": train_time,
-            "batch_size": current_batch_size,
-            "group_size": current_group_size,
-            "bp_warmup": bp_warmup,
-            "bp_action": bp_decision.action,
-            "bp_regime": bp_decision.regime,
-            "bp_p_star": bp_decision.p_star,
-            "bp_sigma": bp_decision.sigma,
-            "bp_kappa": bp_decision.kappa,
-            "bp_utilization": bp_decision.utilization,
-            "bp_throughput": bp_decision.throughput,
-        }
-        if batch_surprisal_stats:
-            metrics["exec_entropy_mean"] = step_exec_mean
-            metrics["exec_entropy_var"] = step_exec_var
-            metrics["plan_entropy_mean"] = step_plan_mean
-            metrics["plan_entropy_var"] = step_plan_var
-            # Preferred names: these values are sampled-token surprisal.
-            metrics["exec_surprisal_mean"] = step_exec_mean
-            metrics["exec_surprisal_var"] = step_exec_var
-            metrics["plan_surprisal_mean"] = step_plan_mean
-            metrics["plan_surprisal_var"] = step_plan_var
-            metrics["post_exec_surprisal_mean"] = step_post_exec_mean
-            metrics["post_exec_surprisal_var"] = step_post_exec_var
-            metrics["post_plan_surprisal_mean"] = step_post_plan_mean
-            metrics["post_plan_surprisal_var"] = step_post_plan_var
-        metrics["clip_fraction"] = clip_fraction
-        metrics["adv_cap_fraction"] = adv_cap_fraction
-        metrics["adv_cap_magnitude"] = adv_cap_magnitude
-        if batch_norm_metrics:
-            metrics.update(batch_norm_metrics)
-        if batch_adv_results:
-            all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
-            for k in all_extra_keys:
-                vals = [r.extra_metrics[k] for r in batch_adv_results if k in r.extra_metrics]
-                metrics[k] = sum(vals) / len(vals)
-        if "dg_eta" in metrics:
-            delight_eta_ema = float(metrics["dg_eta"])
-
-        # ── Behavior monitoring ─────────────────────────────────────
-        # Aggregate turn-level behavior from this step's generations.
-        # Tracks model behavior drift that loss alone cannot detect:
-        # action collapse, invalid action rate, response length.
-        if _step_behavior_turns > 0:
-            metrics["behavior/invalid_action_rate"] = (
-                _step_behavior_invalid / _step_behavior_turns
-            )
-            metrics["behavior/action_type_count"] = len(_step_behavior_actions)
-            if _step_behavior_actions:
-                _act_total = sum(_step_behavior_actions.values())
-                _max_frac = max(_step_behavior_actions.values()) / _act_total
-                metrics["behavior/action_dominance"] = _max_frac
-        if _step_behavior_resp_lens:
-            metrics["behavior/avg_response_chars"] = (
-                sum(_step_behavior_resp_lens) / len(_step_behavior_resp_lens)
-            )
-        # ────────────────────────────────────────────────────────────
-
-        metrics_logger.log(metrics)
-
-        loss_display = _format_loss_for_display(
-            loss_value,
-            backend_caps.reports_sync_loss,
-        )
-        print(
-            f"Step {batch_idx} [{condition_label}] | loss={loss_display}"
-            f" | reward={mean_reward:.3f}"
-            f" | correct={correct_rate * 100:.1f}%"
-            f" | datums={num_datums}"
-            f" | bs={current_batch_size}"
-            f" | gs={current_group_size}"
-            f" | tie_g={reward_tie_group_rate * 100:.1f}%"
-            f" | sepa_l={sepa_lambda_val:.4f}"
-            f" | time={step_time:.1f}s"
-        )
-
-        # Wandb
-        if wandb_enabled and wandb_run is not None:
-            wandb_metrics: dict[str, int | float | str] = {
-                "train/loss": loss_value,
-                "train/reported_loss": loss_value,
-                "train/uncertainty_kind": config.uncertainty_kind,
-                "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
-                "train/rewards/mean_reward": mean_reward,
-                "train/rewards/correct_rate": correct_rate,
-                "train/rewards/running_correct_rate": running_correct_rate,
-                "train/rewards/tie_eligible_groups": batch_reward_tie_eligible_groups,
-                "train/rewards/tie_groups": batch_reward_tie_groups,
-                "train/rewards/uniform_groups": batch_reward_uniform_groups,
-                "train/rewards/tie_group_rate": reward_tie_group_rate,
-                "train/rewards/uniform_group_rate": reward_uniform_group_rate,
-                "train/rewards/tie_pair_rate": reward_tie_pair_rate,
-                "train/rewards/unique_fraction_mean": reward_unique_fraction_mean,
-                "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
-                "train/backend/preserves_token_advantages": int(
-                    backend_caps.preserves_token_advantages
-                ),
-                "train/sepa_lambda": sepa_lambda_val,
-                "train/sepa_gate_open": int(sepa_gate),
-                "train/max_token_hit_rate": max_token_hit_rate,
-                "train/num_datums": num_datums,
-                "train/step_time_s": step_time,
-                "train/batch_size": current_batch_size,
-                "train/group_size": current_group_size,
-                "train/entropy/exec_mean": step_exec_mean,
-                "train/entropy/exec_var": step_exec_var,
-                "train/entropy/plan_mean": step_plan_mean,
-                "train/entropy/plan_var": step_plan_var,
-                "train/surprisal/exec_mean": step_exec_mean,
-                "train/surprisal/exec_var": step_exec_var,
-                "train/surprisal/plan_mean": step_plan_mean,
-                "train/surprisal/plan_var": step_plan_var,
-                "train/surprisal/post_exec_mean": step_post_exec_mean,
-                "train/surprisal/post_exec_var": step_post_exec_var,
-                "train/surprisal/post_plan_mean": step_post_plan_mean,
-                "train/surprisal/post_plan_var": step_post_plan_var,
-                "train/clip_fraction": clip_fraction,
-                "train/adv_cap_fraction": adv_cap_fraction,
-                "train/adv_cap_magnitude": adv_cap_magnitude,
-                **{f"train/{k}": v for k, v in batch_norm_metrics.items()},
-                "train/backpressure/action": bp_decision.action,
-                "train/backpressure/regime": bp_decision.regime,
-                "train/backpressure/p_star": bp_decision.p_star,
-                "train/backpressure/sigma": bp_decision.sigma,
-                "train/backpressure/kappa": bp_decision.kappa,
-                "train/backpressure/utilization": bp_decision.utilization,
-                "train/backpressure/throughput": bp_decision.throughput,
-                "train/backpressure/warmup": int(bp_warmup),
+            metrics: dict = {
+                "step": batch_idx,
+                "algorithm_mode": config.algorithm_mode,
+                "advantage_mode": config.advantage_mode,
+                "transform_mode": config.transform_mode,
+                "uncertainty_kind": config.uncertainty_kind,
+                "condition": condition_label,
+                "backend_reports_sync_loss": backend_caps.reports_sync_loss,
+                "backend_preserves_token_advantages": backend_caps.preserves_token_advantages,
+                "loss_is_placeholder": not backend_caps.reports_sync_loss,
+                "reported_loss": loss_value,
+                "loss": loss_value,
+                "mean_reward": mean_reward,
+                "correct_rate": correct_rate,
+                "running_correct_rate": running_correct_rate,
+                "reward_tie_eligible_groups": batch_reward_tie_eligible_groups,
+                "reward_tie_groups": batch_reward_tie_groups,
+                "reward_uniform_groups": batch_reward_uniform_groups,
+                "reward_tie_group_rate": reward_tie_group_rate,
+                "reward_uniform_group_rate": reward_uniform_group_rate,
+                "reward_tie_pair_rate": reward_tie_pair_rate,
+                "reward_unique_fraction_mean": reward_unique_fraction_mean,
+                "sepa_lambda": sepa_lambda_val,
+                "sepa_gate_open": sepa_gate,
+                "num_datums": num_datums,
+                "max_token_hit_rate": max_token_hit_rate,
+                "step_time_s": step_time,
+                "sample_time_s": sample_time,
+                "train_time_s": train_time,
+                "batch_size": current_batch_size,
+                "group_size": current_group_size,
+                "bp_warmup": bp_warmup,
+                "bp_action": bp_decision.action,
+                "bp_regime": bp_decision.regime,
+                "bp_p_star": bp_decision.p_star,
+                "bp_sigma": bp_decision.sigma,
+                "bp_kappa": bp_decision.kappa,
+                "bp_utilization": bp_decision.utilization,
+                "bp_throughput": bp_decision.throughput,
             }
+            metrics["tokens_per_step"] = bp_total_tokens
+            metrics["tokens_per_second"] = (
+                bp_total_tokens / step_time if step_time > _PROMPT_PAD_EPS else 0.0
+            )
+            metrics["sample_share"] = (
+                sample_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
+            )
+            metrics["train_share"] = (
+                train_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
+            )
+            rss_mb = _process_max_rss_mb()
+            if rss_mb is not None:
+                metrics["process_max_rss_mb"] = round(rss_mb, 3)
+            metrics.update(runtime_counters.metrics())
+            metrics.update(_helper_runtime_metrics(helper))
+            if batch_surprisal_stats:
+                metrics["exec_entropy_mean"] = step_exec_mean
+                metrics["exec_entropy_var"] = step_exec_var
+                metrics["plan_entropy_mean"] = step_plan_mean
+                metrics["plan_entropy_var"] = step_plan_var
+                # Preferred names: these values are sampled-token surprisal.
+                metrics["exec_surprisal_mean"] = step_exec_mean
+                metrics["exec_surprisal_var"] = step_exec_var
+                metrics["plan_surprisal_mean"] = step_plan_mean
+                metrics["plan_surprisal_var"] = step_plan_var
+                metrics["post_exec_surprisal_mean"] = step_post_exec_mean
+                metrics["post_exec_surprisal_var"] = step_post_exec_var
+                metrics["post_plan_surprisal_mean"] = step_post_plan_mean
+                metrics["post_plan_surprisal_var"] = step_post_plan_var
+            metrics["clip_fraction"] = clip_fraction
+            metrics["adv_cap_fraction"] = adv_cap_fraction
+            metrics["adv_cap_magnitude"] = adv_cap_magnitude
+            if batch_norm_metrics:
+                metrics.update(batch_norm_metrics)
+            if batch_adv_results:
+                all_extra_keys = {k for r in batch_adv_results for k in r.extra_metrics}
+                for k in all_extra_keys:
+                    vals = [r.extra_metrics[k] for r in batch_adv_results if k in r.extra_metrics]
+                    metrics[k] = sum(vals) / len(vals)
+            if "dg_eta" in metrics:
+                delight_eta_ema = float(metrics["dg_eta"])
+
+            # ── Behavior monitoring ─────────────────────────────────────
+            # Aggregate turn-level behavior from this step's generations.
+            # Tracks model behavior drift that loss alone cannot detect:
+            # action collapse, invalid action rate, response length.
+            if _step_behavior_turns > 0:
+                metrics["behavior/invalid_action_rate"] = (
+                    _step_behavior_invalid / _step_behavior_turns
+                )
+                metrics["behavior/action_type_count"] = len(_step_behavior_actions)
+                if _step_behavior_actions:
+                    _act_total = sum(_step_behavior_actions.values())
+                    _max_frac = max(_step_behavior_actions.values()) / _act_total
+                    metrics["behavior/action_dominance"] = _max_frac
+            if _step_behavior_resp_lens:
+                metrics["behavior/avg_response_chars"] = (
+                    sum(_step_behavior_resp_lens) / len(_step_behavior_resp_lens)
+                )
+            # ────────────────────────────────────────────────────────────
+
+            metrics_logger.log(metrics)
+
+            loss_display = _format_loss_for_display(
+                loss_value,
+                backend_caps.reports_sync_loss,
+            )
+            print(
+                f"Step {batch_idx} [{condition_label}] | loss={loss_display}"
+                f" | reward={mean_reward:.3f}"
+                f" | correct={correct_rate * 100:.1f}%"
+                f" | datums={num_datums}"
+                f" | bs={current_batch_size}"
+                f" | gs={current_group_size}"
+                f" | tie_g={reward_tie_group_rate * 100:.1f}%"
+                f" | sepa_l={sepa_lambda_val:.4f}"
+                f" | time={step_time:.1f}s"
+            )
+
+            # Wandb
+            if wandb_enabled and wandb_run is not None:
+                wandb_metrics: dict[str, int | float | str] = {
+                    "train/loss": loss_value,
+                    "train/reported_loss": loss_value,
+                    "train/uncertainty_kind": config.uncertainty_kind,
+                    "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
+                    "train/rewards/mean_reward": mean_reward,
+                    "train/rewards/correct_rate": correct_rate,
+                    "train/rewards/running_correct_rate": running_correct_rate,
+                    "train/rewards/tie_eligible_groups": batch_reward_tie_eligible_groups,
+                    "train/rewards/tie_groups": batch_reward_tie_groups,
+                    "train/rewards/uniform_groups": batch_reward_uniform_groups,
+                    "train/rewards/tie_group_rate": reward_tie_group_rate,
+                    "train/rewards/uniform_group_rate": reward_uniform_group_rate,
+                    "train/rewards/tie_pair_rate": reward_tie_pair_rate,
+                    "train/rewards/unique_fraction_mean": reward_unique_fraction_mean,
+                    "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
+                    "train/backend/preserves_token_advantages": int(
+                        backend_caps.preserves_token_advantages
+                    ),
+                    "train/sepa_lambda": sepa_lambda_val,
+                    "train/sepa_gate_open": int(sepa_gate),
+                    "train/max_token_hit_rate": max_token_hit_rate,
+                    "train/num_datums": num_datums,
+                    "train/step_time_s": step_time,
+                    "train/batch_size": current_batch_size,
+                    "train/group_size": current_group_size,
+                    "train/entropy/exec_mean": step_exec_mean,
+                    "train/entropy/exec_var": step_exec_var,
+                    "train/entropy/plan_mean": step_plan_mean,
+                    "train/entropy/plan_var": step_plan_var,
+                    "train/surprisal/exec_mean": step_exec_mean,
+                    "train/surprisal/exec_var": step_exec_var,
+                    "train/surprisal/plan_mean": step_plan_mean,
+                    "train/surprisal/plan_var": step_plan_var,
+                    "train/surprisal/post_exec_mean": step_post_exec_mean,
+                    "train/surprisal/post_exec_var": step_post_exec_var,
+                    "train/surprisal/post_plan_mean": step_post_plan_mean,
+                    "train/surprisal/post_plan_var": step_post_plan_var,
+                    "train/clip_fraction": clip_fraction,
+                    "train/adv_cap_fraction": adv_cap_fraction,
+                    "train/adv_cap_magnitude": adv_cap_magnitude,
+                    **{f"train/{k}": v for k, v in batch_norm_metrics.items()},
+                    "train/backpressure/action": bp_decision.action,
+                    "train/backpressure/regime": bp_decision.regime,
+                    "train/backpressure/p_star": bp_decision.p_star,
+                    "train/backpressure/sigma": bp_decision.sigma,
+                    "train/backpressure/kappa": bp_decision.kappa,
+                    "train/backpressure/utilization": bp_decision.utilization,
+                    "train/backpressure/throughput": bp_decision.throughput,
+                    "train/backpressure/warmup": int(bp_warmup),
+                }
+                if batch_adv_results:
+                    for k in {k for r in batch_adv_results for k in r.extra_metrics}:
+                        wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
+                if tl_grpo_ema is not None:
+                    wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
+                # Behavior monitoring → W&B
+                for _bk in ("behavior/invalid_action_rate", "behavior/action_type_count",
+                            "behavior/action_dominance", "behavior/avg_response_chars"):
+                    if _bk in metrics:
+                        wandb_metrics[f"train/{_bk}"] = metrics[_bk]
+                wandb_run.log(wandb_metrics, step=batch_idx)
+
+            # Step record for emergence analysis
+            step_entry: dict = {
+                "step": batch_idx,
+                "mean_reward": mean_reward,
+                "correct_count": batch_correct,
+                "total_count": len(batch_rewards),
+                "condition": condition_label,
+                "uncertainty_kind": config.uncertainty_kind,
+            }
+            if batch_surprisal_stats:
+                step_entry["exec_entropy_mean"] = step_exec_mean
+                step_entry["exec_entropy_var"] = step_exec_var
+                step_entry["plan_entropy_mean"] = step_plan_mean
+                step_entry["plan_entropy_var"] = step_plan_var
+                step_entry["exec_surprisal_mean"] = step_exec_mean
+                step_entry["exec_surprisal_var"] = step_exec_var
+                step_entry["plan_surprisal_mean"] = step_plan_mean
+                step_entry["plan_surprisal_var"] = step_plan_var
+                step_entry["post_exec_surprisal_mean"] = step_post_exec_mean
+                step_entry["post_exec_surprisal_var"] = step_post_exec_var
+                step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
+                step_entry["post_plan_surprisal_var"] = step_post_plan_var
+            step_entry["clip_fraction"] = clip_fraction
+            step_entry["adv_cap_fraction"] = adv_cap_fraction
+            step_entry["adv_cap_magnitude"] = adv_cap_magnitude
             if batch_adv_results:
                 for k in {k for r in batch_adv_results for k in r.extra_metrics}:
-                    wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
-            if tl_grpo_ema is not None:
-                wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
-            # Behavior monitoring → W&B
-            for _bk in ("behavior/invalid_action_rate", "behavior/action_type_count",
-                        "behavior/action_dominance", "behavior/avg_response_chars"):
-                if _bk in metrics:
-                    wandb_metrics[f"train/{_bk}"] = metrics[_bk]
-            wandb_run.log(wandb_metrics, step=batch_idx)
+                    step_entry[k] = metrics.get(k, 0.0)
+            steps_logger.log(step_entry)
 
-        # Step record for emergence analysis
-        step_entry: dict = {
-            "step": batch_idx,
-            "mean_reward": mean_reward,
-            "correct_count": batch_correct,
-            "total_count": len(batch_rewards),
-            "condition": condition_label,
-            "uncertainty_kind": config.uncertainty_kind,
-        }
-        if batch_surprisal_stats:
-            step_entry["exec_entropy_mean"] = step_exec_mean
-            step_entry["exec_entropy_var"] = step_exec_var
-            step_entry["plan_entropy_mean"] = step_plan_mean
-            step_entry["plan_entropy_var"] = step_plan_var
-            step_entry["exec_surprisal_mean"] = step_exec_mean
-            step_entry["exec_surprisal_var"] = step_exec_var
-            step_entry["plan_surprisal_mean"] = step_plan_mean
-            step_entry["plan_surprisal_var"] = step_plan_var
-            step_entry["post_exec_surprisal_mean"] = step_post_exec_mean
-            step_entry["post_exec_surprisal_var"] = step_post_exec_var
-            step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
-            step_entry["post_plan_surprisal_var"] = step_post_plan_var
-        step_entry["clip_fraction"] = clip_fraction
-        step_entry["adv_cap_fraction"] = adv_cap_fraction
-        step_entry["adv_cap_magnitude"] = adv_cap_magnitude
-        if batch_adv_results:
-            for k in {k for r in batch_adv_results for k in r.extra_metrics}:
-                step_entry[k] = metrics.get(k, 0.0)
-        steps_logger.log(step_entry)
+            # Periodic checkpoint
+            if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
+                ckpt_name = f"checkpoint_step_{batch_idx + 1}"
+                checkpoint_path = helper.save_adapter(  # type: ignore[unresolved-attribute]
+                    config.adapter_path,
+                    ckpt_name,
+                )
+                _save_trainer_state(
+                    log_path,
+                    step=batch_idx,
+                    example_idx=example_idx,
+                    total_correct=total_correct,
+                    total_completions=total_completions,
+                    current_batch_size=current_batch_size,
+                    current_group_size=current_group_size,
+                    checkpoint_name=ckpt_name,
+                    checkpoint_path=checkpoint_path,
+                    sepa_state=sepa_controller.state_dict(),
+                    tl_grpo_ema=tl_grpo_ema,
+                    delight_eta_ema=delight_eta_ema,
+                )
+                print(f"Saved checkpoint: {ckpt_name}")
 
-        # Periodic checkpoint
-        if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
-            ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-            checkpoint_path = helper.save_adapter(  # type: ignore[unresolved-attribute]
-                config.adapter_path,
-                ckpt_name,
-            )
-            _save_trainer_state(
-                log_path,
-                step=batch_idx,
-                example_idx=example_idx,
-                total_correct=total_correct,
-                total_completions=total_completions,
-                current_batch_size=current_batch_size,
-                current_group_size=current_group_size,
-                checkpoint_name=ckpt_name,
-                checkpoint_path=checkpoint_path,
-                sepa_state=sepa_controller.state_dict(),
-                tl_grpo_ema=tl_grpo_ema,
-                delight_eta_ema=delight_eta_ema,
-            )
-            print(f"Saved checkpoint: {ckpt_name}")
+        # -----------------------------------------------------------------------
+        # Final
+        # -----------------------------------------------------------------------
+        final_path = helper.save_adapter(config.adapter_path, "final")  # type: ignore[unresolved-attribute]
+        _save_trainer_state(
+            log_path,
+            step=config.max_steps - 1,
+            example_idx=example_idx,
+            total_correct=total_correct,
+            total_completions=total_completions,
+            current_batch_size=current_batch_size,
+            current_group_size=current_group_size,
+            checkpoint_name="final",
+            checkpoint_path=final_path,
+            sepa_state=sepa_controller.state_dict(),
+            tl_grpo_ema=tl_grpo_ema,
+            delight_eta_ema=delight_eta_ema,
+        )
+        final_rate = (
+            100.0 * total_correct / total_completions if total_completions > 0 else 0.0
+        )
+        print(
+            f"Training complete. {_condition_label(config)}, "
+            f"{config.max_steps} steps, running correct rate: {final_rate:.1f}%"
+        )
+        metrics_path = log_path / "metrics.jsonl"
+        if metrics_path.is_file():
+            print(f"Metrics saved to {metrics_path}")
+        else:
+            print("No metrics file written (all steps skipped / no informative datums).")
 
-    # -----------------------------------------------------------------------
-    # Final
-    # -----------------------------------------------------------------------
-    final_path = helper.save_adapter(config.adapter_path, "final")  # type: ignore[unresolved-attribute]
-    _save_trainer_state(
-        log_path,
-        step=config.max_steps - 1,
-        example_idx=example_idx,
-        total_correct=total_correct,
-        total_completions=total_completions,
-        current_batch_size=current_batch_size,
-        current_group_size=current_group_size,
-        checkpoint_name="final",
-        checkpoint_path=final_path,
-        sepa_state=sepa_controller.state_dict(),
-        tl_grpo_ema=tl_grpo_ema,
-        delight_eta_ema=delight_eta_ema,
-    )
-    final_rate = (
-        100.0 * total_correct / total_completions if total_completions > 0 else 0.0
-    )
-    print(
-        f"Training complete. {_condition_label(config)}, "
-        f"{config.max_steps} steps, running correct rate: {final_rate:.1f}%"
-    )
-    metrics_path = log_path / "metrics.jsonl"
-    if metrics_path.is_file():
-        print(f"Metrics saved to {metrics_path}")
-    else:
-        print("No metrics file written (all steps skipped / no informative datums).")
-
-    if wandb_enabled and wandb_run is not None:
-        wandb_run.finish()
-    metrics_logger.close()
-    steps_logger.close()
-    generations_logger.close()
-
-    return final_path
+        return final_path
+    finally:
+        if wandb_enabled and wandb_run is not None:
+            try:
+                wandb_run.finish()
+            except Exception:
+                pass
+        for logger in (metrics_logger, steps_logger, generations_logger):
+            try:
+                logger.close()
+            except Exception:
+                pass

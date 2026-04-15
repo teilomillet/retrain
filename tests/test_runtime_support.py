@@ -5,6 +5,7 @@ from __future__ import annotations
 from retrain.runtime_support import (
     DecodedSequence,
     ExamplePromptCache,
+    RuntimeCounters,
     TokenTextLookup,
     decode_sequence_groups,
     top_surprisal_entries,
@@ -36,7 +37,8 @@ class _FakeDetector:
 
 def test_token_text_lookup_batches_cache_misses() -> None:
     tokenizer = _FakeTokenizer()
-    lookup = TokenTextLookup(tokenizer)
+    counters = RuntimeCounters()
+    lookup = TokenTextLookup(tokenizer, counters=counters)
 
     first = lookup.get_many([1, 2, 1])
     second = lookup.get_many([2, 3])
@@ -44,16 +46,21 @@ def test_token_text_lookup_batches_cache_misses() -> None:
     assert first == ["tok-1", "tok-2", "tok-1"]
     assert second == ["tok-2", "tok-3"]
     assert tokenizer.convert_calls == 2
+    assert counters.token_lookup_requests == 5
+    assert counters.token_lookup_convert_calls == 2
+    assert counters.token_lookup_cache_misses == 3
 
 
 def test_example_prompt_cache_uses_supplied_callables() -> None:
     calls: list[tuple[object, object]] = []
     previews: list[object] = []
+    counters = RuntimeCounters()
     cache = ExamplePromptCache(
         tokenizer=object(),
         prompts=["alpha"],
         encoder=lambda tokenizer, prompt: calls.append((tokenizer, prompt)) or [1, 2, 3],
         preview_renderer=lambda prompt: previews.append(prompt) or "preview",
+        counters=counters,
     )
 
     assert cache.prompt_ids(0) == [1, 2, 3]
@@ -62,19 +69,22 @@ def test_example_prompt_cache_uses_supplied_callables() -> None:
     assert cache.preview(0) == "preview"
     assert len(calls) == 1
     assert len(previews) == 1
+    assert counters.prompt_encode_calls == 1
+    assert counters.prompt_preview_calls == 1
 
 
 def test_decode_sequence_groups_and_top_surprisal_entries() -> None:
     tokenizer = _FakeTokenizer()
     detector = _FakeDetector()
-    lookup = TokenTextLookup(tokenizer)
-
+    counters = RuntimeCounters()
+    lookup = TokenTextLookup(tokenizer, counters=counters)
     groups = decode_sequence_groups(
         tokenizer,
         [[([7, 8], [-0.1, -0.9]), ([9], [-0.2])]],
         needs_planning=True,
         token_lookup=lookup,
         detector=detector,
+        counters=counters,
     )
 
     assert groups == [
@@ -99,3 +109,5 @@ def test_decode_sequence_groups_and_top_surprisal_entries() -> None:
         {"pos": 1, "surprisal": 1.2, "token": "tok-11"},
         {"pos": 2, "surprisal": 0.4, "token": "tok-12"},
     ]
+    assert counters.batch_decode_calls == 1
+    assert counters.batch_decoded_sequences == 2

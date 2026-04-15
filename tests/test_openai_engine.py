@@ -114,6 +114,11 @@ def test_generate_reuses_cached_prompt_decode(monkeypatch):
     engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
 
     assert tokenizer.decode_calls == 1
+    assert engine.performance_counters() == {
+        "engine_prompt_decode_calls": 1,
+        "engine_prompt_cache_hits": 1,
+        "engine_prompt_cache_size": 1,
+    }
 
 
 def test_direct_token_ids_payload_is_used(monkeypatch):

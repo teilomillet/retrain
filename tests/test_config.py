@@ -31,6 +31,9 @@ class TestDefaults:
         assert c.prefix_caching is True
         assert c.log_dir == "logs/train"
         assert c.uncertainty_kind == "surprisal"
+        assert c.log_generations is True
+        assert c.generation_log_samples_per_prompt == 1
+        assert c.generation_top_surprisal_limit == 0
 
 
 class TestLoadConfig:
@@ -96,6 +99,9 @@ ema_decay = 0.95
 log_dir = "logs/custom"
 wandb_project = "my-project"
 wandb_run_name = "run-1"
+log_generations = false
+generation_log_samples_per_prompt = 2
+generation_top_surprisal_limit = 3
 """)
         c = load_config(str(toml))
         assert c.advantage_mode == "grpo"
@@ -127,6 +133,9 @@ wandb_run_name = "run-1"
         assert c.log_dir == "logs/custom"
         assert c.wandb_project == "my-project"
         assert c.wandb_run_name == "run-1"
+        assert c.log_generations is False
+        assert c.generation_log_samples_per_prompt == 2
+        assert c.generation_top_surprisal_limit == 3
 
     def test_empty_string_ignored(self, tmp_path):
         """Empty-string TOML values should keep the default (match Mojo behavior)."""
@@ -241,6 +250,15 @@ wandb_run_name = "run-1"
         assert c.environment_args == ""
         assert c.environment_max_turns == -1
         assert c.environment_auto_install is False
+        assert c.log_generations is True
+        assert c.generation_log_samples_per_prompt == 1
+        assert c.generation_top_surprisal_limit == 0
+
+    def test_generation_logging_limits_reject_negative_values(self):
+        with pytest.raises(ValueError, match="generation_log_samples_per_prompt"):
+            TrainConfig(generation_log_samples_per_prompt=-1)
+        with pytest.raises(ValueError, match="generation_top_surprisal_limit"):
+            TrainConfig(generation_top_surprisal_limit=-1)
 
     def test_new_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"

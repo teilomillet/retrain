@@ -9,6 +9,7 @@ from retrain.cli import (
     _INIT_TEMPLATES,
     _customize_toml,
     _print_top_help,
+    _run_benchmark,
     _run_backends,
     _run_diff,
     _run_doctor,
@@ -57,6 +58,7 @@ class TestTopHelp:
         assert "retrain man" in captured.out
         assert "retrain migrate-config" in captured.out
         assert "retrain backends" in captured.out
+        assert "retrain benchmark" in captured.out
         assert "retrain init-plugin" in captured.out
         assert "retrain plugins" in captured.out
         assert "retrain man --path" in captured.out
@@ -134,6 +136,7 @@ class TestManCommand:
     def test_man_list_topics(self, capsys):
         _run_man(["--list-topics"])
         captured = capsys.readouterr()
+        assert "benchmark" in captured.out
         assert "environments" in captured.out
         assert "quickstart" in captured.out
         assert "configuration" in captured.out
@@ -151,6 +154,13 @@ class TestManCommand:
         assert "batch_size" in captured.out
         assert "transform_mode" in captured.out
         assert "[algorithm]" in captured.out
+
+    def test_man_topic_benchmark(self, capsys):
+        _run_man(["--topic", "benchmark"])
+        captured = capsys.readouterr()
+        assert "BENCHMARKING" in captured.out
+        assert "retrain benchmark config.toml --repeat 3" in captured.out
+        assert "benchmark_summary.json" in captured.out
 
     def test_man_invalid_topic_exits(self):
         with pytest.raises(SystemExit):
@@ -444,6 +454,97 @@ class TestExplainCommand:
         with pytest.raises(SystemExit) as exc_info:
             _run_explain(["/nonexistent/path.toml"])
         assert exc_info.value.code == 1
+
+
+class TestBenchmarkCommand:
+    def test_benchmark_summary_json(self, tmp_path, capsys):
+        run_dir = tmp_path / "run"
+        emergence_dir = run_dir / "emergence"
+        emergence_dir.mkdir(parents=True)
+        (run_dir / "metrics.jsonl").write_text(
+            json.dumps(
+                {
+                    "step": 0,
+                    "loss": 1.0,
+                    "mean_reward": 0.2,
+                    "correct_rate": 0.5,
+                    "step_time_s": 2.0,
+                    "sample_time_s": 1.2,
+                    "train_time_s": 0.6,
+                    "sample_share": 0.6,
+                    "train_share": 0.3,
+                    "tokens_per_step": 64,
+                    "tokens_per_second": 32.0,
+                    "process_max_rss_mb": 128.0,
+                    "prompt_encode_calls": 1,
+                }
+            )
+            + "\n"
+        )
+        (emergence_dir / "generations.jsonl").write_text('{"step": 0}\n')
+
+        _run_benchmark(["--json", str(run_dir)])
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["label"] == "run"
+        assert payload["steps"] == 1
+        assert payload["generations_bytes"] > 0
+        assert payload["prompt_encode_calls"] == 1
+
+    def test_benchmark_config_dispatches_to_suite_runner(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from retrain.benchmark import BenchmarkSuiteSummary
+        from retrain.config import TrainConfig
+
+        config_path = tmp_path / "bench.toml"
+        config_path.write_text("[training]\nmax_steps = 1\n")
+
+        recorded: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            "retrain.config.load_config",
+            lambda path, overrides=None: TrainConfig(
+                log_dir=str(tmp_path / "base-log"),
+                adapter_path=str(tmp_path / "base-adapter"),
+            ),
+        )
+        monkeypatch.setattr("retrain.cli._check_environment", lambda config: None)
+        monkeypatch.setattr(
+            "retrain.benchmark.run_benchmark_suite",
+            lambda config, *, repeats, output_dir, runner_factory, disable_wandb: recorded.update(
+                {
+                    "config": config,
+                    "repeats": repeats,
+                    "output_dir": output_dir,
+                    "disable_wandb": disable_wandb,
+                    "runner_factory": runner_factory,
+                }
+            )
+            or BenchmarkSuiteSummary(
+                path=str(output_dir),
+                repeats=repeats,
+                wandb_disabled=disable_wandb,
+                runs=[],
+                aggregates={},
+            ),
+        )
+
+        _run_benchmark(
+            [
+                str(config_path),
+                "--repeat",
+                "2",
+                "--output-dir",
+                str(tmp_path / "suite"),
+                "--json",
+            ]
+        )
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["repeats"] == 2
+        assert payload["wandb_disabled"] is True
+        assert recorded["repeats"] == 2
+        assert str(recorded["output_dir"]).endswith("suite")
 
 
 class TestCustomizeToml:

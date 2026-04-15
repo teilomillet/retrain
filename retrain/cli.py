@@ -188,6 +188,8 @@ _TOPIC_TO_SECTION = {
     "examples": "EXAMPLES",
     "advantages": "ADVANTAGE PIPELINE",
     "metrics": "METRICS GUIDE",
+    "benchmark": "BENCHMARKING",
+    "benchmarking": "BENCHMARKING",
     "capacity": "CAPACITY PLANNING",
     "capacity-planning": "CAPACITY PLANNING",
     "architecture": "ARCHITECTURE",
@@ -227,6 +229,7 @@ def _print_top_help(cli_name: str) -> None:
     print(f"  {cli_name} top [logdir]")
     print(f"  {cli_name} explain [config.toml] [--json]")
     print(f"  {cli_name} diff <run_a> <run_b> [--json]")
+    print(f"  {cli_name} benchmark <config.toml|run_dir> [--repeat N] [--output-dir DIR] [--json]")
     print(f"  {cli_name} trace [config.toml] [--json]")
     print(
         f"  {cli_name} tree [tree.toml] [--json]"
@@ -381,6 +384,15 @@ def _render_commands_block(cli_name: str) -> list[str]:
         "        Compares metrics between two training runs.",
         f"    {cli_name} diff <campaign_dir> <cond_a> <cond_b> [--json]",
         "        Compares two conditions in a campaign (averaged across seeds).",
+        "        --json            machine-readable JSON output.",
+        "",
+        f"    {cli_name} benchmark <config.toml> [--repeat N] [--output-dir DIR] [--json]",
+        "        Runs one or more benchmark repetitions with isolated log/adapters.",
+        "        Disables wandb by default to reduce measurement noise.",
+        f"    {cli_name} benchmark <run_dir|suite_dir> [--json]",
+        "        Summarizes an existing run or benchmark suite directory.",
+        "        --repeat N        number of repeated executions (config mode only).",
+        "        --output-dir DIR  benchmark suite root (config mode only).",
         "        --json            machine-readable JSON output.",
         "",
         f"    {cli_name} trace [config.toml] [--json]",
@@ -1628,6 +1640,107 @@ def _run_diff(args: list[str]) -> None:
         print(format_diff(result))
 
 
+def _run_benchmark(args: list[str]) -> None:
+    """Run or summarize a benchmark suite."""
+    from dataclasses import asdict
+
+    from retrain.benchmark import (
+        default_benchmark_output_dir,
+        format_run_summary,
+        format_suite_summary,
+        run_benchmark_suite,
+        summarize_run,
+        summarize_suite,
+    )
+    from retrain.config import load_config, parse_cli_overrides
+    from retrain.registry import get_registry
+
+    fmt = "text"
+    repeats = 1
+    output_dir: str | None = None
+    passthrough: list[str] = []
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--json":
+            fmt = "json"
+        elif arg.startswith("--repeat="):
+            repeats = int(arg.split("=", 1)[1])
+        elif arg == "--repeat":
+            i += 1
+            if i >= len(args):
+                print("Flag --repeat requires a value.", file=sys.stderr)
+                sys.exit(1)
+            repeats = int(args[i])
+        elif arg.startswith("--output-dir="):
+            output_dir = arg.split("=", 1)[1]
+        elif arg == "--output-dir":
+            i += 1
+            if i >= len(args):
+                print("Flag --output-dir requires a value.", file=sys.stderr)
+                sys.exit(1)
+            output_dir = args[i]
+        else:
+            passthrough.append(arg)
+        i += 1
+
+    config_path, overrides = parse_cli_overrides(passthrough)
+    if config_path is None:
+        print("Usage:", file=sys.stderr)
+        print(
+            "  retrain benchmark <config.toml> [--repeat N] [--output-dir DIR] [--json]",
+            file=sys.stderr,
+        )
+        print(
+            "  retrain benchmark <run_dir|suite_dir> [--json]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    target = Path(config_path)
+    if target.is_dir():
+        try:
+            if (target / "metrics.jsonl").is_file():
+                run_summary = summarize_run(target)
+                if fmt == "json":
+                    print(json.dumps(asdict(run_summary), indent=2))
+                else:
+                    print(format_run_summary(run_summary))
+                return
+            suite_summary = summarize_suite(target)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+        if fmt == "json":
+            print(json.dumps(asdict(suite_summary), indent=2))
+        else:
+            print(format_suite_summary(suite_summary))
+        return
+
+    if not target.is_file():
+        print(f"File not found: {target}", file=sys.stderr)
+        sys.exit(1)
+
+    config = load_config(str(target), overrides=overrides)
+    _check_environment(config)
+    suite_dir = Path(output_dir) if output_dir else default_benchmark_output_dir(
+        str(target),
+        config,
+    )
+    suite_summary = run_benchmark_suite(
+        config,
+        repeats=repeats,
+        output_dir=suite_dir,
+        runner_factory=lambda cfg: get_registry("trainer").create(cfg.trainer, cfg),
+        disable_wandb=True,
+    )
+    if fmt == "json":
+        print(json.dumps(asdict(suite_summary), indent=2))
+    else:
+        print(format_suite_summary(suite_summary))
+
+
 def _run_migrate_config(args: list[str]) -> None:
     """Migrate legacy backend config keys to [backend.options] format."""
     from retrain.config import migrate_legacy_backend_keys_toml_text
@@ -2175,6 +2288,10 @@ def main() -> None:
 
     if args and args[0] == "diff":
         _run_diff(args[1:])
+        sys.exit(0)
+
+    if args and args[0] == "benchmark":
+        _run_benchmark(args[1:])
         sys.exit(0)
 
     if args and args[0] == "trace":

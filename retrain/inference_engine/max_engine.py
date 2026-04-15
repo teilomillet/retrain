@@ -64,6 +64,9 @@ class MAXServeEngine(InferenceEngine):
     def shutdown(self):
         self._engine.shutdown()
 
+    def performance_counters(self):
+        return self._engine.performance_counters()
+
 
 class MAXLocalEngine(InferenceEngine):
     """In-process MAX inference via the pipeline API.
@@ -87,6 +90,7 @@ class MAXLocalEngine(InferenceEngine):
         config = PipelineConfig(model_path=model_name)
         self._llm = LLM(config)
         self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self._prompt_decode_calls = 0
         print(f"MAXLocalEngine ready ({model_name}).")
 
     def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
@@ -100,6 +104,7 @@ class MAXLocalEngine(InferenceEngine):
         results = []
 
         for prompt_ids in prompt_ids_list:
+            self._prompt_decode_calls += 1
             prompt_text = self._tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
             requests = []
@@ -176,3 +181,8 @@ class MAXLocalEngine(InferenceEngine):
 
     def shutdown(self):
         del self._llm
+
+    def performance_counters(self):
+        return {
+            "engine_prompt_decode_calls": self._prompt_decode_calls,
+        }

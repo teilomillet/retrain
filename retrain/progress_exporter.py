@@ -39,6 +39,10 @@ class RunSnapshot:
     latest_invalid_action_rate: float | None
     latest_avg_response_chars: float | None
     latest_step_time_s: float | None
+    latest_tokens_per_second: float | None
+    latest_sample_share: float | None
+    latest_train_share: float | None
+    latest_process_max_rss_mb: float | None
     metrics_age_seconds: float | None
     sample_event_age_seconds: float | None
     sample_result_age_seconds: float | None
@@ -236,6 +240,10 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         latest_invalid_action_rate=_float_or_none(latest_metrics.get("behavior/invalid_action_rate")) if latest_metrics else None,
         latest_avg_response_chars=_float_or_none(latest_metrics.get("behavior/avg_response_chars")) if latest_metrics else None,
         latest_step_time_s=_float_or_none(latest_metrics.get("step_time_s")) if latest_metrics else None,
+        latest_tokens_per_second=_float_or_none(latest_metrics.get("tokens_per_second")) if latest_metrics else None,
+        latest_sample_share=_float_or_none(latest_metrics.get("sample_share")) if latest_metrics else None,
+        latest_train_share=_float_or_none(latest_metrics.get("train_share")) if latest_metrics else None,
+        latest_process_max_rss_mb=_float_or_none(latest_metrics.get("process_max_rss_mb")) if latest_metrics else None,
         metrics_age_seconds=metrics_age_seconds,
         sample_event_age_seconds=sample_event_age_seconds,
         sample_result_age_seconds=sample_result_age_seconds,
@@ -302,6 +310,10 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
         ("soma_retrain_latest_invalid_action_rate", "Latest invalid action rate from metrics.jsonl.", "gauge", lambda s: s.latest_invalid_action_rate),
         ("soma_retrain_latest_avg_response_chars", "Latest average response length from metrics.jsonl.", "gauge", lambda s: s.latest_avg_response_chars),
         ("soma_retrain_latest_step_time_seconds", "Latest full training-step duration.", "gauge", lambda s: s.latest_step_time_s),
+        ("soma_retrain_latest_tokens_per_second", "Latest tokens-per-second throughput from metrics.jsonl.", "gauge", lambda s: s.latest_tokens_per_second),
+        ("soma_retrain_latest_sample_share", "Latest sampling share of step time.", "gauge", lambda s: s.latest_sample_share),
+        ("soma_retrain_latest_train_share", "Latest training share of step time.", "gauge", lambda s: s.latest_train_share),
+        ("soma_retrain_latest_process_max_rss_megabytes", "Latest reported process peak RSS.", "gauge", lambda s: s.latest_process_max_rss_mb),
         ("soma_retrain_metrics_age_seconds", "Seconds since metrics.jsonl was updated.", "gauge", lambda s: s.metrics_age_seconds),
         ("soma_retrain_sample_event_age_seconds", "Seconds since any sample diagnostic event was recorded.", "gauge", lambda s: s.sample_event_age_seconds),
         ("soma_retrain_sample_result_age_seconds", "Seconds since the latest sample result was recorded.", "gauge", lambda s: s.sample_result_age_seconds),

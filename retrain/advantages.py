@@ -10,6 +10,7 @@ import math
 import re
 from dataclasses import dataclass, field
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Callable, cast
 
 from retrain.plugin_resolver import get_plugin_runtime, resolve_dotted_attribute
@@ -2383,6 +2384,7 @@ DEFAULT_STRATEGIC_GRAMS = [
 ]
 
 
+@lru_cache(maxsize=8192)
 def _clean_token_fragment(fragment: str) -> str:
     """Clean a tokenizer fragment: replace subword markers with space."""
     # sentencepiece: \u2581, GPT-2/BPE: \u0120
@@ -2428,8 +2430,9 @@ def identify_planning_tokens(
     mask = [0] * n_tokens
 
     for start in range(n_tokens):
-        window_text = ""
         window_end = min(start + effective_window, n_tokens)
+        matched = False
+        window_text = ""
 
         for end in range(start, window_end):
             if cleaned[end]:
@@ -2438,7 +2441,6 @@ def identify_planning_tokens(
                 else:
                     window_text = cleaned[end]
 
-            matched = False
             for pat in patterns:
                 if pat.search(window_text):
                     for idx in range(start, end + 1):

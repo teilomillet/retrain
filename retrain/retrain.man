@@ -10,6 +10,7 @@ SYNOPSIS
     retrain top [logdir]
     retrain explain [config.toml] [--json]
     retrain migrate-config <config.toml> [--check|--write|--output PATH] [--json]
+    retrain benchmark <config.toml|run_dir> [--repeat N] [--output-dir DIR] [--json]
     retrain diff <run_a> <run_b> [--json]
     retrain diff <campaign_dir> <cond_a> <cond_b> [--json]
     retrain trace [config.toml] [--json]
@@ -42,7 +43,8 @@ DESCRIPTION
                           and transforms are swappable via TOML or dotted
                           Python import paths.
         Observable        JSONL logs, wandb integration, structured
-                          emergence data, campaign status scanning.
+                          emergence data, benchmark summaries, campaign
+                          status scanning.
         Agent-friendly    This manual is a plain text file. AI agents can
                           read it directly: retrain man --path
 
@@ -120,6 +122,15 @@ COMMANDS
         Compares two conditions in a campaign (averaged across seeds).
         --json            machine-readable JSON output.
 
+    retrain benchmark <config.toml> [--repeat N] [--output-dir DIR] [--json]
+        Runs one or more benchmark repetitions with isolated log/adapters.
+        Disables wandb by default to reduce measurement noise.
+    retrain benchmark <run_dir|suite_dir> [--json]
+        Summarizes an existing run or benchmark suite directory.
+        --repeat N        number of repeated executions (config mode only).
+        --output-dir DIR  benchmark suite root (config mode only).
+        --json            machine-readable JSON output.
+
     retrain trace [config.toml] [--json]
         Pre-flight validation: build flow, trace with synthetic data.
         Catches incompatible modes, missing data, and unsupported
@@ -178,6 +189,8 @@ OPTIONS
         --environment-id
         --environment-max-turns
         --environment-provider
+        --generation-log-samples-per-prompt
+        --generation-top-surprisal-limit
         --grad-clip-norm
         --group-size
         --gtpo-beta
@@ -187,6 +200,7 @@ OPTIONS
         --inference-url
         --kv-cache-dtype
         --log-dir
+        --log-generations
         --lora-alpha
         --lora-dropout
         --lora-rank
@@ -652,6 +666,21 @@ CONFIGURATION
     wandb_tags = ""
         W&B tags (comma-separated).
 
+    log_generations = true
+        Write emergence/generations.jsonl. Disable this for the leanest
+        trainer-side run when per-sample completion logs are not needed.
+
+    generation_log_samples_per_prompt = 1
+        Cap logged samples per prompt. 0 = log every sampled completion.
+        When the cap is smaller than group_size, retrain keeps the
+        highest-reward completions first. Default is 1 to preserve a
+        representative emergence trace without paying for full fan-out.
+
+    generation_top_surprisal_limit = 0
+        Number of highest-surprisal tokens to include in each logged
+        generation. 0 disables the diagnostic payload entirely. This is
+        off by default because it is a measurable trainer-side overhead.
+
     strategic_grams = ""
         JSON array or comma-separated planning phrases for the regex
         detector. Empty = 18 built-in phrases.
@@ -949,13 +978,56 @@ DIFF MODE
         retrain diff --json logs/run_a logs/run_b
 
     The comparison table shows final metrics (loss, correct_rate,
-    mean_reward), wall time, step counts, a winner indicator for each
-    metric, and ASCII sparkline curves of correct_rate over training.
+    mean_reward), wall time, step counts, a performance section
+    (step/sample/train time, throughput, memory when present), a winner
+    indicator for each metric, and ASCII sparkline curves of
+    correct_rate over training.
 
     Winner indicators:
         <       A is better (lower loss, or higher correct_rate/reward)
         >       B is better
         =       Equal (within floating point tolerance)
+
+BENCHMARKING
+    Use the benchmark command when you want reproducible measurement
+    rather than ad hoc log inspection.
+
+    Run repeated benchmark executions from a config:
+
+        retrain benchmark config.toml --repeat 3
+
+    Choose an explicit suite directory:
+
+        retrain benchmark config.toml --repeat 5 --output-dir logs/qwen-bench
+
+    Summarize an existing run directory:
+
+        retrain benchmark logs/qwen-bench/repeat_01
+
+    Summarize an existing benchmark suite:
+
+        retrain benchmark logs/qwen-bench --json
+
+    Behavior:
+        - Each repeat gets its own log_dir and adapter_path.
+        - wandb is disabled by default to reduce measurement noise.
+        - The suite directory stores benchmark_meta.json and
+          benchmark_summary.json.
+
+    Summary metrics:
+        wall_time_s              Total measured step wall time
+        mean_step_time_s         Mean full-step duration
+        mean_sample_time_s       Mean sampling duration
+        mean_train_time_s        Mean training duration
+        mean_tokens_per_second   Throughput from training metrics
+        mean_sample_share        Fraction of step time spent sampling
+        mean_train_share         Fraction of step time spent training
+        peak_process_max_rss_mb  Peak process RSS reported by the run
+
+    Practical use:
+        1) Start with 3 repeats on a short representative config.
+        2) Compare sample_share vs train_share to localize the bottleneck.
+        3) Use retrain diff and retrain status to inspect the resulting runs.
 
 LOGGING
     retrain writes structured JSONL logs to log_dir:
@@ -985,6 +1057,13 @@ LOGGING
         num_datums              Datums submitted for training
         max_token_hit_rate      Fraction hitting max_tokens limit
         step_time_s             Wall time for the step (seconds)
+        sample_time_s           Sampling wall time inside the step
+        train_time_s            Training wall time inside the step
+        tokens_per_step         Tokens submitted for the step
+        tokens_per_second       Tokens_per_step / step_time_s
+        sample_share            sample_time_s / step_time_s
+        train_share             train_time_s / step_time_s
+        process_max_rss_mb      Best-effort process peak RSS in MiB
         batch_size              Current batch size
         group_size              Current group size
         bp_action               Back pressure action
@@ -998,12 +1077,33 @@ LOGGING
         exec_entropy_var        Alias for exec_surprisal_var
         plan_entropy_mean       Alias for plan_surprisal_mean
         plan_entropy_var        Alias for plan_surprisal_var
+        prompt_encode_calls     Cumulative prompt-encoding cache misses
+        prompt_preview_calls    Cumulative prompt-preview cache misses
+        token_lookup_requests   Cumulative token-string lookup requests
+        token_lookup_convert_calls
+                                Cumulative tokenizer.convert_ids_to_tokens calls
+        token_lookup_cache_misses
+                                Cumulative token IDs first-resolved from tokenizer
+        batch_decode_calls      Cumulative tokenizer.batch_decode calls
+        batch_decoded_sequences Cumulative decoded rollout sequences
+        engine_prompt_decode_calls
+                                Cumulative external-engine prompt decodes
+        engine_prompt_cache_hits
+                                Cumulative external-engine prompt cache hits
+        engine_prompt_cache_size
+                                Current external-engine prompt cache size
 
     emergence/steps.jsonl: compact per-step summaries for emergence
     analysis (step, mean_reward, correct_count, total_count, condition).
 
     emergence/generations.jsonl: individual completions with prompt,
-    completion text, reward, and token count.
+    completion text, reward, and token count. Controlled by
+    [logging].log_generations and [logging].generation_log_samples_per_prompt.
+    When the sample cap is active, entries prefer the highest-reward
+    completions for each prompt.
+    Optional top_surprisal_tokens payloads are controlled by
+    [logging].generation_top_surprisal_limit and are disabled by default
+    for lower trainer overhead.
 
     wandb metric prefixes:
         train/                  loss, reported_loss, loss_is_placeholder,
@@ -1157,6 +1257,10 @@ EXAMPLES
 
         retrain diff logs/campaign_20260222 grpo+none maxrl+gtpo_sepa
 
+    Benchmark a short representative config:
+
+        retrain benchmark config.toml --repeat 3
+
     Check run status (active campaigns only):
 
         retrain status logs
@@ -1201,6 +1305,9 @@ METRICS GUIDE
         plan_surprisal_mean     Should stay high (model keeps thinking).
         sepa_lambda             Ramps 0->1 over training.
         sepa_gate_open          When the correctness gate opened.
+        tokens_per_second       Throughput proxy for end-to-end step work.
+        sample_share            Sampling fraction of each step.
+        train_share             Training fraction of each step.
 
     Diagnostic metrics (debug, not for comparison):
 
@@ -1209,6 +1316,10 @@ METRICS GUIDE
         loss_is_placeholder     True for async backend-reported placeholder loss.
         num_datums              Drops = groups uninformative (all right/wrong).
         bp_regime               Stuck in "retrograde" = batch size too high.
+        process_max_rss_mb      Host-side peak RSS; useful for capacity tracking.
+        prompt_encode_calls     Rising slowly is expected on repeated prompts.
+        engine_prompt_cache_hits
+                                Rising fast indicates prompt decode reuse is working.
 
 CAPACITY PLANNING
     Capacity planning in retrain is about sizing actual trainer runs,
