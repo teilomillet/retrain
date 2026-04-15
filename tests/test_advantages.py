@@ -262,6 +262,12 @@ class TestPlanningTokens:
         mask = identify_planning_tokens(tokens, grams)
         assert mask == [1, 1, 1, 1, 1, 1]
 
+    def test_overlapping_phrases_with_empty_fragments(self):
+        tokens = ["", "the", "key", "", "insight"]
+        grams = ["the key", "key insight", "the key insight"]
+        mask = identify_planning_tokens(tokens, grams)
+        assert mask == [1, 1, 1, 1, 1]
+
 
 # ---------------------------------------------------------------------------
 # Entropy masking (Yue et al.)

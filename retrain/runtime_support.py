@@ -151,6 +151,7 @@ def decode_sequence_groups(
 ) -> list[list[DecodedSequence]]:
     """Decode grouped token sequences once and attach planning masks."""
     flat_token_ids: list[list[int]] = []
+    flat_token_texts: list[list[str]] = []
     group_offsets: list[int] = []
 
     for group in all_group_sequences:
@@ -173,6 +174,19 @@ def decode_sequence_groups(
     else:
         decoded_texts = []
 
+    if needs_planning:
+        if token_lookup is None or detector is None:
+            raise ValueError(
+                "Planning decode requires both token_lookup and detector."
+            )
+        all_token_ids = [token_id for seq in flat_token_ids for token_id in seq]
+        all_token_texts = token_lookup.get_many(all_token_ids)
+        offset = 0
+        for seq in flat_token_ids:
+            next_offset = offset + len(seq)
+            flat_token_texts.append(all_token_texts[offset:next_offset])
+            offset = next_offset
+
     decoded_groups: list[list[DecodedSequence]] = []
     for group_idx, group in enumerate(all_group_sequences):
         flat_offset = group_offsets[group_idx]
@@ -181,13 +195,9 @@ def decode_sequence_groups(
             token_ids_list = list(token_ids)
             logprobs = list(seq_logprobs)
             if needs_planning:
-                if token_lookup is None or detector is None:
-                    raise ValueError(
-                        "Planning decode requires both token_lookup and detector."
-                    )
                 detector_typed = detector
                 planning_mask = detector_typed.detect(  # type: ignore[unresolved-attribute]
-                    token_lookup.get_many(token_ids_list)
+                    flat_token_texts[flat_offset + seq_idx]
                 )
             else:
                 planning_mask = [0] * len(logprobs)
