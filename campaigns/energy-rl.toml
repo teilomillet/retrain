@@ -36,7 +36,7 @@ id = "soma_energy"
 max_turns = 120
 
 [environment.args]
-num_examples = 64
+num_examples = 800
 dataset_seed = 7
 max_turns = 120
 http_url = "http://127.0.0.1:13737"

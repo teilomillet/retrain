@@ -62,3 +62,10 @@ def test_approved_export_handoff_resolves_relative_paths(tmp_path):
     assert cfg.model == "candidate/model"
     assert cfg.sft_data_path == str(dataset_path.resolve())
     assert cfg.artifact_dir == str(export_root / "retrain_runs" / "energy.job123.abc123")
+
+
+def test_pipeline_config_defaults_match_budgeted_energy_paths() -> None:
+    cfg = PipelineConfig()
+
+    assert cfg.sft_data_path.endswith("python/data/sft/energy_search_sft.train.jsonl")
+    assert cfg.num_examples == 800

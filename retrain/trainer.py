@@ -6,6 +6,7 @@ Ports the training loop from src/main.mojo into pure Python.
 from __future__ import annotations
 
 import json
+import random
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -47,6 +48,35 @@ from retrain.verifiers_bridge import (
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
 _PROMPT_PAD_EPS = 1e-9
+
+
+def _build_sft_example_order(example_count: int, seed: int) -> list[int]:
+    """Return a deterministic shuffled traversal for SFT warmup examples.
+
+    This keeps resume behavior stable while avoiding the old prefix-only walk,
+    which could spend the whole warmup budget on the earliest episodes in the
+    JSONL file.
+    """
+    if example_count <= 0:
+        return []
+    order = list(range(example_count))
+    rng = random.Random(seed)
+    rng.shuffle(order)
+    return order
+
+
+def _select_sft_batch_indices(
+    example_order: list[int],
+    *,
+    batch_size: int,
+    step: int,
+) -> list[int]:
+    """Select a deterministic SFT warmup batch from the shuffled traversal."""
+    if batch_size <= 0 or not example_order:
+        return []
+    start = step * batch_size
+    size = len(example_order)
+    return [example_order[(start + offset) % size] for offset in range(batch_size)]
 
 
 def _apply_advantage_cap(
@@ -660,6 +690,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     # SFT warmup data (load once if configured)
     # -----------------------------------------------------------------------
     sft_examples: list[list[dict[str, str]]] = []
+    sft_example_order: list[int] = []
     if config.sft_warmup_steps > 0 and config.sft_data_path:
         sft_path = Path(config.sft_data_path)
         if sft_path.exists():
@@ -668,6 +699,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 for _line in _f:
                     row = _json.loads(_line)
                     sft_examples.append(row["messages"])
+            sft_example_order = _build_sft_example_order(
+                len(sft_examples),
+                config.seed,
+            )
             print(f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path}")
         else:
             print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
@@ -683,8 +718,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             # Sample a batch of SFT examples
             sft_batch_size = min(16, len(sft_examples))
-            sft_start = (batch_idx * sft_batch_size) % len(sft_examples)
-            sft_batch = sft_examples[sft_start : sft_start + sft_batch_size]
+            sft_batch_indices = _select_sft_batch_indices(
+                sft_example_order,
+                batch_size=sft_batch_size,
+                step=batch_idx,
+            )
+            sft_batch = [sft_examples[idx] for idx in sft_batch_indices]
 
             # Tokenize: full conversation (system + user + assistant)
             sft_tokens_list: list[list[int]] = []
@@ -753,6 +792,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "sft_signal": sft_signal,
                 "phase": "sft",
                 "datums": len(sft_batch),
+                "sft_unique_examples_seen": min(
+                    len(sft_examples),
+                    (batch_idx + 1) * sft_batch_size,
+                ),
+                "sft_dataset_coverage": min(
+                    1.0,
+                    ((batch_idx + 1) * sft_batch_size) / max(len(sft_examples), 1),
+                ),
                 "time_s": round(elapsed, 2),
                 "advantage_mode": config.advantage_mode,
                 "lr": effective_sft_lr,

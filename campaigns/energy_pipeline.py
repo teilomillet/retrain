@@ -51,7 +51,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+
+
+JSONDict = dict[str, object]
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +78,7 @@ class PipelineConfig:
     sft_steps: int = 60
     sft_lr: float = 4e-5
     sft_batch_size: int = 4
-    sft_data_path: str = "/Users/teilomillet/Code/soma/python/data/sft/energy_search_sft.jsonl"
+    sft_data_path: str = "/Users/teilomillet/Code/soma/python/data/sft/energy_search_sft.train.jsonl"
 
     # -- RL phase --
     rl_steps: int = 200
@@ -89,7 +91,7 @@ class PipelineConfig:
     # -- Environment (energy-specific) --
     http_url: str = "http://127.0.0.1:13737"
     max_turns: int = 120
-    num_examples: int = 64
+    num_examples: int = 800
     dataset_seed: int = 7
 
     # Energy domain defaults
@@ -342,7 +344,7 @@ def _resolve_export_path(base_dir: Path, value: str) -> Path:
     return (base_dir / path).resolve()
 
 
-def _load_approved_export_handoff(export_index_path: str | Path) -> tuple[Path, dict[str, Any]]:
+def _load_approved_export_handoff(export_index_path: str | Path) -> tuple[Path, JSONDict]:
     path = Path(export_index_path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"approved export bundle not found: {path}")
@@ -355,7 +357,7 @@ def _load_approved_export_handoff(export_index_path: str | Path) -> tuple[Path, 
 def _apply_approved_export_handoff(
     cfg: PipelineConfig,
     export_index_path: str | Path,
-) -> dict[str, Any]:
+) -> JSONDict:
     """Apply an approved export bundle to the retrain pipeline config."""
     path, export_bundle = _load_approved_export_handoff(export_index_path)
 
