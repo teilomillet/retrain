@@ -240,9 +240,9 @@ def load_verifiers_environment(config: "TrainConfig") -> object:
             )
         except Exception:
             # Keep loading path robust even if helper APIs change in verifiers.
-            check_hub_env_installed = None  # type: ignore[assignment]
-            install_from_hub = None  # type: ignore[assignment]
-            is_hub_env = None  # type: ignore[assignment]
+            check_hub_env_installed = None
+            install_from_hub = None
+            is_hub_env = None
 
         if (
             check_hub_env_installed is not None

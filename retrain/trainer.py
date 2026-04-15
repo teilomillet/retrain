@@ -592,7 +592,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     wandb_run: WandbRunLike | None = None
     wandb_enabled = bool(config.wandb_project)
     if wandb_enabled:
-        import wandb as wandb_module  # type: ignore[unresolved-import]
+        import wandb as wandb_module
 
         wandb = cast(WandbModuleLike, wandb_module)
 
