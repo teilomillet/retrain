@@ -44,7 +44,7 @@ select = ["ANN401", "TID251"]
 "typing_extensions.Any".msg = "Use precise aliases or protocols instead of typing_extensions.Any."
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["prime_rl.configs.shared", "prime_rl.transport"]
+allowed-unresolved-imports = ["prime_rl.configs.shared", "prime_rl.transport", "wandb"]
 
 [tool.uv.sources]
 ordeal = { path = "../ordeal", editable = true }
