@@ -216,6 +216,8 @@ OPTIONS
         --sepa-schedule
         --sepa-steps
         --sft-data-path
+        --sft-loss-fn
+        --sft-lr
         --sft-warmup-steps
         --strategic-grams
         --surprisal-mask-rho

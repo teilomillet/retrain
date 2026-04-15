@@ -18,12 +18,12 @@ jobs:
       - name: Install package and quality tooling
         run: |
           uv venv
-          uv pip install -e ".[docs]" pytest ruff ty "ordeal==0.3.39"
+          uv pip install -e ".[docs]" pytest "ruff==0.15.7" "ty==0.0.24" "ordeal==0.3.39"
       - name: Run ruff
-        run: uv run ruff check retrain tests
+        run: .venv/bin/ruff check retrain tests
       - name: Run staged ty checks
         run: |
-          uv run ty check \
+          .venv/bin/ty check \
             retrain/type_defs.py \
             retrain/data.py \
             retrain/sepa.py \
@@ -37,10 +37,10 @@ jobs:
             --no-progress \
             --output-format concise
       - name: Manual blocks are synced
-        run: uv run retrain man --check
+        run: .venv/bin/retrain man --check
       - name: Build docs (strict)
-        run: uv run mkdocs build --strict
+        run: .venv/bin/mkdocs build --strict
       - name: Run tests
-        run: uv run pytest -q
+        run: .venv/bin/pytest -q
       - name: Run backend workflow chaos gate
         run: make chaos-backend-workflow

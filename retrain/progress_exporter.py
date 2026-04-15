@@ -16,11 +16,11 @@ from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
 
 
 _RECENT_DIAG_LIMIT = 256
 _ACTIVE_AGE_SECONDS = 10 * 60
+JsonObject = dict[str, object]
 
 
 @dataclass
@@ -54,10 +54,10 @@ class RunSnapshot:
     recent_result_latency_max_s: float | None
 
 
-def _tail_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
+def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
     if not path.is_file():
         return []
-    rows: deque[dict[str, Any]] = deque(maxlen=limit)
+    rows: deque[JsonObject] = deque(maxlen=limit)
     try:
         with path.open(encoding="utf-8") as handle:
             for raw_line in handle:
@@ -75,7 +75,7 @@ def _tail_jsonl(path: Path, limit: int) -> list[dict[str, Any]]:
     return list(rows)
 
 
-def _latest_jsonl_entry(path: Path) -> dict[str, Any] | None:
+def _latest_jsonl_entry(path: Path) -> JsonObject | None:
     rows = _tail_jsonl(path, 1)
     return rows[-1] if rows else None
 
@@ -92,7 +92,7 @@ def _int_or_none(value: object) -> int | None:
     return None
 
 
-def _infer_phase(run_name: str, metrics_entry: dict[str, Any] | None) -> str:
+def _infer_phase(run_name: str, metrics_entry: JsonObject | None) -> str:
     if metrics_entry and isinstance(metrics_entry.get("phase"), str):
         phase = str(metrics_entry["phase"]).strip()
         if phase:
@@ -149,7 +149,7 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         except OSError:
             metrics_age_seconds = None
 
-    def _event_age(row: dict[str, Any] | None) -> float | None:
+    def _event_age(row: JsonObject | None) -> float | None:
         if row is None:
             return None
         ts = _float_or_none(row.get("ts"))

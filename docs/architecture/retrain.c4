@@ -1,0 +1,197 @@
+specification {
+  element actor {
+    style { shape person }
+  }
+  element system
+  element container
+  element component
+
+  tag external
+  tag storage
+  tag plugin
+  tag backend
+}
+
+model {
+  researcher = actor 'ML Researcher' {
+    description 'Defines TOML configs, launches runs, inspects results'
+  }
+
+  // === External systems ===
+  hf = system 'HuggingFace Hub' {
+    #external
+    description 'Model weights, tokenizers, datasets'
+  }
+  tinker = system 'Tinker API' {
+    #external
+    description 'Thinking Machines remote training/sampling API'
+  }
+  primerl = system 'PRIME-RL Stack' {
+    #external
+    description 'External PRIME-RL trainer + vLLM inference (filesystem/zmq transport)'
+  }
+  verifiers = system 'Verifiers Environments' {
+    #external
+    description 'RL environments, rubrics and multi-turn rollouts (PrimeIntellect verifiers)'
+  }
+  judge = system 'LLM Judge API' {
+    #external
+    description 'OpenAI-compatible endpoint used for judge rewards'
+  }
+  wandb = system 'Weights & Biases' {
+    #external
+    description 'Experiment tracking and metrics dashboards'
+  }
+  gpu = system 'Local GPU Host' {
+    #external
+    description 'Host machine with CUDA GPU running PyTorch / LoRA training'
+  }
+
+  // === retrain system ===
+  retrain = system 'retrain' {
+    description 'TOML-first RLVR trainer for LLMs'
+
+    cli = container 'retrain CLI / Trainer' {
+      technology 'Python 3.11+ (Typer-style CLI, single process)'
+      description 'Single Python process: parses TOML, runs the RL training loop, orchestrates backends, rewards, logging'
+
+      entry = component 'CLI Entrypoint' {
+        description 'Dispatches: train, explain, status, init, doctor, backends, man, migrate-config'
+      }
+      config = component 'Config Loader' {
+        description 'Parses retrain.toml, applies CLI overrides, validates TrainConfig'
+      }
+      campaign = component 'Campaign Runner' {
+        description 'Expands [campaign] conditions × seeds into multiple runs'
+      }
+      runner = component 'Training Runner' {
+        description 'TrainingRunner protocol: built-in loop, shell command, or plugin'
+      }
+      trainer = component 'Training Loop' {
+        description 'Main RL loop: sample → score → advantages → train_step → checkpoint'
+      }
+      advantages = component 'Advantage Pipeline' {
+        description 'GRPO / MaxRL / REINFORCE++ + composable transforms (GTPO, HICRA, SEPA)'
+      }
+      sepa = component 'SEPA Controller' {
+        description 'Scheduling + entropy-pooling state for SEPA transforms'
+      }
+      rewards = component 'Reward Dispatcher' {
+        description 'match / math / judge / custom reward functions'
+      }
+      vbridge = component 'Verifiers Bridge' {
+        description 'Loads verifiers envs, runs single/multi-turn rollouts, scores with rubrics'
+      }
+      infer = component 'Inference Engine' {
+        description 'Pluggable sampler: pytorch, openai-compatible, MAX (Modular) engines'
+      }
+      backendad = component 'Backend Adapter' {
+        #backend
+        description 'TrainHelper protocol: checkpoint/sample/train_step/save_adapter — local, tinker, prime-rl'
+      }
+      registry = component 'Registry & Plugin Resolver' {
+        #plugin
+        description 'Resolves backends, engines, rewards, advantages via dotted-path plugins'
+      }
+      squeeze = component 'LoRA-Squeeze' {
+        description 'RSVD rank analysis + adapter compression'
+      }
+      logger = component 'Logger & Progress Exporter' {
+        description 'JSONL metrics, run status, W&B export'
+      }
+      tools = component 'Inspection Tools' {
+        description 'explain (dry-run), status, diff, doctor, man, tree'
+      }
+
+      // intra-container wiring
+      entry -> config 'loads'
+      entry -> campaign 'delegates sweep'
+      entry -> runner 'runs single job'
+      entry -> tools 'serves side commands'
+      campaign -> runner 'spawns one run per (condition, seed)'
+      runner -> trainer 'invokes built-in loop'
+      trainer -> advantages 'computes per-token advantages'
+      trainer -> rewards 'scores rollouts'
+      trainer -> vbridge 'rollouts + dataset'
+      trainer -> infer 'sample (when engine separate)'
+      trainer -> backendad 'sample / train_step / checkpoint'
+      trainer -> logger 'metrics + artifacts'
+      advantages -> sepa 'pool entropy per schedule'
+      rewards -> vbridge 'rubric scoring'
+      registry -> backendad 'instantiates'
+      registry -> infer 'instantiates'
+      registry -> rewards 'instantiates'
+      registry -> advantages 'resolves plugin advantages/transforms'
+      squeeze -> backendad 'reads adapter weights'
+    }
+
+    store = container 'Run Artifact Store' {
+      #storage
+      technology 'Local filesystem (logs/, adapters/, checkpoints/)'
+      description 'metrics.jsonl, trainer_state.json, LoRA adapters, checkpoints'
+    }
+
+    cli -> store 'writes metrics, adapters, checkpoints'
+  }
+
+  // === Context-level relationships ===
+  researcher -> retrain.cli 'runs TOML configs via CLI'
+  researcher -> wandb 'inspects dashboards'
+
+  retrain.cli -> hf 'pulls models, tokenizers, datasets'
+  retrain.cli -> verifiers 'loads environments and rubrics'
+  retrain.cli -> wandb 'streams metrics'
+  retrain.cli -> judge 'judge rewards (OpenAI-compatible HTTP)'
+  retrain.cli -> tinker 'remote sample + train_step (TinkerTrainHelper)'
+  retrain.cli -> primerl 'TrainingBatch via filesystem/zmq; /update_weights'
+  retrain.cli -> gpu 'local PyTorch training (LocalTrainHelper)'
+}
+
+views {
+  view context of retrain {
+    title 'retrain — System Context'
+    include *
+    autoLayout TopBottom
+    style element.tag = #external { color slate }
+  }
+
+  view containers of retrain {
+    title 'retrain — Containers'
+    include *
+    autoLayout TopBottom
+    style element.tag = #external { color slate }
+    style element.tag = #storage { shape storage; color green }
+  }
+
+  view cli_components of retrain.cli {
+    title 'retrain CLI — Components'
+    include *
+    autoLayout TopBottom
+    style element.tag = #plugin { color amber }
+    style element.tag = #backend { color indigo }
+  }
+
+  view training_loop of retrain.cli {
+    title 'Training Loop — Data Flow'
+    include
+      retrain.cli.trainer,
+      retrain.cli.advantages,
+      retrain.cli.sepa,
+      retrain.cli.rewards,
+      retrain.cli.vbridge,
+      retrain.cli.infer,
+      retrain.cli.backendad,
+      retrain.cli.logger,
+      retrain.store,
+      hf,
+      verifiers,
+      tinker,
+      primerl,
+      gpu,
+      judge,
+      wandb
+    autoLayout LeftRight
+    style element.tag = #external { color slate }
+    style element.tag = #storage { shape storage; color green }
+  }
+}

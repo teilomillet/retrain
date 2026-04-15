@@ -10,7 +10,7 @@ import random
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NotRequired, TypedDict, cast
+from typing import NotRequired, Protocol, TypedDict, cast
 
 from transformers import AutoTokenizer
 
@@ -48,6 +48,30 @@ from retrain.verifiers_bridge import (
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
 _PROMPT_PAD_EPS = 1e-9
+
+
+class WandbRunLike(Protocol):
+    def log(
+        self,
+        data: Mapping[str, object],
+        *,
+        step: int | None = None,
+    ) -> object: ...
+
+    def finish(self) -> object: ...
+
+
+class WandbModuleLike(Protocol):
+    def init(
+        self,
+        *,
+        project: str,
+        name: str,
+        config: Mapping[str, str | int | float],
+        entity: str | None = None,
+        group: str | None = None,
+        tags: list[str] | None = None,
+    ) -> WandbRunLike: ...
 
 
 def _build_sft_example_order(example_count: int, seed: int) -> list[int]:
@@ -565,10 +589,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     # -----------------------------------------------------------------------
     # 8. Optional wandb
     # -----------------------------------------------------------------------
-    wandb_run = None
+    wandb_run: WandbRunLike | None = None
     wandb_enabled = bool(config.wandb_project)
     if wandb_enabled:
-        import wandb  # type: ignore[unresolved-import]
+        import wandb as wandb_module  # type: ignore[unresolved-import]
+
+        wandb = cast(WandbModuleLike, wandb_module)
 
         condition_label = _condition_label(config)
         default_run_name = Path(config.log_dir).name or condition_label
