@@ -98,3 +98,52 @@ def test_summarize_delight_campaign_writes_reports(tmp_path):
     md_text = md_path.read_text()
     assert "C2" in md_text
     assert "Delta vs C1" in md_text
+
+
+def test_summarize_delight_campaign_skips_bad_lines_and_computes_std(tmp_path):
+    campaign_dir = tmp_path / "logs" / "campaign_stats"
+    campaign_dir.mkdir(parents=True)
+
+    cond_run_a = campaign_dir / "runs" / "grpo+delight_s1"
+    cond_run_b = campaign_dir / "runs" / "grpo+delight_s2"
+    cond_run_a.mkdir(parents=True, exist_ok=True)
+    cond_run_b.mkdir(parents=True, exist_ok=True)
+
+    with (cond_run_a / "metrics.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"step": 0, "correct_rate": 0.20, "loss": 1.0}) + "\n")
+        handle.write("not json\n")
+        handle.write(json.dumps({"step": 1, "correct_rate": 0.40, "loss": 0.8}) + "\n")
+
+    with (cond_run_b / "metrics.jsonl").open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps({"step": 0, "correct_rate": 0.40, "loss": 0.9}) + "\n")
+        handle.write(json.dumps({"step": 1, "correct_rate": 0.60, "loss": 0.7}) + "\n")
+
+    manifest = {
+        "campaign_toml": "campaigns/delight-stats.toml",
+        "conditions": ["grpo+delight"],
+        "runs": [
+            {
+                "condition": "grpo+delight",
+                "seed": 1,
+                "run_name": "grpo+delight_s1",
+                "log_dir": "logs/campaign_stats/runs/grpo+delight_s1",
+            },
+            {
+                "condition": "grpo+delight",
+                "seed": 2,
+                "run_name": "grpo+delight_s2",
+                "log_dir": "logs/campaign_stats/runs/grpo+delight_s2",
+            },
+        ],
+    }
+    (campaign_dir / "manifest.json").write_text(json.dumps(manifest) + "\n")
+
+    summary = summarize_delight_campaign(campaign_dir)
+    condition = summary["conditions"][0]
+    run_a = condition["runs"][0]
+
+    assert run_a["num_steps"] == 2
+    assert run_a["mean_correct_rate"] == pytest.approx(0.30)
+    assert run_a["peak_correct_rate"] == pytest.approx(0.40)
+    assert condition["final_correct_rate_mean"] == pytest.approx(0.50)
+    assert condition["final_correct_rate_std"] == pytest.approx(0.10)

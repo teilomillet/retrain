@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
 
+from retrain.metrics_scan import float_or_none, scan_metrics_file
+
 SUMMARY_JSON_NAME = "delight-summary.json"
 SUMMARY_MD_NAME = "delight-summary.md"
 _FINAL_EXTRA_FIELDS = (
@@ -20,21 +22,12 @@ _FINAL_EXTRA_FIELDS = (
 
 
 def _safe_float(value: object) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    return None
-
-
-def _mean(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
-
+    return float_or_none(value)
 
 def _std(values: list[float]) -> float:
     if len(values) <= 1:
         return 0.0
     return float(pstdev(values))
-
-
 def _resolve_run_dir(campaign_dir: Path, log_dir: object) -> Path:
     if not isinstance(log_dir, str) or not log_dir:
         return campaign_dir
@@ -65,54 +58,39 @@ def _load_manifest(campaign_dir: Path) -> dict[str, object]:
         )
     return payload
 
-
-def _load_metrics_entries(run_dir: Path) -> list[dict[str, object]]:
-    metrics_path = run_dir / "metrics.jsonl"
-    if not metrics_path.is_file():
-        return []
-
-    entries: list[dict[str, object]] = []
-    for line in metrics_path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict):
-            entries.append(payload)
-    return entries
-
-
 def _summarize_run(run_meta: dict[str, object], campaign_dir: Path) -> dict[str, object] | None:
     run_dir = _resolve_run_dir(campaign_dir, run_meta.get("log_dir"))
-    entries = _load_metrics_entries(run_dir)
-    if not entries:
+    metrics_summary = scan_metrics_file(
+        run_dir / "metrics.jsonl",
+        collect_correct_rates=True,
+    )
+    final_entry = metrics_summary.last
+    if metrics_summary.rows <= 0 or final_entry is None:
         return None
 
-    final_entry = entries[-1]
-    correct_rate_series = [
-        value
-        for entry in entries
-        if (value := _safe_float(entry.get("correct_rate"))) is not None
-    ]
     final_correct_rate = _safe_float(final_entry.get("correct_rate"))
     final_mean_reward = _safe_float(final_entry.get("mean_reward"))
     final_loss = _safe_float(final_entry.get("loss"))
     if final_correct_rate is None:
         return None
 
+    if metrics_summary.correct_rates:
+        peak_correct_rate = max(metrics_summary.correct_rates)
+        mean_correct_rate = sum(metrics_summary.correct_rates) / len(
+            metrics_summary.correct_rates
+        )
+    else:
+        peak_correct_rate = final_correct_rate
+        mean_correct_rate = final_correct_rate
+
     summary: dict[str, object] = {
         "run_name": run_meta.get("run_name", run_dir.name),
         "seed": run_meta.get("seed"),
         "log_dir": str(run_dir),
-        "num_steps": len(entries),
+        "num_steps": metrics_summary.rows,
         "final_correct_rate": final_correct_rate,
-        "peak_correct_rate": (
-            max(correct_rate_series) if correct_rate_series else final_correct_rate
-        ),
-        "mean_correct_rate": _mean(correct_rate_series),
+        "peak_correct_rate": peak_correct_rate,
+        "mean_correct_rate": mean_correct_rate,
     }
     if final_mean_reward is not None:
         summary["final_mean_reward"] = final_mean_reward
@@ -166,10 +144,16 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             for run_summary in run_summaries
         ]
         if final_correct_rates:
-            row["final_correct_rate_mean"] = _mean(final_correct_rates)
+            row["final_correct_rate_mean"] = sum(final_correct_rates) / len(
+                final_correct_rates
+            )
             row["final_correct_rate_std"] = _std(final_correct_rates)
-            row["peak_correct_rate_mean"] = _mean(peak_correct_rates)
-            row["mean_correct_rate_mean"] = _mean(mean_correct_rates)
+            row["peak_correct_rate_mean"] = sum(peak_correct_rates) / len(
+                peak_correct_rates
+            )
+            row["mean_correct_rate_mean"] = sum(mean_correct_rates) / len(
+                mean_correct_rates
+            )
 
         final_mean_rewards = [
             float(run_summary["final_mean_reward"])
@@ -177,7 +161,9 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             if "final_mean_reward" in run_summary
         ]
         if final_mean_rewards:
-            row["final_mean_reward_mean"] = _mean(final_mean_rewards)
+            row["final_mean_reward_mean"] = sum(final_mean_rewards) / len(
+                final_mean_rewards
+            )
 
         final_losses = [
             float(run_summary["final_loss"])
@@ -185,7 +171,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             if "final_loss" in run_summary
         ]
         if final_losses:
-            row["final_loss_mean"] = _mean(final_losses)
+            row["final_loss_mean"] = sum(final_losses) / len(final_losses)
 
         for key in _FINAL_EXTRA_FIELDS:
             values = [
@@ -194,7 +180,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
                 if f"final_{key}" in run_summary
             ]
             if values:
-                row[f"final_{key}_mean"] = _mean(values)
+                row[f"final_{key}_mean"] = sum(values) / len(values)
 
         condition_rows.append(row)
 
