@@ -87,8 +87,9 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
 
 class _FakeScalewayTrainHelper(_BaseFakeHelper):
     def __init__(self, *args, **kwargs):
-        _ = args, kwargs
         super().__init__()
+        self.init_args = args
+        self.init_kwargs = kwargs
 
 
 def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
@@ -175,10 +176,25 @@ def test_scaleway_backend_contract(monkeypatch):
     fake_mod = SimpleNamespace(ScalewayTrainHelper=_FakeScalewayTrainHelper)
     monkeypatch.setitem(sys.modules, "retrain.scaleway_backend", fake_mod)
 
-    cfg = TrainConfig(backend="scaleway")
+    cfg = TrainConfig(
+        backend="scaleway",
+        backend_options={"gpu_type": "h100", "zone": "nl-ams-1", "inference_engine": "sglang", "health_timeout_s": 600},
+    )
     helper = backend.create("scaleway", cfg)
     assert isinstance(helper, TrainHelper)
-    assert isinstance(helper, _BaseFakeHelper)
+    assert isinstance(helper, _FakeScalewayTrainHelper)
+
+    # Verify _create_scaleway forwards options (explicit + defaults) to ScalewayTrainHelper
+    kw = helper.init_kwargs
+    assert kw["gpu_type"] == "h100"
+    assert kw["zone"] == "nl-ams-1"
+    assert kw["inference_engine"] == "sglang"
+    assert kw["health_timeout_s"] == 600
+    assert kw["health_poll_s"] == 5.0       # default
+    assert kw["max_model_len"] == 32768     # default
+    assert kw["model"] == cfg.model
+    assert kw["lora_rank"] == cfg.lora_rank
+
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)

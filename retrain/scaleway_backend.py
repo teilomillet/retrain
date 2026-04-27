@@ -214,7 +214,9 @@ class ScalewayTrainHelper:
         logprobs: list[float] = []
         lp_content = (choice.get("logprobs") or {}).get("content") or []
         for entry in lp_content:
-            token_ids.append(entry["token_id"] if "token_id" in entry else entry.get("token", 0))
+            if "token_id" not in entry:
+                continue
+            token_ids.append(entry["token_id"])
             top = entry.get("top_logprobs") or []
             logprobs.append(top[0]["logprob"] if top else 0.0)
         return token_ids, logprobs
@@ -224,8 +226,10 @@ class ScalewayTrainHelper:
         dest_resolved = dest.resolve()
         for member in tar.getmembers():
             member_path = (dest / member.name).resolve()
-            if not str(member_path).startswith(str(dest_resolved) + "/") and member_path != dest_resolved:
-                raise ValueError(f"Unsafe tar path rejected: {member.name}")
+            try:
+                member_path.relative_to(dest_resolved)
+            except ValueError:
+                raise ValueError(f"Unsafe tar path rejected: {member.name}") from None
         tar.extractall(dest)
 
     def _post_training(self, path: str, body: dict) -> dict:

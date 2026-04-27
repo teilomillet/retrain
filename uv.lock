@@ -2755,7 +2755,6 @@ source = { editable = "." }
 dependencies = [
     { name = "datasets" },
     { name = "mojo" },
-    { name = "ordeal" },
     { name = "orjson" },
     { name = "peft" },
     { name = "requests" },
@@ -2774,6 +2773,7 @@ all = [
 ]
 dev = [
     { name = "mlx-lm", marker = "sys_platform == 'darwin'" },
+    { name = "ordeal" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "sentence-transformers" },
@@ -2821,7 +2821,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5,<10.0" },
     { name = "mlx-lm", marker = "sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.20.0" },
     { name = "mojo", specifier = ">=0.26.2.0" },
-    { name = "ordeal", specifier = ">=0.3.39" },
+    { name = "ordeal", marker = "extra == 'dev'", specifier = ">=0.3.39" },
     { name = "orjson", specifier = ">=3.11.8" },
     { name = "peft", specifier = ">=0.12.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },

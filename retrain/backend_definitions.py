@@ -202,15 +202,6 @@ def _validate_positive_float(value: object) -> str | None:
     return None
 
 
-class ScalewayOptions(TypedDict):
-    gpu_type: str
-    zone: str
-    inference_engine: str
-    health_timeout_s: int
-    health_poll_s: float
-    max_model_len: int
-
-
 _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
     "local": BackendDefinition(
         name="local",

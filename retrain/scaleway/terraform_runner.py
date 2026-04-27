@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shlex
 import subprocess
 from pathlib import Path
 
@@ -104,10 +103,9 @@ class TerraformRunner:
 
     def _var_args(self) -> list[str]:
         project_id = os.environ.get("SCW_DEFAULT_PROJECT_ID", "")
-        # Values are shell-escaped so user-supplied strings (model name, zone…)
-        # cannot break out of the -var=key=value argument.
+
         def v(key: str, value: str | int) -> str:
-            return f"-var={key}={shlex.quote(str(value))}"
+            return f"-var={key}={value}"
 
         return [
             v("instance_type", self._instance_type),
