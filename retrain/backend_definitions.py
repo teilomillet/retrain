@@ -208,6 +208,7 @@ class ScalewayOptions(TypedDict):
     inference_engine: str
     health_timeout_s: int
     health_poll_s: float
+    max_model_len: int
 
 
 _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {

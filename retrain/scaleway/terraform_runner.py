@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import subprocess
-import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -104,17 +104,21 @@ class TerraformRunner:
 
     def _var_args(self) -> list[str]:
         project_id = os.environ.get("SCW_DEFAULT_PROJECT_ID", "")
-        args = [
-            f"-var=instance_type={self._instance_type}",
-            f"-var=zone={self._zone}",
-            f"-var=project_id={project_id}",
-            f"-var=model={self._model}",
-            f"-var=lora_rank={self._lora_rank}",
-            f"-var=inference_engine={self._inference_engine}",
-            f"-var=caller_ip={self._caller_ip}",
-            f"-var=max_model_len={self._max_model_len}",
+        # Values are shell-escaped so user-supplied strings (model name, zone…)
+        # cannot break out of the -var=key=value argument.
+        def v(key: str, value: str | int) -> str:
+            return f"-var={key}={shlex.quote(str(value))}"
+
+        return [
+            v("instance_type", self._instance_type),
+            v("zone", self._zone),
+            v("project_id", project_id),
+            v("model", self._model),
+            v("lora_rank", self._lora_rank),
+            v("inference_engine", self._inference_engine),
+            v("caller_ip", self._caller_ip),
+            v("max_model_len", self._max_model_len),
         ]
-        return args
 
     def _run_tf(self, *args: str) -> None:
         cmd = ["terraform", *args]

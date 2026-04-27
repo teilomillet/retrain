@@ -136,11 +136,10 @@ class ScalewayTrainHelper:
             timeout=120,
         )
         resp.raise_for_status()
-        # Unpack the tar.gz returned by the server into local path/name/
         local_dir = Path(path) / name
         local_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=io.BytesIO(resp.content), mode="r:gz") as tar:
-            tar.extractall(local_dir)
+            self._safe_extractall(tar, local_dir)
         return str(local_dir)
 
     def load_state(self, name: str) -> None:
@@ -149,6 +148,17 @@ class ScalewayTrainHelper:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Deterministically destroy the Scaleway instance and release resources."""
+        self._runner.destroy()
+        self._client.close()
+
+    def __enter__(self) -> ScalewayTrainHelper:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def __del__(self) -> None:
         try:
@@ -208,6 +218,15 @@ class ScalewayTrainHelper:
             top = entry.get("top_logprobs") or []
             logprobs.append(top[0]["logprob"] if top else 0.0)
         return token_ids, logprobs
+
+    @staticmethod
+    def _safe_extractall(tar: tarfile.TarFile, dest: Path) -> None:
+        dest_resolved = dest.resolve()
+        for member in tar.getmembers():
+            member_path = (dest / member.name).resolve()
+            if not str(member_path).startswith(str(dest_resolved) + "/") and member_path != dest_resolved:
+                raise ValueError(f"Unsafe tar path rejected: {member.name}")
+        tar.extractall(dest)
 
     def _post_training(self, path: str, body: dict) -> dict:
         resp = self._client.post(
