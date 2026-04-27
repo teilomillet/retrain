@@ -27,12 +27,15 @@ class TerraformError(RuntimeError):
 
 
 def _detect_public_ip() -> str:
-    """Best-effort detection of the caller's public IP via ipify. Returns '0.0.0.0/0' on failure."""
+    """Detect the caller's public IP via ipify. Raises RuntimeError on failure."""
     try:
         ip = httpx.get("https://api4.ipify.org", timeout=5).text.strip()
         return f"{ip}/32"
-    except Exception:
-        return "0.0.0.0/0"
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not auto-detect public IP to restrict ports 8000/8001. "
+            "Set caller_ip explicitly in your campaign config."
+        ) from exc
 
 
 class TerraformRunner:
@@ -52,13 +55,7 @@ class TerraformRunner:
     ) -> None:
         if not caller_ip:
             caller_ip = _detect_public_ip()
-            if caller_ip == "0.0.0.0/0":
-                logger.warning(
-                    "Could not detect public IP — ports 8000/8001 will be open to the internet. "
-                    "Set caller_ip explicitly to restrict access."
-                )
-            else:
-                logger.info("Auto-detected caller IP: %s", caller_ip)
+            logger.info("Auto-detected caller IP: %s", caller_ip)
         elif caller_ip == "0.0.0.0/0":
             logger.warning(
                 "caller_ip is 0.0.0.0/0 — ports 8000/8001 will be open to the internet."
@@ -153,11 +150,17 @@ class TerraformRunner:
             cmd,
             cwd=str(self._tf_dir),
             env=env,
-            capture_output=False,
+            capture_output=True,
             text=True,
         )
+        if result.stdout:
+            logger.debug("terraform %s stdout:\n%s", args[0], result.stdout.strip())
         if result.returncode != 0:
-            raise TerraformError(f"terraform {args[0]} exited with code {result.returncode}")
+            stderr = (result.stderr or "").strip()
+            msg = f"terraform {args[0]} exited with code {result.returncode}"
+            if stderr:
+                msg += f"\n{stderr}"
+            raise TerraformError(msg)
 
     def _read_outputs(self) -> dict[str, object]:
         cmd = ["terraform", "output", "-json", f"-state={self.state_file}"]

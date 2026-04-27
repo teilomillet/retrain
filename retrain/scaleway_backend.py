@@ -158,11 +158,11 @@ class ScalewayTrainHelper:
         self.close()
 
     def __del__(self) -> None:
-        try:
-            if hasattr(self, "_runner"):
-                self._runner.destroy()
-        except Exception:
-            pass
+        if hasattr(self, "_runner") and self._runner._applied:
+            logger.warning(
+                "ScalewayTrainHelper was garbage-collected without explicit close() — "
+                "use a context manager or call close() to ensure the instance is destroyed."
+            )
 
     # ------------------------------------------------------------------
     # Internals

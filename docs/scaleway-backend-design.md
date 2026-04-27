@@ -97,7 +97,7 @@ TensorRT-LLM is excluded from the MVP: it requires compiling a TRT engine at boo
 | KV cache on shared prefixes | ❌ limited | ✅ **RadixAttention** |
 | Sampling throughput | 🟡 average | ✅ 20–40% higher |
 | Cloud-init setup | ✅ simple | ✅ simple |
-| OpenAI-compat API | ✅ | ✅ |
+| OpenAI-compatible API | ✅ | ✅ |
 
 **Key point — RadixAttention**: in RL, retrain samples `group_size` completions from the **same prompt** (8, 16…). SGLang reuses the KV cache of the shared prefix across all completions in a group, massively reducing memory usage and sampling time. This is a structural advantage for this workload.
 
@@ -155,7 +155,7 @@ Python client on the retrain side:
 
 1. `__init__` → `TerraformRunner.apply()` (blocks ~2–5 min, logs progress)
 2. Polls `/health` on both services
-3. Delegates `sample()` to the inference engine (OpenAI-compat, identical for vLLM and SGLang)
+3. Delegates `sample()` to the inference engine (OpenAI-compatible, identical for vLLM and SGLang)
 4. Delegates `train_step()` / `checkpoint()` to the Training Server
 5. `checkpoint()` triggers LoRA reload on the inference engine via the appropriate endpoint:
    - vLLM: `POST /v1/load_lora_adapter`
