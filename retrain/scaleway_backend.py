@@ -80,9 +80,6 @@ class ScalewayTrainHelper:
         temperature: float,
         top_p: float,
     ) -> SampleBatch:
-        from transformers import AutoTokenizer
-        # Lazy-load tokenizer for decoding token IDs back to text for the prompt
-        # vLLM OpenAI-compat API expects text prompts, not token IDs
         tokenizer = self._get_tokenizer()
 
         results: SampleBatch = []
@@ -172,16 +169,16 @@ class ScalewayTrainHelper:
     # ------------------------------------------------------------------
 
     def _wait_healthy(self) -> None:
-        deadline = time.monotonic() + self._health_timeout_s
         for url in (f"{self._inference_url}/health", f"{self._training_url}/health"):
             logger.info("Waiting for %s …", url)
+            deadline = time.monotonic() + self._health_timeout_s
             while True:
                 try:
                     r = self._client.get(url, timeout=5)
                     if r.status_code == 200:
                         break
                 except Exception:
-                    pass
+                    logger.debug("Health check %s failed", url, exc_info=True)
                 if time.monotonic() > deadline:
                     raise RuntimeError(f"Timeout waiting for {url} to become healthy")
                 time.sleep(self._health_poll_s)

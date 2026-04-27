@@ -5,6 +5,11 @@
 # retrain (CPU local) drives training via HTTP on ports 8000/8001.
 # =============================================================================
 
+locals {
+  # ssh_cidr defaults to caller_ip when not explicitly set
+  ssh_cidr = var.ssh_cidr != "" ? var.ssh_cidr : var.caller_ip
+}
+
 # -----------------------------------------------------------------------------
 # VPC Private Network
 # -----------------------------------------------------------------------------
@@ -24,12 +29,12 @@ resource "scaleway_instance_security_group" "gpu" {
   inbound_default_policy  = "drop"
   outbound_default_policy = "accept"
 
-  # SSH — open to all IPs; key-based auth enforced via Scaleway IAM SSH keys
+  # SSH — key-based auth enforced via Scaleway IAM SSH keys
   inbound_rule {
     action   = "accept"
     protocol = "TCP"
     port     = 22
-    ip_range = "0.0.0.0/0"
+    ip_range = local.ssh_cidr
   }
 
   # Inference engine (vLLM / SGLang)

@@ -63,6 +63,12 @@ variable "caller_ip" {
   default     = "0.0.0.0/0"
 }
 
+variable "ssh_cidr" {
+  description = "CIDR allowed to reach SSH (port 22). Defaults to caller_ip."
+  type        = string
+  default     = ""
+}
+
 # -----------------------------------------------------------------------------
 # Model & Training
 # -----------------------------------------------------------------------------

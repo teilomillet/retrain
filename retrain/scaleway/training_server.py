@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import tempfile
 from pathlib import Path
 
 import httpx
@@ -60,6 +59,8 @@ class LoadStateRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    if _helper is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="helper not initialized")
     return {"status": "ok"}
 
 
@@ -131,7 +132,7 @@ def _reload_lora_on_inference(name: str) -> None:
                 timeout=30,
             ).raise_for_status()
     except Exception as exc:
-        logger.warning("LoRA reload on inference engine failed: %s", exc)
+        raise RuntimeError(f"LoRA reload on inference engine failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

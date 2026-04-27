@@ -8,6 +8,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 _GPU_TYPE_MAP: dict[str, str] = {
@@ -24,6 +26,15 @@ class TerraformError(RuntimeError):
     pass
 
 
+def _detect_public_ip() -> str:
+    """Best-effort detection of the caller's public IP via ipify. Returns '0.0.0.0/0' on failure."""
+    try:
+        ip = httpx.get("https://api4.ipify.org", timeout=5).text.strip()
+        return f"{ip}/32"
+    except Exception:
+        return "0.0.0.0/0"
+
+
 class TerraformRunner:
     """Provisions and tears down a Scaleway GPU instance via Terraform."""
 
@@ -34,15 +45,23 @@ class TerraformRunner:
         model: str,
         lora_rank: int,
         inference_engine: str,
-        caller_ip: str = "0.0.0.0/0",
+        caller_ip: str = "",
         max_model_len: int = 32768,
         tf_dir: Path | None = None,
         state_dir: Path | None = None,
     ) -> None:
-        if caller_ip == "0.0.0.0/0":
+        if not caller_ip:
+            caller_ip = _detect_public_ip()
+            if caller_ip == "0.0.0.0/0":
+                logger.warning(
+                    "Could not detect public IP — ports 8000/8001 will be open to the internet. "
+                    "Set caller_ip explicitly to restrict access."
+                )
+            else:
+                logger.info("Auto-detected caller IP: %s", caller_ip)
+        elif caller_ip == "0.0.0.0/0":
             logger.warning(
-                "caller_ip is 0.0.0.0/0 — ports 8000/8001 will be open to the internet. "
-                "Set caller_ip to your public IP to restrict access."
+                "caller_ip is 0.0.0.0/0 — ports 8000/8001 will be open to the internet."
             )
         self._zone = zone
         self._instance_type = _GPU_TYPE_MAP.get(gpu_type.lower(), gpu_type)
@@ -66,6 +85,8 @@ class TerraformRunner:
         logger.info("Terraform apply — provisioning %s in %s", self._instance_type, self._zone)
         logger.info("Terraform state → %s", self.state_file)
         self._run_tf("init", "-no-color", "-input=false")
+        # Mark as applied before the call so destroy() runs even on partial failures
+        self._applied = True
         self._run_tf(
             "apply",
             "-auto-approve",
@@ -74,7 +95,6 @@ class TerraformRunner:
             *self._state_args(),
             *self._var_args(),
         )
-        self._applied = True
         outputs = self._read_outputs()
         inference_url = outputs["inference_url"]["value"]
         training_url = outputs["training_url"]["value"]
@@ -109,10 +129,11 @@ class TerraformRunner:
     def _var_args(self) -> list[str]:
         project_id = os.environ.get("SCW_DEFAULT_PROJECT_ID", "")
 
-        def v(key: str, value: str | int) -> str:
-            return f"-var={key}={value}"
+        def v(key: str, value: str | int) -> list[str]:
+            return ["-var", f"{key}={value}"]
 
-        return [
+        args: list[str] = []
+        for pair in [
             v("instance_type", self._instance_type),
             v("zone", self._zone),
             v("project_id", project_id),
@@ -121,7 +142,9 @@ class TerraformRunner:
             v("inference_engine", self._inference_engine),
             v("caller_ip", self._caller_ip),
             v("max_model_len", self._max_model_len),
-        ]
+        ]:
+            args.extend(pair)
+        return args
 
     def _run_tf(self, *args: str) -> None:
         cmd = ["terraform", *args]
