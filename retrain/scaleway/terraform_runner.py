@@ -123,7 +123,7 @@ class TerraformRunner:
     def _run_tf(self, *args: str) -> None:
         cmd = ["terraform", *args]
         env = {**os.environ, "TF_DATA_DIR": str(self._state_dir)}
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 — list argv, shell=False, no user input reaches here
             cmd,
             cwd=str(self._tf_dir),
             env=env,
@@ -136,7 +136,7 @@ class TerraformRunner:
     def _read_outputs(self) -> dict[str, object]:
         cmd = ["terraform", "output", "-json", f"-state={self.state_file}"]
         env = {**os.environ, "TF_DATA_DIR": str(self._state_dir)}
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 — list argv, shell=False, no user input reaches here
             cmd,
             cwd=str(self._tf_dir),
             env=env,
