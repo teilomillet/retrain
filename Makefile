@@ -47,7 +47,7 @@ test-mojo:
 lint:
 	uv run ruff check retrain tests
 
-typecheck:
+typecheck: setup-dev
 	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
 
 chaos-backend-workflow:

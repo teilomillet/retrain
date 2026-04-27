@@ -144,9 +144,9 @@ def _create_scaleway(config: "TrainConfig") -> "TrainHelper":
         gpu_type=str(options.get("gpu_type", "l40s")),
         zone=str(options.get("zone", "fr-par-2")),
         inference_engine=str(options.get("inference_engine", "vllm")),
-        health_timeout_s=int(options.get("health_timeout_s", 300)),
-        health_poll_s=float(options.get("health_poll_s", 5.0)),
-        max_model_len=int(options.get("max_model_len", 32768)),
+        health_timeout_s=cast(int, options.get("health_timeout_s", 300)),
+        health_poll_s=cast(float, options.get("health_poll_s", 5.0)),
+        max_model_len=cast(int, options.get("max_model_len", 32768)),
         state_dir=str(Path(config.log_dir) / ".terraform-state"),
     )
 

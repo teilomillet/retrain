@@ -104,7 +104,6 @@ class TerraformRunner:
 
     def _var_args(self) -> list[str]:
         project_id = os.environ.get("SCW_DEFAULT_PROJECT_ID", "")
-        hf_token = self._hf_token or os.environ.get("HF_TOKEN", "")
         args = [
             f"-var=instance_type={self._instance_type}",
             f"-var=zone={self._zone}",
