@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
+from pathlib import Path
+
 from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
 from retrain.registry import backend
@@ -194,6 +196,7 @@ def test_scaleway_backend_contract(monkeypatch):
     assert kw["max_model_len"] == 32768     # default
     assert kw["model"] == cfg.model
     assert kw["lora_rank"] == cfg.lora_rank
+    assert kw["state_dir"] == str(Path(cfg.log_dir) / ".terraform-state")
 
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")

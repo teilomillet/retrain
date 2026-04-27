@@ -39,6 +39,11 @@ class TerraformRunner:
         tf_dir: Path | None = None,
         state_dir: Path | None = None,
     ) -> None:
+        if caller_ip == "0.0.0.0/0":
+            logger.warning(
+                "caller_ip is 0.0.0.0/0 — ports 8000/8001 will be open to the internet. "
+                "Set caller_ip to your public IP to restrict access."
+            )
         self._zone = zone
         self._instance_type = _GPU_TYPE_MAP.get(gpu_type.lower(), gpu_type)
         self._model = model

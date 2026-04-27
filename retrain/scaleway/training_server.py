@@ -27,6 +27,7 @@ app = FastAPI(title="retrain-training-server")
 _helper = None
 _inference_url: str = "http://localhost:8000"
 _inference_engine: str = "vllm"
+_adapter_base: str = "/tmp/retrain_adapter"
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,6 @@ class CheckpointRequest(BaseModel):
 
 
 class SaveAdapterRequest(BaseModel):
-    path: str
     name: str
 
 
@@ -90,8 +90,8 @@ def checkpoint(req: CheckpointRequest) -> dict:
 def save_adapter(req: SaveAdapterRequest) -> Response:
     if _helper is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="helper not initialized")
-    saved_path = _helper.save_adapter(req.path, req.name)
-    # Read all safetensors files and pack them as a tar archive
+    # Always write under the server-controlled base dir — client does not control on-disk location
+    saved_path = _helper.save_adapter(_adapter_base, req.name)
     import io
     import tarfile
     buf = io.BytesIO()
@@ -116,19 +116,18 @@ def load_state(req: LoadStateRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 def _reload_lora_on_inference(name: str) -> None:
-    # The adapter was just saved by checkpoint(); we need to tell the inference
-    # engine to reload it. vLLM and SGLang use different endpoints.
+    lora_path = str(Path(_adapter_base) / name)
     try:
         if _inference_engine == "vllm":
             httpx.post(
                 f"{_inference_url}/v1/load_lora_adapter",
-                json={"lora_name": name, "lora_path": name},
+                json={"lora_name": name, "lora_path": lora_path},
                 timeout=30,
             ).raise_for_status()
         else:
             httpx.post(
                 f"{_inference_url}/add_lora",
-                json={"lora_name": name, "lora_path": name},
+                json={"lora_name": name, "lora_path": lora_path},
                 timeout=30,
             ).raise_for_status()
     except Exception as exc:
@@ -152,9 +151,10 @@ def main() -> None:
     parser.add_argument("--inference-engine", default="vllm", choices=["vllm", "sglang"])
     args = parser.parse_args()
 
-    global _helper, _inference_url, _inference_engine
+    global _helper, _inference_url, _inference_engine, _adapter_base
     _inference_url = args.inference_url
     _inference_engine = args.inference_engine
+    _adapter_base = args.adapter_path
 
     from retrain.local_train_helper import LocalTrainHelper
     _helper = LocalTrainHelper(

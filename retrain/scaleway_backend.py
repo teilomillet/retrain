@@ -132,7 +132,7 @@ class ScalewayTrainHelper:
     def save_adapter(self, path: str, name: str) -> str:
         resp = self._client.post(
             f"{self._training_url}/save_adapter",
-            json={"path": path, "name": name},
+            json={"name": name},
             timeout=120,
         )
         resp.raise_for_status()
@@ -162,7 +162,8 @@ class ScalewayTrainHelper:
 
     def __del__(self) -> None:
         try:
-            self._runner.destroy()
+            if hasattr(self, "_runner"):
+                self._runner.destroy()
         except Exception:
             pass
 
