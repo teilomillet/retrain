@@ -1,51 +1,52 @@
 # Scaleway Backend — Design Proposal
 
-**Statut** : RFC — en attente d'avis équipe  
-**Auteur** : Gireg Roussel  
-**Date** : 2026-04-24
+**Status**: RFC — pending team review  
+**Author**: Gireg Roussel  
+**Date**: 2026-04-24
 
 ---
 
 ## Motivation
 
-retrain dispose aujourd'hui de trois backends : `local` (GPU local), `tinker` (service propriétaire) et `prime_rl` (stack PRIME-RL externe). Aucun d'eux ne répond à la contrainte de **souveraineté** : données et calcul hébergés en France/UE, sans dépendance à un cloud américain.
+retrain currently has three backends: `local` (local GPU), `tinker` (proprietary service) and `prime_rl` (external PRIME-RL stack). None of them satisfy the **data sovereignty** constraint: compute and data hosted in France/EU, with no dependency on a US cloud provider.
 
-L'objectif est d'ajouter un backend `scaleway` qui utilise l'infrastructure GPU de Scaleway (H100, L40S, A100…) pour faire tourner inférence et entraînement, avec provisionnement automatique via Terraform.
+The goal is to add a `scaleway` backend that uses Scaleway's GPU infrastructure (H100, L40S, A100…) to run inference and training, with automatic provisioning via Terraform.
 
 ---
 
-## Vision d'ensemble
+## Overview
 
 ```
-retrain (CPU local)
+retrain (local CPU)
     │
-    ├─ terraform apply ──────────────────→  Instance GPU Scaleway
-    │   (cloud-init au boot)                    ├─ Inference engine  :8000  (vLLM par défaut, ou SGLang)
+    ├─ terraform apply ──────────────────→  Scaleway GPU Instance
+    │   (cloud-init at boot)                    ├─ Inference engine  :8000  (vLLM by default, or SGLang)
     │                                           ├─ Training API      :8001
-    │                                           └─ LoRA weights      (RAM GPU)
+    │                                           └─ LoRA weights      (GPU RAM)
     │
     ├─ sample()     ────────────────────→  Inference engine  /v1/chat/completions
     ├─ train_step() ────────────────────→  Training API  /train_step
-    ├─ checkpoint() ────────────────────→  Training API  /checkpoint  →  reload LoRA sur inference engine
-    └─ fin du run   ────────────────────→  terraform destroy
+    ├─ checkpoint() ────────────────────→  Training API  /checkpoint  →  reload LoRA on inference engine
+    └─ end of run   ────────────────────→  terraform destroy
 ```
 
-**Pas de GPU local requis.** Tout tourne sur l'instance Scaleway. retrain ne fait que piloter le cycle de vie et envoyer les données.
+**No local GPU required.** Everything runs on the Scaleway instance. retrain only drives the lifecycle and sends data.
 
 ---
 
-## Expérience utilisateur cible
+## Target user experience
 
 ```toml
 [backend]
 backend = "scaleway"
 
 [backend.options]
-gpu_type        = "l40s"                              # ou "h100", "a100", "L40S-1-48G" (type exact)
-zone            = "fr-par-2"
-model           = "meta-llama/Llama-3.1-8B-Instruct"
-lora_rank       = 32
-inference_engine = "vllm"                            # ou "sglang" (voir section dédiée)
+gpu_type         = "l40s"                              # or "h100", "a100", "L40S-1-48G" (exact type)
+zone             = "fr-par-2"
+model            = "meta-llama/Llama-3.1-8B-Instruct"
+lora_rank        = 32
+inference_engine = "vllm"                              # or "sglang" (see dedicated section)
+max_model_len    = 4096
 
 [algorithm]
 advantage_mode = "maxrl"
@@ -63,116 +64,117 @@ export SCW_DEFAULT_PROJECT_ID=...
 retrain
 ```
 
-retrain provisionne l'instance, attend qu'elle soit prête, entraîne, puis la détruit. L'adaptateur LoRA final est rapatrié localement avant teardown.
+retrain provisions the instance, waits for it to be ready, trains, then destroys it. The final LoRA adapter is retrieved locally before teardown.
 
 ---
 
-## Résolution du type de GPU
+## GPU type resolution
 
-On supporte deux formes dans `gpu_type` :
+Two forms are supported in `gpu_type`:
 
-| Valeur TOML | Instance Scaleway résolue |
-|-------------|--------------------------|
+| TOML value | Resolved Scaleway instance |
+|------------|---------------------------|
 | `"h100"` | `H100-1-80G` |
 | `"l40s"` | `L40S-1-48G` |
 | `"a100"` | `GPU-A100-S` |
 | `"l4"` | `L4-1-24G` |
-| `"L40S-1-48G"` | passthrough (type exact) |
+| `"L40S-1-48G"` | passthrough (exact type) |
 
-Si la valeur n'est pas dans la table, elle est passée telle quelle au Terraform — ce qui permet d'utiliser tout nouveau type Scaleway sans mise à jour de retrain.
+If the value is not in the table, it is passed as-is to Terraform — which allows using any new Scaleway type without updating retrain.
 
 ---
 
-## Choix du moteur d'inférence
+## Inference engine selection
 
-Le backend supporte **vLLM** (défaut) et **SGLang**, configurables via `inference_engine`.
-TensorRT-LLM est exclu du MVP : il requiert de compiler un engine TRT au boot (~10–30 min) et le hot-swap LoRA y est significativement plus complexe.
+The backend supports **vLLM** (default) and **SGLang**, configurable via `inference_engine`.
+TensorRT-LLM is excluded from the MVP: it requires compiling a TRT engine at boot (~10–30 min) and LoRA hot-swap is significantly more complex.
 
-### Comparaison pour le cas d'usage retrain
+### Comparison for the retrain use case
 
-| Critère | vLLM | SGLang |
-|---------|------|--------|
-| LoRA hot-swap fiable | ✅ mature (`/v1/load_lora_adapter`) | ⚠️ récent (`/add_lora`) |
-| KV cache sur préfixes partagés | ❌ limité | ✅ **RadixAttention** |
-| Throughput sampling | 🟡 moyen | ✅ 20–40% supérieur |
-| Setup cloud-init | ✅ simple | ✅ simple |
-| API OpenAI-compat | ✅ | ✅ |
+| Criterion | vLLM | SGLang |
+|-----------|------|--------|
+| Reliable LoRA hot-swap | ✅ mature (`/v1/load_lora_adapter`) | ⚠️ recent (`/add_lora`) |
+| KV cache on shared prefixes | ❌ limited | ✅ **RadixAttention** |
+| Sampling throughput | 🟡 average | ✅ 20–40% higher |
+| Cloud-init setup | ✅ simple | ✅ simple |
+| OpenAI-compat API | ✅ | ✅ |
 
-**Point clé — RadixAttention** : en RL, retrain échantillonne `group_size` completions depuis le **même prompt** (8, 16…). SGLang réutilise le KV cache du préfixe partagé entre toutes les completions d'un groupe, ce qui réduit massivement la mémoire et le temps de sampling. C'est un avantage structurel pour ce workload.
+**Key point — RadixAttention**: in RL, retrain samples `group_size` completions from the **same prompt** (8, 16…). SGLang reuses the KV cache of the shared prefix across all completions in a group, massively reducing memory usage and sampling time. This is a structural advantage for this workload.
 
-**Recommandation** : démarrer avec **vLLM** pour la maturité du hot-swap LoRA. SGLang devient le choix naturel dès que son API de rechargement LoRA est validée stable — l'architecture le supporte sans changement côté training.
+**Recommendation**: start with **vLLM** for the maturity of its LoRA hot-swap. SGLang becomes the natural choice once its LoRA reload API is validated as stable — the architecture supports it with no changes on the training side.
 
-### Rechargement LoRA à chaque `checkpoint()`
+### LoRA reload on each `checkpoint()`
 
 ```
 Training server                Inference engine
       │                               │
-      │  sauvegarde poids LoRA        │
+      │  saves LoRA weights           │
       │──────────────────────────────→│ POST /v1/load_lora_adapter  (vLLM)
       │                               │ POST /add_lora               (SGLang)
-      │                               │  → moteur recharge les poids en RAM GPU
+      │                               │  → engine reloads weights into GPU RAM
 ```
 
-L'endpoint varie selon `inference_engine` mais le protocole côté retrain est identique.
+The endpoint varies by `inference_engine` but the protocol on the retrain side is identical.
 
 ---
 
-## Composants
+## Components
 
 ### 1. Terraform (`retrain/scaleway/terraform/`)
 
 ```
-main.tf          # scaleway_instance_server + règles réseau (ports 8000/8001)
-variables.tf     # instance_type, zone, project_id, image_id, model, lora_rank, inference_engine
+main.tf          # scaleway_instance_server + network rules (ports 8000/8001)
+variables.tf     # instance_type, zone, project_id, model, lora_rank, inference_engine, max_model_len
 outputs.tf       # inference_url, training_url, instance_ip
-cloud-init.yaml  # bootstrap : installe le moteur d'inférence + training server au démarrage
+cloud-init.yaml  # bootstrap: installs inference engine + training server at startup
+versions.tf      # provider constraints
 ```
 
-Le `cloud-init` installe les dépendances et lance, selon `inference_engine` :
-- `vllm serve <model> --port 8000 --enable-lora` **(défaut)**
-- ou `python -m sglang.launch_server --model <model> --port 8000`
-- `retrain-training-server --port 8001 --model <model> --lora-rank <rank>`
+`cloud-init` installs dependencies and starts, depending on `inference_engine`:
+- `python -m vllm.entrypoints.openai.api_server --model <model> --port 8000 --enable-lora` **(default)**
+- or `python -m sglang.launch_server --model <model> --port 8000`
+- `python -m retrain.scaleway.training_server --port 8001 --model <model> --lora-rank <rank>`
+
+All packages are installed in a venv at `/opt/retrain`.
 
 ### 2. Training Server (`retrain/scaleway/training_server.py`)
 
-Serveur FastAPI minimal qui tourne sur l'instance GPU et expose `TrainHelper` via HTTP. Il instancie `LocalTrainHelper` en interne (PyTorch/PEFT sur le GPU Scaleway).
+Minimal FastAPI server running on the GPU instance, exposing `TrainHelper` over HTTP. It instantiates `LocalTrainHelper` internally (PyTorch/PEFT on the Scaleway GPU).
 
-| Endpoint | Corps | Réponse |
-|----------|-------|---------|
+| Endpoint | Body | Response |
+|----------|------|----------|
 | `POST /train_step` | tokens, logprobs, advantages, lr, wd | `{loss: float}` |
-| `POST /checkpoint` | name | `{}` — sync poids training → vLLM |
-| `POST /save_adapter` | path, name | poids LoRA (bytes) |
+| `POST /checkpoint` | name | `{}` — syncs training weights → vLLM |
+| `POST /save_adapter` | path, name | LoRA weights (tar.gz bytes) |
 | `POST /load_state` | name | `{}` |
 | `GET  /health` | — | `{status: "ok"}` |
 
-Packagé comme entrypoint `retrain-training-server` dans `pyproject.toml`.
-
 ### 3. `ScalewayTrainHelper` (`retrain/scaleway_backend.py`)
 
-Client Python côté retrain :
+Python client on the retrain side:
 
-1. `__init__` → `TerraformRunner.apply()` (bloque ~2–5 min, log la progression)
-2. Attend `/health` sur les deux services
-3. Délègue `sample()` vers le moteur d'inférence (OpenAI-compat, identique pour vLLM et SGLang)
-4. Délègue `train_step()` / `checkpoint()` vers le Training Server
-5. `checkpoint()` déclenche le rechargement LoRA sur le moteur d'inférence via l'endpoint adapté :
-   - vLLM : `POST /v1/load_lora_adapter`
-   - SGLang : `POST /add_lora`
-6. `__del__` + `try/finally` dans la boucle → `TerraformRunner.destroy()`
+1. `__init__` → `TerraformRunner.apply()` (blocks ~2–5 min, logs progress)
+2. Polls `/health` on both services
+3. Delegates `sample()` to the inference engine (OpenAI-compat, identical for vLLM and SGLang)
+4. Delegates `train_step()` / `checkpoint()` to the Training Server
+5. `checkpoint()` triggers LoRA reload on the inference engine via the appropriate endpoint:
+   - vLLM: `POST /v1/load_lora_adapter`
+   - SGLang: `POST /add_lora`
+6. `close()` / context manager / `__del__` → `TerraformRunner.destroy()`
 
 ### 4. `TerraformRunner` (`retrain/scaleway/terraform_runner.py`)
 
-- Résout `gpu_type` → type Scaleway exact
-- Lookup de l'image GPU marketplace via API Scaleway (drivers NVIDIA pré-installés)
-- `terraform init && terraform apply -auto-approve -json`
-- Parse les outputs
-- `terraform destroy -auto-approve` au teardown
+- Resolves `gpu_type` → exact Scaleway type
+- `terraform init && terraform apply -auto-approve`
+- Parses outputs (inference_url, training_url)
+- `terraform destroy -auto-approve` at teardown
+- State file stored in `<log_dir>/.terraform-state/terraform.tfstate`
 
 ---
 
 ## Capabilities
 
-Identiques au backend `tinker` (remote, synchrone) :
+Identical to the `tinker` backend (remote, synchronous):
 
 | Capability | `scaleway` | `tinker` | `prime_rl` |
 |------------|-----------|---------|------------|
@@ -181,55 +183,55 @@ Identiques au backend `tinker` (remote, synchrone) :
 | `supports_checkpoint_resume` | `true` | `true` | `true` |
 | `resume_runtime_dependent` | `true` | `true` | `false` |
 
-`resume_runtime_dependent = true` : l'instance est recréée à chaque run, donc les poids en mémoire sont perdus. Le resume passe par un checkpoint sauvegardé localement (ou sur Scaleway Object Storage).
+`resume_runtime_dependent = true`: the instance is recreated on each run, so in-memory weights are lost. Resume relies on a checkpoint saved locally (or on Scaleway Object Storage).
 
 ---
 
-## Dépendances
+## Dependencies
 
 ```toml
 # pyproject.toml
 [project.optional-dependencies]
-scaleway = ["fastapi", "uvicorn", "httpx", "scaleway"]
+scaleway = ["httpx>=0.27", "fastapi>=0.111", "uvicorn[standard]>=0.29", "scaleway>=0.10"]
 ```
 
 ```bash
 pip install retrain[scaleway]
-# + terraform CLI (>= 1.5) dans le PATH
+# + terraform CLI (>= 1.6) in PATH
 ```
 
 ---
 
-## Questions ouvertes pour l'équipe
+## Open questions
 
-1. **Moteur d'inférence** : vLLM (défaut) ou SGLang ? SGLang offre un gain significatif via RadixAttention sur les workloads RL multi-completions, mais son API de hot-swap LoRA est plus récente. Faut-il valider SGLang sur un run de smoke test avant d'en faire le défaut ?
+1. **Inference engine default**: vLLM (current) or SGLang? SGLang offers a significant gain via RadixAttention on RL multi-completion workloads, but its LoRA reload API is newer. Should SGLang be validated via a smoke test before making it the default?
 
-2. **Sécurité réseau** : les ports 8000/8001 ne doivent pas être exposés publiquement. Quelle approche préférez-vous ?
-   - VPC Scaleway (IP privée uniquement) + VPN/bastion pour retrain → plus sûr, plus complexe
-   - Tunnel SSH automatique depuis `TerraformRunner` → simple, léger overhead
-   - Security group filtré sur l'IP publique de la machine retrain → compromis
+2. **Network security**: ports 8000/8001 should not be publicly exposed. Preferred approach?
+   - Scaleway VPC (private IP only) + VPN/bastion for retrain → more secure, more complex
+   - Automatic SSH tunnel from `TerraformRunner` → simple, light overhead
+   - Security group filtered on the retrain machine's public IP → compromise
 
-3. **État Terraform** : par défaut le state est local (`.terraform/terraform.tfstate`). Pour des équipes avec plusieurs runners simultanés, il faudra un backend Terraform partagé. Scaleway Object Storage est une option naturelle et souveraine — à activer ?
+3. **Terraform state**: local by default (`<log_dir>/.terraform-state/`). For teams with multiple simultaneous runners, a shared Terraform backend will be needed. Scaleway Object Storage is a natural sovereign option — activate?
 
-4. **Catalogue GPU** : la table de résolution `gpu_type → instance_type` doit être maintenue. Préférez-vous qu'elle soit hardcodée dans retrain, ou chargée depuis un endpoint API Scaleway au runtime ?
+4. **GPU catalogue**: the `gpu_type → instance_type` resolution table needs to be maintained. Should it be hardcoded in retrain, or fetched from a Scaleway API endpoint at runtime?
 
-5. **Durée de provisionnement** : ~2–5 min de `terraform apply` avant le premier sample. Acceptable pour les campagnes longues, pénalisant pour les tests courts. Faut-il prévoir un mode "instance persistante" (pas de destroy automatique) ?
+5. **Provisioning time**: ~2–5 min of `terraform apply` before the first sample. Acceptable for long campaigns, costly for short tests. Should a "persistent instance" mode be added (no automatic destroy)?
 
-6. **Checkpoints entre runs** : avec `resume_runtime_dependent = true`, reprendre un run nécessite que l'adaptateur LoRA ait été sauvegardé localement avant le destroy. Faut-il forcer un `save_adapter` automatique au teardown ?
+6. **Cross-run checkpoints**: with `resume_runtime_dependent = true`, resuming a run requires the LoRA adapter to have been saved locally before destroy. Should `save_adapter` be forced automatically at teardown?
 
 ---
 
-## Fichiers à créer / modifier (résumé)
+## Files to create / modify (summary)
 
-| Fichier | Nature |
-|---------|--------|
-| `retrain/scaleway_backend.py` | nouveau |
-| `retrain/scaleway/training_server.py` | nouveau |
-| `retrain/scaleway/terraform_runner.py` | nouveau |
-| `retrain/scaleway/terraform/main.tf` | nouveau |
-| `retrain/scaleway/terraform/variables.tf` | nouveau |
-| `retrain/scaleway/terraform/outputs.tf` | nouveau |
-| `retrain/scaleway/terraform/cloud-init.yaml` | nouveau |
-| `retrain/backend_definitions.py` | modifier — ajouter `"scaleway"` |
-| `docs/backends.md` | modifier — ajouter section Scaleway |
-| `pyproject.toml` | modifier — extra `[scaleway]` + entrypoint |
+| File | Type |
+|------|------|
+| `retrain/scaleway_backend.py` | new |
+| `retrain/scaleway/training_server.py` | new |
+| `retrain/scaleway/terraform_runner.py` | new |
+| `retrain/scaleway/terraform/main.tf` | new |
+| `retrain/scaleway/terraform/variables.tf` | new |
+| `retrain/scaleway/terraform/outputs.tf` | new |
+| `retrain/scaleway/terraform/versions.tf` | new |
+| `retrain/scaleway/terraform/cloud-init.yaml` | new |
+| `retrain/backend_definitions.py` | modify — add `"scaleway"` |
+| `pyproject.toml` | modify — `[scaleway]` extra + entrypoint |
