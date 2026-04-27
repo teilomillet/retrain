@@ -128,6 +128,29 @@ def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOpt
     }
 
 
+def _create_scaleway(config: "TrainConfig") -> "TrainHelper":
+    try:
+        from retrain.scaleway_backend import ScalewayTrainHelper
+    except ImportError:
+        raise RuntimeError(
+            "Backend 'scaleway' requires httpx and the Scaleway SDK.\n"
+            "Install it with: pip install retrain[scaleway]"
+        ) from None
+
+    options = normalize_backend_options("scaleway", config.backend_options)
+    return ScalewayTrainHelper(
+        model=config.model,
+        lora_rank=config.lora_rank,
+        gpu_type=str(options.get("gpu_type", "l40s")),
+        zone=str(options.get("zone", "fr-par-2")),
+        inference_engine=str(options.get("inference_engine", "vllm")),
+        health_timeout_s=int(options.get("health_timeout_s", 300)),
+        health_poll_s=float(options.get("health_poll_s", 5.0)),
+        max_model_len=int(options.get("max_model_len", 32768)),
+        state_dir=str(Path(config.log_dir) / ".terraform-state"),
+    )
+
+
 def _create_prime_rl(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.prime_rl_backend import PrimeRLTrainHelper
@@ -179,6 +202,14 @@ def _validate_positive_float(value: object) -> str | None:
     return None
 
 
+class ScalewayOptions(TypedDict):
+    gpu_type: str
+    zone: str
+    inference_engine: str
+    health_timeout_s: int
+    health_poll_s: float
+
+
 _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
     "local": BackendDefinition(
         name="local",
@@ -205,6 +236,42 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             resume_runtime_dependent=True,
         ),
         option_schema={},
+    ),
+    "scaleway": BackendDefinition(
+        name="scaleway",
+        factory=_create_scaleway,
+        dependency_import="httpx",
+        dependency_hint="pip install retrain[scaleway]",
+        capabilities=BackendCapabilities(
+            reports_sync_loss=True,
+            preserves_token_advantages=True,
+            supports_checkpoint_resume=True,
+            resume_runtime_dependent=True,
+        ),
+        option_schema={
+            "gpu_type": BackendOptionSpec(value_type=str, default="l40s"),
+            "zone": BackendOptionSpec(value_type=str, default="fr-par-2"),
+            "inference_engine": BackendOptionSpec(
+                value_type=str,
+                default="vllm",
+                choices=("vllm", "sglang"),
+            ),
+            "health_timeout_s": BackendOptionSpec(
+                value_type=int,
+                default=300,
+                validator=_validate_positive_int,
+            ),
+            "health_poll_s": BackendOptionSpec(
+                value_type=float,
+                default=5.0,
+                validator=_validate_positive_float,
+            ),
+            "max_model_len": BackendOptionSpec(
+                value_type=int,
+                default=32768,
+                validator=_validate_positive_int,
+            ),
+        },
     ),
     "prime_rl": BackendDefinition(
         name="prime_rl",

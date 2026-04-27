@@ -1,0 +1,46 @@
+# SROIE receipt extraction — RLVR on Scaleway
+# Train Qwen3-4B to extract structured fields from receipts.
+#
+# Usage:
+#   export SCW_SECRET_KEY=...
+#   export SCW_DEFAULT_PROJECT_ID=...
+#   retrain campaigns/sroie.toml
+
+[backend]
+backend = "scaleway"
+
+[backend.options]
+gpu_type         = "l40s"
+zone             = "fr-par-2"
+model            = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank        = 32
+inference_engine = "vllm"
+max_model_len    = 4096
+
+[model]
+model     = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[algorithm]
+advantage_mode = "maxrl"
+transform_mode = "gtpo_sepa"
+
+[training]
+max_steps  = 200
+batch_size = 4
+group_size = 8
+max_tokens = 1024
+temperature = 0.7
+lr = 4e-5
+save_every = 20
+
+[data]
+source = "campaigns.sroie_dataset:SROIEDataSource"
+
+[reward]
+type            = "custom"
+custom_module   = "campaigns.sroie_dataset"
+custom_function = "score"
+
+[logging]
+log_dir = "logs/sroie"
