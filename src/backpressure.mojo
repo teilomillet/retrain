@@ -10,7 +10,7 @@ memory-bound regimes based on operational intensity.
 Follows the same composable trait pattern as RewardFn, DataSource, etc.
 """
 
-from math import sqrt, abs
+from std.math import sqrt, abs
 
 
 # ---------------------------------------------------------------------------

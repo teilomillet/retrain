@@ -7,8 +7,8 @@ The actual entropy pooling is done by advantages.apply_sepa_pooling();
 this struct handles when and how much to pool.
 """
 
-from math import isfinite
-from collections import Optional
+from std.math import isfinite
+from std.collections import Optional
 
 
 struct SEPAController:

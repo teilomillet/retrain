@@ -5,7 +5,7 @@ for sampling and training. All Tinker-specific protocol details
 (ModelInput, SamplingParams, Datum, AdamParams) are encapsulated here.
 """
 
-from python import Python, PythonObject
+from std.python import Python, PythonObject
 
 from src.backend import TrainingBackend, SampleSequence
 from src.config import TrainConfig

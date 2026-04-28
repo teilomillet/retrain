@@ -7,7 +7,7 @@ or any OpenAI-compatible server).
 The heavy lifting is delegated to retrain.local_train_helper.LocalTrainHelper.
 """
 
-from python import Python, PythonObject
+from std.python import Python, PythonObject
 
 from src.backend import TrainingBackend, SampleSequence
 from src.config import TrainConfig

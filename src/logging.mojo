@@ -65,22 +65,22 @@ fn _escape_json_string(s: String) -> String:
             i += 1
         elif b < 0x80:
             # ASCII — safe single-byte slice
-            result += String(s[i : i + 1])
+            result += String(s[byte = i:i + 1])
             i += 1
         elif b < 0xC0:
             # Stray continuation byte — skip
             i += 1
         elif b < 0xE0:
             var end = min(i + 2, n)
-            result += String(s[i:end])
+            result += String(s[byte = i:end])
             i = end
         elif b < 0xF0:
             var end = min(i + 3, n)
-            result += String(s[i:end])
+            result += String(s[byte = i:end])
             i = end
         else:
             var end = min(i + 4, n)
-            result += String(s[i:end])
+            result += String(s[byte = i:end])
             i = end
     return result^
 

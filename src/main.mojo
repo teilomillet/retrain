@@ -10,9 +10,9 @@ reproduce the original hardcoded behavior. External users bring their own
 reward function and dataset without forking.
 """
 
-from python import Python, PythonObject
-from collections import Optional
-from time import perf_counter_ns
+from std.python import Python, PythonObject
+from std.collections import Optional
+from std.time import perf_counter_ns
 
 from src.config import TrainConfig, parse_args
 from src.advantages import (
@@ -100,7 +100,7 @@ fn _safe_truncate(s: String, max_bytes: Int) -> String:
     # Back up past any UTF-8 continuation bytes (0x80-0xBF)
     while end > 0 and (Int(b[end]) & 0xC0) == 0x80:
         end -= 1
-    return String(s[:end])
+    return String(s[byte = 0:end])
 
 
 # ---------------------------------------------------------------------------
@@ -261,10 +261,10 @@ fn train[B: TrainingBackend, R: RewardFn, D: DataSource, E: EpisodeAdvantageFn, 
                     if len(gram) > 0:
                         strategic_grams.append(gram)
                     break
-                var gram = String(String(remaining[:comma_pos]).strip())
+                var gram = String(String(remaining[byte = 0:comma_pos]).strip())
                 if len(gram) > 0:
                     strategic_grams.append(gram)
-                remaining = String(remaining[comma_pos + 1 :])
+                remaining = String(remaining[byte = comma_pos + 1:len(remaining)])
     else:
         strategic_grams = default_strategic_grams()
 
@@ -773,14 +773,14 @@ fn _load_dotenv() raises:
         var eq = line.find("=")
         if eq == -1:
             continue
-        var key = String(String(line[:eq]).strip())
-        var val = String(String(line[eq + 1 :]).strip())
+        var key = String(String(line[byte = 0:eq]).strip())
+        var val = String(String(line[byte = eq + 1:len(line)]).strip())
         # Strip surrounding quotes
         if len(val) >= 2:
             if (val.startswith('"') and val.endswith('"')) or (
                 val.startswith("'") and val.endswith("'")
             ):
-                val = String(val[1 : len(val) - 1])
+                val = String(val[byte = 1:len(val) - 1])
         os.environ[key] = val
     print("Loaded .env")
 

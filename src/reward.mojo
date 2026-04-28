@@ -59,7 +59,7 @@ fn extract_boxed(text: String) -> String:
     if end <= start:
         return String("")
 
-    var extracted = String(text[start:end])
+    var extracted = String(text[byte = start:end])
     return String(extracted.strip())
 
 

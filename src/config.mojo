@@ -4,8 +4,8 @@ Loads training configuration from a TOML file. If argv[1] is provided,
 it is used as the TOML path; otherwise retrain.toml in cwd is loaded.
 """
 
-from python import Python, PythonObject
-from sys import argv, exit
+from std.python import Python, PythonObject
+from std.sys import argv, exit
 
 
 @fieldwise_init

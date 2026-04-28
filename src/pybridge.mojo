@@ -4,8 +4,8 @@ Conversion helpers, HuggingFace tokenizer, datasets, vocab, and wandb.
 Backend-specific code (Tinker, MAX) lives in their own modules.
 """
 
-from python import Python, PythonObject
-from collections import Optional
+from std.python import Python, PythonObject
+from std.collections import Optional
 
 from src.advantages import identify_planning_tokens_native
 
@@ -235,7 +235,7 @@ fn _extract_boxed_py(text: String) -> String:
             depth -= 1
         pos += 1
 
-    var extracted = String(text[start : pos - 1])
+    var extracted = String(text[byte = start:pos - 1])
     return String(extracted.strip())
 
 

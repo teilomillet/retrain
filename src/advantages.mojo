@@ -13,7 +13,7 @@ Functions:
     identify_planning_tokens_native  — strategic gram matching (pure Mojo)
 """
 
-from math import abs
+from std.math import abs
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +409,7 @@ fn _clean_token_fragment(fragment: String) -> String:
             i += 2
         elif b < 0x80:
             # ASCII byte — copy directly
-            result += String(fragment[i : i + 1])
+            result += String(fragment[byte = i:i + 1])
             i += 1
         elif b < 0xC0:
             # Stray continuation byte — skip
@@ -419,21 +419,21 @@ fn _clean_token_fragment(fragment: String) -> String:
             var end = i + 2
             if end > n:
                 end = n
-            result += String(fragment[i:end])
+            result += String(fragment[byte = i:end])
             i = end
         elif b < 0xF0:
             # 3-byte UTF-8 sequence
             var end = i + 3
             if end > n:
                 end = n
-            result += String(fragment[i:end])
+            result += String(fragment[byte = i:end])
             i = end
         else:
             # 4-byte UTF-8 sequence
             var end = i + 4
             if end > n:
                 end = n
-            result += String(fragment[i:end])
+            result += String(fragment[byte = i:end])
             i = end
 
     return String(result.strip())
