@@ -105,3 +105,18 @@ variable "inference_engine" {
   }
 }
 
+# -----------------------------------------------------------------------------
+# PRIME-RL deployment
+# -----------------------------------------------------------------------------
+variable "num_train_gpus" {
+  description = "Number of GPUs allocated to the PRIME-RL trainer process"
+  type        = number
+  default     = 1
+}
+
+variable "num_infer_gpus" {
+  description = "Number of GPUs allocated to the PRIME-RL inference server"
+  type        = number
+  default     = 1
+}
+

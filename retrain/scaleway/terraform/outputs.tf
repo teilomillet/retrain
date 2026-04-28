@@ -3,17 +3,12 @@
 # =============================================================================
 
 output "inference_url" {
-  description = "vLLM / SGLang inference endpoint"
+  description = "vLLM inference endpoint (PRIME-RL patched)"
   value       = "http://${scaleway_instance_ip.gpu.address}:8000"
 }
 
-output "training_url" {
-  description = "retrain training server endpoint"
-  value       = "http://${scaleway_instance_ip.gpu.address}:8001"
-}
-
 output "instance_ip" {
-  description = "Public IP of the GPU instance"
+  description = "Public IP of the GPU instance (used as ZMQ host for PRIME-RL transport)"
   value       = scaleway_instance_ip.gpu.address
 }
 

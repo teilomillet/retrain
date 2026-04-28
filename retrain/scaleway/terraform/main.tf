@@ -1,8 +1,10 @@
 # =============================================================================
 # retrain Scaleway backend — Main Infrastructure
 # =============================================================================
-# Architecture: 1 GPU instance (inference + training) on a VPC private network.
-# retrain (CPU local) drives training via HTTP on ports 8000/8001.
+# Architecture: 1 GPU instance running PRIME-RL (vLLM + trainer) on a VPC.
+# retrain (CPU local) drives training via:
+#   - HTTP  :8000  vLLM inference (PRIME-RL patched)
+#   - ZMQ   :5555  PRIME-RL trainer transport
 # =============================================================================
 
 locals {
@@ -45,11 +47,11 @@ resource "scaleway_instance_security_group" "gpu" {
     ip_range = var.caller_ip
   }
 
-  # retrain training server
+  # PRIME-RL trainer ZMQ transport
   inbound_rule {
     action   = "accept"
     protocol = "TCP"
-    port     = 8001
+    port     = 5555
     ip_range = var.caller_ip
   }
 }
@@ -82,6 +84,8 @@ resource "scaleway_instance_server" "gpu" {
     lora_rank        = var.lora_rank
     inference_engine = var.inference_engine
     max_model_len    = var.max_model_len
+    num_train_gpus   = var.num_train_gpus
+    num_infer_gpus   = var.num_infer_gpus
   })
 
   private_network {

@@ -50,6 +50,8 @@ class TerraformRunner:
         inference_engine: str,
         caller_ip: str = "",
         max_model_len: int = 32768,
+        num_train_gpus: int = 1,
+        num_infer_gpus: int = 1,
         tf_dir: Path | None = None,
         state_dir: Path | None = None,
     ) -> None:
@@ -67,6 +69,8 @@ class TerraformRunner:
         self._inference_engine = inference_engine
         self._caller_ip = caller_ip
         self._max_model_len = max_model_len
+        self._num_train_gpus = num_train_gpus
+        self._num_infer_gpus = num_infer_gpus
         self._tf_dir = tf_dir or _TF_DIR
         self._state_dir = state_dir or Path(os.getcwd()) / ".terraform-scaleway"
         self._state_dir.mkdir(parents=True, exist_ok=True)
@@ -78,7 +82,7 @@ class TerraformRunner:
     # ------------------------------------------------------------------
 
     def apply(self) -> tuple[str, str]:
-        """Provision the instance. Returns (inference_url, training_url)."""
+        """Provision the instance. Returns (inference_url, instance_ip)."""
         logger.info("Terraform apply — provisioning %s in %s", self._instance_type, self._zone)
         logger.info("Terraform state → %s", self.state_file)
         self._run_tf("init", "-no-color", "-input=false")
@@ -94,9 +98,9 @@ class TerraformRunner:
         )
         outputs = self._read_outputs()
         inference_url = outputs["inference_url"]["value"]
-        training_url = outputs["training_url"]["value"]
-        logger.info("Instance ready — inference=%s training=%s", inference_url, training_url)
-        return inference_url, training_url
+        instance_ip = outputs["instance_ip"]["value"]
+        logger.info("Instance ready — inference=%s ip=%s", inference_url, instance_ip)
+        return inference_url, instance_ip
 
     def destroy(self) -> None:
         """Tear down the instance."""
@@ -139,6 +143,8 @@ class TerraformRunner:
             v("inference_engine", self._inference_engine),
             v("caller_ip", self._caller_ip),
             v("max_model_len", self._max_model_len),
+            v("num_train_gpus", self._num_train_gpus),
+            v("num_infer_gpus", self._num_infer_gpus),
         ]:
             args.extend(pair)
         return args

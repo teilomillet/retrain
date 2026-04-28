@@ -194,6 +194,8 @@ def test_scaleway_backend_contract(monkeypatch):
     assert kw["health_timeout_s"] == 600
     assert kw["health_poll_s"] == 5.0       # default
     assert kw["max_model_len"] == 32768     # default
+    assert kw["zmq_port"] == 5555           # default
+    assert kw["output_dir"] == ""           # default
     assert kw["model"] == cfg.model
     assert kw["lora_rank"] == cfg.lora_rank
     assert kw["state_dir"] == str(Path(cfg.log_dir) / ".terraform-state")

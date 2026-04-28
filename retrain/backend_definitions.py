@@ -147,6 +147,10 @@ def _create_scaleway(config: "TrainConfig") -> "TrainHelper":
         health_timeout_s=cast(int, options.get("health_timeout_s", 300)),
         health_poll_s=cast(float, options.get("health_poll_s", 5.0)),
         max_model_len=cast(int, options.get("max_model_len", 32768)),
+        num_train_gpus=cast(int, options.get("num_train_gpus", 1)),
+        num_infer_gpus=cast(int, options.get("num_infer_gpus", 1)),
+        zmq_port=cast(int, options.get("zmq_port", 5555)),
+        output_dir=str(options.get("output_dir", "")),
         state_dir=str(Path(config.log_dir) / ".terraform-state"),
     )
 
@@ -233,10 +237,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
         name="scaleway",
         factory=_create_scaleway,
         dependency_import="httpx",
-        dependency_hint="pip install retrain[scaleway]",
+        dependency_hint="pip install retrain[scaleway] prime-rl",
         capabilities=BackendCapabilities(
-            reports_sync_loss=True,
-            preserves_token_advantages=True,
+            reports_sync_loss=False,
+            preserves_token_advantages=False,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=True,
         ),
@@ -263,6 +267,22 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=32768,
                 validator=_validate_positive_int,
             ),
+            "num_train_gpus": BackendOptionSpec(
+                value_type=int,
+                default=1,
+                validator=_validate_positive_int,
+            ),
+            "num_infer_gpus": BackendOptionSpec(
+                value_type=int,
+                default=1,
+                validator=_validate_positive_int,
+            ),
+            "zmq_port": BackendOptionSpec(
+                value_type=int,
+                default=5555,
+                validator=_validate_port,
+            ),
+            "output_dir": BackendOptionSpec(value_type=str, default=""),
         },
     ),
     "prime_rl": BackendDefinition(

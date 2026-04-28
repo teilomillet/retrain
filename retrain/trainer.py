@@ -640,6 +640,17 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         )
 
         # -----------------------------------------------------------------------
+        # 3b. Autonomous backends run their own loop — delegate and return.
+        # -----------------------------------------------------------------------
+        if backend_caps.is_autonomous:
+            if not callable(getattr(helper, "run", None)):
+                raise RuntimeError(
+                    f"Backend '{config.backend}' is marked autonomous but has no run() method."
+                )
+            print(f"Autonomous backend '{config.backend}' — delegating to helper.run().")
+            return helper.run(config)  # type: ignore[unresolved-attribute]
+
+        # -----------------------------------------------------------------------
         # 4. Load tokenizer + lazy token/prompt caches
         # -----------------------------------------------------------------------
         print(f"Loading tokenizer for {config.model} ...")
