@@ -558,8 +558,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         trace_result = flow.trace()
         if not trace_result.ok:
             msgs = [i.message for i in trace_result.issues if i.severity == "error"]
-            if hasattr(flow.backend, "close"):
-                flow.backend.close()
+            backend = flow.backend
+            if backend is not None and hasattr(backend, "close"):
+                backend.close()  # type: ignore[union-attr]
             raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
 
     # -----------------------------------------------------------------------
