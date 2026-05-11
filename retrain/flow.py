@@ -121,7 +121,8 @@ class TrainingFlow:
         probe_passed = 0
 
         # Check 1 — disallowed built-in modes for scalar backends
-        if not self.backend_capabilities.preserves_token_advantages:
+        # Autonomous backends never execute the local advantage pipeline, skip.
+        if not self.backend_capabilities.is_autonomous and not self.backend_capabilities.preserves_token_advantages:
             if self.algorithm_spec is not None:
                 if (
                     self.config.algorithm_mode
@@ -173,7 +174,8 @@ class TrainingFlow:
                 continue
 
             if (
-                not self.backend_capabilities.preserves_token_advantages
+                not self.backend_capabilities.is_autonomous
+                and not self.backend_capabilities.preserves_token_advantages
                 and not _token_advs_are_uniform(result.token_advs)
             ):
                 issues.append(TraceIssue(

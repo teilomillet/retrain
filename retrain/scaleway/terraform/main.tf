@@ -1,10 +1,9 @@
 # =============================================================================
 # retrain Scaleway backend — Main Infrastructure
 # =============================================================================
-# Architecture: 1 GPU instance running PRIME-RL (vLLM + trainer) on a VPC.
-# retrain (CPU local) drives training via:
-#   - HTTP  :8000  vLLM inference (PRIME-RL patched)
-#   - ZMQ   :5555  PRIME-RL trainer transport
+# Architecture: 1 GPU instance running retrain with the local backend.
+# retrain (local machine) rsyncs the project and runs via SSH.
+# Only SSH (port 22) needs to be reachable from the caller.
 # =============================================================================
 
 locals {
@@ -26,7 +25,7 @@ resource "scaleway_vpc_private_network" "retrain" {
 # -----------------------------------------------------------------------------
 resource "scaleway_instance_security_group" "gpu" {
   name                    = "${var.project_name}-sg-gpu"
-  description             = "GPU: inference/training ports restricted to caller, SSH via Scaleway IAM keys"
+  description             = "GPU: SSH only — retrain runs on the instance via SSH"
   zone                    = var.zone
   inbound_default_policy  = "drop"
   outbound_default_policy = "accept"
@@ -37,22 +36,6 @@ resource "scaleway_instance_security_group" "gpu" {
     protocol = "TCP"
     port     = 22
     ip_range = local.ssh_cidr
-  }
-
-  # Inference engine (vLLM / SGLang)
-  inbound_rule {
-    action   = "accept"
-    protocol = "TCP"
-    port     = 8000
-    ip_range = var.caller_ip
-  }
-
-  # PRIME-RL trainer ZMQ transport
-  inbound_rule {
-    action   = "accept"
-    protocol = "TCP"
-    port     = 5555
-    ip_range = var.caller_ip
   }
 }
 
@@ -80,12 +63,7 @@ resource "scaleway_instance_server" "gpu" {
   }
 
   cloud_init = templatefile("${path.module}/cloud-init.yaml", {
-    model            = var.model
-    lora_rank        = var.lora_rank
-    inference_engine = var.inference_engine
-    max_model_len    = var.max_model_len
-    num_train_gpus   = var.num_train_gpus
-    num_infer_gpus   = var.num_infer_gpus
+    model = var.model
   })
 
   private_network {

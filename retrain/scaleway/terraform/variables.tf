@@ -78,45 +78,8 @@ variable "model" {
 }
 
 variable "lora_rank" {
-  description = "LoRA rank for training"
+  description = "LoRA rank (unused at provision time, kept for future use)"
   type        = number
   default     = 32
-}
-
-variable "max_model_len" {
-  description = "Maximum sequence length for the inference engine (prompt + completion tokens)"
-  type        = number
-  default     = 32768
-
-  validation {
-    condition     = var.max_model_len > 0
-    error_message = "max_model_len must be > 0"
-  }
-}
-
-variable "inference_engine" {
-  description = "Inference engine: vllm or sglang"
-  type        = string
-  default     = "vllm"
-
-  validation {
-    condition     = contains(["vllm", "sglang"], var.inference_engine)
-    error_message = "inference_engine must be 'vllm' or 'sglang'."
-  }
-}
-
-# -----------------------------------------------------------------------------
-# PRIME-RL deployment
-# -----------------------------------------------------------------------------
-variable "num_train_gpus" {
-  description = "Number of GPUs allocated to the PRIME-RL trainer process"
-  type        = number
-  default     = 1
-}
-
-variable "num_infer_gpus" {
-  description = "Number of GPUs allocated to the PRIME-RL inference server"
-  type        = number
-  default     = 1
 }
 

@@ -47,46 +47,33 @@ class TerraformRunner:
         gpu_type: str,
         model: str,
         lora_rank: int,
-        inference_engine: str,
         caller_ip: str = "",
-        max_model_len: int = 32768,
-        num_train_gpus: int = 1,
-        num_infer_gpus: int = 1,
         tf_dir: Path | None = None,
         state_dir: Path | None = None,
     ) -> None:
         if not caller_ip:
             caller_ip = _detect_public_ip()
             logger.info("Auto-detected caller IP: %s", caller_ip)
-        elif caller_ip == "0.0.0.0/0":
-            logger.warning(
-                "caller_ip is 0.0.0.0/0 — ports 8000/8001 will be open to the internet."
-            )
         self._zone = zone
         self._instance_type = _GPU_TYPE_MAP.get(gpu_type.lower(), gpu_type)
         self._model = model
         self._lora_rank = lora_rank
-        self._inference_engine = inference_engine
         self._caller_ip = caller_ip
-        self._max_model_len = max_model_len
-        self._num_train_gpus = num_train_gpus
-        self._num_infer_gpus = num_infer_gpus
         self._tf_dir = tf_dir or _TF_DIR
         self._state_dir = state_dir or Path(os.getcwd()) / ".terraform-scaleway"
         self._state_dir.mkdir(parents=True, exist_ok=True)
-        self.state_file = self._state_dir / "terraform.tfstate"
+        self.state_file = self._state_dir / "resources.tfstate"
         self._applied = False
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def apply(self) -> tuple[str, str]:
-        """Provision the instance. Returns (inference_url, instance_ip)."""
+    def apply(self) -> str:
+        """Provision the instance. Returns instance_ip."""
         logger.info("Terraform apply — provisioning %s in %s", self._instance_type, self._zone)
         logger.info("Terraform state → %s", self.state_file)
         self._run_tf("init", "-no-color", "-input=false")
-        # Mark as applied before the call so destroy() runs even on partial failures
         self._applied = True
         self._run_tf(
             "apply",
@@ -97,10 +84,9 @@ class TerraformRunner:
             *self._var_args(),
         )
         outputs = self._read_outputs()
-        inference_url = outputs["inference_url"]["value"]
         instance_ip = outputs["instance_ip"]["value"]
-        logger.info("Instance ready — inference=%s ip=%s", inference_url, instance_ip)
-        return inference_url, instance_ip
+        logger.info("Instance ready — ip=%s", instance_ip)
+        return instance_ip
 
     def destroy(self) -> None:
         """Tear down the instance."""
@@ -140,11 +126,7 @@ class TerraformRunner:
             v("project_id", project_id),
             v("model", self._model),
             v("lora_rank", self._lora_rank),
-            v("inference_engine", self._inference_engine),
             v("caller_ip", self._caller_ip),
-            v("max_model_len", self._max_model_len),
-            v("num_train_gpus", self._num_train_gpus),
-            v("num_infer_gpus", self._num_infer_gpus),
         ]:
             args.extend(pair)
         return args
@@ -163,10 +145,7 @@ class TerraformRunner:
             logger.debug("terraform %s stdout:\n%s", args[0], result.stdout.strip())
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
-            msg = f"terraform {args[0]} exited with code {result.returncode}"
-            if stderr:
-                msg += f"\n{stderr}"
-            raise TerraformError(msg)
+            raise TerraformError(f"terraform {args[0]} failed:\n{stderr}")
 
     def _read_outputs(self) -> dict[str, object]:
         cmd = ["terraform", "output", "-json", f"-state={self.state_file}"]

@@ -47,6 +47,7 @@ class BackendCapabilities:
     preserves_token_advantages: bool
     supports_checkpoint_resume: bool
     resume_runtime_dependent: bool
+    is_autonomous: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,13 +130,7 @@ def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOpt
 
 
 def _create_scaleway(config: "TrainConfig") -> "TrainHelper":
-    try:
-        from retrain.scaleway_backend import ScalewayTrainHelper
-    except ImportError:
-        raise RuntimeError(
-            "Backend 'scaleway' requires httpx and the Scaleway SDK.\n"
-            "Install it with: pip install retrain[scaleway]"
-        ) from None
+    from retrain.scaleway_backend import ScalewayTrainHelper
 
     options = normalize_backend_options("scaleway", config.backend_options)
     return ScalewayTrainHelper(
@@ -143,14 +138,8 @@ def _create_scaleway(config: "TrainConfig") -> "TrainHelper":
         lora_rank=config.lora_rank,
         gpu_type=str(options.get("gpu_type", "l40s")),
         zone=str(options.get("zone", "fr-par-2")),
-        inference_engine=str(options.get("inference_engine", "vllm")),
-        health_timeout_s=cast(int, options.get("health_timeout_s", 300)),
-        health_poll_s=cast(float, options.get("health_poll_s", 5.0)),
-        max_model_len=cast(int, options.get("max_model_len", 32768)),
-        num_train_gpus=cast(int, options.get("num_train_gpus", 1)),
-        num_infer_gpus=cast(int, options.get("num_infer_gpus", 1)),
-        zmq_port=cast(int, options.get("zmq_port", 5555)),
-        output_dir=str(options.get("output_dir", "")),
+        ssh_timeout_s=cast(int, options.get("ssh_timeout_s", 600)),
+        ssh_poll_s=cast(float, options.get("ssh_poll_s", 15.0)),
         state_dir=str(Path(config.log_dir) / ".terraform-state"),
     )
 
@@ -236,53 +225,28 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
     "scaleway": BackendDefinition(
         name="scaleway",
         factory=_create_scaleway,
-        dependency_import="httpx",
-        dependency_hint="pip install retrain[scaleway] prime-rl",
+        dependency_import="",
+        dependency_hint="",
         capabilities=BackendCapabilities(
-            reports_sync_loss=False,
-            preserves_token_advantages=False,
+            reports_sync_loss=True,
+            preserves_token_advantages=True,
             supports_checkpoint_resume=True,
-            resume_runtime_dependent=True,
+            resume_runtime_dependent=False,
+            is_autonomous=True,
         ),
         option_schema={
             "gpu_type": BackendOptionSpec(value_type=str, default="l40s"),
             "zone": BackendOptionSpec(value_type=str, default="fr-par-2"),
-            "inference_engine": BackendOptionSpec(
-                value_type=str,
-                default="vllm",
-                choices=("vllm", "sglang"),
-            ),
-            "health_timeout_s": BackendOptionSpec(
+            "ssh_timeout_s": BackendOptionSpec(
                 value_type=int,
-                default=300,
+                default=600,
                 validator=_validate_positive_int,
             ),
-            "health_poll_s": BackendOptionSpec(
+            "ssh_poll_s": BackendOptionSpec(
                 value_type=float,
-                default=5.0,
+                default=15.0,
                 validator=_validate_positive_float,
             ),
-            "max_model_len": BackendOptionSpec(
-                value_type=int,
-                default=32768,
-                validator=_validate_positive_int,
-            ),
-            "num_train_gpus": BackendOptionSpec(
-                value_type=int,
-                default=1,
-                validator=_validate_positive_int,
-            ),
-            "num_infer_gpus": BackendOptionSpec(
-                value_type=int,
-                default=1,
-                validator=_validate_positive_int,
-            ),
-            "zmq_port": BackendOptionSpec(
-                value_type=int,
-                default=5555,
-                validator=_validate_port,
-            ),
-            "output_dir": BackendOptionSpec(value_type=str, default=""),
         },
     ),
     "prime_rl": BackendDefinition(
@@ -368,6 +332,7 @@ def _coerce_backend_capabilities(raw: object) -> BackendCapabilities | None:
                 preserves_token_advantages=bool(payload["preserves_token_advantages"]),
                 supports_checkpoint_resume=bool(payload["supports_checkpoint_resume"]),
                 resume_runtime_dependent=bool(payload["resume_runtime_dependent"]),
+                is_autonomous=bool(payload.get("is_autonomous", False)),
             )
         except KeyError:
             return None
@@ -547,6 +512,7 @@ def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, object]:
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
         "resume_runtime_dependent": caps.resume_runtime_dependent,
+        "is_autonomous": caps.is_autonomous,
     }
 
 

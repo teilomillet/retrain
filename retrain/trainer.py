@@ -558,6 +558,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         trace_result = flow.trace()
         if not trace_result.ok:
             msgs = [i.message for i in trace_result.issues if i.severity == "error"]
+            if hasattr(flow.backend, "close"):
+                flow.backend.close()
             raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
 
     # -----------------------------------------------------------------------
@@ -1914,5 +1916,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         for logger in (metrics_logger, steps_logger, generations_logger):
             try:
                 logger.close()
+            except Exception:
+                pass
+        if hasattr(flow, "backend") and hasattr(flow.backend, "close"):
+            try:
+                flow.backend.close()
             except Exception:
                 pass

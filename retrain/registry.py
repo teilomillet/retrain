@@ -374,7 +374,7 @@ def check_environment(
         try:
             importlib.import_module(import_name)
             available = True
-        except ImportError:
+        except (ImportError, ValueError):
             available = False
         results.append((name, import_name, hint, available))
 

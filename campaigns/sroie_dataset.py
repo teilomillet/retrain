@@ -43,25 +43,27 @@ def _build_prompt(text: str) -> list[dict]:
 class SROIEDataSource:
     """Loads SROIE v2 from HuggingFace for structured receipt extraction."""
 
-    def __init__(self, max_examples: int = 0) -> None:
+    def __init__(self, config: object = None, max_examples: int = 0) -> None:
         self.max_examples = max_examples
 
     def load(self) -> list[Example]:
         from datasets import load_dataset
 
-        ds = load_dataset("darentang/sroie", split="train")
+        ds = load_dataset("jsdnrs/ICDAR2019-SROIE", split="train", columns=["words", "entities"])
 
         examples: list[Example] = []
         for i, item in enumerate(ds):
-            text = item.get("text", "").strip()
+            words = item.get("words") or []
+            text = " ".join(words).strip()
             if not text:
                 continue
 
+            entities = item.get("entities") or {}
             reference = json.dumps({
-                "company": item.get("company", ""),
-                "date": item.get("date", ""),
-                "address": item.get("address", ""),
-                "total": item.get("total", ""),
+                "company": entities.get("company", ""),
+                "date": entities.get("date", ""),
+                "address": entities.get("address", ""),
+                "total": entities.get("total", ""),
             }, ensure_ascii=False)
 
             examples.append(Example(

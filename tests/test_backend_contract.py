@@ -87,9 +87,8 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
-class _FakeScalewayTrainHelper(_BaseFakeHelper):
+class _FakeScalewayTrainHelper:
     def __init__(self, *args, **kwargs):
-        super().__init__()
         self.init_args = args
         self.init_kwargs = kwargs
 
@@ -180,26 +179,17 @@ def test_scaleway_backend_contract(monkeypatch):
 
     cfg = TrainConfig(
         backend="scaleway",
-        backend_options={"gpu_type": "h100", "zone": "nl-ams-1", "inference_engine": "sglang", "health_timeout_s": 600},
+        backend_options={"gpu_type": "h100", "zone": "nl-ams-1", "ssh_timeout_s": 600},
     )
     helper = backend.create("scaleway", cfg)
-    assert isinstance(helper, TrainHelper)
+    # Scaleway is autonomous — it does not implement the TrainHelper step protocol
     assert isinstance(helper, _FakeScalewayTrainHelper)
 
-    # Verify _create_scaleway forwards options (explicit + defaults) to ScalewayTrainHelper
     kw = helper.init_kwargs
     assert kw["gpu_type"] == "h100"
     assert kw["zone"] == "nl-ams-1"
-    assert kw["inference_engine"] == "sglang"
-    assert kw["health_timeout_s"] == 600
-    assert kw["health_poll_s"] == 5.0       # default
-    assert kw["max_model_len"] == 32768     # default
-    assert kw["zmq_port"] == 5555           # default
-    assert kw["output_dir"] == ""           # default
+    assert kw["ssh_timeout_s"] == 600
+    assert kw["ssh_poll_s"] == 15.0       # default
     assert kw["model"] == cfg.model
     assert kw["lora_rank"] == cfg.lora_rank
     assert kw["state_dir"] == str(Path(cfg.log_dir) / ".terraform-state")
-
-    _exercise_lifecycle_step(helper, "step_0")
-    _exercise_lifecycle_step(helper, "step_1")
-    _assert_lifecycle_calls(helper)

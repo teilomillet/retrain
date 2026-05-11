@@ -10,10 +10,8 @@
 backend = "scaleway"
 
 [backend.options]
-gpu_type         = "l40s"
-zone             = "fr-par-2"
-inference_engine = "vllm"
-max_model_len    = 4096
+gpu_type = "l40s"
+zone     = "fr-par-2"
 
 [model]
 model     = "Qwen/Qwen3-4B-Instruct-2507"
@@ -33,7 +31,7 @@ lr = 4e-5
 save_every = 20
 
 [data]
-source = "campaigns.sroie_dataset:SROIEDataSource"
+source = "campaigns.sroie_dataset.SROIEDataSource"
 
 [reward]
 type            = "custom"
