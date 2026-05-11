@@ -1,30 +1,42 @@
 # Scaleway Backend — Implementation Status
 
+## Architecture
+
+The Scaleway backend provisions a GPU instance via Terraform, rsyncs the project,
+and runs `retrain` with the `local` backend directly on the VM over SSH. This
+replaces the earlier HTTP/FastAPI design described in `scaleway-backend-design.md`
+— no training server, inference engine sidecar, or ZMQ process is involved.
+
 ## Steps
 
-| # | Description | Status | Fichier(s) |
-|---|-------------|--------|------------|
+| # | Description | Status | File(s) |
+|---|-------------|--------|---------|
 | 1 | `TerraformRunner` | ✅ Done | `retrain/scaleway/terraform_runner.py` |
-| 2 | Fichiers Terraform | ✅ Done | `retrain/scaleway/terraform/main.tf`, `variables.tf`, `outputs.tf`, `cloud-init.yaml` |
-| 3 | Training Server (FastAPI) | ✅ Done | `retrain/scaleway/training_server.py` |
-| 4 | `ScalewayTrainHelper` | ✅ Done | `retrain/scaleway_backend.py` |
-| 5 | Enregistrement backend | ✅ Done | `retrain/backend_definitions.py` |
-| 6 | `pyproject.toml` | ✅ Done | `pyproject.toml` |
-| 7 | Test contract | ✅ Done (non exécuté) | `tests/test_backend_contract.py` |
+| 2 | Terraform files (SSH-only security group) | ✅ Done | `retrain/scaleway/terraform/` |
+| 3 | `ScalewayTrainHelper` (SSH + rsync) | ✅ Done | `retrain/scaleway_backend.py` |
+| 4 | Backend registration | ✅ Done | `retrain/backend_definitions.py` |
+| 5 | Contract test | ✅ Done | `tests/test_backend_contract.py` |
 
-## À valider
+## Flow
 
-- [ ] `pytest tests/test_backend_contract.py::test_scaleway_backend_contract` passe
-- [ ] `terraform validate` sur `retrain/scaleway/terraform/`
-- [ ] Run end-to-end sur Scaleway avec `campaigns/sroie.toml`
+1. `terraform apply` — provision VM, return `instance_ip`
+2. Wait for SSH to become available (configurable timeout, default 10 min)
+3. `rsync` project root to `/opt/retrain-run` on the VM
+4. `pip install -e '.[local]'` into `/opt/retrain-venv`
+5. Write campaign config to VM with `backend = "local"` override
+6. `retrain <config>` — stream logs back via SSH
+7. `scp` adapter from VM to local machine
+8. `terraform destroy` on `close()`
 
-## Questions ouvertes (du design doc)
+## To validate
 
-Les questions du RFC restent ouvertes et n'ont pas été tranchées dans l'implémentation :
+- [ ] `pytest tests/test_backend_contract.py::test_scaleway_backend_contract`
+- [ ] `terraform validate` in `retrain/scaleway/terraform/`
+- [ ] End-to-end run on Scaleway with `campaigns/sroie.toml`
 
-1. **Moteur d'inférence par défaut** — vLLM actuellement, SGLang à valider via smoke test
-2. **Sécurité réseau** — ports 8000/8001 ouverts publiquement pour le MVP, à restreindre (VPC / SSH tunnel / security group IP source)
-3. **État Terraform** — local par défaut, Scaleway Object Storage à activer pour multi-runners
-4. **Catalogue GPU** — table hardcodée dans `TerraformRunner.GPU_TYPE_MAP`, API Scaleway non consultée
-5. **Instance persistante** — pas de mode "no destroy" pour les tests courts
-6. **Save adapter au teardown** — pas de `save_adapter` automatique avant `terraform destroy`
+## Open questions
+
+1. **Network security** — `caller_ip` is auto-detected via ipify at `terraform apply` time. A dynamic IP that changes between `apply` and the SSH connection will cause a timeout. Set `caller_ip` explicitly in the campaign TOML if needed.
+2. **Terraform state** — stored locally in `<log_dir>/.terraform-state/` by default. Scaleway Object Storage would be needed for multi-runner or multi-machine setups.
+3. **GPU catalogue** — type resolution table is hardcoded in `TerraformRunner._GPU_TYPE_MAP`.
+4. **cloud-init duration** — model pre-download can take 10–20 min. SSH becomes available well before that; training will start before the model is cached if rsync + pip finish first. This is fine: `LocalTrainHelper` calls `from_pretrained` at startup and will wait for the download.

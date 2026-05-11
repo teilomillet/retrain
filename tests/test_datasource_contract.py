@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from retrain.config import TrainConfig
-from retrain.data import DataSource, Example
+from retrain.data import Example
 
 
 def _make_config(**kwargs) -> TrainConfig:
@@ -20,9 +20,9 @@ def _make_config(**kwargs) -> TrainConfig:
 
 
 def _assert_datasource_contract(instance: object) -> None:
-    assert isinstance(instance, DataSource), (
+    assert hasattr(instance, "load") and callable(getattr(instance, "load")), (
         f"{type(instance).__name__} does not implement the DataSource protocol "
-        "(missing .load() method returning list[Example])"
+        "(missing callable .load() method)"
     )
 
 

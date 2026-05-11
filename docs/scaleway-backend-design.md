@@ -1,8 +1,10 @@
 # Scaleway Backend — Design Proposal
 
-**Status**: RFC — pending team review  
+**Status**: Superseded — see [`scaleway-implementation-status.md`](scaleway-implementation-status.md) for the implemented architecture.  
 **Author**: Gireg Roussel  
 **Date**: 2026-04-24
+
+> **Note**: The implementation diverges from this RFC. The HTTP/FastAPI training server and inference engine sidecar were dropped in favour of SSH + rsync: retrain is rsynced to the VM and runs with the `local` backend directly on the GPU. The design below is preserved for historical context.
 
 ---
 

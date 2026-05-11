@@ -551,19 +551,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     _print_config_summary(config)
 
     # -----------------------------------------------------------------------
-    # 0a. Build and validate flow
-    # -----------------------------------------------------------------------
-    if flow is None:
-        flow = build_flow(config, gpu=True)
-        trace_result = flow.trace()
-        if not trace_result.ok:
-            msgs = [i.message for i in trace_result.issues if i.severity == "error"]
-            backend = flow.backend
-            if backend is not None and hasattr(backend, "close"):
-                backend.close()  # type: ignore[union-attr]
-            raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
-
-    # -----------------------------------------------------------------------
     # 0. Setup directories + loggers
     # -----------------------------------------------------------------------
     log_path = Path(config.log_dir)
@@ -584,6 +571,15 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     wandb_enabled = False
 
     try:
+        # -----------------------------------------------------------------------
+        # 0a. Build and validate flow (inside try so finally can close backend)
+        # -----------------------------------------------------------------------
+        if flow is None:
+            flow = build_flow(config, gpu=True)
+            trace_result = flow.trace()
+            if not trace_result.ok:
+                msgs = [i.message for i in trace_result.issues if i.severity == "error"]
+                raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
         # -----------------------------------------------------------------------
         # 1. Seed for reproducibility
         # -----------------------------------------------------------------------

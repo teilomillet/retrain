@@ -141,7 +141,8 @@ def _config_to_toml(config: "TrainConfig", adapter_path: str) -> str:
         if isinstance(v, bool):
             return "true" if v else "false"
         if isinstance(v, str):
-            return f'"{v}"'
+            escaped = v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+            return f'"{escaped}"'
         return str(v)
 
     lines += [
