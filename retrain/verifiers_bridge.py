@@ -90,6 +90,50 @@ def _require_verifiers() -> types.ModuleType:
     return vf
 
 
+_NULL_CLIENT_MSG = (
+    "retrain performs sampling via TrainHelper; the verifiers client must never be used"
+)
+
+
+def _make_env_client() -> object | None:
+    """Inert client to satisfy Environment.init_state.
+
+    retrain samples through helper.sample(), never through the verifiers
+    client. Newer verifiers (>= 0.1.12) validate the client argument in
+    init_state (resolve_client raises on None), so we hand it a Client whose
+    sampling surface fails loudly if anything ever tries to use it. Older
+    verifiers accepted None; fall back to that.
+    """
+    try:
+        from verifiers.clients import Client  # type: ignore[unresolved-import]
+    except ImportError:
+        return None
+
+    class _RetrainNullClient(Client):  # type: ignore[misc]
+        def setup_client(self, config: object) -> object:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def to_native_tool(self, tool: object) -> object:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def to_native_prompt(self, messages: object) -> object:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def get_native_response(self, *args: object, **kwargs: object) -> object:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def raise_from_native_response(self, response: object) -> None:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def from_native_response(self, response: object) -> object:
+            raise NotImplementedError(_NULL_CLIENT_MSG)
+
+        async def close(self) -> None:  # cleanup paths may call this; no-op
+            return None
+
+    return _RetrainNullClient(None)
+
+
 def _coerce_prompt(raw: object) -> PromptLike:
     if isinstance(raw, str):
         return raw
@@ -803,7 +847,7 @@ def run_multiturn_group(
                 input_payload["info"] = info
             state = await env_typed.init_state(
                 input=input_payload,
-                client=None,  # retrain handles model calls through helper.sample()
+                client=_make_env_client(),  # inert: retrain samples via helper.sample()
                 model=model_name,
                 sampling_args=None,
             )
