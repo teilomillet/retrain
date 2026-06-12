@@ -85,6 +85,12 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
+class _FakeScalewayTrainHelper(_BaseFakeHelper):
+    def __init__(self, *args, **kwargs):
+        _ = args, kwargs
+        super().__init__()
+
+
 def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
     helper.checkpoint(step_name)
     out = helper.sample(
@@ -158,6 +164,19 @@ def test_prime_rl_backend_contract(monkeypatch):
 
     cfg = TrainConfig(backend="prime_rl")
     helper = backend.create("prime_rl", cfg)
+    assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, _BaseFakeHelper)
+    _exercise_lifecycle_step(helper, "step_0")
+    _exercise_lifecycle_step(helper, "step_1")
+    _assert_lifecycle_calls(helper)
+
+
+def test_scaleway_backend_contract(monkeypatch):
+    fake_mod = SimpleNamespace(ScalewayTrainHelper=_FakeScalewayTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.scaleway_backend", fake_mod)
+
+    cfg = TrainConfig(backend="scaleway")
+    helper = backend.create("scaleway", cfg)
     assert isinstance(helper, TrainHelper)
     assert isinstance(helper, _BaseFakeHelper)
     _exercise_lifecycle_step(helper, "step_0")

@@ -1,0 +1,77 @@
+#cloud-config
+# Bootstrap script for the retrain Scaleway GPU instance.
+# Templated by Terraform via templatefile() — do not edit outputs directly.
+
+write_files:
+  - path: /etc/retrain/config.env
+    content: |
+      MODEL=${model}
+      LORA_RANK=${lora_rank}
+      INFERENCE_ENGINE=${inference_engine}
+      MAX_MODEL_LEN=${max_model_len}
+    permissions: '0600'
+
+  - path: /etc/systemd/system/retrain-inference.service
+    content: |
+      [Unit]
+      Description=retrain inference engine (${inference_engine})
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      EnvironmentFile=/etc/retrain/config.env
+      %{ if inference_engine == "vllm" ~}
+      ExecStart=/opt/retrain/bin/python -m vllm.entrypoints.openai.api_server \
+        --model $MODEL \
+        --port 8000 \
+        --enable-lora \
+        --max-lora-rank $LORA_RANK \
+        --max-model-len $MAX_MODEL_LEN \
+        --trust-remote-code
+      %{ else ~}
+      ExecStart=/opt/retrain/bin/python -m sglang.launch_server \
+        --model $MODEL \
+        --port 8000 \
+        --trust-remote-code
+      %{ endif ~}
+      Restart=on-failure
+      RestartSec=15
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/retrain-training.service
+    content: |
+      [Unit]
+      Description=retrain training server
+      After=retrain-inference.service
+      Wants=network-online.target
+
+      [Service]
+      EnvironmentFile=/etc/retrain/config.env
+      ExecStart=/opt/retrain/bin/python -m retrain.scaleway.training_server \
+        --port 8001 \
+        --model $MODEL \
+        --lora-rank $LORA_RANK \
+        --inference-url http://localhost:8000 \
+        --inference-engine $INFERENCE_ENGINE
+      Restart=on-failure
+      RestartSec=15
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - mkdir -p /etc/retrain
+  - apt-get update -qq
+  - apt-get install -y python3-venv python3-pip
+  - python3 -m venv /opt/retrain
+  - /opt/retrain/bin/pip install --quiet %{ if inference_engine == "vllm" }vllm%{ else }sglang[all]%{ endif }
+  - /opt/retrain/bin/pip install --quiet "retrain[local,scaleway]"
+  - systemctl daemon-reload
+  - systemctl enable retrain-inference retrain-training
+  - systemctl start retrain-inference retrain-training

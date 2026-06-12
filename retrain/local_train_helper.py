@@ -22,6 +22,11 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig, TaskType
 
+from retrain.gemma4_text import (
+    DEFAULT_LORA_TARGET_MODULES,
+    forward_logits,
+    resolve_lora_target_modules,
+)
 from retrain.inference_engine import create_engine
 
 
@@ -117,22 +122,18 @@ class LocalTrainHelper:
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
 
+        # Create train model
+        print(f"Loading train model: {model_name} on {self.train_device}...")
+        base_train = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype
+        )
         effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
             lora_alpha=effective_alpha,
             lora_dropout=lora_dropout,
-            target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ],
-        )
-
-        # Create train model
-        print(f"Loading train model: {model_name} on {self.train_device}...")
-        base_train = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype
+            target_modules=resolve_lora_target_modules(base_train, DEFAULT_LORA_TARGET_MODULES),
         )
         self.train_model = get_peft_model(base_train, peft_config)
         self.train_model.to(self.train_device)
@@ -180,9 +181,8 @@ class LocalTrainHelper:
                 device=self.infer_device,
                 peft_config=peft_config,
                 dtype=dtype,
+                existing_model=self.train_model,
             )
-            # Point the engine's model to the train model (same object)
-            self.engine.model = self.train_model
 
         # Optimizer (only for train_model)
         self.optimizer = torch.optim.AdamW(
@@ -336,8 +336,7 @@ class LocalTrainHelper:
 
         # Single batched forward pass with AMP
         with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
-            outputs = self.train_model(input_ids, attention_mask=attention_mask)
-            logits = outputs.logits[:, :-1]  # [N, max_len-1, vocab] — shift
+            logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]  # [N, max_len-1, vocab] — shift
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
 
             # Gather logprobs for target tokens (shifted by 1)

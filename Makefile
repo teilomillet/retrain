@@ -19,13 +19,16 @@ all: setup build
 setup:
 	uv sync
 
+setup-dev:
+	uv sync --extra dev
+
 build:
 	mojo build src/main.mojo -o retrain-tinker
 
 # Run both Python and Mojo tests
 test: test-python test-mojo
 
-test-python:
+test-python: setup-dev
 	uv run python -m pytest tests/test_*.py -x -q
 
 test-mojo:
@@ -44,7 +47,7 @@ test-mojo:
 lint:
 	uv run ruff check retrain tests
 
-typecheck:
+typecheck: setup-dev
 	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
 
 chaos-backend-workflow:

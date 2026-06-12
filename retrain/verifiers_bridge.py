@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import types
 from typing import TYPE_CHECKING, Protocol, cast
@@ -232,26 +232,32 @@ def load_verifiers_environment(config: "TrainConfig") -> object:
     env_args = parse_environment_args(config.environment_args)
 
     if config.environment_auto_install:
+        check_hub_env_installed_fn: Callable[[str], bool] | None
+        install_from_hub_fn: Callable[[str], bool] | None
+        is_hub_env_fn: Callable[[str], bool] | None
         try:
             from verifiers.utils.install_utils import (  # type: ignore[unresolved-import]
                 check_hub_env_installed,
                 install_from_hub,
                 is_hub_env,
             )
+            check_hub_env_installed_fn = check_hub_env_installed
+            install_from_hub_fn = install_from_hub
+            is_hub_env_fn = is_hub_env
         except Exception:
             # Keep loading path robust even if helper APIs change in verifiers.
-            check_hub_env_installed = None
-            install_from_hub = None
-            is_hub_env = None
+            check_hub_env_installed_fn = None
+            install_from_hub_fn = None
+            is_hub_env_fn = None
 
         if (
-            check_hub_env_installed is not None
-            and install_from_hub is not None
-            and is_hub_env is not None
-            and is_hub_env(env_id)
-            and not check_hub_env_installed(env_id)
+            check_hub_env_installed_fn is not None
+            and install_from_hub_fn is not None
+            and is_hub_env_fn is not None
+            and is_hub_env_fn(env_id)
+            and not check_hub_env_installed_fn(env_id)
         ):
-            ok = install_from_hub(env_id)
+            ok = install_from_hub_fn(env_id)
             if not ok:
                 suggestion_hint = _format_hub_suggestions(env_id)
                 raise RuntimeError(
