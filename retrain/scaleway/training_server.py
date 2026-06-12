@@ -82,8 +82,9 @@ def checkpoint(req: CheckpointRequest) -> dict:
     if _helper is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="helper not initialized")
     _helper.checkpoint(req.name)
-    _reload_lora_on_inference(req.name)
-    return {}
+    adapter_path = _helper.save_adapter(_helper.adapter_path, req.name)
+    _reload_lora_on_inference(req.name, adapter_path)
+    return {"adapter_path": adapter_path}
 
 
 @app.post("/save_adapter")
@@ -115,20 +116,21 @@ def load_state(req: LoadStateRequest) -> dict:
 # LoRA reload on inference engine
 # ---------------------------------------------------------------------------
 
-def _reload_lora_on_inference(name: str) -> None:
-    # The adapter was just saved by checkpoint(); we need to tell the inference
-    # engine to reload it. vLLM and SGLang use different endpoints.
+def _reload_lora_on_inference(name: str, adapter_path: str) -> None:
+    # The adapter was just saved by checkpoint(); tell the inference engine to
+    # reload the actual directory, not a name relative to an arbitrary cwd.
+    lora_path = str(Path(adapter_path).resolve())
     try:
         if _inference_engine == "vllm":
             httpx.post(
                 f"{_inference_url}/v1/load_lora_adapter",
-                json={"lora_name": name, "lora_path": name},
+                json={"lora_name": name, "lora_path": lora_path},
                 timeout=30,
             ).raise_for_status()
         else:
             httpx.post(
                 f"{_inference_url}/add_lora",
-                json={"lora_name": name, "lora_path": name},
+                json={"lora_name": name, "lora_path": lora_path},
                 timeout=30,
             ).raise_for_status()
     except Exception as exc:

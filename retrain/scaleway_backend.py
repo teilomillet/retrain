@@ -11,6 +11,7 @@ import io
 import logging
 import tarfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -80,9 +81,6 @@ class ScalewayTrainHelper:
         temperature: float,
         top_p: float,
     ) -> SampleBatch:
-        from transformers import AutoTokenizer
-        # Lazy-load tokenizer for decoding token IDs back to text for the prompt
-        # vLLM OpenAI-compat API expects text prompts, not token IDs
         tokenizer = self._get_tokenizer()
 
         results: SampleBatch = []
@@ -210,14 +208,72 @@ class ScalewayTrainHelper:
         resp.raise_for_status()
         data = resp.json()
         choice = data["choices"][0]
+        if not isinstance(choice, Mapping):
+            raise RuntimeError("Scaleway inference returned non-object choice payload.")
+
+        completion_text = self._completion_text(dict(choice))
+        lp_content = (choice.get("logprobs") or {}).get("content") or []
+        if not lp_content:
+            token_ids = self._get_tokenizer().encode(completion_text, add_special_tokens=False)
+            return list(token_ids), [0.0] * len(token_ids)
+
         token_ids: list[int] = []
         logprobs: list[float] = []
-        lp_content = (choice.get("logprobs") or {}).get("content") or []
         for entry in lp_content:
-            token_ids.append(entry["token_id"] if "token_id" in entry else entry.get("token", 0))
+            if not isinstance(entry, Mapping):
+                raise RuntimeError("Scaleway inference returned malformed logprobs.content entry.")
+            token_ids.append(self._token_id_from_logprob_entry(entry))
+            logprob = entry.get("logprob")
             top = entry.get("top_logprobs") or []
-            logprobs.append(top[0]["logprob"] if top else 0.0)
+            if logprob is None and top and isinstance(top[0], Mapping):
+                logprob = top[0].get("logprob")
+            if logprob is None:
+                raise RuntimeError("Scaleway inference logprobs.content entry is missing logprob.")
+            logprobs.append(float(logprob))
+
+        if completion_text:
+            expected_ids = self._get_tokenizer().encode(completion_text, add_special_tokens=False)
+            if expected_ids and len(expected_ids) != len(token_ids):
+                raise RuntimeError(
+                    "Scaleway inference returned logprobs.content length "
+                    f"{len(token_ids)} but completion text encodes to {len(expected_ids)} tokens."
+                )
+        if len(token_ids) != len(logprobs):
+            raise RuntimeError("Scaleway inference returned mismatched token ID/logprob lengths.")
         return token_ids, logprobs
+
+    @staticmethod
+    def _completion_text(choice: dict) -> str:
+        message = choice.get("message")
+        if isinstance(message, Mapping):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+        text = choice.get("text")
+        return text if isinstance(text, str) else ""
+
+    def _token_id_from_logprob_entry(self, entry: Mapping) -> int:
+        token_id = entry.get("token_id")
+        if token_id is not None:
+            return int(token_id)
+
+        token = entry.get("token")
+        if not isinstance(token, str):
+            raise RuntimeError("Scaleway inference logprobs.content entry is missing token_id.")
+
+        tokenizer = self._get_tokenizer()
+        converted = tokenizer.convert_tokens_to_ids(token)
+        unk_token_id = getattr(tokenizer, "unk_token_id", None)
+        if isinstance(converted, int) and converted != unk_token_id:
+            return int(converted)
+
+        encoded = tokenizer.encode(token, add_special_tokens=False)
+        if len(encoded) == 1:
+            return int(encoded[0])
+        raise RuntimeError(
+            "Scaleway inference logprobs.content entry has no token_id, "
+            f"and token text {token!r} does not map to exactly one token ID."
+        )
 
     @staticmethod
     def _safe_extractall(tar: tarfile.TarFile, dest: Path) -> None:

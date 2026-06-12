@@ -14,36 +14,8 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model
 
+from retrain.gemma4_text import eos_token_ids, is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
-
-
-def _unwrap_peft_model(model):
-    base_model = getattr(model, "base_model", None)
-    if base_model is not None and hasattr(base_model, "model"):
-        return base_model.model
-    return model
-
-
-def _is_gemma4_text_model(model):
-    unwrapped = _unwrap_peft_model(model)
-    config = getattr(unwrapped, "config", None)
-    return (
-        getattr(config, "model_type", None) == "gemma4"
-        and hasattr(getattr(unwrapped, "model", None), "language_model")
-        and hasattr(unwrapped, "lm_head")
-    )
-
-
-def _eos_token_ids(model):
-    generation_config = getattr(model, "generation_config", None)
-    token_ids = getattr(generation_config, "eos_token_id", None)
-    if token_ids is None:
-        token_ids = getattr(getattr(_unwrap_peft_model(model), "config", None), "eos_token_id", None)
-    if token_ids is None:
-        return set()
-    if isinstance(token_ids, int):
-        return {token_ids}
-    return {int(token_id) for token_id in token_ids}
 
 
 def _sample_next_token(logits, temperature, top_p):
@@ -84,7 +56,7 @@ class PyTorchEngine(InferenceEngine):
         self.model_name = model_name
 
         if existing_model is not None:
-            self.model = existing_model
+            self.model = existing_model.to(device)
         else:
             print(f"Loading infer model: {model_name} on {device}...")
             base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
@@ -97,7 +69,7 @@ class PyTorchEngine(InferenceEngine):
         results = []
         self.model.eval()
 
-        if _is_gemma4_text_model(self.model):
+        if is_gemma4_text_model(self.model):
             return self._generate_gemma4_text(
                 prompt_ids_list,
                 num_samples,
@@ -165,10 +137,10 @@ class PyTorchEngine(InferenceEngine):
                               compute_entropy=False):
         """Text-only Gemma4 sampling path avoiding the multimodal wrapper."""
         results = []
-        unwrapped = _unwrap_peft_model(self.model)
+        unwrapped = unwrap_peft_model(self.model)
         text_model = unwrapped.model.language_model
         lm_head = unwrapped.lm_head
-        eos_ids = _eos_token_ids(self.model)
+        eos_ids = eos_token_ids(self.model)
 
         with torch.no_grad():
             for prompt_ids in prompt_ids_list:
