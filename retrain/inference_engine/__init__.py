@@ -23,6 +23,7 @@ def create_engine(
     peft_config,
     dtype,
     inference_url="",
+    existing_model=None,
 ):
     """Factory: create the right InferenceEngine based on engine_type.
 
@@ -40,7 +41,7 @@ def create_engine(
     if engine_type == "pytorch":
         from retrain.inference_engine.pytorch_engine import PyTorchEngine
 
-        return PyTorchEngine(model_name, device, peft_config, dtype)
+        return PyTorchEngine(model_name, device, peft_config, dtype, existing_model=existing_model)
 
     elif engine_type == "max":
         from retrain.inference_engine.max_engine import create_max_engine

@@ -25,6 +25,61 @@ from peft import get_peft_model, LoraConfig, TaskType
 from retrain.inference_engine import create_engine
 
 
+DEFAULT_LORA_TARGET_MODULES = [
+    "q_proj", "k_proj", "v_proj", "o_proj",
+    "gate_proj", "up_proj", "down_proj",
+]
+
+
+def _unwrap_peft_model(model):
+    """Return the underlying Transformers model when wrapped by PEFT."""
+    base_model = getattr(model, "base_model", None)
+    if base_model is not None and hasattr(base_model, "model"):
+        return base_model.model
+    return model
+
+
+def _is_gemma4_text_model(model):
+    """Gemma4 multimodal checkpoints need text-only train/inference paths."""
+    unwrapped = _unwrap_peft_model(model)
+    config = getattr(unwrapped, "config", None)
+    return (
+        getattr(config, "model_type", None) == "gemma4"
+        and hasattr(getattr(unwrapped, "model", None), "language_model")
+        and hasattr(unwrapped, "lm_head")
+    )
+
+
+def _resolve_lora_target_modules(model):
+    """Use exact language-tower targets for Gemma4; suffixes for normal CausalLMs."""
+    if not _is_gemma4_text_model(model):
+        return DEFAULT_LORA_TARGET_MODULES
+
+    suffixes = tuple(DEFAULT_LORA_TARGET_MODULES)
+    targets = [
+        name
+        for name, _ in model.named_modules()
+        if name.startswith("model.language_model.") and name.endswith(suffixes)
+    ]
+    if not targets:
+        raise RuntimeError("Gemma4 text model found, but no language LoRA target modules matched")
+    return targets
+
+
+def _forward_logits(model, input_ids, attention_mask):
+    """Return logits while bypassing Gemma4's multimodal wrapper when needed."""
+    if not _is_gemma4_text_model(model):
+        return model(input_ids, attention_mask=attention_mask).logits
+
+    unwrapped = _unwrap_peft_model(model)
+    outputs = unwrapped.model.language_model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        use_cache=False,
+    )
+    return unwrapped.lm_head(outputs.last_hidden_state)
+
+
 def _compute_policy_loss(ratio, adv, mask, clip_eps, clip_eps_high):
     """Compute PPO-style clipped policy loss.
 
@@ -117,22 +172,18 @@ class LocalTrainHelper:
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
 
+        # Create train model
+        print(f"Loading train model: {model_name} on {self.train_device}...")
+        base_train = AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype
+        )
         effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
             lora_alpha=effective_alpha,
             lora_dropout=lora_dropout,
-            target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ],
-        )
-
-        # Create train model
-        print(f"Loading train model: {model_name} on {self.train_device}...")
-        base_train = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype
+            target_modules=_resolve_lora_target_modules(base_train),
         )
         self.train_model = get_peft_model(base_train, peft_config)
         self.train_model.to(self.train_device)
@@ -180,9 +231,8 @@ class LocalTrainHelper:
                 device=self.infer_device,
                 peft_config=peft_config,
                 dtype=dtype,
+                existing_model=self.train_model,
             )
-            # Point the engine's model to the train model (same object)
-            self.engine.model = self.train_model
 
         # Optimizer (only for train_model)
         self.optimizer = torch.optim.AdamW(
@@ -336,8 +386,7 @@ class LocalTrainHelper:
 
         # Single batched forward pass with AMP
         with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
-            outputs = self.train_model(input_ids, attention_mask=attention_mask)
-            logits = outputs.logits[:, :-1]  # [N, max_len-1, vocab] — shift
+            logits = _forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]  # [N, max_len-1, vocab] — shift
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
 
             # Gather logprobs for target tokens (shifted by 1)

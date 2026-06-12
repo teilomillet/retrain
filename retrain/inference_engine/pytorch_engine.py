@@ -12,15 +12,66 @@ Supports two weight-sync modes:
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
-from peft import get_peft_model, LoraConfig, TaskType
+from peft import get_peft_model
 
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+
+
+def _unwrap_peft_model(model):
+    base_model = getattr(model, "base_model", None)
+    if base_model is not None and hasattr(base_model, "model"):
+        return base_model.model
+    return model
+
+
+def _is_gemma4_text_model(model):
+    unwrapped = _unwrap_peft_model(model)
+    config = getattr(unwrapped, "config", None)
+    return (
+        getattr(config, "model_type", None) == "gemma4"
+        and hasattr(getattr(unwrapped, "model", None), "language_model")
+        and hasattr(unwrapped, "lm_head")
+    )
+
+
+def _eos_token_ids(model):
+    generation_config = getattr(model, "generation_config", None)
+    token_ids = getattr(generation_config, "eos_token_id", None)
+    if token_ids is None:
+        token_ids = getattr(getattr(_unwrap_peft_model(model), "config", None), "eos_token_id", None)
+    if token_ids is None:
+        return set()
+    if isinstance(token_ids, int):
+        return {token_ids}
+    return {int(token_id) for token_id in token_ids}
+
+
+def _sample_next_token(logits, temperature, top_p):
+    scaled = logits / max(float(temperature), 1e-7)
+    probs = F.softmax(scaled.float(), dim=-1)
+
+    if top_p < 1.0:
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
+        cumulative = torch.cumsum(sorted_probs, dim=-1)
+        remove = cumulative - sorted_probs > top_p
+        filtered = sorted_probs.masked_fill(remove, 0.0)
+        filtered = filtered / filtered.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        sampled_sorted = torch.multinomial(filtered, num_samples=1)
+        next_token = sorted_indices.gather(1, sampled_sorted)
+        next_prob = filtered.gather(1, sampled_sorted).squeeze(1)
+        entropy = -(filtered * filtered.clamp_min(1e-12).log()).sum(dim=-1)
+    else:
+        next_token = torch.multinomial(probs, num_samples=1)
+        next_prob = probs.gather(1, next_token).squeeze(1)
+        entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1)
+
+    return next_token, next_prob.clamp_min(1e-12).log(), entropy
 
 
 class PyTorchEngine(InferenceEngine):
     """Local PyTorch/PEFT inference engine."""
 
-    def __init__(self, model_name, device, peft_config, dtype):
+    def __init__(self, model_name, device, peft_config, dtype, existing_model=None):
         """Load a PEFT-wrapped model for inference.
 
         Args:
@@ -32,16 +83,29 @@ class PyTorchEngine(InferenceEngine):
         self.device = device
         self.model_name = model_name
 
-        print(f"Loading infer model: {model_name} on {device}...")
-        base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
-        self.model = get_peft_model(base, peft_config)
-        self.model.to(device)
+        if existing_model is not None:
+            self.model = existing_model
+        else:
+            print(f"Loading infer model: {model_name} on {device}...")
+            base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+            self.model = get_peft_model(base, peft_config)
+            self.model.to(device)
 
     def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
                  compute_entropy=False):
         """Generate completions with per-token logprobs via PyTorch."""
         results = []
         self.model.eval()
+
+        if _is_gemma4_text_model(self.model):
+            return self._generate_gemma4_text(
+                prompt_ids_list,
+                num_samples,
+                max_tokens,
+                temperature,
+                top_p,
+                compute_entropy,
+            )
 
         with torch.no_grad():
             for prompt_ids in prompt_ids_list:
@@ -92,6 +156,72 @@ class PyTorchEngine(InferenceEngine):
                         token_ids=gen_ids,
                         logprobs=logprobs,
                         token_entropies=token_entropies,
+                    ))
+                results.append(group)
+
+        return results
+
+    def _generate_gemma4_text(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                              compute_entropy=False):
+        """Text-only Gemma4 sampling path avoiding the multimodal wrapper."""
+        results = []
+        unwrapped = _unwrap_peft_model(self.model)
+        text_model = unwrapped.model.language_model
+        lm_head = unwrapped.lm_head
+        eos_ids = _eos_token_ids(self.model)
+
+        with torch.no_grad():
+            for prompt_ids in prompt_ids_list:
+                input_ids = torch.tensor([prompt_ids] * num_samples, device=self.device)
+                generated = input_ids
+                attention_mask = torch.ones_like(generated, device=self.device)
+                past_key_values = None
+                shared_kv_states = None
+                generated_tokens = [[] for _ in range(num_samples)]
+                generated_logprobs = [[] for _ in range(num_samples)]
+                generated_entropies = [[] for _ in range(num_samples)] if compute_entropy else None
+                finished = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
+
+                for _ in range(max_tokens):
+                    step_input_ids = generated if past_key_values is None else generated[:, -1:]
+                    kwargs = {"return_shared_kv_states": True}
+                    if shared_kv_states is not None:
+                        kwargs["shared_kv_states"] = shared_kv_states
+
+                    outputs = text_model(
+                        input_ids=step_input_ids,
+                        attention_mask=attention_mask,
+                        past_key_values=past_key_values,
+                        use_cache=True,
+                        **kwargs,
+                    )
+                    logits = lm_head(outputs.last_hidden_state[:, -1:, :])[:, -1, :]
+                    next_token, logprob, entropy = _sample_next_token(logits, temperature, top_p)
+                    generated = torch.cat([generated, next_token], dim=-1)
+                    attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+                    past_key_values = outputs.past_key_values
+                    shared_kv_states = outputs.shared_kv_states
+
+                    for i in range(num_samples):
+                        if finished[i]:
+                            continue
+                        token = int(next_token[i].item())
+                        generated_tokens[i].append(token)
+                        generated_logprobs[i].append(float(logprob[i].item()))
+                        if generated_entropies is not None:
+                            generated_entropies[i].append(float(entropy[i].item()))
+                        if token in eos_ids:
+                            finished[i] = True
+
+                    if bool(finished.all()):
+                        break
+
+                group = []
+                for i in range(num_samples):
+                    group.append(SampleResult(
+                        token_ids=generated_tokens[i],
+                        logprobs=generated_logprobs[i],
+                        token_entropies=generated_entropies[i] if generated_entropies is not None else None,
                     ))
                 results.append(group)
 
