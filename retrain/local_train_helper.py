@@ -179,7 +179,7 @@ class LocalTrainHelper:
                 engine_type="pytorch",
                 model_name=model_name,
                 device=self.infer_device,
-                peft_config=peft_config,
+                peft_config=None,
                 dtype=dtype,
                 existing_model=self.train_model,
             )

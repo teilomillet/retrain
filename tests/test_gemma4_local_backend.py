@@ -64,10 +64,31 @@ class _FakeGemma4TextModel:
         return [(name, object()) for name in names]
 
 
+class _WrappedGemma4TextModel:
+    def __init__(self, model: _FakeGemma4TextModel) -> None:
+        self.base_model = SimpleNamespace(model=model)
+
+    def named_modules(self):
+        return [("base_model.model.model.language_model.layers.0.self_attn.q_proj", object())]
+
+
 def test_gemma4_lora_targets_are_language_tower_exact_names():
     model = _FakeGemma4TextModel()
 
     targets = resolve_lora_target_modules(model, DEFAULT_LORA_TARGET_MODULES)
+
+    assert targets == [
+        "model.language_model.layers.0.self_attn.q_proj",
+        "model.language_model.layers.0.self_attn.k_proj",
+        "model.language_model.layers.0.mlp.down_proj",
+    ]
+
+
+def test_gemma4_lora_targets_scan_unwrapped_peft_model():
+    model = _FakeGemma4TextModel()
+    wrapped = _WrappedGemma4TextModel(model)
+
+    targets = resolve_lora_target_modules(wrapped, DEFAULT_LORA_TARGET_MODULES)
 
     assert targets == [
         "model.language_model.layers.0.self_attn.q_proj",
@@ -109,6 +130,17 @@ def test_pytorch_engine_moves_existing_model_to_requested_device():
 
     assert engine.model is model
     assert model.to_calls == ["cuda:7"]
+
+
+def test_pytorch_engine_rejects_peft_config_with_existing_model():
+    with pytest.raises(ValueError, match="peft_config must be None"):
+        PyTorchEngine(
+            model_name="unused",
+            device="cpu",
+            peft_config=object(),
+            dtype=None,
+            existing_model=_ExistingModel(),
+        )
 
 
 def test_top_p_sampling_entropy_uses_full_distribution():

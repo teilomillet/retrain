@@ -36,9 +36,10 @@ def resolve_lora_target_modules(model, suffixes: Iterable[str] = DEFAULT_LORA_TA
     if not is_gemma4_text_model(model):
         return list(suffixes)
 
+    unwrapped = unwrap_peft_model(model)
     targets = [
         name
-        for name, _ in model.named_modules()
+        for name, _ in unwrapped.named_modules()
         if name.startswith("model.language_model.") and name.endswith(suffixes)
     ]
     if not targets:

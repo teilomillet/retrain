@@ -31,9 +31,12 @@ def create_engine(
         engine_type: One of "pytorch", "max", "vllm", "sglang", "mlx", "openai".
         model_name: HuggingFace model ID.
         device: Torch device string for local engines.
-        peft_config: LoraConfig (used by PyTorchEngine).
+        peft_config: LoraConfig for PyTorchEngine to wrap a freshly loaded
+            model. Must be None when existing_model is provided.
         dtype: Model dtype (used by PyTorchEngine).
         inference_url: Server URL for server-based engines.
+        existing_model: Already wrapped PyTorch/PEFT model to reuse for
+            single-model local inference.
 
     Returns:
         An InferenceEngine instance.

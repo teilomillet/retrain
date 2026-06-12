@@ -48,13 +48,20 @@ class PyTorchEngine(InferenceEngine):
         Args:
             model_name: HuggingFace model ID.
             device: Torch device string (e.g. "cuda:0", "cpu").
-            peft_config: LoraConfig for PEFT wrapping.
+            peft_config: LoraConfig for PEFT wrapping. Must be None when
+                existing_model is provided, because that model is expected to
+                already be PEFT-wrapped and configured.
             dtype: Model dtype (bfloat16 or float32).
         """
         self.device = device
         self.model_name = model_name
 
         if existing_model is not None:
+            if peft_config is not None:
+                raise ValueError(
+                    "peft_config must be None when existing_model is provided; "
+                    "existing_model is expected to be already PEFT-wrapped."
+                )
             self.model = existing_model.to(device)
         else:
             print(f"Loading infer model: {model_name} on {device}...")
