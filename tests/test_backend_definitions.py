@@ -46,6 +46,12 @@ def test_resolver_accepts_backend_options_for_builtins() -> None:
     assert caps.preserves_token_advantages is False
 
 
+def test_local_backend_options_accept_train_microbatch_size() -> None:
+    assert normalize_backend_options("local", {"train_microbatch_size": "2"}) == {
+        "train_microbatch_size": 2
+    }
+
+
 def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
     class _PluginFactory:
         retrain_backend_capabilities = {

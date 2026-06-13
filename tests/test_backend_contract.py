@@ -68,8 +68,10 @@ class _BaseFakeHelper:
 
 
 class _FakeLocalTrainHelper(_BaseFakeHelper):
+    init_calls: list[dict] = []
+
     def __init__(self, *args, **kwargs):
-        _ = args, kwargs
+        self.init_calls.append({"args": args, "kwargs": kwargs})
         super().__init__()
 
 
@@ -127,6 +129,7 @@ def _assert_lifecycle_calls(helper: _BaseFakeHelper) -> None:
 
 
 def test_local_backend_contract(monkeypatch):
+    _FakeLocalTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
     monkeypatch.setitem(sys.modules, "retrain.local_train_helper", fake_mod)
 
@@ -137,6 +140,18 @@ def test_local_backend_contract(monkeypatch):
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 0
+
+
+def test_local_backend_passes_train_microbatch_option(monkeypatch):
+    _FakeLocalTrainHelper.init_calls.clear()
+    fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.local_train_helper", fake_mod)
+
+    cfg = TrainConfig(backend="local", backend_options={"train_microbatch_size": 2})
+    backend.create("local", cfg)
+
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 2
 
 
 def test_tinker_backend_contract(monkeypatch):

@@ -83,6 +83,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         optim_eps=config.optim_eps,
         clip_eps=config.clip_eps,
         clip_eps_high=config.clip_eps_high,
+        train_microbatch_size=int(
+            config.backend_options.get("train_microbatch_size", 0)
+        ),
     )
 
 
@@ -191,7 +194,13 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
         ),
-        option_schema={},
+        option_schema={
+            "train_microbatch_size": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+        },
     ),
     "tinker": BackendDefinition(
         name="tinker",

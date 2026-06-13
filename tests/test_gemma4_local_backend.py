@@ -16,6 +16,7 @@ from retrain.gemma4_text import (
     resolve_lora_target_modules,
 )
 from retrain.inference_engine.pytorch_engine import PyTorchEngine, _sample_next_token
+from retrain.local_train_helper import LocalTrainHelper
 
 
 class _ExistingModel:
@@ -153,3 +154,62 @@ def test_top_p_sampling_entropy_uses_full_distribution():
     assert token.tolist() == [[0]]
     assert logprob.tolist() == pytest.approx([0.0])
     assert entropy.tolist() == pytest.approx(expected_entropy.tolist())
+
+
+class _TinyCausalModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding = torch.nn.Embedding(8, 4)
+        self.proj = torch.nn.Linear(4, 8)
+
+    def forward(self, input_ids, attention_mask=None):
+        _ = attention_mask
+        return SimpleNamespace(logits=self.proj(self.embedding(input_ids)))
+
+
+def _helper_for_model(model: torch.nn.Module, *, train_microbatch_size: int):
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
+    helper.scaler = torch.amp.GradScaler(enabled=False)
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.clip_eps = 0.0
+    helper.clip_eps_high = 0.0
+    helper._clip_fraction = 0.0
+    helper.split_mode = False
+    helper._external_engine = False
+    helper.train_microbatch_size = train_microbatch_size
+    return helper
+
+
+def test_local_train_step_microbatch_matches_full_batch_update():
+    torch.manual_seed(123)
+    base = _TinyCausalModel()
+    full_model = _TinyCausalModel()
+    micro_model = _TinyCausalModel()
+    full_model.load_state_dict(base.state_dict())
+    micro_model.load_state_dict(base.state_dict())
+
+    tokens = [
+        [1, 2, 3, 4],
+        [1, 3, 4],
+        [2, 4, 5, 6],
+    ]
+    logprobs = [[0.0] * len(row) for row in tokens]
+    advantages = [
+        [0.0, 1.0, -0.5, 0.25],
+        [0.0, -1.0, 0.5],
+        [0.0, 0.25, 0.75, -0.25],
+    ]
+
+    full = _helper_for_model(full_model, train_microbatch_size=0)
+    micro = _helper_for_model(micro_model, train_microbatch_size=1)
+
+    full_loss = full.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
+    micro_loss = micro.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
+
+    assert micro_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
+    assert micro._clip_fraction == pytest.approx(full._clip_fraction)
+    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+        assert torch.allclose(full_param, micro_param, atol=1e-6)

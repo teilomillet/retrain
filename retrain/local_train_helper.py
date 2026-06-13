@@ -77,13 +77,15 @@ class LocalTrainHelper:
                  engine_type="pytorch", inference_url="",
                  lora_alpha=0, lora_dropout=0.0,
                  optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
-                 clip_eps=0.0, clip_eps_high=0.0):
+                 clip_eps=0.0, clip_eps_high=0.0,
+                 train_microbatch_size=0):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
         self.clip_eps = clip_eps
         self.clip_eps_high = clip_eps_high
         self._clip_fraction = 0.0
+        self.train_microbatch_size = max(0, int(train_microbatch_size))
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -322,19 +324,8 @@ class LocalTrainHelper:
                 return dict(counters)
         return {}
 
-    def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
-        """Execute training forward/backward/step on pre-prepared tensors.
-
-        After the optimizer step, clones LoRA params into _weight_snapshot
-        for safe cross-thread syncing. Runs on background thread in split mode.
-
-        Returns:
-            Scalar loss value.
-        """
-        self.train_model.train()
-        self.optimizer.zero_grad()
-
-        # Single batched forward pass with AMP
+    def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
+        """Compute masked policy loss for one already-padded microbatch."""
         with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
             logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]  # [N, max_len-1, vocab] — shift
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
@@ -353,14 +344,49 @@ class LocalTrainHelper:
             masked_loss, clip_frac = _compute_policy_loss(
                 ratio, adv, mask, self.clip_eps, self.clip_eps_high
             )
-            self._clip_fraction = clip_frac
+            token_count = mask.sum().clamp(min=1)
 
-        self.scaler.scale(masked_loss).backward()
+        return masked_loss, token_count, clip_frac
+
+    def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
+        """Execute training forward/backward/step on pre-prepared tensors.
+
+        After the optimizer step, clones LoRA params into _weight_snapshot
+        for safe cross-thread syncing. Runs on background thread in split mode.
+
+        Returns:
+            Scalar loss value.
+        """
+        self.train_model.train()
+        self.optimizer.zero_grad()
+
+        batch_size = int(input_ids.shape[0])
+        microbatch_size = self.train_microbatch_size or batch_size
+        total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
+        total_tokens_value = float(total_tokens.item())
+        loss_sum = 0.0
+        clip_count = 0.0
+
+        for start in range(0, batch_size, microbatch_size):
+            stop = min(start + microbatch_size, batch_size)
+            masked_loss, token_count, clip_frac = self._compute_train_loss(
+                input_ids[start:stop],
+                old_logprobs[start:stop],
+                advantages[start:stop],
+                attention_mask[start:stop],
+            )
+            token_count_value = float(token_count.item())
+            scaled_loss = masked_loss * (token_count / total_tokens)
+            self.scaler.scale(scaled_loss).backward()
+            loss_sum += float(masked_loss.detach().item()) * token_count_value
+            clip_count += clip_frac * token_count_value
+
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self.optimizer.zero_grad()
 
-        loss_val = masked_loss.item()
+        self._clip_fraction = clip_count / total_tokens_value
+        loss_val = loss_sum / total_tokens_value
 
         # Snapshot LoRA weights for safe cross-thread sync
         if self.split_mode or self._external_engine:

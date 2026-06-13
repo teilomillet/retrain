@@ -390,6 +390,13 @@ CONFIGURATION
   [backend.options]
 
     Backend-specific key/value options table.
+    For backend = "local":
+        train_microbatch_size = 0
+            0 disables train-step microbatching. A positive value splits local
+            PyTorch/PEFT train_step datums into chunks of that size, preserving
+            the token-weighted loss while reducing peak VRAM at extra compute
+            cost. Use 1 for tight single-GPU memory probes.
+
     For backend = "prime_rl":
         transport = "filesystem"   # or "zmq"
         zmq_host = "localhost"

@@ -63,6 +63,18 @@ devices = "gpu:0"
 adapter_path = "/tmp/retrain_adapter"
 ```
 
+For tight single-GPU memory budgets, the local backend can microbatch
+`train_step()` datums:
+
+```toml
+[backend.options]
+train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
+```
+
+This splits local train-step datums into smaller forward/backward chunks while
+preserving the token-weighted loss. Use it when sampling fits but training OOMs
+on the full datum batch.
+
 ### Single GPU
 
 With one device, the same model handles both inference and training. No weight duplication, minimal overhead.

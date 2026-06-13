@@ -141,10 +141,24 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | `{}` | Backend-specific options table. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
+
+Local backend memory knob:
+
+```toml
+[backend]
+backend = "local"
+
+[backend.options]
+train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
+```
+
+`train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
+forward/backward chunks while preserving the token-weighted loss. This trades
+extra compute time for lower peak VRAM during `train_step`.
 
 ### Migrate legacy backend config
 
