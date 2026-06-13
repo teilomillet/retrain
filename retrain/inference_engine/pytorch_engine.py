@@ -42,7 +42,15 @@ def _sample_next_token(logits, temperature, top_p):
 class PyTorchEngine(InferenceEngine):
     """Local PyTorch/PEFT inference engine."""
 
-    def __init__(self, model_name, device, peft_config, dtype, existing_model=None):
+    def __init__(
+        self,
+        model_name,
+        device,
+        peft_config,
+        dtype,
+        existing_model=None,
+        sample_use_cache=True,
+    ):
         """Load a PEFT-wrapped model for inference.
 
         Args:
@@ -55,6 +63,7 @@ class PyTorchEngine(InferenceEngine):
         """
         self.device = device
         self.model_name = model_name
+        self.sample_use_cache = bool(sample_use_cache)
 
         if existing_model is not None:
             if peft_config is not None:
@@ -161,24 +170,37 @@ class PyTorchEngine(InferenceEngine):
                 finished = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
 
                 for _ in range(max_tokens):
-                    step_input_ids = generated if past_key_values is None else generated[:, -1:]
-                    kwargs = {"return_shared_kv_states": True}
-                    if shared_kv_states is not None:
-                        kwargs["shared_kv_states"] = shared_kv_states
-
-                    outputs = text_model(
-                        input_ids=step_input_ids,
-                        attention_mask=attention_mask,
-                        past_key_values=past_key_values,
-                        use_cache=True,
-                        **kwargs,
+                    use_cache = self.sample_use_cache
+                    step_input_ids = (
+                        generated
+                        if past_key_values is None or not use_cache
+                        else generated[:, -1:]
                     )
+                    kwargs = {}
+                    if use_cache:
+                        kwargs["return_shared_kv_states"] = True
+                        if shared_kv_states is not None:
+                            kwargs["shared_kv_states"] = shared_kv_states
+
+                    model_kwargs = {
+                        "input_ids": step_input_ids,
+                        "attention_mask": attention_mask,
+                        "use_cache": use_cache,
+                        **kwargs,
+                    }
+                    if use_cache:
+                        model_kwargs["past_key_values"] = past_key_values
+                    outputs = text_model(**model_kwargs)
                     logits = lm_head(outputs.last_hidden_state[:, -1:, :])[:, -1, :]
                     next_token, logprob, entropy = _sample_next_token(logits, temperature, top_p)
                     generated = torch.cat([generated, next_token], dim=-1)
                     attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
-                    past_key_values = getattr(outputs, "past_key_values", None)
-                    shared_kv_states = getattr(outputs, "shared_kv_states", None)
+                    past_key_values = (
+                        getattr(outputs, "past_key_values", None) if use_cache else None
+                    )
+                    shared_kv_states = (
+                        getattr(outputs, "shared_kv_states", None) if use_cache else None
+                    )
 
                     for i in range(num_samples):
                         if finished[i]:

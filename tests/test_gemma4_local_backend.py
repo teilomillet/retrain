@@ -54,6 +54,12 @@ class _FakeGemma4TextModel:
     def __call__(self, *_args, **_kwargs):
         raise AssertionError("Gemma4 multimodal wrapper should not be called")
 
+    def eval(self):
+        return self
+
+    def to(self, _device: str):
+        return self
+
     def named_modules(self):
         names = [
             "",
@@ -71,6 +77,11 @@ class _WrappedGemma4TextModel:
 
     def named_modules(self):
         return [("base_model.model.model.language_model.layers.0.self_attn.q_proj", object())]
+
+
+class _FailingEngine:
+    def generate(self, *_args, **_kwargs):
+        raise RuntimeError("sample failed")
 
 
 def test_gemma4_lora_targets_are_language_tower_exact_names():
@@ -144,6 +155,34 @@ def test_pytorch_engine_rejects_peft_config_with_existing_model():
         )
 
 
+def test_gemma4_text_sampler_can_disable_kv_cache():
+    torch.manual_seed(123)
+    model = _FakeGemma4TextModel()
+    engine = PyTorchEngine(
+        model_name="unused",
+        device="cpu",
+        peft_config=None,
+        dtype=None,
+        existing_model=model,
+        sample_use_cache=False,
+    )
+
+    results = engine.generate([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+
+    assert len(results) == 1
+    assert len(results[0]) == 1
+    assert len(model.language_model.calls) == 2
+    assert [call["input_ids"].shape[1] for call in model.language_model.calls] == [
+        2,
+        3,
+    ]
+    assert [call["use_cache"] for call in model.language_model.calls] == [
+        False,
+        False,
+    ]
+    assert [call["kwargs"] for call in model.language_model.calls] == [{}, {}]
+
+
 def test_top_p_sampling_entropy_uses_full_distribution():
     logits = torch.tensor([[3.0, 2.0, 1.0, 0.0]])
     probs = F.softmax(logits, dim=-1)
@@ -154,6 +193,21 @@ def test_top_p_sampling_entropy_uses_full_distribution():
     assert token.tolist() == [[0]]
     assert logprob.tolist() == pytest.approx([0.0])
     assert entropy.tolist() == pytest.approx(expected_entropy.tolist())
+
+
+def test_local_sample_empty_cache_runs_after_engine_error(monkeypatch):
+    calls: list[str] = []
+    helper = object.__new__(LocalTrainHelper)
+    helper.engine = _FailingEngine()
+    helper.cuda_empty_cache = True
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty"))
+
+    with pytest.raises(RuntimeError, match="sample failed"):
+        helper.sample([[1, 2]], 1, 1, 1.0, 1.0)
+
+    assert calls == ["empty"]
 
 
 class _TinyCausalModel(torch.nn.Module):
@@ -180,6 +234,7 @@ def _helper_for_model(model: torch.nn.Module, *, train_microbatch_size: int):
     helper.split_mode = False
     helper._external_engine = False
     helper.train_microbatch_size = train_microbatch_size
+    helper.cuda_empty_cache = False
     return helper
 
 

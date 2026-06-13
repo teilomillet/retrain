@@ -64,16 +64,22 @@ adapter_path = "/tmp/retrain_adapter"
 ```
 
 For tight single-GPU memory budgets, the local backend can microbatch
-`train_step()` datums:
+`train_step()` datums and opt into CUDA allocator cleanup / lower-memory
+PyTorch sampling:
 
 ```toml
 [backend.options]
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
+cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
+sample_use_cache = false   # slower PyTorch sampling, lower KV-cache memory
 ```
 
 This splits local train-step datums into smaller forward/backward chunks while
 preserving the token-weighted loss. Use it when sampling fits but training OOMs
-on the full datum batch.
+on the full datum batch. `cuda_empty_cache` does not change model math; it only
+trades allocator reuse for lower fragmentation pressure. `sample_use_cache =
+false` is a compute-for-memory tradeoff for the PyTorch inference engine,
+especially Gemma4's text-only manual sampling path.
 
 ### Single GPU
 

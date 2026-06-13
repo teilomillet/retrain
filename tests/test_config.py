@@ -244,7 +244,11 @@ generation_top_surprisal_limit = 3
         assert c.optim_eps == pytest.approx(1e-8)
         assert c.lora_alpha == 0
         assert c.lora_dropout == pytest.approx(0.0)
-        assert c.backend_options == {"train_microbatch_size": 0}
+        assert c.backend_options == {
+            "train_microbatch_size": 0,
+            "cuda_empty_cache": False,
+            "sample_use_cache": True,
+        }
         assert c.environment_provider == ""
         assert c.environment_id == ""
         assert c.environment_args == ""

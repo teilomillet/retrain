@@ -46,9 +46,18 @@ def test_resolver_accepts_backend_options_for_builtins() -> None:
     assert caps.preserves_token_advantages is False
 
 
-def test_local_backend_options_accept_train_microbatch_size() -> None:
-    assert normalize_backend_options("local", {"train_microbatch_size": "2"}) == {
-        "train_microbatch_size": 2
+def test_local_backend_options_accept_memory_controls() -> None:
+    assert normalize_backend_options(
+        "local",
+        {
+            "train_microbatch_size": "2",
+            "cuda_empty_cache": "true",
+            "sample_use_cache": "false",
+        },
+    ) == {
+        "train_microbatch_size": 2,
+        "cuda_empty_cache": True,
+        "sample_use_cache": False,
     }
 
 

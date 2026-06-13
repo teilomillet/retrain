@@ -141,17 +141,28 @@ def test_local_backend_contract(monkeypatch):
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 0
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is False
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
 
 
-def test_local_backend_passes_train_microbatch_option(monkeypatch):
+def test_local_backend_passes_memory_control_options(monkeypatch):
     _FakeLocalTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
     monkeypatch.setitem(sys.modules, "retrain.local_train_helper", fake_mod)
 
-    cfg = TrainConfig(backend="local", backend_options={"train_microbatch_size": 2})
+    cfg = TrainConfig(
+        backend="local",
+        backend_options={
+            "train_microbatch_size": 2,
+            "cuda_empty_cache": True,
+            "sample_use_cache": False,
+        },
+    )
     backend.create("local", cfg)
 
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 2
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
 
 
 def test_tinker_backend_contract(monkeypatch):

@@ -141,7 +141,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -154,11 +154,17 @@ backend = "local"
 
 [backend.options]
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
+cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
+sample_use_cache = false   # slower PyTorch sampling, lower KV-cache memory
 ```
 
 `train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
 forward/backward chunks while preserving the token-weighted loss. This trades
 extra compute time for lower peak VRAM during `train_step`.
+`cuda_empty_cache` is allocator hygiene and does not change model outputs.
+`sample_use_cache = false` asks the PyTorch engine to avoid generation KV-cache
+reuse; use it only when rollout sampling OOMs and slower generation is
+acceptable.
 
 ### Migrate legacy backend config
 

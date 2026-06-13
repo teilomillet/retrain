@@ -78,7 +78,9 @@ class LocalTrainHelper:
                  lora_alpha=0, lora_dropout=0.0,
                  optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
                  clip_eps=0.0, clip_eps_high=0.0,
-                 train_microbatch_size=0):
+                 train_microbatch_size=0,
+                 cuda_empty_cache=False,
+                 sample_use_cache=True):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
@@ -86,6 +88,8 @@ class LocalTrainHelper:
         self.clip_eps_high = clip_eps_high
         self._clip_fraction = 0.0
         self.train_microbatch_size = max(0, int(train_microbatch_size))
+        self.cuda_empty_cache = bool(cuda_empty_cache)
+        self.sample_use_cache = bool(sample_use_cache)
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -160,6 +164,7 @@ class LocalTrainHelper:
                 peft_config=peft_config,
                 dtype=dtype,
                 inference_url=inference_url,
+                sample_use_cache=self.sample_use_cache,
             )
         elif self.split_mode:
             self._train_executor = ThreadPoolExecutor(max_workers=1)
@@ -171,6 +176,7 @@ class LocalTrainHelper:
                 device=self.infer_device,
                 peft_config=peft_config,
                 dtype=dtype,
+                sample_use_cache=self.sample_use_cache,
             )
             # Initial sync: copy LoRA weights from train to infer
             self._do_initial_sync()
@@ -184,6 +190,7 @@ class LocalTrainHelper:
                 peft_config=None,
                 dtype=dtype,
                 existing_model=self.train_model,
+                sample_use_cache=self.sample_use_cache,
             )
 
         # Optimizer (only for train_model)
@@ -273,9 +280,12 @@ class LocalTrainHelper:
         Returns:
             List of lists of (token_ids, logprobs) tuples.
         """
-        engine_results = self.engine.generate(
-            prompt_ids_list, num_samples, max_tokens, temperature, top_p
-        )
+        try:
+            engine_results = self.engine.generate(
+                prompt_ids_list, num_samples, max_tokens, temperature, top_p
+            )
+        finally:
+            self._empty_cuda_cache_if_requested()
 
         # Convert SampleResult -> tuples for Mojo interop
         results = []
@@ -303,10 +313,13 @@ class LocalTrainHelper:
         Returns:
             List of lists of (token_ids, logprobs, token_entropies) tuples.
         """
-        engine_results = self.engine.generate(
-            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-            compute_entropy=True,
-        )
+        try:
+            engine_results = self.engine.generate(
+                prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                compute_entropy=True,
+            )
+        finally:
+            self._empty_cuda_cache_if_requested()
 
         results = []
         for group in engine_results:
@@ -323,6 +336,10 @@ class LocalTrainHelper:
             if isinstance(counters, dict):
                 return dict(counters)
         return {}
+
+    def _empty_cuda_cache_if_requested(self):
+        if self.cuda_empty_cache and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
         """Compute masked policy loss for one already-padded microbatch."""
@@ -360,44 +377,47 @@ class LocalTrainHelper:
         self.train_model.train()
         self.optimizer.zero_grad()
 
-        batch_size = int(input_ids.shape[0])
-        microbatch_size = self.train_microbatch_size or batch_size
-        total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
-        total_tokens_value = float(total_tokens.item())
-        loss_sum = 0.0
-        clip_count = 0.0
+        try:
+            batch_size = int(input_ids.shape[0])
+            microbatch_size = self.train_microbatch_size or batch_size
+            total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
+            total_tokens_value = float(total_tokens.item())
+            loss_sum = 0.0
+            clip_count = 0.0
 
-        for start in range(0, batch_size, microbatch_size):
-            stop = min(start + microbatch_size, batch_size)
-            masked_loss, token_count, clip_frac = self._compute_train_loss(
-                input_ids[start:stop],
-                old_logprobs[start:stop],
-                advantages[start:stop],
-                attention_mask[start:stop],
-            )
-            token_count_value = float(token_count.item())
-            scaled_loss = masked_loss * (token_count / total_tokens)
-            self.scaler.scale(scaled_loss).backward()
-            loss_sum += float(masked_loss.detach().item()) * token_count_value
-            clip_count += clip_frac * token_count_value
+            for start in range(0, batch_size, microbatch_size):
+                stop = min(start + microbatch_size, batch_size)
+                masked_loss, token_count, clip_frac = self._compute_train_loss(
+                    input_ids[start:stop],
+                    old_logprobs[start:stop],
+                    advantages[start:stop],
+                    attention_mask[start:stop],
+                )
+                token_count_value = float(token_count.item())
+                scaled_loss = masked_loss * (token_count / total_tokens)
+                self.scaler.scale(scaled_loss).backward()
+                loss_sum += float(masked_loss.detach().item()) * token_count_value
+                clip_count += clip_frac * token_count_value
 
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self.optimizer.zero_grad()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
-        self._clip_fraction = clip_count / total_tokens_value
-        loss_val = loss_sum / total_tokens_value
+            self._clip_fraction = clip_count / total_tokens_value
+            loss_val = loss_sum / total_tokens_value
 
-        # Snapshot LoRA weights for safe cross-thread sync
-        if self.split_mode or self._external_engine:
-            snapshot = {}
-            for name, param in self.train_model.named_parameters():
-                if "lora_" in name:
-                    snapshot[name] = param.data.clone()
-            self._weight_snapshot = snapshot
-            self._weights_dirty = True
+            # Snapshot LoRA weights for safe cross-thread sync
+            if self.split_mode or self._external_engine:
+                snapshot = {}
+                for name, param in self.train_model.named_parameters():
+                    if "lora_" in name:
+                        snapshot[name] = param.data.clone()
+                self._weight_snapshot = snapshot
+                self._weights_dirty = True
 
-        return loss_val
+            return loss_val
+        finally:
+            self.optimizer.zero_grad()
+            self._empty_cuda_cache_if_requested()
 
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
         """Run one training step with importance sampling loss.

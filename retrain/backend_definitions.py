@@ -86,6 +86,8 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         train_microbatch_size=int(
             config.backend_options.get("train_microbatch_size", 0)
         ),
+        cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", False)),
+        sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),
     )
 
 
@@ -200,6 +202,8 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=0,
                 validator=_validate_non_negative_int,
             ),
+            "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=False),
+            "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
         },
     ),
     "tinker": BackendDefinition(
