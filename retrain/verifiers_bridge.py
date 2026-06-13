@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 import types
@@ -70,6 +71,7 @@ class _MultiTurnEnvironment(Protocol):
     async def get_prompt_messages(self, state: StateDict) -> PromptLike: ...
     async def add_trajectory_step(self, state: StateDict, step: object) -> object: ...
     async def render_completion(self, state: StateDict) -> object: ...
+    async def cleanup(self, state: StateDict) -> object: ...
 
 
 class _Tokenizer(Protocol):
@@ -789,6 +791,21 @@ def run_multiturn_group(
         states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [[] for _ in range(num_rollouts)]
 
+        async def cleanup_states() -> None:
+            cleanup_error: Exception | None = None
+            active_exception = sys.exc_info()[0] is not None
+            cleanup_openenv_state = getattr(env_typed, "_cleanup_openenv_state", None)
+            for state in states:
+                try:
+                    if callable(cleanup_openenv_state):
+                        await cleanup_openenv_state(state)
+                    else:
+                        await env_typed.cleanup(state)
+                except Exception as exc:  # noqa: BLE001 - preserve rollout failures.
+                    cleanup_error = cleanup_error or exc
+            if cleanup_error is not None and not active_exception:
+                raise cleanup_error
+
         # Per-rollout temperatures for diversity (temperature_spread > 0)
         if temperature_spread > 0 and num_rollouts > 1:
             rollout_temps = [
@@ -798,157 +815,170 @@ def run_multiturn_group(
         else:
             rollout_temps = [temperature] * num_rollouts
 
-        for i in range(num_rollouts):
-            input_payload: dict[str, object] = {
-                "prompt": prompt,
-                "answer": answer,
-                "task": task,
-                "example_id": i,
-            }
-            if info is not None:
-                input_payload["info"] = info
-            state = await env_typed.init_state(
-                input=input_payload,
-                client=None,  # retrain handles model calls through helper.sample()
-                model=model_name,
-                sampling_args=None,
-            )
-            state = await env_typed.setup_state(state)
-            states.append(state)
-
-        turn_count = 0
-        while True:
-            active: list[tuple[int, PromptLike, list[int]]] = []
-            for idx, state in enumerate(states):
-                if await env_typed.is_completed(state):
-                    continue
-                prompt_messages = await env_typed.get_prompt_messages(state)
-                if state.get("final_env_response") is not None:
-                    continue
-                prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
-                active.append((idx, prompt_messages, prompt_ids))
-
-            if not active:
-                break
-
-            if max_turns_override > 0 and turn_count >= max_turns_override:
-                for idx, _messages, _prompt_ids in active:
-                    states[idx]["is_completed"] = True
-                    states[idx]["is_truncated"] = True
-                    states[idx]["stop_condition"] = "retrain_max_turns"
-                break
-
-            prompt_ids_batch = [item[2] for item in active]
-            sampled_groups = helper.sample(
-                prompt_ids_batch,
-                1,
-                max_tokens,
-                temperature,
-                top_p,
-            )
-            # Handle empty groups: if the sampler returns no completions
-            # (e.g. prompt too long for max_tokens), use a fallback empty
-            # completion so the turn loop can continue gracefully.
-            completion_ids_batch = [
-                list(group[0][0]) if group else []
-                for group in sampled_groups
-            ]
-            completion_logprobs_batch = [
-                [float(lp) for lp in group[0][1]] if group else []
-                for group in sampled_groups
-            ]
-            completion_texts = tokenizer_typed.batch_decode(
-                completion_ids_batch, skip_special_tokens=True
-            )
-
-            for pos, (idx, prompt_messages, prompt_ids) in enumerate(active):
-                completion_ids = completion_ids_batch[pos]
-                completion_logprobs = completion_logprobs_batch[pos]
-                completion_text = completion_texts[pos]
-                completion_messages = _completion_messages_for_env(env_typed, completion_text)
-
-                tokens_payload = {
-                    "prompt_ids": list(prompt_ids),
-                    "prompt_mask": [0] * len(prompt_ids),
-                    "completion_ids": list(completion_ids),
-                    "completion_mask": [1] * len(completion_ids),
-                    "completion_logprobs": list(completion_logprobs),
-                    "overlong_prompt": False,
-                    "is_truncated": False,
+        try:
+            for i in range(num_rollouts):
+                input_payload: dict[str, object] = {
+                    "prompt": prompt,
+                    "answer": answer,
+                    "task": task,
+                    "example_id": i,
                 }
-                _TrajectoryStep = getattr(vf, "TrajectoryStep", None)
-                if _TrajectoryStep is not None:
-                    trajectory_step = _TrajectoryStep(
-                        prompt=prompt_messages,
-                        completion=completion_messages,
-                        response=None,
-                        tokens=tokens_payload,
-                        reward=None,
-                        advantage=None,
-                        is_truncated=False,
-                        trajectory_id=states[idx]["trajectory_id"],
-                        extras={},
-                    )
-                else:
-                    # Fallback for verifiers versions without TrajectoryStep.
-                    trajectory_step = types.SimpleNamespace(
-                        prompt=prompt_messages,
-                        completion=completion_messages,
-                        tokens=tokens_payload,
-                        reward=None,
-                        advantage=None,
-                        is_truncated=False,
-                        trajectory_id=states[idx].get("trajectory_id", idx),
-                    )
-                await env_typed.add_trajectory_step(states[idx], trajectory_step)
-                per_rollout_turns[idx].append(
-                    VerifiersTurnSample(
-                        prompt_ids=list(prompt_ids),
-                        completion_ids=list(completion_ids),
-                        completion_logprobs=list(completion_logprobs),
-                        completion_text=completion_text,
-                    )
+                if info is not None:
+                    input_payload["info"] = info
+                state = await env_typed.init_state(
+                    input=input_payload,
+                    client=None,  # retrain handles model calls through helper.sample()
+                    model=model_name,
+                    sampling_args=None,
+                )
+                state = await env_typed.setup_state(state)
+                states.append(state)
+
+            turn_count = 0
+            while True:
+                active: list[tuple[int, PromptLike, list[int]]] = []
+                for idx, state in enumerate(states):
+                    if await env_typed.is_completed(state):
+                        continue
+                    prompt_messages = await env_typed.get_prompt_messages(state)
+                    if state.get("final_env_response") is not None:
+                        continue
+                    prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
+                    active.append((idx, prompt_messages, prompt_ids))
+
+                if not active:
+                    break
+
+                if max_turns_override > 0 and turn_count >= max_turns_override:
+                    for idx, _messages, _prompt_ids in active:
+                        states[idx]["is_completed"] = True
+                        states[idx]["is_truncated"] = True
+                        states[idx]["stop_condition"] = "retrain_max_turns"
+                    break
+
+                prompt_ids_batch = [item[2] for item in active]
+                sampled_groups = helper.sample(
+                    prompt_ids_batch,
+                    1,
+                    max_tokens,
+                    temperature,
+                    top_p,
+                )
+                # Handle empty groups: if the sampler returns no completions
+                # (e.g. prompt too long for max_tokens), use a fallback empty
+                # completion so the turn loop can continue gracefully.
+                completion_ids_batch = [
+                    list(group[0][0]) if group else []
+                    for group in sampled_groups
+                ]
+                completion_logprobs_batch = [
+                    [float(lp) for lp in group[0][1]] if group else []
+                    for group in sampled_groups
+                ]
+                completion_texts = tokenizer_typed.batch_decode(
+                    completion_ids_batch, skip_special_tokens=True
                 )
 
-            turn_count += 1
+                for pos, (idx, prompt_messages, prompt_ids) in enumerate(active):
+                    completion_ids = completion_ids_batch[pos]
+                    completion_logprobs = completion_logprobs_batch[pos]
+                    completion_text = completion_texts[pos]
+                    completion_messages = _completion_messages_for_env(
+                        env_typed, completion_text
+                    )
 
-        for state in states:
-            await env_typed.render_completion(state)
-        await env_typed.rubric.score_group(states)
+                    tokens_payload = {
+                        "prompt_ids": list(prompt_ids),
+                        "prompt_mask": [0] * len(prompt_ids),
+                        "completion_ids": list(completion_ids),
+                        "completion_mask": [1] * len(completion_ids),
+                        "completion_logprobs": list(completion_logprobs),
+                        "overlong_prompt": False,
+                        "is_truncated": False,
+                    }
+                    _TrajectoryStep = getattr(vf, "TrajectoryStep", None)
+                    if _TrajectoryStep is not None:
+                        trajectory_step = _TrajectoryStep(
+                            prompt=prompt_messages,
+                            completion=completion_messages,
+                            response=None,
+                            tokens=tokens_payload,
+                            reward=None,
+                            advantage=None,
+                            is_truncated=False,
+                            trajectory_id=states[idx]["trajectory_id"],
+                            extras={},
+                        )
+                    else:
+                        # Fallback for verifiers versions without TrajectoryStep.
+                        trajectory_step = types.SimpleNamespace(
+                            prompt=prompt_messages,
+                            completion=completion_messages,
+                            tokens=tokens_payload,
+                            reward=None,
+                            advantage=None,
+                            is_truncated=False,
+                            trajectory_id=states[idx].get("trajectory_id", idx),
+                        )
+                    await env_typed.add_trajectory_step(states[idx], trajectory_step)
+                    per_rollout_turns[idx].append(
+                        VerifiersTurnSample(
+                            prompt_ids=list(prompt_ids),
+                            completion_ids=list(completion_ids),
+                            completion_logprobs=list(completion_logprobs),
+                            completion_text=completion_text,
+                        )
+                    )
 
-        # TL-GRPO: branch from each turn to get epistemically sound
-        # per-turn advantages (alternatives compared against same state).
-        all_branch_rewards: list[list[list[float]]] = []
-        if tl_grpo:
-            for i, state in enumerate(states):
-                br = _run_tl_grpo_branching(
-                    state,
-                    per_rollout_turns[i],
-                    env,
-                    helper,
-                    tokenizer,
-                    branch_mode=tl_grpo_branch_mode,
-                    branch_size=tl_grpo_branch_size,
-                    lookahead_steps=tl_grpo_lookahead_steps,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
+                turn_count += 1
+
+            for state in states:
+                await env_typed.render_completion(state)
+            await env_typed.rubric.score_group(states)
+
+            # TL-GRPO: branch from each turn to get epistemically sound
+            # per-turn advantages (alternatives compared against same state).
+            all_branch_rewards: list[list[list[float]]] = []
+            if tl_grpo:
+                for i, state in enumerate(states):
+                    br = _run_tl_grpo_branching(
+                        state,
+                        per_rollout_turns[i],
+                        env,
+                        helper,
+                        tokenizer,
+                        branch_mode=tl_grpo_branch_mode,
+                        branch_size=tl_grpo_branch_size,
+                        lookahead_steps=tl_grpo_lookahead_steps,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                    )
+                    all_branch_rewards.append(br)
+                _compute_tl_grpo_advantages(
+                    states,
+                    all_branch_rewards,
+                    outcome_baseline=tl_grpo_outcome_baseline,
                 )
-                all_branch_rewards.append(br)
-            _compute_tl_grpo_advantages(
-                states,
+
+            rewards = [_coerce_reward(s.get("reward")) for s in states]
+            completions_text = [_messages_to_text(s.get("completion")) for s in states]
+            turn_rewards = [_coerce_float_list(s.get("turn_rewards")) for s in states]
+            turn_advantages = [_coerce_float_list(s.get("turn_advantages")) for s in states]
+            turn_logs = [
+                cast(list[dict[str, object]], s.get("turn_log") or [])
+                for s in states
+            ]
+            return (
+                rewards,
+                per_rollout_turns,
+                completions_text,
+                turn_rewards,
+                turn_advantages,
+                turn_logs,
                 all_branch_rewards,
-                outcome_baseline=tl_grpo_outcome_baseline,
             )
-
-        rewards = [_coerce_reward(s.get("reward")) for s in states]
-        completions_text = [_messages_to_text(s.get("completion")) for s in states]
-        turn_rewards = [_coerce_float_list(s.get("turn_rewards")) for s in states]
-        turn_advantages = [_coerce_float_list(s.get("turn_advantages")) for s in states]
-        turn_logs = [
-            cast(list[dict[str, object]], s.get("turn_log") or [])
-            for s in states
-        ]
-        return rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs, all_branch_rewards
+        finally:
+            await cleanup_states()
 
     return asyncio.run(_run())

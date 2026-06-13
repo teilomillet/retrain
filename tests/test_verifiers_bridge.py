@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from retrain import verifiers_bridge as bridge_mod
 from retrain.config import TrainConfig
 from retrain.verifiers_bridge import (
     _coerce_float_list,
@@ -11,6 +12,7 @@ from retrain.verifiers_bridge import (
     load_examples_from_environment,
     parse_environment_args,
     prompt_preview,
+    run_multiturn_group,
 )
 
 
@@ -22,6 +24,89 @@ class _DummyTokenizer:
 
     def encode(self, text):
         return [len(text), len(text) + 1]
+
+    def batch_decode(self, token_ids, *, skip_special_tokens=True):
+        return [f"completion-{idx}" for idx, _ids in enumerate(token_ids)]
+
+
+class _DummyHelper:
+    def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):  # noqa: ARG002
+        return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
+
+
+class _CleanupTrackingRubric:
+    async def score_group(self, states):
+        for state in states:
+            state["reward"] = 1.0
+
+
+class _FailingRubric:
+    async def score_group(self, states):  # noqa: ARG002
+        raise RuntimeError("score failed")
+
+
+class _CleanupTrackingMultiTurnEnv:
+    message_type = "chat"
+
+    def __init__(self) -> None:
+        self.rubric = _CleanupTrackingRubric()
+        self.cleaned: list[int] = []
+
+    async def init_state(self, *, input, client, model, sampling_args):  # noqa: A002, ARG002
+        return {
+            "prompt": input["prompt"],
+            "trajectory": [],
+            "trajectory_id": input["example_id"],
+            "reward": None,
+            "completion": None,
+        }
+
+    async def setup_state(self, state):
+        state["setup"] = True
+        return state
+
+    async def is_completed(self, state):
+        return bool(state["trajectory"])
+
+    async def get_prompt_messages(self, state):
+        return state["prompt"]
+
+    async def add_trajectory_step(self, state, step):
+        state["trajectory"].append(step)
+
+    async def render_completion(self, state):
+        step = state["trajectory"][0]
+        state["completion"] = getattr(step, "completion", [])
+
+    async def cleanup(self, state):
+        self.cleaned.append(int(state["trajectory_id"]))
+
+
+class _OpenEnvCleanupTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.openenv_cleaned: list[int] = []
+
+    async def _cleanup_openenv_state(self, state):
+        self.openenv_cleaned.append(int(state["trajectory_id"]))
+
+    async def cleanup(self, state):  # pragma: no cover - must not be called.
+        raise AssertionError("full cleanup should not run for OpenEnv resources")
+
+
+class _FailingScoreCleanupTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rubric = _FailingRubric()
+
+
+class _FakeTrajectoryStep:
+    def __init__(self, **kwargs) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _FakeVerifiersModule:
+    TrajectoryStep = _FakeTrajectoryStep
 
 
 class _EvalOnlyEnv:
@@ -132,3 +217,85 @@ class TestCoerceFloatList:
 
     def test_empty_list(self):
         assert _coerce_float_list([]) == []
+
+
+class TestRunMultiturnGroup:
+    def test_cleans_up_rollout_states_after_scoring(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _CleanupTrackingMultiTurnEnv()
+
+        rewards, turns, *_ = run_multiturn_group(
+            env,
+            helper=_DummyHelper(),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=3,
+            max_tokens=4,
+            temperature=1.0,
+            top_p=1.0,
+        )
+
+        assert rewards == [1.0, 1.0, 1.0]
+        assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1]
+        assert env.cleaned == [0, 1, 2]
+
+    def test_prefers_openenv_resource_cleanup_when_available(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _OpenEnvCleanupTrackingMultiTurnEnv()
+
+        rewards, turns, *_ = run_multiturn_group(
+            env,
+            helper=_DummyHelper(),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=2,
+            max_tokens=4,
+            temperature=1.0,
+            top_p=1.0,
+        )
+
+        assert rewards == [1.0, 1.0]
+        assert [len(rollout_turns) for rollout_turns in turns] == [1, 1]
+        assert env.openenv_cleaned == [0, 1]
+
+    def test_cleans_up_rollout_states_when_scoring_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _FailingScoreCleanupTrackingMultiTurnEnv()
+
+        with pytest.raises(RuntimeError, match="score failed"):
+            run_multiturn_group(
+                env,
+                helper=_DummyHelper(),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=2,
+                max_tokens=4,
+                temperature=1.0,
+                top_p=1.0,
+            )
+
+        assert env.cleaned == [0, 1]
