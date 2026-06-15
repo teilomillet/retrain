@@ -12,17 +12,12 @@ retrain path/to/config.toml
 ```toml
 [backend]
 backend = "local"          # local | tinker | prime_rl
-devices = "gpu:0"          # e.g. gpu:0,gpu:1 for split mode
+devices = "gpu:0"          # gpu:0/gpu:0,gpu:1 for CUDA, mps for Apple Silicon
 adapter_path = "/tmp/retrain_adapter"
 
-[backend.options]          # backend-specific options (example for prime_rl)
-transport = "filesystem"   # filesystem | zmq
-zmq_host = "localhost"     # used when transport = "zmq"
-zmq_port = 5555            # used when transport = "zmq"
-zmq_hwm = 10               # used when transport = "zmq"
-strict_advantages = true   # must remain true; false is rejected to prevent silent aggregation
-sync_wait_s = 30           # max wait for broadcast weights in checkpoint()
-sync_poll_s = 0.2          # polling interval for broadcast weights
+[backend.options]          # backend-specific options
+trust_remote_code = false  # local backend: opt into custom HF model code
+require_causal_conv1d = false  # local backend: hard-fail if Nemotron-H CUDA fast path is unavailable
 
 [model]
 model = "Qwen/Qwen3-4B-Instruct-2507"
@@ -132,6 +127,18 @@ wandb_tags = ""            # comma-separated
 strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 ```
 
+For `backend = "prime_rl"`, `[backend.options]` instead accepts:
+
+```toml
+transport = "filesystem"   # filesystem | zmq
+zmq_host = "localhost"     # used when transport = "zmq"
+zmq_port = 5555            # used when transport = "zmq"
+zmq_hwm = 10               # used when transport = "zmq"
+strict_advantages = true   # must remain true; false is rejected to prevent silent aggregation
+sync_wait_s = 30           # max wait for broadcast weights in checkpoint()
+sync_poll_s = 0.2          # polling interval for broadcast weights
+```
+
 ## Field reference
 
 ### `[backend]`
@@ -139,9 +146,9 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
-| `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
+| `devices` | str | `"gpu:0"` | Comma-separated device list. `gpu:N`/`cuda:N` select CUDA, `mps` selects Apple Silicon PyTorch MPS, and multi-CUDA enables split mode |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | `{}` | Backend-specific options table. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | `{}` | Backend-specific options table. For `local`: `trust_remote_code`, `require_causal_conv1d`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.

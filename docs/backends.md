@@ -63,6 +63,21 @@ devices = "gpu:0"
 adapter_path = "/tmp/retrain_adapter"
 ```
 
+For Hugging Face models with custom architecture code, opt in explicitly:
+
+```toml
+[backend.options]
+trust_remote_code = true
+require_causal_conv1d = false
+```
+
+- `trust_remote_code` passes through to local training and PyTorch inference
+  model loads. Keep it `false` unless the selected model repository requires
+  custom code.
+- `require_causal_conv1d` turns the CUDA fast-path warning into a hard
+  preflight failure for Nemotron-H/Mamba models. `mamba-ssm` is always required
+  for Nemotron-H local Transformers loads.
+
 ### Single GPU
 
 With one device, the same model handles both inference and training. No weight duplication, minimal overhead.
@@ -210,11 +225,42 @@ The `devices` field accepts comma-separated GPU specs:
 | Value | Meaning |
 |-------|---------|
 | `gpu:0` | Single GPU (CUDA device 0) |
+| `cuda:0` | Single GPU (CUDA device 0) |
 | `gpu:0,gpu:1` | Split mode: infer on 0, train on 1 |
 | `gpu:7` | Single GPU (CUDA device 7) |
+| `mps` | Apple Silicon PyTorch MPS device |
 | `cpu` | CPU-only (slow, for testing) |
 
-If CUDA is not available, local backend falls back to CPU automatically.
+If CUDA is requested but unavailable, the local backend preserves the historical
+fallback to CPU. MPS is opt-in: use `devices = "mps"` explicitly, and retrain
+fails fast if PyTorch reports MPS as unavailable.
+
+To verify a Mac locally with an exact generated-token gate:
+
+```bash
+uv run python scripts/mps_local_lora_probe.py \
+  --device mps \
+  --expected-new-tokens 5
+```
+
+The probe creates a tiny local Llama checkpoint, runs one real LoRA optimizer
+step, samples with the local PyTorch engine, and fails unless every sample has
+exactly the requested number of generated tokens with aligned logprobs.
+
+For a full trainer-stack smoke, including TOML loading, plugin data/reward,
+flow tracing, metrics, generation logs, and final adapter save:
+
+```bash
+uv run python scripts/mps_retrain_stack_probe.py \
+  --device mps \
+  --expected-new-tokens 5 \
+  --steps 1 \
+  --group-size 2
+```
+
+This probe fails unless the trainer logs exactly the requested generated-token
+count for every logged sample, writes finite-loss metrics for every step, avoids
+skipped steps, and saves a final LoRA adapter.
 
 ## Checkpoint resume
 

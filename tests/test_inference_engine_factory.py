@@ -12,6 +12,56 @@ from retrain.inference_engine import create_engine
 
 
 class TestCreateEngine:
+    def test_pytorch_engine_receives_trust_remote_code(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(PyTorchEngine=mock_cls)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "retrain.inference_engine.pytorch_engine", fake_mod)
+            create_engine(
+                engine_type="pytorch",
+                model_name="nvidia/FakeNemotron",
+                device="cpu",
+                peft_config=None,
+                dtype=None,
+                inference_url="",
+                trust_remote_code=True,
+            )
+
+        mock_cls.assert_called_once_with(
+            "nvidia/FakeNemotron",
+            "cpu",
+            None,
+            None,
+            trust_remote_code=True,
+            use_cache=True,
+        )
+
+    def test_pytorch_engine_receives_use_cache(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(PyTorchEngine=mock_cls)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setitem(sys.modules, "retrain.inference_engine.pytorch_engine", fake_mod)
+            create_engine(
+                engine_type="pytorch",
+                model_name="google/FakeGemma",
+                device="cpu",
+                peft_config=None,
+                dtype=None,
+                inference_url="",
+                use_cache=False,
+            )
+
+        mock_cls.assert_called_once_with(
+            "google/FakeGemma",
+            "cpu",
+            None,
+            None,
+            trust_remote_code=False,
+            use_cache=False,
+        )
+
     def test_mlx_engine_uses_default_url(self):
         mock_cls = MagicMock(return_value=object())
         fake_mod = SimpleNamespace(OpenAIEngine=mock_cls)

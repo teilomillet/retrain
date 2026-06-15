@@ -23,6 +23,8 @@ def create_engine(
     peft_config,
     dtype,
     inference_url="",
+    trust_remote_code=False,
+    use_cache=True,
 ):
     """Factory: create the right InferenceEngine based on engine_type.
 
@@ -33,6 +35,8 @@ def create_engine(
         peft_config: LoraConfig (used by PyTorchEngine).
         dtype: Model dtype (used by PyTorchEngine).
         inference_url: Server URL for server-based engines.
+        trust_remote_code: Whether local HF model loads may execute remote code.
+        use_cache: Whether PyTorch generation may use KV cache.
 
     Returns:
         An InferenceEngine instance.
@@ -40,7 +44,14 @@ def create_engine(
     if engine_type == "pytorch":
         from retrain.inference_engine.pytorch_engine import PyTorchEngine
 
-        return PyTorchEngine(model_name, device, peft_config, dtype)
+        return PyTorchEngine(
+            model_name,
+            device,
+            peft_config,
+            dtype,
+            trust_remote_code=trust_remote_code,
+            use_cache=use_cache,
+        )
 
     elif engine_type == "max":
         from retrain.inference_engine.max_engine import create_max_engine

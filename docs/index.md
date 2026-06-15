@@ -3,7 +3,8 @@
 RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLMs. retrain is designed to make experiments easier: define a TOML, run training, and compare outcomes with repeatable logs.
 
 !!! info "Hardware"
-    **Local backend:** One CUDA GPU with **16+ GB VRAM** (RTX 4090, A100, H100).
+    **Local backend:** CUDA GPU for production-scale runs; Apple Silicon MPS is
+    supported for local PyTorch smoke tests and small experiments.
     **Tinker backend:** No local GPU -- training runs on the remote Tinker service.
     See [Getting Started](getting-started.md#prerequisites) for details.
 

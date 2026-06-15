@@ -66,6 +66,9 @@ retrain --devices gpu:0
 # 1 GPU -- explicit PyTorch
 retrain --devices gpu:0 --inference-engine pytorch
 
+# Apple Silicon -- PyTorch MPS local training and sampling
+retrain --devices mps --inference-engine pytorch
+
 # 8 GPUs -- MAX serve on GPUs 0-6, training on GPU 7
 max serve --model Qwen/Qwen3-4B-Instruct-2507  # manages its own GPUs
 retrain --devices gpu:7 \
@@ -101,11 +104,13 @@ The `_weights_dirty` flag avoids redundant saves. In split mode, a weight snapsh
 |--------|----------|-----------|
 | `engine = "pytorch"`, `devices = "gpu:0"` | GPU 0 | GPU 0 (same model) |
 | `engine = "pytorch"`, `devices = "gpu:0,gpu:1"` | GPU 1 | GPU 0 (split mode) |
+| `engine = "pytorch"`, `devices = "mps"` | Apple Silicon MPS | Apple Silicon MPS |
 | `engine = "max"`, `devices = "gpu:7"` | GPU 7 | MAX-managed |
 | `engine = "vllm"`, `devices = "gpu:7"` | GPU 7 | Server-managed |
 | `engine = "mlx"`, `devices = "cpu"` | CPU | MLX-LM server-managed |
 
-With external engines, `devices` controls only the training GPU. The engine manages its own GPU allocation independently.
+With external engines, `devices` controls only the PyTorch training device. The
+engine manages its own accelerator allocation independently.
 
 ## TOML configuration
 

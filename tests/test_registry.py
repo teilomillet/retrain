@@ -169,6 +169,29 @@ class TestBuiltinCreation:
         with pytest.raises(ValueError, match="custom_module"):
             reward.create("custom", config)
 
+    def test_local_backend_uses_model_load_options(self):
+        mock_cls = MagicMock(return_value=object())
+        fake_mod = SimpleNamespace(LocalTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="local",
+            backend_options={
+                "trust_remote_code": True,
+                "require_causal_conv1d": True,
+                "train_microbatch_size": 1,
+                "cuda_empty_cache": True,
+                "sample_use_cache": False,
+            },
+        )
+        with patch.dict(sys.modules, {"retrain.local_train_helper": fake_mod}):
+            backend.create("local", config)
+
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["trust_remote_code"] is True
+        assert mock_cls.call_args.kwargs["require_causal_conv1d"] is True
+        assert mock_cls.call_args.kwargs["train_microbatch_size"] == 1
+        assert mock_cls.call_args.kwargs["cuda_empty_cache"] is True
+        assert mock_cls.call_args.kwargs["sample_use_cache"] is False
+
     def test_tinker_uses_inference_url_before_base_url(self):
         mock_cls = MagicMock(return_value=MagicMock())
         fake_mod = SimpleNamespace(TinkerTrainHelper=mock_cls)

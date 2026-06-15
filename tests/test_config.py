@@ -244,7 +244,13 @@ generation_top_surprisal_limit = 3
         assert c.optim_eps == pytest.approx(1e-8)
         assert c.lora_alpha == 0
         assert c.lora_dropout == pytest.approx(0.0)
-        assert c.backend_options == {}
+        assert c.backend_options == {
+            "trust_remote_code": False,
+            "require_causal_conv1d": False,
+            "train_microbatch_size": 0,
+            "cuda_empty_cache": False,
+            "sample_use_cache": True,
+        }
         assert c.environment_provider == ""
         assert c.environment_id == ""
         assert c.environment_args == ""
@@ -463,6 +469,25 @@ class TestValidation:
                 backend="prime_rl",
                 backend_options={"tranport": "filesystem"},
             )
+
+    def test_local_backend_options_are_normalized(self):
+        c = TrainConfig(
+            backend="local",
+            backend_options={
+                "trust_remote_code": "true",
+                "require_causal_conv1d": "false",
+                "train_microbatch_size": "1",
+                "cuda_empty_cache": "true",
+                "sample_use_cache": "false",
+            },
+        )
+        assert c.backend_options == {
+            "trust_remote_code": True,
+            "require_causal_conv1d": False,
+            "train_microbatch_size": 1,
+            "cuda_empty_cache": True,
+            "sample_use_cache": False,
+        }
 
     def test_backend_options_choice_validation_raises(self):
         with pytest.raises(ValueError, match="must be one of"):

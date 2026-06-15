@@ -13,13 +13,15 @@ GPU split mode (multi-GPU): separate devices for inference and training.
 The LocalBackend in Mojo calls into this module via Python interop.
 """
 
+import importlib
 import os
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from peft import get_peft_model, LoraConfig, TaskType
 
 from retrain.inference_engine import create_engine
@@ -55,14 +57,142 @@ def _compute_policy_loss(ratio, adv, mask, clip_eps, clip_eps_high):
 
 
 def _parse_device(device_str):
-    """Convert a device spec like 'gpu:0' to a torch device string like 'cuda:0'."""
-    device_str = device_str.strip()
-    if device_str.startswith("gpu:"):
-        return device_str.replace("gpu:", "cuda:")
-    elif device_str == "cpu":
-        return "cpu"
-    else:
+    """Convert a local backend device spec to a torch device string."""
+    device_str = device_str.strip().lower()
+    if device_str in ("gpu", "cuda"):
         return "cuda:0"
+    if device_str.startswith("gpu:"):
+        device_index = device_str.split(":", 1)[1]
+        if device_index.isdigit():
+            return f"cuda:{device_index}"
+    if device_str.startswith("cuda:"):
+        device_index = device_str.split(":", 1)[1]
+        if device_index.isdigit():
+            return device_str
+    if device_str == "cpu":
+        return "cpu"
+    if device_str in ("mps", "mps:0"):
+        return "mps"
+    raise ValueError(
+        f"Unsupported local backend device {device_str!r}. "
+        "Expected gpu:N, cuda:N, mps, mps:0, or cpu."
+    )
+
+
+def _device_type(device):
+    if str(device).startswith("cuda"):
+        return "cuda"
+    if str(device).startswith("mps"):
+        return "mps"
+    if str(device) == "cpu":
+        return "cpu"
+    raise ValueError(f"Unsupported torch device {device!r}.")
+
+
+def _mps_is_available():
+    return (
+        hasattr(torch.backends, "mps")
+        and torch.backends.mps.is_built()
+        and torch.backends.mps.is_available()
+    )
+
+
+def _resolve_available_device(device):
+    device_kind = _device_type(device)
+    if device_kind == "cuda" and not torch.cuda.is_available():
+        print("CUDA not available, falling back to CPU")
+        return "cpu"
+    if device_kind == "mps" and not _mps_is_available():
+        raise RuntimeError(
+            "MPS was requested for the local backend, but PyTorch reports "
+            "torch.backends.mps.is_available() == False."
+        )
+    return device
+
+
+def _model_dtype_for_device(device):
+    device_kind = _device_type(device)
+    if device_kind == "cuda":
+        return torch.bfloat16
+    if device_kind == "mps":
+        return torch.float16
+    return torch.float32
+
+
+def _use_amp_for_device(device):
+    return _device_type(device) in ("cuda", "mps")
+
+
+def _use_grad_scaler_for_device(device):
+    return _device_type(device) == "cuda"
+
+
+def _empty_accelerator_cache(device):
+    device_kind = _device_type(device)
+    if device_kind == "cuda" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif device_kind == "mps" and _mps_is_available() and hasattr(torch, "mps"):
+        torch.mps.empty_cache()
+
+
+def _import_error(module_name):
+    try:
+        importlib.import_module(module_name)
+    except Exception as exc:
+        return exc
+    return None
+
+
+def _preflight_model_type(model_name, trust_remote_code):
+    if trust_remote_code:
+        config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        return str(getattr(config, "model_type", ""))
+
+    config_dict, _ = PretrainedConfig.get_config_dict(model_name)
+    return str(config_dict.get("model_type", ""))
+
+
+def _preflight_local_model_prerequisites(
+    model_name,
+    trust_remote_code,
+    require_causal_conv1d,
+    devices,
+):
+    model_type = _preflight_model_type(model_name, trust_remote_code)
+    if model_type != "nemotron_h":
+        return
+
+    if not trust_remote_code:
+        raise RuntimeError(
+            "Nemotron-H models require Hugging Face custom model code. "
+            "Set [backend.options] trust_remote_code = true for local training."
+        )
+
+    mamba_error = _import_error("mamba_ssm")
+    if mamba_error is not None:
+        raise RuntimeError(
+            "Nemotron-H local Transformers loading requires mamba-ssm "
+            "(import mamba_ssm failed). Install mamba-ssm in the retrain "
+            f"environment before training {model_name!r}."
+        ) from mamba_error
+
+    uses_cuda = torch.cuda.is_available() and any(
+        str(device).startswith("cuda") for device in devices
+    )
+    if not uses_cuda:
+        return
+
+    causal_conv_error = _import_error("causal_conv1d")
+    if causal_conv_error is None:
+        return
+
+    message = (
+        "Nemotron-H on CUDA is missing causal-conv1d; the fast Mamba path "
+        "will be unavailable. Install causal-conv1d for the BF16 CUDA path."
+    )
+    if require_causal_conv1d:
+        raise RuntimeError(message) from causal_conv_error
+    warnings.warn(message, RuntimeWarning, stacklevel=2)
 
 
 class LocalTrainHelper:
@@ -72,13 +202,19 @@ class LocalTrainHelper:
                  engine_type="pytorch", inference_url="",
                  lora_alpha=0, lora_dropout=0.0,
                  optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
-                 clip_eps=0.0, clip_eps_high=0.0):
+                 clip_eps=0.0, clip_eps_high=0.0,
+                 trust_remote_code=False, require_causal_conv1d=False,
+                 train_microbatch_size=0, cuda_empty_cache=False,
+                 sample_use_cache=True):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
         self.clip_eps = clip_eps
         self.clip_eps_high = clip_eps_high
         self._clip_fraction = 0.0
+        self.train_microbatch_size = int(train_microbatch_size or 0)
+        self.cuda_empty_cache = bool(cuda_empty_cache)
+        self.sample_use_cache = bool(sample_use_cache)
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -96,9 +232,7 @@ class LocalTrainHelper:
         if self._external_engine:
             # Server handles inference — all local GPUs for training
             device = parsed_devices[-1] if parsed_devices else "cuda:0"
-            if device.startswith("cuda") and not torch.cuda.is_available():
-                print("CUDA not available, falling back to CPU")
-                device = "cpu"
+            device = _resolve_available_device(device)
             self.infer_device = device  # not used for sampling, but kept for compat
             self.train_device = device
             self.split_mode = False
@@ -108,14 +242,21 @@ class LocalTrainHelper:
         else:
             # Single-model mode: use first device (with CUDA fallback)
             device = parsed_devices[0] if parsed_devices else "cuda:0"
-            if device.startswith("cuda") and not torch.cuda.is_available():
-                print("CUDA not available, falling back to CPU")
-                device = "cpu"
+            device = _resolve_available_device(device)
             self.infer_device = device
             self.train_device = device
 
-        self.use_amp = self.train_device != "cpu"
-        dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
+        self.train_device_type = _device_type(self.train_device)
+        self.use_amp = _use_amp_for_device(self.train_device)
+        self.autocast_dtype = _model_dtype_for_device(self.train_device)
+        dtype = self.autocast_dtype
+
+        _preflight_local_model_prerequisites(
+            model_name,
+            trust_remote_code,
+            require_causal_conv1d,
+            devices=(self.train_device, self.infer_device),
+        )
 
         effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
         peft_config = LoraConfig(
@@ -132,7 +273,7 @@ class LocalTrainHelper:
         # Create train model
         print(f"Loading train model: {model_name} on {self.train_device}...")
         base_train = AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype
+            model_name, torch_dtype=dtype, trust_remote_code=trust_remote_code
         )
         self.train_model = get_peft_model(base_train, peft_config)
         self.train_model.to(self.train_device)
@@ -157,6 +298,8 @@ class LocalTrainHelper:
                 peft_config=peft_config,
                 dtype=dtype,
                 inference_url=inference_url,
+                trust_remote_code=trust_remote_code,
+                use_cache=self.sample_use_cache,
             )
         elif self.split_mode:
             self._train_executor = ThreadPoolExecutor(max_workers=1)
@@ -168,6 +311,8 @@ class LocalTrainHelper:
                 device=self.infer_device,
                 peft_config=peft_config,
                 dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                use_cache=self.sample_use_cache,
             )
             # Initial sync: copy LoRA weights from train to infer
             self._do_initial_sync()
@@ -180,6 +325,8 @@ class LocalTrainHelper:
                 device=self.infer_device,
                 peft_config=peft_config,
                 dtype=dtype,
+                trust_remote_code=trust_remote_code,
+                use_cache=self.sample_use_cache,
             )
             # Point the engine's model to the train model (same object)
             self.engine.model = self.train_model
@@ -194,7 +341,9 @@ class LocalTrainHelper:
         )
 
         # AMP scaler for mixed precision
-        self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler(
+            enabled=self.use_amp and _use_grad_scaler_for_device(self.train_device)
+        )
 
         print(f"LocalTrainHelper ready (engine={engine_type}, split_mode={self.split_mode}).")
 
@@ -274,6 +423,7 @@ class LocalTrainHelper:
         engine_results = self.engine.generate(
             prompt_ids_list, num_samples, max_tokens, temperature, top_p
         )
+        self._maybe_empty_cuda_cache()
 
         # Convert SampleResult -> tuples for Mojo interop
         results = []
@@ -305,6 +455,7 @@ class LocalTrainHelper:
             prompt_ids_list, num_samples, max_tokens, temperature, top_p,
             compute_entropy=True,
         )
+        self._maybe_empty_cuda_cache()
 
         results = []
         for group in engine_results:
@@ -322,20 +473,26 @@ class LocalTrainHelper:
                 return dict(counters)
         return {}
 
-    def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
-        """Execute training forward/backward/step on pre-prepared tensors.
+    def _maybe_empty_cuda_cache(self):
+        if self.cuda_empty_cache:
+            _empty_accelerator_cache(self.train_device)
 
-        After the optimizer step, clones LoRA params into _weight_snapshot
-        for safe cross-thread syncing. Runs on background thread in split mode.
+    def _snapshot_lora_weights_after_step(self):
+        if self.split_mode or self._external_engine:
+            snapshot = {}
+            for name, param in self.train_model.named_parameters():
+                if "lora_" in name:
+                    snapshot[name] = param.data.clone()
+            self._weight_snapshot = snapshot
+            self._weights_dirty = True
+        self._maybe_empty_cuda_cache()
 
-        Returns:
-            Scalar loss value.
-        """
-        self.train_model.train()
-        self.optimizer.zero_grad()
-
-        # Single batched forward pass with AMP
-        with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
+    def _loss_for_batch(self, input_ids, old_logprobs, advantages, attention_mask):
+        with torch.amp.autocast(
+            device_type=self.train_device_type,
+            dtype=self.autocast_dtype,
+            enabled=self.use_amp,
+        ):
             outputs = self.train_model(input_ids, attention_mask=attention_mask)
             logits = outputs.logits[:, :-1]  # [N, max_len-1, vocab] — shift
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
@@ -354,7 +511,25 @@ class LocalTrainHelper:
             masked_loss, clip_frac = _compute_policy_loss(
                 ratio, adv, mask, self.clip_eps, self.clip_eps_high
             )
-            self._clip_fraction = clip_frac
+        token_count = mask.sum().clamp(min=1).item()
+        return masked_loss, clip_frac, token_count
+
+    def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
+        """Execute training forward/backward/step on pre-prepared tensors.
+
+        After the optimizer step, clones LoRA params into _weight_snapshot
+        for safe cross-thread syncing. Runs on background thread in split mode.
+
+        Returns:
+            Scalar loss value.
+        """
+        self.train_model.train()
+        self.optimizer.zero_grad()
+
+        masked_loss, clip_frac, _ = self._loss_for_batch(
+            input_ids, old_logprobs, advantages, attention_mask
+        )
+        self._clip_fraction = clip_frac
 
         self.scaler.scale(masked_loss).backward()
         self.scaler.step(self.optimizer)
@@ -362,17 +537,42 @@ class LocalTrainHelper:
         self.optimizer.zero_grad()
 
         loss_val = masked_loss.item()
-
-        # Snapshot LoRA weights for safe cross-thread sync
-        if self.split_mode or self._external_engine:
-            snapshot = {}
-            for name, param in self.train_model.named_parameters():
-                if "lora_" in name:
-                    snapshot[name] = param.data.clone()
-            self._weight_snapshot = snapshot
-            self._weights_dirty = True
+        self._snapshot_lora_weights_after_step()
 
         return loss_val
+
+    def _do_train_microbatched_impl(self, input_ids, old_logprobs, advantages, attention_mask):
+        """Run one optimizer step using smaller forward/backward microbatches."""
+        microbatch_size = self.train_microbatch_size
+        if microbatch_size <= 0 or input_ids.shape[0] <= microbatch_size:
+            return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
+
+        self.train_model.train()
+        self.optimizer.zero_grad()
+
+        total_tokens = attention_mask[:, 1:].sum().clamp(min=1).item()
+        weighted_loss = 0.0
+        weighted_clip = 0.0
+        for start in range(0, input_ids.shape[0], microbatch_size):
+            end = start + microbatch_size
+            chunk_loss, chunk_clip, chunk_tokens = self._loss_for_batch(
+                input_ids[start:end],
+                old_logprobs[start:end],
+                advantages[start:end],
+                attention_mask[start:end],
+            )
+            weight = float(chunk_tokens) / float(total_tokens)
+            self.scaler.scale(chunk_loss * weight).backward()
+            weighted_loss += float(chunk_loss.item()) * weight
+            weighted_clip += float(chunk_clip) * weight
+
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad()
+        self._clip_fraction = weighted_clip
+        self._snapshot_lora_weights_after_step()
+
+        return weighted_loss
 
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
         """Run one training step with importance sampling loss.
@@ -426,14 +626,20 @@ class LocalTrainHelper:
 
             # Submit training to background thread
             self._train_future = self._train_executor.submit(
-                self._do_train_impl, input_ids, old_logprobs, advantages, attention_mask
+                self._do_train_microbatched_impl,
+                input_ids,
+                old_logprobs,
+                advantages,
+                attention_mask,
             )
 
             # Return loss from the previously completed training step
             return self._pending_loss
         else:
             # Synchronous path: run training inline, return current loss
-            return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
+            return self._do_train_microbatched_impl(
+                input_ids, old_logprobs, advantages, attention_mask
+            )
 
     def load_state(self, name):
         """Load adapter weights from a saved checkpoint for resume.

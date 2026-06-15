@@ -366,9 +366,10 @@ CONFIGURATION
         "prime_rl" requires PRIME-RL (pip install prime-rl).
 
     devices = "gpu:0"
-        Comma-separated device specs: "gpu:0", "gpu:0,gpu:1", "cpu".
-        gpu:N maps to cuda:N. Multiple CUDA devices enable split mode
-        (first for inference, last for training).
+        Comma-separated device specs: "gpu:0", "cuda:0",
+        "gpu:0,gpu:1", "mps", "cpu". gpu:N maps to cuda:N.
+        Multiple CUDA devices enable split mode (first for inference,
+        last for training). MPS is opt-in and fails fast if unavailable.
 
     adapter_path = "/tmp/retrain_adapter"
         Filesystem path for LoRA adapter checkpoints.
@@ -390,6 +391,15 @@ CONFIGURATION
   [backend.options]
 
     Backend-specific key/value options table.
+    For backend = "local":
+        trust_remote_code = false
+            Pass through to local Hugging Face model loads. Required for
+            custom architectures such as Nemotron-H.
+        require_causal_conv1d = false
+            If true, Nemotron-H CUDA preflight hard-fails when causal-conv1d
+            is missing. If false, the same condition emits a warning.
+            mamba-ssm is always required for Nemotron-H local loads.
+
     For backend = "prime_rl":
         transport = "filesystem"   # or "zmq"
         zmq_host = "localhost"
@@ -1369,8 +1379,8 @@ TROUBLESHOOTING
     5) Loss is negative: this is normal with importance-sampling loss.
     6) Training is slow: reduce batch_size and group_size, or switch
        to a server-based inference engine (vllm, sglang).
-    7) CUDA out of memory: reduce batch_size, group_size, or
-       max_tokens. Use --devices gpu:0,gpu:1 for split mode.
+    7) CUDA/MPS out of memory: reduce batch_size, group_size, or
+       max_tokens. On CUDA, use --devices gpu:0,gpu:1 for split mode.
     8) "Unknown flag" error: retrain suggests close matches.
        Run "retrain man --topic options" for the full flag list.
     9) To check if auto-generated manual blocks are stale:

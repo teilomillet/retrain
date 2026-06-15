@@ -29,6 +29,14 @@ class PrimeRLOptions(TypedDict):
     sync_poll_s: float
 
 
+class LocalOptions(TypedDict):
+    trust_remote_code: bool
+    require_causal_conv1d: bool
+    train_microbatch_size: int
+    cuda_empty_cache: bool
+    sample_use_cache: bool
+
+
 @dataclass(frozen=True)
 class BackendOptionSpec:
     """Schema entry for one built-in backend option."""
@@ -69,6 +77,7 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "Backend 'local' requires PyTorch.\n"
             "Install it with: pip install retrain[local]"
         ) from None
+    options = _normalize_local_options(config.backend_options)
     return LocalTrainHelper(
         config.model,
         config.adapter_path,
@@ -83,6 +92,11 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         optim_eps=config.optim_eps,
         clip_eps=config.clip_eps,
         clip_eps_high=config.clip_eps_high,
+        trust_remote_code=options["trust_remote_code"],
+        require_causal_conv1d=options["require_causal_conv1d"],
+        train_microbatch_size=options["train_microbatch_size"],
+        cuda_empty_cache=options["cuda_empty_cache"],
+        sample_use_cache=options["sample_use_cache"],
     )
 
 
@@ -113,6 +127,17 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
     )
     setattr(helper, "sft_loss_fn", config.sft_loss_fn)
     return helper
+
+
+def _normalize_local_options(raw_options: Mapping[str, object]) -> LocalOptions:
+    options = normalize_backend_options("local", raw_options)
+    return {
+        "trust_remote_code": cast(bool, options["trust_remote_code"]),
+        "require_causal_conv1d": cast(bool, options["require_causal_conv1d"]),
+        "train_microbatch_size": cast(int, options["train_microbatch_size"]),
+        "cuda_empty_cache": cast(bool, options["cuda_empty_cache"]),
+        "sample_use_cache": cast(bool, options["sample_use_cache"]),
+    }
 
 
 def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOptions:
@@ -191,7 +216,17 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
         ),
-        option_schema={},
+        option_schema={
+            "trust_remote_code": BackendOptionSpec(value_type=bool, default=False),
+            "require_causal_conv1d": BackendOptionSpec(value_type=bool, default=False),
+            "train_microbatch_size": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=False),
+            "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
+        },
     ),
     "tinker": BackendDefinition(
         name="tinker",

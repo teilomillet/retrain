@@ -46,6 +46,36 @@ def test_resolver_accepts_backend_options_for_builtins() -> None:
     assert caps.preserves_token_advantages is False
 
 
+def test_local_backend_options_normalize_bool_values() -> None:
+    normalized = normalize_backend_options(
+        "local",
+        {
+            "trust_remote_code": "true",
+            "require_causal_conv1d": "false",
+            "train_microbatch_size": "1",
+            "cuda_empty_cache": "true",
+            "sample_use_cache": "false",
+        },
+    )
+    assert normalized == {
+        "trust_remote_code": True,
+        "require_causal_conv1d": False,
+        "train_microbatch_size": 1,
+        "cuda_empty_cache": True,
+        "sample_use_cache": False,
+    }
+
+
+def test_local_backend_options_reject_negative_microbatch() -> None:
+    try:
+        normalize_backend_options("local", {"train_microbatch_size": -1})
+    except ValueError as exc:
+        assert "train_microbatch_size" in str(exc)
+        assert "must be >= 0" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
     class _PluginFactory:
         retrain_backend_capabilities = {

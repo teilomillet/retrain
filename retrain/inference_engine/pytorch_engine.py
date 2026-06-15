@@ -20,20 +20,35 @@ from retrain.inference_engine.base import InferenceEngine, SampleResult
 class PyTorchEngine(InferenceEngine):
     """Local PyTorch/PEFT inference engine."""
 
-    def __init__(self, model_name, device, peft_config, dtype):
+    def __init__(
+        self,
+        model_name,
+        device,
+        peft_config,
+        dtype,
+        trust_remote_code=False,
+        use_cache=True,
+    ):
         """Load a PEFT-wrapped model for inference.
 
         Args:
             model_name: HuggingFace model ID.
-            device: Torch device string (e.g. "cuda:0", "cpu").
+            device: Torch device string (e.g. "cuda:0", "mps", "cpu").
             peft_config: LoraConfig for PEFT wrapping.
             dtype: Model dtype (bfloat16 or float32).
+            trust_remote_code: Whether HF may execute model repository code.
+            use_cache: Whether generation may use the model KV cache.
         """
         self.device = device
         self.model_name = model_name
+        self.use_cache = use_cache
 
         print(f"Loading infer model: {model_name} on {device}...")
-        base = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+        base = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=dtype,
+            trust_remote_code=trust_remote_code,
+        )
         self.model = get_peft_model(base, peft_config)
         self.model.to(device)
 
@@ -58,6 +73,7 @@ class PyTorchEngine(InferenceEngine):
                     do_sample=True,
                     output_scores=True,
                     return_dict_in_generate=True,
+                    use_cache=self.use_cache,
                 )
 
                 # Vectorized logprob extraction
@@ -126,7 +142,9 @@ class PyTorchEngine(InferenceEngine):
                 param.data.copy_(lora_dict[name].to(param.device))
 
     def shutdown(self):
-        """Release model from GPU memory."""
+        """Release model from accelerator memory."""
         del self.model
         if self.device.startswith("cuda"):
             torch.cuda.empty_cache()
+        elif self.device.startswith("mps") and hasattr(torch, "mps"):
+            torch.mps.empty_cache()

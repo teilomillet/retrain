@@ -6,12 +6,18 @@ Goal: run your first retrain experiment quickly, then scale it safely.
 
 === "Local backend (default)"
 
-    **Hardware:** A CUDA GPU with at least **16 GB VRAM** (e.g., RTX 4090, A100, H100). The default model (Qwen3-4B) loads in bf16 (~8 GB) plus LoRA adapter and KV cache overhead.
+    **Hardware:** A CUDA GPU with at least **16 GB VRAM** (e.g., RTX 4090,
+    A100, H100) for production-scale local runs. Apple Silicon MPS is supported
+    with `devices = "mps"` for PyTorch smoke tests and small experiments. The
+    default model (Qwen3-4B) loads in bf16 on CUDA (~8 GB) plus LoRA adapter and
+    KV cache overhead.
 
     !!! tip "Low VRAM?"
         Start with `retrain init --template quickstart` (smoke-test profile with `max_tokens=1024`), then move to the standard training defaults (`max_tokens=10240`) once your run is stable.
 
-    **Software:** Python 3.11+, CUDA 12.x, internet access for the first run (downloads model weights from HuggingFace and the MATH dataset).
+    **Software:** Python 3.11+, CUDA 12.x for CUDA runs or a PyTorch build with
+    MPS support for Apple Silicon runs, plus internet access for the first run
+    (downloads model weights from HuggingFace and the MATH dataset).
 
 === "Tinker backend"
 
