@@ -44,6 +44,7 @@ from retrain.runtime_support import (
 from retrain.sepa import SEPAStateDict
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
+    VerifiersRolloutTiming,
     encode_prompt_for_sampling,
     is_multiturn_environment,
     load_examples_from_environment,
@@ -57,6 +58,14 @@ from retrain.verifiers_bridge import (
 _TRAINER_STATE_FILE = "trainer_state.json"
 _CORRECT_THRESHOLD = 0.5
 _PROMPT_PAD_EPS = 1e-9
+
+
+def _accumulate_metric_totals(
+    totals: dict[str, float],
+    metrics: Mapping[str, float],
+) -> None:
+    for key, value in metrics.items():
+        totals[key] = totals.get(key, 0.0) + float(value)
 
 
 class WandbRunLike(Protocol):
@@ -1013,6 +1022,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             _step_behavior_invalid = 0
             _step_behavior_actions: dict[str, int] = {}
             _step_behavior_resp_lens: list[int] = []
+            rollout_timing_metrics: dict[str, float] = {}
 
             if verifiers_multiturn:
                 all_group_sequences: list[list[tuple[list[int], list[float]]]] = []
@@ -1023,7 +1033,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     task = batch_tasks[f_idx]
                     info = batch_infos[f_idx]
 
-                    rewards_G, turns_G, completion_texts_G, turn_rewards_G, turn_advantages_G, turn_logs_G, branch_rewards_G = run_multiturn_group(
+                    (
+                        rewards_G,
+                        turns_G,
+                        completion_texts_G,
+                        turn_rewards_G,
+                        turn_advantages_G,
+                        turn_logs_G,
+                        branch_rewards_G,
+                        rollout_timing,
+                    ) = run_multiturn_group(
                         verifiers_env,
                         helper=helper,  # type: ignore[invalid-argument-type]
                         tokenizer=tokenizer,
@@ -1042,6 +1061,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         tl_grpo_branch_size=config.tl_grpo_branch_size,
                         tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
                         tl_grpo_outcome_baseline=tl_grpo_ema,
+                    )
+                    _accumulate_metric_totals(
+                        rollout_timing_metrics,
+                        cast(VerifiersRolloutTiming, rollout_timing).as_metrics(),
                     )
 
                     logprobs_G: list[list[float]] = []
@@ -1680,6 +1703,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 metrics["process_max_rss_mb"] = round(rss_mb, 3)
             metrics.update(runtime_counters.metrics())
             metrics.update(_helper_runtime_metrics(helper))
+            if rollout_timing_metrics:
+                metrics.update(rollout_timing_metrics)
+                rollout_total = rollout_timing_metrics.get("rollout/total_s", 0.0)
+                metrics["rollout/accounted_share_of_sample"] = (
+                    rollout_total / sample_time if sample_time > _PROMPT_PAD_EPS else 0.0
+                )
             if batch_surprisal_stats:
                 metrics["exec_entropy_mean"] = step_exec_mean
                 metrics["exec_entropy_var"] = step_exec_var
