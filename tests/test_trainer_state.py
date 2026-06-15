@@ -319,6 +319,36 @@ class TestBackendAdvantageFlowGuard:
         errors = [i for i in result.issues if i.severity == "error"]
         assert any("cannot run ECHO" in e.message for e in errors)
 
+    def test_warns_when_echo_backend_lacks_shared_forward(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="tinker",
+            advantage_mode="grpo",
+            transform_mode="none",
+            echo_enabled=True,
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+        warnings = [i for i in result.issues if i.severity == "warning"]
+        assert any("strict same-forward ECHO" in w.message for w in warnings)
+
+    def test_local_echo_backend_reports_shared_forward(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="local",
+            advantage_mode="grpo",
+            transform_mode="none",
+            echo_enabled=True,
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+        assert flow.backend_capabilities.supports_echo_shared_forward is True
+        assert not any("strict same-forward ECHO" in i.message for i in result.issues)
+
 
 class TestNonPreservingRuntimeGuard:
     def test_allows_uniform_completion_advantages(self):

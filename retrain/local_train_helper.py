@@ -70,6 +70,14 @@ def _parse_device(device_str):
         return "cuda:0"
 
 
+def _pad_to_width(tensor, width, value):
+    """Right-pad a batch-major tensor to ``width`` columns."""
+    if tensor.shape[1] >= width:
+        return tensor
+    pad = tensor.new_full((tensor.shape[0], width - tensor.shape[1]), value)
+    return torch.cat([tensor, pad], dim=1)
+
+
 class LocalTrainHelper:
     """Local GPU helper: pluggable inference engine + PyTorch/PEFT training."""
 
@@ -495,25 +503,10 @@ class LocalTrainHelper:
 
         try:
             batch_size = int(input_ids.shape[0])
-            microbatch_size = self.train_microbatch_size or batch_size
             total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
             total_tokens_value = float(total_tokens.item())
             loss_sum = 0.0
             clip_count = 0.0
-
-            for start in range(0, batch_size, microbatch_size):
-                stop = min(start + microbatch_size, batch_size)
-                masked_loss, token_count, clip_frac = self._compute_train_loss(
-                    input_ids[start:stop],
-                    old_logprobs[start:stop],
-                    advantages[start:stop],
-                    attention_mask[start:stop],
-                )
-                token_count_value = float(token_count.item())
-                scaled_loss = masked_loss * (token_count / total_tokens)
-                self.scaler.scale(scaled_loss).backward()
-                loss_sum += float(masked_loss.detach().item()) * token_count_value
-                clip_count += clip_frac * token_count_value
 
             echo_loss_sum = 0.0
             echo_total_tokens_value = 0.0
@@ -531,30 +524,115 @@ class LocalTrainHelper:
                         "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
                     )
                 echo_total_tokens_value = float(echo_total_tokens.item())
-                echo_logprobs = torch.zeros_like(echo_advantages)
-                echo_microbatch_size = self.train_microbatch_size or echo_batch_size
 
-                for start in range(0, echo_batch_size, echo_microbatch_size):
-                    stop = min(start + echo_microbatch_size, echo_batch_size)
-                    if echo_loss_fn == "cross_entropy":
-                        echo_loss, echo_token_count = self._compute_sft_loss(
-                            echo_input_ids[start:stop],
-                            echo_advantages[start:stop],
-                            echo_attention_mask[start:stop],
+            max_width = max(input_ids.shape[1], echo_input_ids.shape[1])
+            rl_input_ids = _pad_to_width(input_ids, max_width, 0)
+            rl_old_logprobs = _pad_to_width(old_logprobs, max_width, 0.0)
+            rl_advantages = _pad_to_width(advantages, max_width, 0.0)
+            rl_attention_mask = _pad_to_width(attention_mask, max_width, False)
+            echo_padded_ids = _pad_to_width(echo_input_ids, max_width, 0)
+            echo_old_logprobs = torch.zeros_like(echo_advantages)
+            echo_old_logprobs = _pad_to_width(echo_old_logprobs, max_width, 0.0)
+            echo_padded_advantages = _pad_to_width(echo_advantages, max_width, 0.0)
+            echo_padded_mask = _pad_to_width(echo_attention_mask, max_width, False)
+
+            combined_input_ids = torch.cat([rl_input_ids, echo_padded_ids], dim=0)
+            combined_old_logprobs = torch.cat(
+                [rl_old_logprobs, echo_old_logprobs],
+                dim=0,
+            )
+            combined_advantages = torch.cat(
+                [rl_advantages, echo_padded_advantages],
+                dim=0,
+            )
+            combined_attention_mask = torch.cat(
+                [rl_attention_mask, echo_padded_mask],
+                dim=0,
+            )
+
+            combined_batch_size = int(combined_input_ids.shape[0])
+            microbatch_size = self.train_microbatch_size or combined_batch_size
+
+            for start in range(0, combined_batch_size, microbatch_size):
+                stop = min(start + microbatch_size, combined_batch_size)
+                mb_input_ids = combined_input_ids[start:stop]
+                mb_old_logprobs = combined_old_logprobs[start:stop]
+                mb_advantages = combined_advantages[start:stop]
+                mb_attention_mask = combined_attention_mask[start:stop]
+                with torch.amp.autocast(
+                    device_type=self.train_device.split(":")[0],
+                    enabled=self.use_amp,
+                ):
+                    logits = forward_logits(
+                        self.train_model,
+                        mb_input_ids,
+                        mb_attention_mask,
+                    )[:, :-1]
+                    new_logprobs = F.log_softmax(logits.float(), dim=-1)
+                    target_ids = mb_input_ids[:, 1:]
+                    token_logprobs = new_logprobs.gather(
+                        2,
+                        target_ids.unsqueeze(2),
+                    ).squeeze(2)
+
+                    mb_global_rows = torch.arange(start, stop, device=input_ids.device)
+                    rl_rows = mb_global_rows < batch_size
+                    echo_rows = ~rl_rows
+                    scaled_loss = token_logprobs.sum() * 0.0
+
+                    if rl_rows.any():
+                        rl_lp = token_logprobs[rl_rows]
+                        rl_old_lp = mb_old_logprobs[rl_rows, 1:]
+                        rl_adv = mb_advantages[rl_rows, 1:]
+                        rl_mask = mb_attention_mask[rl_rows, 1:]
+                        ratio = torch.exp(rl_lp - rl_old_lp)
+                        masked_loss, clip_frac = _compute_policy_loss(
+                            ratio,
+                            rl_adv,
+                            rl_mask,
+                            self.clip_eps,
+                            self.clip_eps_high,
                         )
-                    else:
-                        echo_loss, echo_token_count, _ = self._compute_train_loss(
-                            echo_input_ids[start:stop],
-                            echo_logprobs[start:stop],
-                            echo_advantages[start:stop],
-                            echo_attention_mask[start:stop],
+                        token_count = rl_mask.sum().clamp(min=1)
+                        token_count_value = float(token_count.item())
+                        scaled_loss = scaled_loss + masked_loss * (
+                            token_count / total_tokens
                         )
-                    echo_token_count_value = float(echo_token_count.item())
-                    scaled_echo_loss = echo_loss * (echo_token_count / echo_total_tokens)
-                    self.scaler.scale(scaled_echo_loss).backward()
-                    echo_loss_sum += (
-                        float(echo_loss.detach().item()) * echo_token_count_value
-                    )
+                        loss_sum += (
+                            float(masked_loss.detach().item()) * token_count_value
+                        )
+                        clip_count += clip_frac * token_count_value
+
+                    if echo_rows.any():
+                        echo_lp = token_logprobs[echo_rows]
+                        echo_adv = mb_advantages[echo_rows, 1:]
+                        echo_mask = mb_attention_mask[echo_rows, 1:]
+                        if echo_loss_fn == "cross_entropy":
+                            echo_weights = torch.clamp(echo_adv, min=0.0)
+                            echo_weights = echo_weights * echo_mask.float()
+                            echo_token_mask = (echo_weights > 0).float()
+                            echo_token_count = echo_token_mask.sum().clamp(min=1)
+                            echo_loss = (-echo_lp * echo_weights).sum() / echo_token_count
+                        else:
+                            echo_old_lp = mb_old_logprobs[echo_rows, 1:]
+                            ratio = torch.exp(echo_lp - echo_old_lp)
+                            echo_loss, _ = _compute_policy_loss(
+                                ratio,
+                                echo_adv,
+                                echo_mask,
+                                self.clip_eps,
+                                self.clip_eps_high,
+                            )
+                            echo_token_count = echo_mask.sum().clamp(min=1)
+                        echo_token_count_value = float(echo_token_count.item())
+                        scaled_loss = scaled_loss + echo_loss * (
+                            echo_token_count / echo_total_tokens
+                        )
+                        echo_loss_sum += (
+                            float(echo_loss.detach().item()) * echo_token_count_value
+                        )
+
+                self.scaler.scale(scaled_loss).backward()
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
