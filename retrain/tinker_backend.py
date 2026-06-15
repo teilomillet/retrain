@@ -326,6 +326,175 @@ class TinkerTrainHelper:
                 return float(loss_sum) / n
             return 0.0
 
+    def train_step_with_echo(
+        self,
+        all_tokens: list[list[int]],
+        all_logprobs: list[list[float]],
+        all_advantages: list[list[float]],
+        echo_tokens: list[list[int]],
+        echo_advantages: list[list[float]],
+        echo_loss_fn: str,
+        lr: float,
+        weight_decay: float,
+    ) -> tuple[float, float]:
+        """Run RL + ECHO forward/backward passes before one optimizer step."""
+        if not echo_tokens:
+            return self.train_step(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                lr,
+                weight_decay,
+            ), 0.0
+        if echo_loss_fn not in ("importance_sampling", "cross_entropy"):
+            raise ValueError(
+                "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+            )
+
+        import torch
+        import tinker.types as types
+        from tinker.types.tensor_data import TensorData
+
+        with self._throttle:
+            datums = []
+            for i in range(len(all_tokens)):
+                model_input = types.ModelInput.from_ints(all_tokens[i])
+                loss_fn_inputs = {
+                    "target_tokens": TensorData.from_torch(
+                        torch.tensor(all_tokens[i], dtype=torch.long)
+                    ),
+                    "logprobs": TensorData.from_torch(
+                        torch.tensor(all_logprobs[i], dtype=torch.float32)
+                    ),
+                    "advantages": TensorData.from_torch(
+                        torch.tensor(all_advantages[i], dtype=torch.float32)
+                    ),
+                }
+                datums.append(
+                    types.Datum(
+                        model_input=model_input,
+                        loss_fn_inputs=loss_fn_inputs,
+                    )
+                )
+
+            echo_datums = []
+            for i, tokens in enumerate(echo_tokens):
+                advs = (
+                    echo_advantages[i]
+                    if i < len(echo_advantages)
+                    else [1.0] * len(tokens)
+                )
+                model_input = types.ModelInput.from_ints(tokens)
+                if echo_loss_fn == "cross_entropy":
+                    loss_fn_inputs = {
+                        "target_tokens": TensorData.from_torch(
+                            torch.tensor(tokens, dtype=torch.long)
+                        ),
+                        "weights": TensorData.from_torch(
+                            torch.tensor(
+                                [max(float(a), 0.0) for a in advs],
+                                dtype=torch.float32,
+                            )
+                        ),
+                    }
+                else:
+                    loss_fn_inputs = {
+                        "target_tokens": TensorData.from_torch(
+                            torch.tensor(tokens, dtype=torch.long)
+                        ),
+                        "logprobs": TensorData.from_torch(
+                            torch.zeros(len(tokens), dtype=torch.float32)
+                        ),
+                        "advantages": TensorData.from_torch(
+                            torch.tensor(advs, dtype=torch.float32)
+                        ),
+                    }
+                echo_datums.append(
+                    types.Datum(
+                        model_input=model_input,
+                        loss_fn_inputs=loss_fn_inputs,
+                    )
+                )
+
+            if self._use_custom_ppo:
+                fwd_future = self.training_client.forward(
+                    datums, loss_fn="importance_sampling"
+                )
+                fwd_result = fwd_future.result()
+                new_lp_list = []
+                for out in fwd_result.loss_fn_outputs:
+                    lp = torch.tensor(
+                        out["logprobs"].data, dtype=torch.float32
+                    ).requires_grad_(True)
+                    new_lp_list.append(lp)
+                loss, ppo_metrics = self._ppo_dual_clip_loss(datums, new_lp_list)
+                loss.backward()
+                grad_datums = []
+                for i, lp_tensor in enumerate(new_lp_list):
+                    grad = lp_tensor.grad
+                    if grad is None:
+                        raise RuntimeError(
+                            f"No gradient for logprob tensor {i}"
+                        )
+                    new_lp_data = [float(x) for x in lp_tensor.detach()]
+                    grad_data = [float(x) for x in grad]
+                    grad_datums.append(
+                        types.Datum(
+                            model_input=datums[i].model_input,
+                            loss_fn_inputs={
+                                "target_tokens": datums[i].loss_fn_inputs[
+                                    "target_tokens"
+                                ],
+                                "logprobs": TensorData.from_torch(
+                                    torch.tensor(new_lp_data, dtype=torch.float32)
+                                ),
+                                "advantages": TensorData.from_torch(
+                                    torch.tensor(grad_data, dtype=torch.float32)
+                                ),
+                            },
+                        )
+                    )
+                fwd_bwd_future = self.training_client.forward_backward(
+                    grad_datums, loss_fn="importance_sampling"
+                )
+            else:
+                loss_fn = "ppo" if self._clip_eps > 0 else "importance_sampling"
+                fwd_bwd_future = self.training_client.forward_backward(
+                    datums, loss_fn=loss_fn
+                )
+                ppo_metrics = None
+
+            fwd_bwd_result = fwd_bwd_future.result()
+            echo_result = self.training_client.forward_backward(
+                echo_datums,
+                loss_fn=echo_loss_fn,
+            ).result()
+
+            adam_params = types.AdamParams(
+                learning_rate=lr,
+                beta1=self._optim_beta1,
+                beta2=self._optim_beta2,
+                eps=self._optim_eps,
+                weight_decay=weight_decay,
+                grad_clip_norm=self._grad_clip_norm,
+            )
+            self.training_client.optim_step(adam_params).result()
+
+            if ppo_metrics is not None:
+                rl_loss = float(ppo_metrics.get("ppo_custom_loss", 0.0))
+            elif hasattr(fwd_bwd_result, "metrics") and fwd_bwd_result.metrics:
+                rl_loss_sum = fwd_bwd_result.metrics.get("loss:sum", 0.0)
+                rl_loss = float(rl_loss_sum) / max(len(datums), 1)
+            else:
+                rl_loss = 0.0
+
+            if hasattr(echo_result, "metrics") and echo_result.metrics:
+                echo_loss_sum = echo_result.metrics.get("loss:sum", 0.0)
+                echo_loss = float(echo_loss_sum) / max(len(echo_datums), 1)
+            else:
+                echo_loss = 0.0
+            return rl_loss, echo_loss
+
     def _ppo_dual_clip_loss(
         self,
         data: list,

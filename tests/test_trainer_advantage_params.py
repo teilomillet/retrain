@@ -112,6 +112,7 @@ class _EchoRecordingFakeHelper(_FakeHelper):
         super().__init__(adapter_path)
         self.train_calls: list[dict[str, object]] = []
         self.sft_calls: list[dict[str, object]] = []
+        self.hybrid_calls: list[dict[str, object]] = []
 
     def train_step(
         self,
@@ -149,6 +150,31 @@ class _EchoRecordingFakeHelper(_FakeHelper):
             }
         )
         return 0.031
+
+    def train_step_with_echo(
+        self,
+        all_tokens: list[list[int]],
+        all_logprobs: list[list[float]],
+        all_advantages: list[list[float]],
+        echo_tokens: list[list[int]],
+        echo_advantages: list[list[float]],
+        echo_loss_fn: str,
+        lr: float,
+        weight_decay: float,
+    ) -> tuple[float, float]:
+        self.hybrid_calls.append(
+            {
+                "tokens": all_tokens,
+                "logprobs": all_logprobs,
+                "advantages": all_advantages,
+                "echo_tokens": echo_tokens,
+                "echo_advantages": echo_advantages,
+                "echo_loss_fn": echo_loss_fn,
+                "lr": lr,
+                "weight_decay": weight_decay,
+            }
+        )
+        return 0.123, 0.031
 
 
 def _make_fake_flow(cfg, helper):
@@ -809,7 +835,7 @@ def test_train_can_disable_generation_logging(monkeypatch, tmp_path):
     assert not generations_path.exists()
 
 
-def test_train_echo_multiturn_trains_prompt_suffix_and_logs_metrics(
+def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metrics(
     monkeypatch,
     tmp_path,
 ):
@@ -898,8 +924,7 @@ def test_train_echo_multiturn_trains_prompt_suffix_and_logs_metrics(
         adapter_path=str(tmp_path / "adapter"),
         environment_provider="verifiers",
         environment_id="fake/multiturn",
-        advantage_mode="grpo",
-        transform_mode="none",
+        algorithm_mode="reinforce_pp_gtpo",
         echo_enabled=True,
         echo_weight=0.2,
         echo_max_tokens_per_step=10,
@@ -909,10 +934,11 @@ def test_train_echo_multiturn_trains_prompt_suffix_and_logs_metrics(
     flow = _make_fake_flow(cfg, helper)
     trainer_mod.train(cfg, flow=flow)
 
-    assert len(helper.train_calls) == 1
-    assert len(helper.sft_calls) == 1
-    assert helper.sft_calls[0]["loss_fn"] == "cross_entropy"
-    echo_advantages = helper.sft_calls[0]["advantages"]
+    assert helper.train_calls == []
+    assert helper.sft_calls == []
+    assert len(helper.hybrid_calls) == 1
+    assert helper.hybrid_calls[0]["echo_loss_fn"] == "cross_entropy"
+    echo_advantages = helper.hybrid_calls[0]["echo_advantages"]
     assert echo_advantages == [
         [0.0, 0.0, 0.0, 0.2, 0.2],
         [0.0, 0.0, 0.0, 0.2],
@@ -925,13 +951,14 @@ def test_train_echo_multiturn_trains_prompt_suffix_and_logs_metrics(
         if line.strip()
     ]
     step_metrics = entries[-1]
-    assert step_metrics["condition"] == "grpo+none+echo"
+    assert step_metrics["condition"] == "reinforce_pp_gtpo+echo"
     assert step_metrics["echo/enabled"] == 1
     assert step_metrics["echo/candidate_tokens"] == 3
     assert step_metrics["echo/kept_tokens"] == 3
     assert step_metrics["echo/token_ratio"] == pytest.approx(0.75)
     assert step_metrics["echo/skipped_entropy_floor"] == 0
     assert step_metrics["echo/mode_collapse_guard"] == 0
+    assert step_metrics["echo/joint_optimizer_step"] == 1
 
 
 def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
@@ -1032,6 +1059,7 @@ def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
 
     assert len(helper.train_calls) == 1
     assert helper.sft_calls == []
+    assert helper.hybrid_calls == []
 
     metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
     entries = [
@@ -1043,4 +1071,5 @@ def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
     assert step_metrics["echo/candidate_tokens"] == 2
     assert step_metrics["echo/kept_tokens"] == 0
     assert step_metrics["echo/skipped_entropy_floor"] == 1
+    assert step_metrics["echo/joint_optimizer_step"] == 0
     assert step_metrics["echo/mode_collapse_guard"] == 1

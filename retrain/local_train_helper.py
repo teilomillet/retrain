@@ -478,6 +478,108 @@ class LocalTrainHelper:
             self.optimizer.zero_grad()
             self._empty_cuda_cache_if_requested()
 
+    def _do_hybrid_impl(
+        self,
+        input_ids,
+        old_logprobs,
+        advantages,
+        attention_mask,
+        echo_input_ids,
+        echo_advantages,
+        echo_attention_mask,
+        echo_loss_fn,
+    ):
+        """Execute RL + ECHO as one hybrid optimizer step."""
+        self.train_model.train()
+        self.optimizer.zero_grad()
+
+        try:
+            batch_size = int(input_ids.shape[0])
+            microbatch_size = self.train_microbatch_size or batch_size
+            total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
+            total_tokens_value = float(total_tokens.item())
+            loss_sum = 0.0
+            clip_count = 0.0
+
+            for start in range(0, batch_size, microbatch_size):
+                stop = min(start + microbatch_size, batch_size)
+                masked_loss, token_count, clip_frac = self._compute_train_loss(
+                    input_ids[start:stop],
+                    old_logprobs[start:stop],
+                    advantages[start:stop],
+                    attention_mask[start:stop],
+                )
+                token_count_value = float(token_count.item())
+                scaled_loss = masked_loss * (token_count / total_tokens)
+                self.scaler.scale(scaled_loss).backward()
+                loss_sum += float(masked_loss.detach().item()) * token_count_value
+                clip_count += clip_frac * token_count_value
+
+            echo_loss_sum = 0.0
+            echo_total_tokens_value = 0.0
+            echo_batch_size = int(echo_input_ids.shape[0])
+            if echo_batch_size > 0:
+                if echo_loss_fn == "cross_entropy":
+                    echo_weights = torch.clamp(echo_advantages[:, 1:], min=0.0)
+                    echo_total_tokens = (
+                        echo_weights * echo_attention_mask[:, 1:].float() > 0
+                    ).sum().clamp(min=1)
+                elif echo_loss_fn == "importance_sampling":
+                    echo_total_tokens = echo_attention_mask[:, 1:].sum().clamp(min=1)
+                else:
+                    raise ValueError(
+                        "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+                    )
+                echo_total_tokens_value = float(echo_total_tokens.item())
+                echo_logprobs = torch.zeros_like(echo_advantages)
+                echo_microbatch_size = self.train_microbatch_size or echo_batch_size
+
+                for start in range(0, echo_batch_size, echo_microbatch_size):
+                    stop = min(start + echo_microbatch_size, echo_batch_size)
+                    if echo_loss_fn == "cross_entropy":
+                        echo_loss, echo_token_count = self._compute_sft_loss(
+                            echo_input_ids[start:stop],
+                            echo_advantages[start:stop],
+                            echo_attention_mask[start:stop],
+                        )
+                    else:
+                        echo_loss, echo_token_count, _ = self._compute_train_loss(
+                            echo_input_ids[start:stop],
+                            echo_logprobs[start:stop],
+                            echo_advantages[start:stop],
+                            echo_attention_mask[start:stop],
+                        )
+                    echo_token_count_value = float(echo_token_count.item())
+                    scaled_echo_loss = echo_loss * (echo_token_count / echo_total_tokens)
+                    self.scaler.scale(scaled_echo_loss).backward()
+                    echo_loss_sum += (
+                        float(echo_loss.detach().item()) * echo_token_count_value
+                    )
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            self._clip_fraction = clip_count / total_tokens_value
+            loss_val = loss_sum / total_tokens_value
+            echo_loss_val = (
+                echo_loss_sum / echo_total_tokens_value
+                if echo_total_tokens_value > 0
+                else 0.0
+            )
+
+            if self.split_mode or self._external_engine:
+                snapshot = {}
+                for name, param in self.train_model.named_parameters():
+                    if "lora_" in name:
+                        snapshot[name] = param.data.clone()
+                self._weight_snapshot = snapshot
+                self._weights_dirty = True
+
+            return loss_val, echo_loss_val
+        finally:
+            self.optimizer.zero_grad()
+            self._empty_cuda_cache_if_requested()
+
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
         """Run one training step with importance sampling loss.
 
@@ -584,6 +686,74 @@ class LocalTrainHelper:
         attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
 
         return self._do_sft_impl(input_ids, advantages, attention_mask)
+
+    def train_step_with_echo(
+        self,
+        all_tokens,
+        all_logprobs,
+        all_advantages,
+        echo_tokens,
+        echo_advantages,
+        echo_loss_fn,
+        lr,
+        weight_decay,
+    ):
+        """Run RL + ECHO as one optimizer step.
+
+        The RL datums already contain the configured algorithm's token
+        advantages. ECHO contributes a separate prompt-side supervised mask,
+        and both losses are accumulated before the optimizer step.
+        """
+        if not echo_tokens:
+            return self.train_step(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                lr,
+                weight_decay,
+            ), 0.0
+
+        if echo_loss_fn not in ("importance_sampling", "cross_entropy"):
+            raise ValueError(
+                "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+            )
+
+        if self._train_future is not None:
+            self._pending_loss = self._train_future.result()
+            self._train_future = None
+
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = lr
+            pg["weight_decay"] = weight_decay
+
+        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
+        lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
+        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
+        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
+        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
+        max_len = input_ids.shape[1]
+        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
+
+        echo_token_tensors = [torch.tensor(t, dtype=torch.long) for t in echo_tokens]
+        echo_adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in echo_advantages]
+        echo_input_ids = pad_sequence(echo_token_tensors, batch_first=True, padding_value=0).to(self.train_device)
+        echo_advantages_tensor = pad_sequence(echo_adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        echo_lengths = torch.tensor([len(t) for t in echo_tokens], device=self.train_device)
+        echo_max_len = echo_input_ids.shape[1]
+        echo_attention_mask = torch.arange(echo_max_len, device=self.train_device).unsqueeze(0) < echo_lengths.unsqueeze(1)
+
+        return self._do_hybrid_impl(
+            input_ids,
+            old_logprobs,
+            advantages,
+            attention_mask,
+            echo_input_ids,
+            echo_advantages_tensor,
+            echo_attention_mask,
+            echo_loss_fn,
+        )
 
     def load_state(self, name):
         """Load adapter weights from a saved checkpoint for resume.

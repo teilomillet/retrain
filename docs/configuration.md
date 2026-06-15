@@ -255,10 +255,14 @@ Nested plugin params tables under `[algorithm]`:
 ### `[echo]`
 
 ECHO is an auxiliary world-modeling objective for multi-turn verifiers
-environments. When enabled, retrain extracts prompt suffix tokens introduced
-after the previous assistant turn, which is where rendered environment/tool
-responses usually enter the next prompt, and trains them with a supervised
-token loss after the RL step.
+environments. It composes with any configured retrain algorithm: the algorithm
+still determines sampled assistant-token advantages, while ECHO adds a
+supervised environment-token mask from the same rollout. When enabled, retrain
+extracts prompt suffix tokens introduced after the previous assistant turn,
+which is where rendered environment/tool responses usually enter the next
+prompt, and trains them with a supervised token loss. Built-in token-preserving
+backends accumulate the RL and ECHO losses before one optimizer step; older
+custom helpers may fall back to a separate auxiliary step.
 
 ECHO requires a token-preserving backend (`local` or `tinker`). `prime_rl` is
 rejected because it cannot carry prompt-side token masks without silently
