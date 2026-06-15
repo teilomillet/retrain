@@ -26,6 +26,13 @@ from retrain.backpressure import (
     StepObservation,
 )
 from retrain.config import TrainConfig
+from retrain.echo import (
+    EchoBuildStats,
+    EchoDatum,
+    EchoLimitStats,
+    build_prompt_suffix_echo_datums,
+    limit_echo_datums,
+)
 from retrain.flow import (
     TrainingFlow,
     _UNIFORMITY_EPS,
@@ -242,6 +249,47 @@ def _apply_advantage_cap(
     return result, frac, mean_mag
 
 
+def _run_echo_train_step(
+    helper: object,
+    tokens: list[list[int]],
+    advantages: list[list[float]],
+    *,
+    loss_fn: str,
+    lr: float,
+    weight_decay: float,
+) -> float:
+    """Run an ECHO supervised step with a backend-compatible fallback."""
+
+    sft_train_step = getattr(helper, "sft_train_step", None)
+    if callable(sft_train_step):
+        had_loss_fn = hasattr(helper, "sft_loss_fn")
+        old_loss_fn = getattr(helper, "sft_loss_fn", None)
+        setattr(helper, "sft_loss_fn", loss_fn)
+        try:
+            return float(sft_train_step(tokens, advantages, lr, weight_decay))
+        finally:
+            if had_loss_fn:
+                setattr(helper, "sft_loss_fn", old_loss_fn)
+            else:
+                delattr(helper, "sft_loss_fn")
+
+    train_step = getattr(helper, "train_step")
+    zero_logprobs = [[0.0] * len(seq) for seq in tokens]
+    return float(train_step(tokens, zero_logprobs, advantages, lr, weight_decay))
+
+
+def _echo_allowed_tokens(
+    *,
+    rl_completion_tokens: int,
+    max_tokens_per_step: int,
+    max_token_ratio: float,
+) -> int:
+    """Compute the active ECHO cap for this step."""
+
+    ratio_cap = int(rl_completion_tokens * max_token_ratio)
+    return max(0, min(max_tokens_per_step, ratio_cap))
+
+
 class TrainerState(TypedDict):
     """Serialized trainer state stored in checkpoint directories."""
 
@@ -358,6 +406,13 @@ def _print_config_summary(config: TrainConfig) -> None:
         lines.append(f"  wandb         : {config.wandb_project}")
     if config.resume_from:
         lines.append(f"  resume_from   : {config.resume_from}")
+    if config.echo_enabled:
+        lines.append(
+            "  echo          : "
+            f"on weight={config.echo_weight} "
+            f"cap={config.echo_max_tokens_per_step} "
+            f"ratio={config.echo_max_token_ratio}"
+        )
     width = max(len(l) for l in lines) + 2
     sep = "-" * width
     print(sep)
@@ -726,6 +781,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "adv_clip_max": config.adv_clip_max,
                 "sft_warmup_steps": config.sft_warmup_steps,
                 "tl_grpo": int(config.tl_grpo),
+                "echo_enabled": int(config.echo_enabled),
+                "echo_weight": config.echo_weight,
+                "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
+                "echo_max_token_ratio": config.echo_max_token_ratio,
+                "echo_entropy_floor": config.echo_entropy_floor,
             }
             wandb_run = wandb.init(
                 project=config.wandb_project,
@@ -1004,6 +1064,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             all_datum_tokens: list[list[int]] = []
             all_datum_logprobs: list[list[float]] = []
             all_datum_advantages: list[list[float]] = []
+            all_echo_tokens: list[list[int]] = []
+            all_echo_advantages: list[list[float]] = []
+            echo_build = EchoBuildStats()
+            echo_limit = EchoLimitStats()
+            echo_loss = 0.0
+            echo_train_time = 0.0
+            echo_allowed = 0
+            echo_skipped_entropy_floor = False
+            rl_completion_token_count = 0
+            rl_completion_surprisal_sum = 0.0
             step_transform_params = _prepare_transform_params_for_step(
                 config.transform_params,
                 delight_eta_prev=delight_eta_ema,
@@ -1143,6 +1213,37 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
                             continue
 
+                    if config.echo_enabled:
+                        echo_datums, group_echo_build = build_prompt_suffix_echo_datums(
+                            turns_G,
+                            weight=config.echo_weight,
+                            min_prompt_overlap=config.echo_min_prompt_overlap,
+                        )
+                        all_echo_tokens.extend(d.tokens for d in echo_datums)
+                        all_echo_advantages.extend(d.advantages for d in echo_datums)
+                        echo_build = EchoBuildStats(
+                            candidate_datums=(
+                                echo_build.candidate_datums
+                                + group_echo_build.candidate_datums
+                            ),
+                            candidate_tokens=(
+                                echo_build.candidate_tokens
+                                + group_echo_build.candidate_tokens
+                            ),
+                            skipped_first_turns=(
+                                echo_build.skipped_first_turns
+                                + group_echo_build.skipped_first_turns
+                            ),
+                            skipped_no_suffix=(
+                                echo_build.skipped_no_suffix
+                                + group_echo_build.skipped_no_suffix
+                            ),
+                            skipped_low_overlap=(
+                                echo_build.skipped_low_overlap
+                                + group_echo_build.skipped_low_overlap
+                            ),
+                        )
+
                     if config.algorithm_mode:
                         adv_result = compute_algorithm_advantages(
                             rewards_G,
@@ -1218,6 +1319,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             all_datum_tokens.append(full_tokens)
                             all_datum_logprobs.append(padded_logprobs)
                             all_datum_advantages.append(padded_advantages)
+                            rl_completion_token_count += len(seq_tokens)
+                            rl_completion_surprisal_sum += sum(
+                                -lp for lp in seq_logprobs
+                            )
 
                     generation_entries: list[dict[str, object]] = []
                     selected_generation_indices = (
@@ -1465,6 +1570,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         all_datum_tokens.append(full_tokens)
                         all_datum_logprobs.append(padded_logprobs)
                         all_datum_advantages.append(padded_advantages)
+                        rl_completion_token_count += len(sample.token_ids)
+                        rl_completion_surprisal_sum += sum(
+                            -lp for lp in sample.logprobs
+                        )
 
                     generation_entries: list[dict[str, object]] = []
                     selected_generation_indices = (
@@ -1557,6 +1666,52 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
                 )
 
+            completion_surprisal_mean = (
+                rl_completion_surprisal_sum / rl_completion_token_count
+                if rl_completion_token_count > 0
+                else 0.0
+            )
+            if config.echo_enabled:
+                echo_allowed = _echo_allowed_tokens(
+                    rl_completion_tokens=rl_completion_token_count,
+                    max_tokens_per_step=config.echo_max_tokens_per_step,
+                    max_token_ratio=config.echo_max_token_ratio,
+                )
+                if completion_surprisal_mean < config.echo_entropy_floor:
+                    echo_skipped_entropy_floor = True
+                    all_echo_tokens = []
+                    all_echo_advantages = []
+                    echo_limit = EchoLimitStats(
+                        kept_datums=0,
+                        kept_tokens=0,
+                        truncated_tokens=echo_build.candidate_tokens,
+                    )
+                else:
+                    echo_candidates = [
+                        (tokens, advantages)
+                        for tokens, advantages in zip(
+                            all_echo_tokens,
+                            all_echo_advantages,
+                        )
+                    ]
+                    limited_echo_datums, echo_limit = limit_echo_datums(
+                        [
+                            EchoDatum(
+                                tokens=tokens,
+                                advantages=advantages,
+                                positive_tokens=sum(
+                                    1 for adv in advantages if adv > 0.0
+                                ),
+                            )
+                            for tokens, advantages in echo_candidates
+                        ],
+                        max_positive_tokens=echo_allowed,
+                    )
+                    all_echo_tokens = [d.tokens for d in limited_echo_datums]
+                    all_echo_advantages = [
+                        d.advantages for d in limited_echo_datums
+                    ]
+
             train_start = time.perf_counter()
             loss_value = helper.train_step(  # type: ignore[unresolved-attribute]
                 all_datum_tokens,
@@ -1565,6 +1720,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 config.lr,
                 config.weight_decay,
             )
+            rl_train_time = time.perf_counter() - train_start
+            if config.echo_enabled and all_echo_tokens:
+                echo_start = time.perf_counter()
+                echo_loss = _run_echo_train_step(
+                    helper,
+                    all_echo_tokens,
+                    all_echo_advantages,
+                    loss_fn=config.echo_loss_fn,
+                    lr=config.lr,
+                    weight_decay=config.weight_decay,
+                )
+                echo_train_time = time.perf_counter() - echo_start
             train_time = time.perf_counter() - train_start
             clip_fraction = getattr(helper, '_clip_fraction', 0.0)
 
@@ -1698,6 +1865,31 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["train_share"] = (
                 train_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
             )
+            echo_token_ratio = (
+                echo_limit.kept_tokens / rl_completion_token_count
+                if rl_completion_token_count > 0
+                else 0.0
+            )
+            metrics["rl/train_time_s"] = rl_train_time
+            metrics["rl/completion_tokens"] = rl_completion_token_count
+            metrics["rl/completion_surprisal_mean"] = completion_surprisal_mean
+            metrics["echo/enabled"] = int(config.echo_enabled)
+            metrics["echo/loss"] = echo_loss
+            metrics["echo/train_time_s"] = echo_train_time
+            metrics["echo/weight"] = config.echo_weight
+            metrics["echo/allowed_tokens"] = echo_allowed
+            metrics["echo/candidate_datums"] = echo_build.candidate_datums
+            metrics["echo/candidate_tokens"] = echo_build.candidate_tokens
+            metrics["echo/kept_datums"] = echo_limit.kept_datums
+            metrics["echo/kept_tokens"] = echo_limit.kept_tokens
+            metrics["echo/truncated_tokens"] = echo_limit.truncated_tokens
+            metrics["echo/token_ratio"] = echo_token_ratio
+            metrics["echo/skipped_first_turns"] = echo_build.skipped_first_turns
+            metrics["echo/skipped_no_suffix"] = echo_build.skipped_no_suffix
+            metrics["echo/skipped_low_overlap"] = echo_build.skipped_low_overlap
+            metrics["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
+            metrics["echo/entropy_floor"] = config.echo_entropy_floor
+            metrics["echo/mode_collapse_guard"] = int(echo_skipped_entropy_floor)
             rss_mb = _process_max_rss_mb()
             if rss_mb is not None:
                 metrics["process_max_rss_mb"] = round(rss_mb, 3)
@@ -1833,6 +2025,27 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 if batch_adv_results:
                     for k in {k for r in batch_adv_results for k in r.extra_metrics}:
                         wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
+                for _ek in (
+                    "rl/train_time_s",
+                    "rl/completion_tokens",
+                    "rl/completion_surprisal_mean",
+                    "echo/enabled",
+                    "echo/loss",
+                    "echo/train_time_s",
+                    "echo/weight",
+                    "echo/allowed_tokens",
+                    "echo/candidate_datums",
+                    "echo/candidate_tokens",
+                    "echo/kept_datums",
+                    "echo/kept_tokens",
+                    "echo/truncated_tokens",
+                    "echo/token_ratio",
+                    "echo/skipped_low_overlap",
+                    "echo/skipped_entropy_floor",
+                    "echo/entropy_floor",
+                    "echo/mode_collapse_guard",
+                ):
+                    wandb_metrics[f"train/{_ek}"] = metrics[_ek]
                 if tl_grpo_ema is not None:
                     wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
                 # Behavior monitoring → W&B
@@ -1867,6 +2080,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             step_entry["clip_fraction"] = clip_fraction
             step_entry["adv_cap_fraction"] = adv_cap_fraction
             step_entry["adv_cap_magnitude"] = adv_cap_magnitude
+            step_entry["echo/enabled"] = int(config.echo_enabled)
+            step_entry["echo/kept_tokens"] = echo_limit.kept_tokens
+            step_entry["echo/token_ratio"] = echo_token_ratio
+            step_entry["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
             if batch_adv_results:
                 for k in {k for r in batch_adv_results for k in r.extra_metrics}:
                     step_entry[k] = metrics.get(k, 0.0)

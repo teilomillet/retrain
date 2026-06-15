@@ -64,6 +64,15 @@ weight_decay = 0.0
 max_examples = 0           # 0 = use all examples
 save_every = 20
 
+[echo]
+enabled = false             # train prompt-side environment/tool tokens in multi-turn envs
+weight = 0.05               # supervised token weight; kept small to avoid dominating RL
+loss_fn = "cross_entropy"   # cross_entropy | importance_sampling
+max_tokens_per_step = 2048  # hard cap on supervised ECHO tokens per step
+max_token_ratio = 0.5       # cap ECHO tokens to this fraction of RL completion tokens
+entropy_floor = 0.01        # skip ECHO when completion surprisal falls below this floor
+min_prompt_overlap = 0.5    # require stable prompt-prefix overlap before extracting suffix
+
 [gtpo]
 beta = 0.1                 # entropy weighting strength
 
@@ -242,6 +251,28 @@ Nested plugin params tables under `[algorithm]`:
     The quickstart template intentionally uses `max_tokens = 1024` for low-cost smoke tests.
     Treat `10240` as the default for standard training and campaign planning.
     See [Capacity Planning](capacity-planning.md) for sizing guidance.
+
+### `[echo]`
+
+ECHO is an auxiliary world-modeling objective for multi-turn verifiers
+environments. When enabled, retrain extracts prompt suffix tokens introduced
+after the previous assistant turn, which is where rendered environment/tool
+responses usually enter the next prompt, and trains them with a supervised
+token loss after the RL step.
+
+ECHO requires a token-preserving backend (`local` or `tinker`). `prime_rl` is
+rejected because it cannot carry prompt-side token masks without silently
+collapsing them to scalar advantages.
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable auxiliary ECHO training on multi-turn prompt suffixes |
+| `weight` | float | `0.05` | Positive supervised weight for ECHO tokens. Must be in `[0, 1]` |
+| `loss_fn` | str | `"cross_entropy"` | ECHO loss. Use `"cross_entropy"` for direct supervised token training or `"importance_sampling"` for the older SFT-as-RL loss |
+| `max_tokens_per_step` | int | `2048` | Absolute cap on positive ECHO tokens per step |
+| `max_token_ratio` | float | `0.5` | Cap positive ECHO tokens to this fraction of RL completion tokens, so ECHO cannot dominate the step |
+| `entropy_floor` | float | `0.01` | Skip the ECHO step when sampled-completion mean surprisal is below this floor; this is a mode-collapse guard |
+| `min_prompt_overlap` | float | `0.5` | Minimum overlap required between previous prompt+completion and the next prompt before suffix extraction is trusted |
 
 ### `[optimizer]`
 

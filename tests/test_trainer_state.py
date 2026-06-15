@@ -304,6 +304,21 @@ class TestBackendAdvantageFlowGuard:
         result = flow.trace()
         assert result.ok
 
+    def test_rejects_echo_on_non_preserving_backend(self):
+        from retrain.config import TrainConfig
+
+        cfg = TrainConfig(
+            backend="prime_rl",
+            advantage_mode="grpo",
+            transform_mode="none",
+            echo_enabled=True,
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("cannot run ECHO" in e.message for e in errors)
+
 
 class TestNonPreservingRuntimeGuard:
     def test_allows_uniform_completion_advantages(self):

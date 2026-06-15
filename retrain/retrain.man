@@ -184,6 +184,13 @@ OPTIONS
         --clip-ratio-c
         --data-source
         --devices
+        --echo-enabled
+        --echo-entropy-floor
+        --echo-loss-fn
+        --echo-max-token-ratio
+        --echo-max-tokens-per-step
+        --echo-min-prompt-overlap
+        --echo-weight
         --environment-args
         --environment-auto-install
         --environment-id

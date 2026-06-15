@@ -82,7 +82,7 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "Backend 'local' requires PyTorch.\n"
             "Install it with: pip install retrain[local]"
         ) from None
-    return LocalTrainHelper(
+    helper = LocalTrainHelper(
         config.model,
         config.adapter_path,
         config.devices,
@@ -103,6 +103,8 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", False)),
         sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),
     )
+    setattr(helper, "sft_loss_fn", config.sft_loss_fn)
+    return helper
 
 
 def _create_tinker(config: "TrainConfig") -> "TrainHelper":
