@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import sys
 from collections.abc import Callable, Iterable, Mapping
 import time
@@ -168,25 +169,27 @@ def _collect_observation_timing(
         return
     step = trajectory[-1]
     extras = _object_field(step, "extras")
-    candidates: list[object] = []
+    candidates: list[tuple[object, bool]] = []
     if isinstance(extras, Mapping):
         extras_map = cast(Mapping[str, object], extras)
         candidates.extend(
             [
-                extras_map.get("openenv_info"),
-                extras_map.get("info"),
-                extras_map,
+                (extras_map.get("openenv_info"), False),
+                (extras_map.get("info"), False),
+                (extras_map, False),
             ]
         )
-    candidates.append(_object_field(step, "timing"))
+    candidates.append((_object_field(step, "timing"), True))
 
-    for candidate in candidates:
+    for candidate, direct_timing in candidates:
         if not isinstance(candidate, Mapping):
             continue
         candidate_map = cast(Mapping[str, object], candidate)
         timing = candidate_map.get("timing")
         if isinstance(timing, Mapping):
             _accumulate_numeric_timing(cast(Mapping[object, object], timing), totals)
+        elif direct_timing:
+            _accumulate_numeric_timing(cast(Mapping[object, object], candidate_map), totals)
 
 
 def _accumulate_numeric_timing(
@@ -195,6 +198,8 @@ def _accumulate_numeric_timing(
 ) -> None:
     for raw_key, raw_value in timing.items():
         if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
+            continue
+        if not math.isfinite(raw_value):
             continue
         key = str(raw_key)
         totals[key] = totals.get(key, 0.0) + float(raw_value)

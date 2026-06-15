@@ -327,6 +327,27 @@ def test_collect_observation_timing_from_trajectory_extras():
     assert totals == {"dbt_total_s": 1.25, "step_total_s": 1.5}
 
 
+def test_collect_observation_timing_from_direct_step_timing():
+    state = {
+        "trajectory": [
+            _FakeTrajectoryStep(
+                timing={
+                    "env_step_s": 0.25,
+                    "nan_step_s": float("nan"),
+                    "inf_step_s": float("inf"),
+                    "flag": True,
+                    "action": "Dbt",
+                }
+            )
+        ]
+    }
+    totals: dict[str, float] = {}
+
+    _collect_observation_timing(state, totals)
+
+    assert totals == {"env_step_s": 0.25}
+
+
 def test_verifiers_rollout_timing_as_metrics_includes_env_timing():
     timing = VerifiersRolloutTiming(
         generation_s=2.0,

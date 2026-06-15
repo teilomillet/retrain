@@ -1706,8 +1706,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             if rollout_timing_metrics:
                 metrics.update(rollout_timing_metrics)
                 rollout_total = rollout_timing_metrics.get("rollout/total_s", 0.0)
-                metrics["rollout/accounted_share_of_sample"] = (
+                rollout_share = (
                     rollout_total / sample_time if sample_time > _PROMPT_PAD_EPS else 0.0
+                )
+                metrics["rollout/accounted_share_of_sample"] = min(
+                    max(rollout_share, 0.0),
+                    1.0,
                 )
             if batch_surprisal_stats:
                 metrics["exec_entropy_mean"] = step_exec_mean
