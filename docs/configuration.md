@@ -274,6 +274,12 @@ output inside the same observation-role message, retrain cannot separate them at
 token level; render warnings as a different role/message if they should be
 excluded from ECHO.
 
+ECHO candidates are collected before reward-uniform groups are skipped for RL.
+This keeps the paper's intended signal: all-failed rollouts can still train the
+environment-prediction objective even when they provide no policy-gradient
+contrast. In that case retrain may run an ECHO-only auxiliary update for the
+step.
+
 ECHO requires a token-preserving backend (`local` or `tinker`). `prime_rl` is
 rejected because it cannot carry prompt-side token masks without silently
 collapsing them to scalar advantages.

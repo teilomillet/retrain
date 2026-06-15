@@ -299,6 +299,19 @@ def _run_rl_echo_train_step(
     older/custom helpers fall back to the historical two-step behavior.
     """
 
+    if not all_tokens:
+        if echo_tokens:
+            echo_loss = _run_echo_train_step(
+                helper,
+                echo_tokens,
+                echo_advantages,
+                loss_fn=echo_loss_fn,
+                lr=lr,
+                weight_decay=weight_decay,
+            )
+            return 0.0, echo_loss, False
+        return 0.0, 0.0, False
+
     if echo_tokens:
         train_step_with_echo = getattr(helper, "train_step_with_echo", None)
         if callable(train_step_with_echo):
@@ -1134,6 +1147,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             echo_joint_optimizer_step = False
             rl_completion_token_count = 0
             rl_completion_surprisal_sum = 0.0
+            sampled_completion_token_count = 0
+            sampled_completion_surprisal_sum = 0.0
+            echo_reference_completion_token_count = 0
             step_transform_params = _prepare_transform_params_for_step(
                 config.transform_params,
                 delight_eta_prev=delight_eta_ema,
@@ -1227,6 +1243,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             planning_masks_G.append([0] * len(seq_logprobs))
 
                         batch_total_completions += 1
+                        sampled_completion_token_count += len(seq_token_ids)
+                        sampled_completion_surprisal_sum += sum(
+                            -lp for lp in seq_logprobs
+                        )
                         if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
                             batch_max_token_hits += 1
 
@@ -1260,18 +1280,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         batch_reward_unique_fraction_sum += (
                             reward_tie_stats["unique_count"] / len(rewards_G)
                         )
-
-                    if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-                        # With batch_advantage_norm, keep uniform groups — cross-group
-                        # reward differences provide signal after batch normalization.
-                        if config.batch_advantage_norm:
-                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
-                        elif rewards_G[0] > _CORRECT_THRESHOLD:
-                            print("    -> skipped (all correct)")
-                            continue
-                        else:
-                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
-                            continue
 
                     if config.echo_enabled:
                         echo_datums, group_echo_build = build_prompt_suffix_echo_datums(
@@ -1311,6 +1319,18 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 + group_echo_build.skipped_bad_observation_mask
                             ),
                         )
+
+                    if reward_tie_stats["is_uniform"] and not config.tl_grpo:
+                        # With batch_advantage_norm, keep uniform groups — cross-group
+                        # reward differences provide signal after batch normalization.
+                        if config.batch_advantage_norm:
+                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                        elif rewards_G[0] > _CORRECT_THRESHOLD:
+                            print("    -> skipped (all correct)")
+                            continue
+                        else:
+                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                            continue
 
                     if config.algorithm_mode:
                         adv_result = compute_algorithm_advantages(
@@ -1706,21 +1726,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             # 10f. Train
             num_datums = len(all_datum_tokens)
-            if num_datums == 0:
-                print(f"Step {batch_idx}: no informative datums, skipping.")
-                obs = StepObservation(
-                    step_time_s=time.perf_counter() - step_start,
-                    sample_time_s=sample_time,
-                    batch_size=current_batch_size,
-                    group_size=current_group_size,
-                    skipped=True,
-                )
-                backpressure.observe(obs)  # type: ignore[unresolved-attribute]
-                continue
-
-            print(f"Step {batch_idx}: submitting {num_datums} datums for training...")
-
-            if not backend_caps.preserves_token_advantages:
+            if num_datums > 0 and not backend_caps.preserves_token_advantages:
                 _assert_uniform_completion_advantages_for_non_preserving_backend(
                     all_datum_logprobs,
                     all_datum_advantages,
@@ -1729,7 +1735,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             # REINFORCE++ batch normalization (before capping)
             batch_norm_metrics: dict[str, float] = {}
-            if config.batch_advantage_norm:
+            if num_datums > 0 and config.batch_advantage_norm:
                 all_datum_advantages, batch_norm_metrics = (
                     apply_batch_advantage_normalization(all_datum_advantages)
                 )
@@ -1737,7 +1743,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # Advantage capping (pre-training, any backend)
             adv_cap_fraction = 0.0
             adv_cap_magnitude = 0.0
-            if config.adv_clip_max > 0:
+            if num_datums > 0 and config.adv_clip_max > 0:
                 all_datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
                     _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
                 )
@@ -1747,13 +1753,19 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 if rl_completion_token_count > 0
                 else 0.0
             )
+            echo_completion_surprisal_mean = (
+                sampled_completion_surprisal_sum / sampled_completion_token_count
+                if sampled_completion_token_count > 0
+                else completion_surprisal_mean
+            )
             if config.echo_enabled:
+                echo_reference_completion_token_count = sampled_completion_token_count
                 echo_allowed = _echo_allowed_tokens(
-                    rl_completion_tokens=rl_completion_token_count,
+                    rl_completion_tokens=echo_reference_completion_token_count,
                     max_tokens_per_step=config.echo_max_tokens_per_step,
                     max_token_ratio=config.echo_max_token_ratio,
                 )
-                if completion_surprisal_mean < config.echo_entropy_floor:
+                if echo_completion_surprisal_mean < config.echo_entropy_floor:
                     echo_skipped_entropy_floor = True
                     all_echo_tokens = []
                     all_echo_advantages = []
@@ -1789,6 +1801,22 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     ]
 
             echo_has_datums = bool(config.echo_enabled and all_echo_tokens)
+            if num_datums == 0 and not echo_has_datums:
+                print(f"Step {batch_idx}: no informative datums, skipping.")
+                obs = StepObservation(
+                    step_time_s=time.perf_counter() - step_start,
+                    sample_time_s=sample_time,
+                    batch_size=current_batch_size,
+                    group_size=current_group_size,
+                    skipped=True,
+                )
+                backpressure.observe(obs)  # type: ignore[unresolved-attribute]
+                continue
+
+            print(
+                f"Step {batch_idx}: submitting {num_datums} RL datums "
+                f"and {len(all_echo_tokens) if echo_has_datums else 0} ECHO datums..."
+            )
             train_start = time.perf_counter()
             loss_value, echo_loss, echo_joint_optimizer_step = _run_rl_echo_train_step(
                 helper,
@@ -1802,7 +1830,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 weight_decay=config.weight_decay,
             )
             train_time = time.perf_counter() - train_start
-            rl_train_time = train_time
+            rl_train_time = train_time if num_datums > 0 else 0.0
             echo_train_time = train_time if echo_has_datums else 0.0
             clip_fraction = getattr(helper, '_clip_fraction', 0.0)
 
@@ -1937,8 +1965,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 train_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
             )
             echo_token_ratio = (
-                echo_limit.kept_tokens / rl_completion_token_count
-                if rl_completion_token_count > 0
+                echo_limit.kept_tokens / echo_reference_completion_token_count
+                if echo_reference_completion_token_count > 0
                 else 0.0
             )
             metrics["rl/train_time_s"] = rl_train_time
@@ -1949,6 +1977,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/train_time_s"] = echo_train_time
             metrics["echo/weight"] = config.echo_weight
             metrics["echo/allowed_tokens"] = echo_allowed
+            metrics["echo/reference_completion_tokens"] = (
+                echo_reference_completion_token_count
+            )
+            metrics["echo/completion_surprisal_mean"] = (
+                echo_completion_surprisal_mean
+            )
             metrics["echo/candidate_datums"] = echo_build.candidate_datums
             metrics["echo/candidate_tokens"] = echo_build.candidate_tokens
             metrics["echo/observation_mask_datums"] = (
@@ -2112,6 +2146,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "echo/train_time_s",
                     "echo/weight",
                     "echo/allowed_tokens",
+                    "echo/reference_completion_tokens",
+                    "echo/completion_surprisal_mean",
                     "echo/candidate_datums",
                     "echo/candidate_tokens",
                     "echo/observation_mask_datums",
