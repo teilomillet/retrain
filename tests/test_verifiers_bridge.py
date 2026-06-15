@@ -6,7 +6,9 @@ import pytest
 
 from retrain.config import TrainConfig
 from retrain.verifiers_bridge import (
+    VerifiersRolloutTiming,
     _coerce_float_list,
+    _collect_observation_timing,
     encode_prompt_for_sampling,
     load_examples_from_environment,
     parse_environment_args,
@@ -132,3 +134,46 @@ class TestCoerceFloatList:
 
     def test_empty_list(self):
         assert _coerce_float_list([]) == []
+
+
+def test_collect_observation_timing_from_trajectory_extras():
+    state = {
+        "trajectory": [
+            {
+                "extras": {
+                    "openenv_info": {
+                        "timing": {
+                            "dbt_total_s": 1.25,
+                            "step_total_s": 1.5,
+                            "dbt_target_scoped": True,
+                            "action": "Dbt",
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    totals: dict[str, float] = {}
+
+    _collect_observation_timing(state, totals)
+
+    assert totals == {"dbt_total_s": 1.25, "step_total_s": 1.5}
+
+
+def test_verifiers_rollout_timing_as_metrics_includes_env_timing():
+    timing = VerifiersRolloutTiming(
+        generation_s=2.0,
+        trajectory_step_s=1.0,
+        total_s=3.5,
+        turns=4,
+        model_tokens=12,
+        env_timing_s={"dbt_total_s": 0.75},
+    )
+
+    metrics = timing.as_metrics()
+
+    assert metrics["rollout/generation_s"] == 2.0
+    assert metrics["rollout/trajectory_step_s"] == 1.0
+    assert metrics["rollout/turns"] == 4.0
+    assert metrics["rollout/model_tokens"] == 12.0
+    assert metrics["rollout/env/dbt_total_s"] == 0.75

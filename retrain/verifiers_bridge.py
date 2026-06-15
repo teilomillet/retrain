@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import types
@@ -190,6 +191,55 @@ def _coerce_reward(raw: object) -> float:
         return float(cast(int | float | str, raw))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _object_field(obj: object, key: str) -> object:
+    if isinstance(obj, Mapping):
+        return cast(Mapping[str, object], obj).get(key)
+    return getattr(obj, key, None)
+
+
+def _collect_observation_timing(
+    state: StateDict,
+    totals: dict[str, float] | None,
+) -> None:
+    if totals is None:
+        return
+    trajectory = state.get("trajectory")
+    if not isinstance(trajectory, list) or not trajectory:
+        return
+    step = trajectory[-1]
+    extras = _object_field(step, "extras")
+    candidates: list[object] = []
+    if isinstance(extras, Mapping):
+        extras_map = cast(Mapping[str, object], extras)
+        candidates.extend(
+            [
+                extras_map.get("openenv_info"),
+                extras_map.get("info"),
+                extras_map,
+            ]
+        )
+    candidates.append(_object_field(step, "timing"))
+
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_map = cast(Mapping[str, object], candidate)
+        timing = candidate_map.get("timing")
+        if isinstance(timing, Mapping):
+            _accumulate_numeric_timing(timing, totals)
+
+
+def _accumulate_numeric_timing(
+    timing: Mapping[object, object],
+    totals: dict[str, float],
+) -> None:
+    for raw_key, raw_value in timing.items():
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
+            continue
+        key = str(raw_key)
+        totals[key] = totals.get(key, 0.0) + float(raw_value)
 
 
 def _coerce_example_id(raw: object) -> int | str:
@@ -495,6 +545,45 @@ class VerifiersTurnSample:
     completion_ids: list[int]
     completion_logprobs: list[float]
     completion_text: str
+
+
+@dataclass
+class VerifiersRolloutTiming:
+    """Stage timings for a verifiers multi-turn rollout group."""
+
+    init_state_s: float = 0.0
+    prompt_render_s: float = 0.0
+    prompt_encode_s: float = 0.0
+    generation_s: float = 0.0
+    decode_s: float = 0.0
+    trajectory_step_s: float = 0.0
+    render_completion_s: float = 0.0
+    score_s: float = 0.0
+    branch_s: float = 0.0
+    total_s: float = 0.0
+    turns: int = 0
+    model_tokens: int = 0
+    env_timing_s: dict[str, float] | None = None
+
+    def as_metrics(self, prefix: str = "rollout/") -> dict[str, float]:
+        metrics = {
+            f"{prefix}init_state_s": self.init_state_s,
+            f"{prefix}prompt_render_s": self.prompt_render_s,
+            f"{prefix}prompt_encode_s": self.prompt_encode_s,
+            f"{prefix}generation_s": self.generation_s,
+            f"{prefix}decode_s": self.decode_s,
+            f"{prefix}trajectory_step_s": self.trajectory_step_s,
+            f"{prefix}render_completion_s": self.render_completion_s,
+            f"{prefix}score_s": self.score_s,
+            f"{prefix}branch_s": self.branch_s,
+            f"{prefix}total_s": self.total_s,
+            f"{prefix}turns": float(self.turns),
+            f"{prefix}model_tokens": float(self.model_tokens),
+        }
+        if self.env_timing_s:
+            for key, value in self.env_timing_s.items():
+                metrics[f"{prefix}env/{key}"] = value
+        return metrics
 
 
 def is_multiturn_environment(env: object) -> bool:
@@ -803,7 +892,16 @@ def run_multiturn_group(
     tl_grpo_lookahead_steps: int = 0,
     tl_grpo_outcome_baseline: float | None = None,
     temperature_spread: float = 0.0,
-) -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]], list[list[list[float]]]]:
+) -> tuple[
+    list[float],
+    list[list[VerifiersTurnSample]],
+    list[str],
+    list[list[float]],
+    list[list[float]],
+    list[list[dict[str, object]]],
+    list[list[list[float]]],
+    VerifiersRolloutTiming,
+]:
     """Run group rollouts for verifiers MultiTurnEnv using retrain sampling.
 
     Args:
@@ -813,19 +911,31 @@ def run_multiturn_group(
             Example: temperature=1.0, spread=0.3 → temps [0.7, 0.8, ..., 1.3]
 
     Returns:
-        (rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs, branch_rewards)
+        (rewards, per_rollout_turns, completions_text, turn_rewards,
+        turn_advantages, turn_logs, branch_rewards, timing)
         turn_rewards: per-turn reward deltas for each rollout (from env state)
         turn_advantages: MT-GRPO per-turn advantages for each rollout (from env rubric)
         turn_logs: per-turn action log for each rollout (observation, action, result)
         branch_rewards: raw per-turn branch reward vectors (TL-GRPO only, else empty)
     """
 
-    async def _run() -> tuple[list[float], list[list[VerifiersTurnSample]], list[str], list[list[float]], list[list[float]], list[list[dict[str, object]]], list[list[list[float]]]]:
+    async def _run() -> tuple[
+        list[float],
+        list[list[VerifiersTurnSample]],
+        list[str],
+        list[list[float]],
+        list[list[float]],
+        list[list[dict[str, object]]],
+        list[list[list[float]]],
+        VerifiersRolloutTiming,
+    ]:
         vf = _require_verifiers()
         env_typed = cast(_MultiTurnEnvironment, env)
         tokenizer_typed = cast(_Tokenizer, tokenizer)
         states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [[] for _ in range(num_rollouts)]
+        rollout_timing = VerifiersRolloutTiming(env_timing_s={})
+        rollout_started = time.perf_counter()
 
         # Per-rollout temperatures for diversity (temperature_spread > 0)
         if temperature_spread > 0 and num_rollouts > 1:
@@ -845,6 +955,7 @@ def run_multiturn_group(
             }
             if info is not None:
                 input_payload["info"] = info
+            init_started = time.perf_counter()
             state = await env_typed.init_state(
                 input=input_payload,
                 client=_make_env_client(),  # inert: retrain samples via helper.sample()
@@ -852,6 +963,7 @@ def run_multiturn_group(
                 sampling_args=None,
             )
             state = await env_typed.setup_state(state)
+            rollout_timing.init_state_s += time.perf_counter() - init_started
             states.append(state)
 
         turn_count = 0
@@ -860,10 +972,17 @@ def run_multiturn_group(
             for idx, state in enumerate(states):
                 if await env_typed.is_completed(state):
                     continue
+                render_started = time.perf_counter()
                 prompt_messages = await env_typed.get_prompt_messages(state)
+                rollout_timing.prompt_render_s += time.perf_counter() - render_started
+                # OpenEnvEnv applies the prior action while rendering the next
+                # prompt, so collect observation timings before a new step is appended.
+                _collect_observation_timing(state, rollout_timing.env_timing_s)
                 if state.get("final_env_response") is not None:
                     continue
+                encode_started = time.perf_counter()
                 prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
+                rollout_timing.prompt_encode_s += time.perf_counter() - encode_started
                 active.append((idx, prompt_messages, prompt_ids))
 
             if not active:
@@ -877,6 +996,7 @@ def run_multiturn_group(
                 break
 
             prompt_ids_batch = [item[2] for item in active]
+            generation_started = time.perf_counter()
             sampled_groups = helper.sample(
                 prompt_ids_batch,
                 1,
@@ -884,6 +1004,7 @@ def run_multiturn_group(
                 temperature,
                 top_p,
             )
+            rollout_timing.generation_s += time.perf_counter() - generation_started
             # Handle empty groups: if the sampler returns no completions
             # (e.g. prompt too long for max_tokens), use a fallback empty
             # completion so the turn loop can continue gracefully.
@@ -895,15 +1016,18 @@ def run_multiturn_group(
                 [float(lp) for lp in group[0][1]] if group else []
                 for group in sampled_groups
             ]
+            decode_started = time.perf_counter()
             completion_texts = tokenizer_typed.batch_decode(
                 completion_ids_batch, skip_special_tokens=True
             )
+            rollout_timing.decode_s += time.perf_counter() - decode_started
 
             for pos, (idx, prompt_messages, prompt_ids) in enumerate(active):
                 completion_ids = completion_ids_batch[pos]
                 completion_logprobs = completion_logprobs_batch[pos]
                 completion_text = completion_texts[pos]
                 completion_messages = _completion_messages_for_env(env_typed, completion_text)
+                rollout_timing.model_tokens += len(completion_ids)
 
                 tokens_payload = {
                     "prompt_ids": list(prompt_ids),
@@ -938,7 +1062,10 @@ def run_multiturn_group(
                         is_truncated=False,
                         trajectory_id=states[idx].get("trajectory_id", idx),
                     )
+                step_started = time.perf_counter()
                 await env_typed.add_trajectory_step(states[idx], trajectory_step)
+                rollout_timing.trajectory_step_s += time.perf_counter() - step_started
+                _collect_observation_timing(states[idx], rollout_timing.env_timing_s)
                 per_rollout_turns[idx].append(
                     VerifiersTurnSample(
                         prompt_ids=list(prompt_ids),
@@ -949,15 +1076,21 @@ def run_multiturn_group(
                 )
 
             turn_count += 1
+            rollout_timing.turns += len(active)
 
         for state in states:
+            render_started = time.perf_counter()
             await env_typed.render_completion(state)
+            rollout_timing.render_completion_s += time.perf_counter() - render_started
+        score_started = time.perf_counter()
         await env_typed.rubric.score_group(states)
+        rollout_timing.score_s += time.perf_counter() - score_started
 
         # TL-GRPO: branch from each turn to get epistemically sound
         # per-turn advantages (alternatives compared against same state).
         all_branch_rewards: list[list[list[float]]] = []
         if tl_grpo:
+            branch_started = time.perf_counter()
             for i, state in enumerate(states):
                 br = _run_tl_grpo_branching(
                     state,
@@ -978,6 +1111,7 @@ def run_multiturn_group(
                 all_branch_rewards,
                 outcome_baseline=tl_grpo_outcome_baseline,
             )
+            rollout_timing.branch_s += time.perf_counter() - branch_started
 
         rewards = [_coerce_reward(s.get("reward")) for s in states]
         completions_text = [_messages_to_text(s.get("completion")) for s in states]
@@ -987,6 +1121,16 @@ def run_multiturn_group(
             cast(list[dict[str, object]], s.get("turn_log") or [])
             for s in states
         ]
-        return rewards, per_rollout_turns, completions_text, turn_rewards, turn_advantages, turn_logs, all_branch_rewards
+        rollout_timing.total_s = time.perf_counter() - rollout_started
+        return (
+            rewards,
+            per_rollout_turns,
+            completions_text,
+            turn_rewards,
+            turn_advantages,
+            turn_logs,
+            all_branch_rewards,
+            rollout_timing,
+        )
 
     return asyncio.run(_run())
