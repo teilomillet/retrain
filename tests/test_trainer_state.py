@@ -9,12 +9,14 @@ import json
 
 import pytest
 
-from retrain.flow import build_flow
+from retrain.flow import TraceIssue, TraceResult, build_flow
 from retrain.trainer import (
     _TRAINER_STATE_FILE,
     _assert_uniform_completion_advantages_for_non_preserving_backend,
     _format_loss_for_display,
     _load_trainer_state,
+    _print_flow_warnings,
+    _run_rl_echo_train_step,
     _save_trainer_state,
 )
 
@@ -145,6 +147,71 @@ class TestLossDisplaySemantics:
 
     def test_placeholder_loss_display_is_annotated(self):
         assert _format_loss_for_display(0.0, False) == "0.0000 (placeholder)"
+
+    def test_print_flow_warnings_outputs_nonfatal_issues(self, capsys):
+        result = TraceResult(
+            issues=[
+                TraceIssue("warning", "compat", "backend caveat"),
+                TraceIssue("error", "compat", "fatal"),
+            ]
+        )
+
+        _print_flow_warnings(result)
+
+        out = capsys.readouterr().out
+        assert "Training flow warning [compat]: backend caveat" in out
+        assert "fatal" not in out
+
+
+class TestEchoStepSemantics:
+    def test_echo_treats_rl_advantages_as_opaque_algorithm_output(self):
+        class Helper:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def train_step_with_echo(
+                self,
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                echo_tokens,
+                echo_advantages,
+                echo_loss_fn,
+                lr,
+                weight_decay,
+            ):
+                self.calls.append(
+                    {
+                        "tokens": all_tokens,
+                        "logprobs": all_logprobs,
+                        "advantages": all_advantages,
+                        "echo_tokens": echo_tokens,
+                        "echo_advantages": echo_advantages,
+                        "echo_loss_fn": echo_loss_fn,
+                        "lr": lr,
+                        "weight_decay": weight_decay,
+                    }
+                )
+                return 0.25, 0.125
+
+        helper = Helper()
+        algorithm_advantages = [[0.7, -0.2, 0.4], [-0.5, -0.5]]
+
+        rl_loss, echo_loss, joint = _run_rl_echo_train_step(
+            helper,
+            all_tokens=[[10, 11, 12], [20, 21]],
+            all_logprobs=[[-0.1, -0.2, -0.3], [-0.4, -0.5]],
+            all_advantages=algorithm_advantages,
+            echo_tokens=[[10, 11, 12, 90]],
+            echo_advantages=[[0.0, 0.0, 0.0, 0.3]],
+            echo_loss_fn="cross_entropy",
+            lr=1e-4,
+            weight_decay=0.01,
+        )
+
+        assert (rl_loss, echo_loss, joint) == (0.25, 0.125, True)
+        assert helper.calls[0]["advantages"] is algorithm_advantages
+        assert helper.calls[0]["echo_advantages"] == [[0.0, 0.0, 0.0, 0.3]]
 
 
 class TestBackendAdvantageFlowGuard:

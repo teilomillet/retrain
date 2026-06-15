@@ -523,6 +523,16 @@ def _format_loss_for_display(loss_value: float, reports_sync_loss: bool) -> str:
     return f"{formatted} (placeholder)"
 
 
+def _print_flow_warnings(trace_result: object) -> None:
+    """Print non-fatal training-flow warnings before setup starts."""
+    for issue in getattr(trace_result, "issues", []):
+        if getattr(issue, "severity", "") != "warning":
+            continue
+        category = getattr(issue, "category", "config")
+        message = getattr(issue, "message", str(issue))
+        print(f"Training flow warning [{category}]: {message}")
+
+
 def _assert_uniform_completion_advantages_for_non_preserving_backend(
     all_logprobs: list[list[float]],
     all_advantages: list[list[float]],
@@ -695,6 +705,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if not trace_result.ok:
             msgs = [i.message for i in trace_result.issues if i.severity == "error"]
             raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
+        _print_flow_warnings(trace_result)
 
     # -----------------------------------------------------------------------
     # 0. Setup directories + loggers
