@@ -278,6 +278,65 @@ def _run_echo_train_step(
     return float(train_step(tokens, zero_logprobs, advantages, lr, weight_decay))
 
 
+def _run_rl_echo_train_step(
+    helper: object,
+    all_tokens: list[list[int]],
+    all_logprobs: list[list[float]],
+    all_advantages: list[list[float]],
+    echo_tokens: list[list[int]],
+    echo_advantages: list[list[float]],
+    *,
+    echo_loss_fn: str,
+    lr: float,
+    weight_decay: float,
+) -> tuple[float, float, bool]:
+    """Run one RL update, optionally with ECHO in the same optimizer step.
+
+    ECHO is independent of the chosen RL algorithm: algorithms produce the
+    sampled-token advantages above, while ECHO adds prompt-side observation
+    tokens as an auxiliary supervised mask. Backends that implement
+    ``train_step_with_echo`` accumulate both losses before one optimizer step;
+    older/custom helpers fall back to the historical two-step behavior.
+    """
+
+    if echo_tokens:
+        train_step_with_echo = getattr(helper, "train_step_with_echo", None)
+        if callable(train_step_with_echo):
+            rl_loss, echo_loss = train_step_with_echo(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                echo_tokens,
+                echo_advantages,
+                echo_loss_fn,
+                lr,
+                weight_decay,
+            )
+            return float(rl_loss), float(echo_loss), True
+
+    train_step = getattr(helper, "train_step")
+    rl_loss = float(
+        train_step(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            lr,
+            weight_decay,
+        )
+    )
+    echo_loss = 0.0
+    if echo_tokens:
+        echo_loss = _run_echo_train_step(
+            helper,
+            echo_tokens,
+            echo_advantages,
+            loss_fn=echo_loss_fn,
+            lr=lr,
+            weight_decay=weight_decay,
+        )
+    return rl_loss, echo_loss, False
+
+
 def _echo_allowed_tokens(
     *,
     rl_completion_tokens: int,
@@ -1072,6 +1131,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             echo_train_time = 0.0
             echo_allowed = 0
             echo_skipped_entropy_floor = False
+            echo_joint_optimizer_step = False
             rl_completion_token_count = 0
             rl_completion_surprisal_sum = 0.0
             step_transform_params = _prepare_transform_params_for_step(
@@ -1712,27 +1772,22 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         d.advantages for d in limited_echo_datums
                     ]
 
+            echo_has_datums = bool(config.echo_enabled and all_echo_tokens)
             train_start = time.perf_counter()
-            loss_value = helper.train_step(  # type: ignore[unresolved-attribute]
+            loss_value, echo_loss, echo_joint_optimizer_step = _run_rl_echo_train_step(
+                helper,
                 all_datum_tokens,
                 all_datum_logprobs,
                 all_datum_advantages,
-                config.lr,
-                config.weight_decay,
+                all_echo_tokens if echo_has_datums else [],
+                all_echo_advantages if echo_has_datums else [],
+                echo_loss_fn=config.echo_loss_fn,
+                lr=config.lr,
+                weight_decay=config.weight_decay,
             )
-            rl_train_time = time.perf_counter() - train_start
-            if config.echo_enabled and all_echo_tokens:
-                echo_start = time.perf_counter()
-                echo_loss = _run_echo_train_step(
-                    helper,
-                    all_echo_tokens,
-                    all_echo_advantages,
-                    loss_fn=config.echo_loss_fn,
-                    lr=config.lr,
-                    weight_decay=config.weight_decay,
-                )
-                echo_train_time = time.perf_counter() - echo_start
             train_time = time.perf_counter() - train_start
+            rl_train_time = train_time
+            echo_train_time = train_time if echo_has_datums else 0.0
             clip_fraction = getattr(helper, '_clip_fraction', 0.0)
 
             step_time = time.perf_counter() - step_start
@@ -1890,6 +1945,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
             metrics["echo/entropy_floor"] = config.echo_entropy_floor
             metrics["echo/mode_collapse_guard"] = int(echo_skipped_entropy_floor)
+            metrics["echo/joint_optimizer_step"] = int(echo_joint_optimizer_step)
             rss_mb = _process_max_rss_mb()
             if rss_mb is not None:
                 metrics["process_max_rss_mb"] = round(rss_mb, 3)
