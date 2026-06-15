@@ -232,7 +232,9 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -318,7 +320,9 @@ def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -390,9 +394,13 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
             has_stats=False,
         )
 
-    def fake_compute_composable_advantages(*args: object, **kwargs: object) -> AdvantageResult:
+    def fake_compute_composable_advantages(
+        *args: object, **kwargs: object
+    ) -> AdvantageResult:
         called["composable"] += 1
-        raise AssertionError("Composable path should be bypassed when algorithm_mode is set.")
+        raise AssertionError(
+            "Composable path should be bypassed when algorithm_mode is set."
+        )
 
     helper = _FakeHelper(adapter_path=str(tmp_path / "adapter"))
 
@@ -400,8 +408,7 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
     module_name = "custom_algorithms"
     plugin_file = tmp_path / f"{module_name}.py"
     plugin_file.write_text(
-        "def my_algo(ctx):\n"
-        "    return [[0.25] * len(seq) for seq in ctx.logprobs_G]\n"
+        "def my_algo(ctx):\n    return [[0.25] * len(seq) for seq in ctx.logprobs_G]\n"
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -423,7 +430,9 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -500,7 +509,9 @@ def test_tinker_entropy_stats_pipeline_does_not_break(monkeypatch, tmp_path):
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -580,7 +591,9 @@ def test_train_generation_logging_defaults_skip_surprisal_tokens(
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -651,7 +664,9 @@ def test_train_generation_logging_can_limit_density_and_enable_surprisal(
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -726,7 +741,9 @@ def test_train_generation_logging_prefers_high_reward_samples(
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -794,7 +811,9 @@ def test_train_can_disable_generation_logging(monkeypatch, tmp_path):
             return SimpleNamespace(
                 create=lambda _name, _cfg: SimpleNamespace(
                     score=lambda response, reference: (
-                        1.0 if ("\\boxed{42}" in response and reference == "42") else 0.0
+                        1.0
+                        if ("\\boxed{42}" in response and reference == "42")
+                        else 0.0
                     )
                 )
             )
@@ -857,6 +876,7 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
                     completion_ids=[4],
                     completion_logprobs=[-0.2],
                     completion_text="b",
+                    observation_mask=[0, 0, 0, 1, 1],
                 ),
             ],
             [
@@ -871,6 +891,7 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
                     completion_ids=[6],
                     completion_logprobs=[-0.2],
                     completion_text="d",
+                    observation_mask=[0, 0, 0, 1],
                 ),
             ],
         ]
@@ -954,6 +975,7 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
     assert step_metrics["condition"] == "reinforce_pp_gtpo+echo"
     assert step_metrics["echo/enabled"] == 1
     assert step_metrics["echo/candidate_tokens"] == 3
+    assert step_metrics["echo/observation_mask_datums"] == 2
     assert step_metrics["echo/kept_tokens"] == 3
     assert step_metrics["echo/token_ratio"] == pytest.approx(0.75)
     assert step_metrics["echo/skipped_entropy_floor"] == 0

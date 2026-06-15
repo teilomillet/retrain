@@ -257,12 +257,22 @@ Nested plugin params tables under `[algorithm]`:
 ECHO is an auxiliary world-modeling objective for multi-turn verifiers
 environments. It composes with any configured retrain algorithm: the algorithm
 still determines sampled assistant-token advantages, while ECHO adds a
-supervised environment-token mask from the same rollout. When enabled, retrain
-extracts prompt suffix tokens introduced after the previous assistant turn,
-which is where rendered environment/tool responses usually enter the next
-prompt, and trains them with a supervised token loss. Built-in token-preserving
-backends accumulate the RL and ECHO losses before one optimizer step; older
-custom helpers may fall back to a separate auxiliary step.
+supervised environment-token mask from the same rollout. When enabled, the
+verifiers bridge records exact prompt-aligned masks for rendered messages whose
+roles are `tool`, `environment`, or `observation`. Those masks are preferred so
+only observed environment/tool tokens receive the auxiliary loss. Prompt-suffix
+extraction remains a fallback for older renderers that cannot expose a stable
+role-aligned mask. Built-in token-preserving backends accumulate the RL and
+ECHO losses before one optimizer step; older custom helpers may fall back to a
+separate auxiliary step.
+
+The explicit-mask path is the intended ECHO path. Check
+`echo/observation_mask_datums` in metrics to confirm a run is using it; a value
+of zero means retrain used the compatibility suffix fallback or no eligible
+observation tokens were present. If a harness renders warning text and terminal
+output inside the same observation-role message, retrain cannot separate them at
+token level; render warnings as a different role/message if they should be
+excluded from ECHO.
 
 ECHO requires a token-preserving backend (`local` or `tinker`). `prime_rl` is
 rejected because it cannot carry prompt-side token masks without silently
@@ -270,7 +280,7 @@ collapsing them to scalar advantages.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `enabled` | bool | `false` | Enable auxiliary ECHO training on multi-turn prompt suffixes |
+| `enabled` | bool | `false` | Enable auxiliary ECHO training on multi-turn environment/tool observation tokens |
 | `weight` | float | `0.05` | Positive supervised weight for ECHO tokens. Must be in `[0, 1]` |
 | `loss_fn` | str | `"cross_entropy"` | ECHO loss. Use `"cross_entropy"` for direct supervised token training or `"importance_sampling"` for the older SFT-as-RL loss |
 | `max_tokens_per_step` | int | `2048` | Absolute cap on positive ECHO tokens per step |

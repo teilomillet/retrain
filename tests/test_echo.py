@@ -31,9 +31,57 @@ def test_build_prompt_suffix_echo_datums_uses_new_prompt_suffix() -> None:
 
     assert stats.candidate_datums == 1
     assert stats.candidate_tokens == 2
+    assert stats.observation_mask_datums == 0
     assert stats.skipped_first_turns == 1
     assert datums[0].tokens == [1, 2, 3, 50, 51]
     assert datums[0].advantages == [0.0, 0.0, 0.0, 0.2, 0.2]
+
+
+def test_build_prompt_suffix_echo_datums_prefers_observation_mask() -> None:
+    turns = [
+        [
+            SimpleNamespace(prompt_ids=[1, 2], completion_ids=[3]),
+            SimpleNamespace(
+                prompt_ids=[1, 2, 3, 50, 51, 99],
+                completion_ids=[4],
+                observation_mask=[0, 0, 0, 1, 1, 0],
+            ),
+        ]
+    ]
+
+    datums, stats = build_prompt_suffix_echo_datums(
+        turns,
+        weight=0.2,
+        min_prompt_overlap=1.0,
+    )
+
+    assert stats.candidate_datums == 1
+    assert stats.candidate_tokens == 2
+    assert stats.observation_mask_datums == 1
+    assert datums[0].tokens == [1, 2, 3, 50, 51, 99]
+    assert datums[0].advantages == [0.0, 0.0, 0.0, 0.2, 0.2, 0.0]
+
+
+def test_build_prompt_suffix_echo_datums_skips_bad_observation_mask() -> None:
+    turns = [
+        [
+            SimpleNamespace(prompt_ids=[1, 2], completion_ids=[3]),
+            SimpleNamespace(
+                prompt_ids=[1, 2, 3, 50],
+                completion_ids=[4],
+                observation_mask=[0, 1],
+            ),
+        ]
+    ]
+
+    datums, stats = build_prompt_suffix_echo_datums(
+        turns,
+        weight=0.2,
+        min_prompt_overlap=0.5,
+    )
+
+    assert datums == []
+    assert stats.skipped_bad_observation_mask == 1
 
 
 def test_build_prompt_suffix_echo_datums_skips_low_overlap() -> None:

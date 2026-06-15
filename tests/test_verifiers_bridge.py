@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from retrain import verifiers_bridge as bridge_mod
+from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
 from retrain.verifiers_bridge import (
+    StateDict,
     VerifiersRolloutTiming,
     _coerce_float_list,
     _collect_observation_timing,
     encode_prompt_for_sampling,
     load_examples_from_environment,
+    observation_mask_for_prompt,
     parse_environment_args,
     prompt_preview,
     run_multiturn_group,
@@ -31,9 +36,50 @@ class _DummyTokenizer:
         return [f"completion-{idx}" for idx, _ids in enumerate(token_ids)]
 
 
+class _RoleTemplateTokenizer:
+    role_ids = {
+        "system": 1,
+        "user": 2,
+        "assistant": 3,
+        "tool": 4,
+        "environment": 5,
+        "observation": 6,
+    }
+
+    def apply_chat_template(self, messages, add_generation_prompt=True, tokenize=True):
+        ids = []
+        for message in messages:
+            role = str(message.get("role", ""))
+            content = str(message.get("content", ""))
+            ids.append(self.role_ids.get(role, 0))
+            ids.extend(ord(char) for char in content)
+        if add_generation_prompt:
+            ids.append(99)
+        return ids
+
+    def batch_decode(self, token_ids, *, skip_special_tokens=True):
+        return [f"completion-{idx}" for idx, _ids in enumerate(token_ids)]
+
+
+class _NonPrefixRoleTemplateTokenizer(_RoleTemplateTokenizer):
+    def apply_chat_template(self, messages, add_generation_prompt=True, tokenize=True):
+        ids = super().apply_chat_template(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+            tokenize=tokenize,
+        )
+        if not add_generation_prompt:
+            return list(reversed(ids))
+        return ids
+
+
 class _DummyHelper:
     def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):  # noqa: ARG002
         return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
+
+
+def _helper() -> TrainHelper:
+    return cast(TrainHelper, _DummyHelper())
 
 
 class _CleanupTrackingRubric:
@@ -82,6 +128,21 @@ class _CleanupTrackingMultiTurnEnv:
 
     async def cleanup(self, state):
         self.cleaned.append(int(state["trajectory_id"]))
+
+
+class _TwoTurnObservationEnv(_CleanupTrackingMultiTurnEnv):
+    async def is_completed(self, state):
+        return len(state["trajectory"]) >= 2
+
+    async def get_prompt_messages(self, state):
+        if not state["trajectory"]:
+            return [{"role": "user", "content": "task"}]
+        first_completion = state["trajectory"][0].completion[0]["content"]
+        return [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": first_completion},
+            {"role": "tool", "content": "result"},
+        ]
 
 
 class _OpenEnvCleanupTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
@@ -181,6 +242,35 @@ class TestPromptHelpers:
         )
         assert ids == [11, 21]
 
+    def test_observation_mask_for_prompt_marks_tool_role_span(self):
+        tok = _RoleTemplateTokenizer()
+        prompt: list[dict[str, object]] = [
+            {"role": "user", "content": "task"},
+            {"role": "assistant", "content": "act"},
+            {"role": "tool", "content": "result"},
+            {"role": "user", "content": "continue"},
+        ]
+        prompt_ids = encode_prompt_for_sampling(tok, prompt)
+
+        mask = observation_mask_for_prompt(tok, prompt, prompt_ids)
+
+        assert mask is not None
+        marked = [idx for idx, value in enumerate(mask) if value]
+        assert len(marked) == len("result") + 1
+        assert prompt_ids[marked[0] : marked[-1] + 1] == [4, *map(ord, "result")]
+
+    def test_observation_mask_for_prompt_returns_none_on_unstable_prefix(self):
+        tok = _NonPrefixRoleTemplateTokenizer()
+        prompt: list[dict[str, object]] = [
+            {"role": "user", "content": "task"},
+            {"role": "tool", "content": "result"},
+        ]
+        prompt_ids = encode_prompt_for_sampling(tok, prompt)
+
+        mask = observation_mask_for_prompt(tok, prompt, prompt_ids)
+
+        assert mask is None
+
 
 class TestLoadExamplesFromEnvironment:
     def test_eval_only_env_has_actionable_error(self):
@@ -232,7 +322,7 @@ class TestRunMultiturnGroup:
 
         rewards, turns, *_ = run_multiturn_group(
             env,
-            helper=_DummyHelper(),
+            helper=_helper(),
             tokenizer=_DummyTokenizer(),
             model_name="dummy-model",
             prompt=[{"role": "user", "content": "hello"}],
@@ -249,6 +339,35 @@ class TestRunMultiturnGroup:
         assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1]
         assert env.cleaned == [0, 1, 2]
 
+    def test_turn_samples_include_prompt_observation_mask(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _TwoTurnObservationEnv()
+
+        rewards, turns, *_ = run_multiturn_group(
+            env,
+            helper=_helper(),
+            tokenizer=_RoleTemplateTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "task"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=4,
+            temperature=1.0,
+            top_p=1.0,
+        )
+
+        assert rewards == [1.0]
+        assert len(turns[0]) == 2
+        assert turns[0][0].observation_mask is None
+        assert turns[0][1].observation_mask is not None
+        assert sum(turns[0][1].observation_mask or []) == len("result") + 1
+
     def test_prefers_openenv_resource_cleanup_when_available(self, monkeypatch):
         monkeypatch.setattr(
             bridge_mod,
@@ -259,7 +378,7 @@ class TestRunMultiturnGroup:
 
         rewards, turns, *_ = run_multiturn_group(
             env,
-            helper=_DummyHelper(),
+            helper=_helper(),
             tokenizer=_DummyTokenizer(),
             model_name="dummy-model",
             prompt=[{"role": "user", "content": "hello"}],
@@ -287,7 +406,7 @@ class TestRunMultiturnGroup:
         with pytest.raises(RuntimeError, match="score failed"):
             run_multiturn_group(
                 env,
-                helper=_DummyHelper(),
+                helper=_helper(),
                 tokenizer=_DummyTokenizer(),
                 model_name="dummy-model",
                 prompt=[{"role": "user", "content": "hello"}],
@@ -304,22 +423,25 @@ class TestRunMultiturnGroup:
 
 
 def test_collect_observation_timing_from_trajectory_extras():
-    state = {
-        "trajectory": [
-            {
-                "extras": {
-                    "openenv_info": {
-                        "timing": {
-                            "dbt_total_s": 1.25,
-                            "step_total_s": 1.5,
-                            "dbt_target_scoped": True,
-                            "action": "Dbt",
+    state = cast(
+        StateDict,
+        {
+            "trajectory": [
+                {
+                    "extras": {
+                        "openenv_info": {
+                            "timing": {
+                                "dbt_total_s": 1.25,
+                                "step_total_s": 1.5,
+                                "dbt_target_scoped": True,
+                                "action": "Dbt",
+                            }
                         }
                     }
                 }
-            }
-        ]
-    }
+            ]
+        },
+    )
     totals: dict[str, float] = {}
 
     _collect_observation_timing(state, totals)
@@ -328,19 +450,22 @@ def test_collect_observation_timing_from_trajectory_extras():
 
 
 def test_collect_observation_timing_from_direct_step_timing():
-    state = {
-        "trajectory": [
-            _FakeTrajectoryStep(
-                timing={
-                    "env_step_s": 0.25,
-                    "nan_step_s": float("nan"),
-                    "inf_step_s": float("inf"),
-                    "flag": True,
-                    "action": "Dbt",
-                }
-            )
-        ]
-    }
+    state = cast(
+        StateDict,
+        {
+            "trajectory": [
+                _FakeTrajectoryStep(
+                    timing={
+                        "env_step_s": 0.25,
+                        "nan_step_s": float("nan"),
+                        "inf_step_s": float("inf"),
+                        "flag": True,
+                        "action": "Dbt",
+                    }
+                )
+            ]
+        },
+    )
     totals: dict[str, float] = {}
 
     _collect_observation_timing(state, totals)
