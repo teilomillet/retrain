@@ -34,6 +34,13 @@ class TestDefaults:
         assert c.log_generations is True
         assert c.generation_log_samples_per_prompt == 1
         assert c.generation_top_surprisal_limit == 0
+        assert c.echo_enabled is False
+        assert c.echo_weight == pytest.approx(0.05)
+        assert c.echo_loss_fn == "cross_entropy"
+        assert c.echo_max_tokens_per_step == 2048
+        assert c.echo_max_token_ratio == pytest.approx(0.5)
+        assert c.echo_entropy_floor == pytest.approx(0.01)
+        assert c.echo_min_prompt_overlap == pytest.approx(0.5)
 
 
 class TestLoadConfig:
@@ -102,6 +109,15 @@ wandb_run_name = "run-1"
 log_generations = false
 generation_log_samples_per_prompt = 2
 generation_top_surprisal_limit = 3
+
+[echo]
+enabled = true
+weight = 0.2
+loss_fn = "cross_entropy"
+max_tokens_per_step = 128
+max_token_ratio = 0.25
+entropy_floor = 0.05
+min_prompt_overlap = 0.75
 """)
         c = load_config(str(toml))
         assert c.advantage_mode == "grpo"
@@ -136,6 +152,13 @@ generation_top_surprisal_limit = 3
         assert c.log_generations is False
         assert c.generation_log_samples_per_prompt == 2
         assert c.generation_top_surprisal_limit == 3
+        assert c.echo_enabled is True
+        assert c.echo_weight == pytest.approx(0.2)
+        assert c.echo_loss_fn == "cross_entropy"
+        assert c.echo_max_tokens_per_step == 128
+        assert c.echo_max_token_ratio == pytest.approx(0.25)
+        assert c.echo_entropy_floor == pytest.approx(0.05)
+        assert c.echo_min_prompt_overlap == pytest.approx(0.75)
 
     def test_empty_string_ignored(self, tmp_path):
         """Empty-string TOML values should keep the default (match Mojo behavior)."""

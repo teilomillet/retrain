@@ -365,6 +365,23 @@ class LocalTrainHelper:
 
         return masked_loss, token_count, clip_frac
 
+    def _compute_sft_loss(self, input_ids, advantages, attention_mask):
+        """Compute weighted next-token cross-entropy for SFT/ECHO datums."""
+        with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
+            logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]
+            new_logprobs = F.log_softmax(logits.float(), dim=-1)
+
+            target_ids = input_ids[:, 1:]
+            new_logprobs = new_logprobs.gather(2, target_ids.unsqueeze(2)).squeeze(2)
+
+            weights = torch.clamp(advantages[:, 1:], min=0.0)
+            weights = weights * attention_mask[:, 1:].float()
+            token_mask = (weights > 0).float()
+            token_count = token_mask.sum().clamp(min=1)
+            loss = (-new_logprobs * weights).sum() / token_count
+
+        return loss, token_count
+
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
         """Execute training forward/backward/step on pre-prepared tensors.
 
@@ -406,6 +423,48 @@ class LocalTrainHelper:
             loss_val = loss_sum / total_tokens_value
 
             # Snapshot LoRA weights for safe cross-thread sync
+            if self.split_mode or self._external_engine:
+                snapshot = {}
+                for name, param in self.train_model.named_parameters():
+                    if "lora_" in name:
+                        snapshot[name] = param.data.clone()
+                self._weight_snapshot = snapshot
+                self._weights_dirty = True
+
+            return loss_val
+        finally:
+            self.optimizer.zero_grad()
+            self._empty_cuda_cache_if_requested()
+
+    def _do_sft_impl(self, input_ids, advantages, attention_mask):
+        """Execute weighted cross-entropy SFT/ECHO update synchronously."""
+        self.train_model.train()
+        self.optimizer.zero_grad()
+
+        try:
+            batch_size = int(input_ids.shape[0])
+            microbatch_size = self.train_microbatch_size or batch_size
+            weights = torch.clamp(advantages[:, 1:], min=0.0)
+            total_tokens = (weights * attention_mask[:, 1:].float() > 0).sum().clamp(min=1)
+            total_tokens_value = float(total_tokens.item())
+            loss_sum = 0.0
+
+            for start in range(0, batch_size, microbatch_size):
+                stop = min(start + microbatch_size, batch_size)
+                masked_loss, token_count = self._compute_sft_loss(
+                    input_ids[start:stop],
+                    advantages[start:stop],
+                    attention_mask[start:stop],
+                )
+                token_count_value = float(token_count.item())
+                scaled_loss = masked_loss * (token_count / total_tokens)
+                self.scaler.scale(scaled_loss).backward()
+                loss_sum += float(masked_loss.detach().item()) * token_count_value
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            loss_val = loss_sum / total_tokens_value
+
             if self.split_mode or self._external_engine:
                 snapshot = {}
                 for name, param in self.train_model.named_parameters():
@@ -479,6 +538,52 @@ class LocalTrainHelper:
         else:
             # Synchronous path: run training inline, return current loss
             return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
+
+    def sft_train_step(self, all_tokens, all_advantages, lr, weight_decay):
+        """Run one SFT/ECHO update.
+
+        ``importance_sampling`` preserves the historical warmup behavior.
+        ``cross_entropy`` gives the direct next-token world-modeling objective
+        ECHO needs for prompt-side environment/tool tokens.
+        """
+        loss_fn = getattr(self, "sft_loss_fn", "importance_sampling")
+        if loss_fn == "importance_sampling":
+            all_logprobs = [[0.0] * len(tokens) for tokens in all_tokens]
+            return self.train_step(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                lr,
+                weight_decay,
+            )
+        if loss_fn != "cross_entropy":
+            raise ValueError(
+                "sft_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+            )
+
+        n = len(all_tokens)
+        if n == 0:
+            return 0.0
+
+        if self._train_future is not None:
+            self._pending_loss = self._train_future.result()
+            self._train_future = None
+
+        for pg in self.optimizer.param_groups:
+            pg["lr"] = lr
+            pg["weight_decay"] = weight_decay
+
+        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
+        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
+
+        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
+        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+
+        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
+        max_len = input_ids.shape[1]
+        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
+
+        return self._do_sft_impl(input_ids, advantages, attention_mask)
 
     def load_state(self, name):
         """Load adapter weights from a saved checkpoint for resume.

@@ -190,6 +190,20 @@ class TrainingFlow:
 
             probe_passed += 1
 
+        # Check 2b — ECHO needs token-preserving backends because it adds
+        # prompt-side supervised token losses next to sampled-token RL losses.
+        if self.config.echo_enabled and not self.backend_capabilities.preserves_token_advantages:
+            issues.append(TraceIssue(
+                severity="error",
+                category="compat",
+                message=(
+                    f"backend='{self.config.backend}' cannot run ECHO: "
+                    "ECHO requires token-preserving training so prompt-side "
+                    "environment/tool tokens can carry their own loss mask. "
+                    "Use backend='local' or backend='tinker'."
+                ),
+            ))
+
         # Check 3 — planning dependency
         if self.needs_planning and self.config.planning_detector in ("none", ""):
             issues.append(TraceIssue(
@@ -199,6 +213,17 @@ class TrainingFlow:
                     "Algorithm/transform needs planning masks but "
                     f"planning_detector='{self.config.planning_detector}'. "
                     "Planning masks will be all-zeros."
+                ),
+            ))
+
+        if self.config.echo_enabled and self.config.environment_provider != "verifiers":
+            issues.append(TraceIssue(
+                severity="warning",
+                category="config",
+                message=(
+                    "ECHO is enabled, but environment_provider is not 'verifiers'. "
+                    "No prompt-side environment/tool tokens will be extracted "
+                    "unless the training loop receives multi-turn verifiers turns."
                 ),
             ))
 
@@ -317,8 +342,12 @@ def _run_probe(
 def _condition_label(config: TrainConfig) -> str:
     """Human-readable algorithm condition label."""
     if config.algorithm_mode:
-        return config.algorithm_mode
-    return f"{config.advantage_mode}+{config.transform_mode}"
+        label = config.algorithm_mode
+    else:
+        label = f"{config.advantage_mode}+{config.transform_mode}"
+    if config.echo_enabled:
+        return f"{label}+echo"
+    return label
 
 
 # ── build_flow ───────────────────────────────────────────────────────────

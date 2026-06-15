@@ -277,7 +277,7 @@ class TinkerTrainHelper:
                 model_input = types.ModelInput.from_ints(tokens)
 
                 if loss_fn == "cross_entropy":
-                    loss_mask = [1.0 if a > 0 else 0.0 for a in advs]
+                    loss_mask = [max(float(a), 0.0) for a in advs]
                     loss_fn_inputs = {
                         "target_tokens": TensorData.from_torch(
                             torch.tensor(tokens, dtype=torch.long)

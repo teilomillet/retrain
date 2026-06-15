@@ -210,6 +210,15 @@ class TrainConfig:
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
     sft_loss_fn: str = "importance_sampling"  # "importance_sampling" or "cross_entropy"
 
+    # ECHO: supervised world-modeling on prompt-side environment/tool tokens.
+    echo_enabled: bool = False
+    echo_weight: float = 0.05
+    echo_loss_fn: str = "cross_entropy"
+    echo_max_tokens_per_step: int = 2048
+    echo_max_token_ratio: float = 0.5
+    echo_entropy_floor: float = 0.01
+    echo_min_prompt_overlap: float = 0.5
+
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
     tl_grpo_branch_mode: str = "action_space"  # "action_space" or "llm"
@@ -299,6 +308,35 @@ class TrainConfig:
         if self.adv_clip_max < 0:
             errors.append(
                 "adv_clip_max must be >= 0. Try: adv_clip_max = 5.0"
+            )
+        if self.echo_weight < 0.0 or self.echo_weight > 1.0:
+            errors.append(
+                "echo_weight must be in [0.0, 1.0]. Try: echo_weight = 0.05"
+            )
+        if self.echo_enabled and self.echo_weight <= 0.0:
+            errors.append(
+                "echo_enabled requires echo_weight > 0. Try: echo_weight = 0.05"
+            )
+        if self.echo_loss_fn not in ("importance_sampling", "cross_entropy"):
+            errors.append(
+                "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+            )
+        if self.echo_max_tokens_per_step <= 0:
+            errors.append(
+                "echo_max_tokens_per_step must be > 0. Try: echo_max_tokens_per_step = 2048"
+            )
+        if self.echo_max_token_ratio <= 0.0:
+            errors.append(
+                "echo_max_token_ratio must be > 0. Try: echo_max_token_ratio = 0.5"
+            )
+        if self.echo_entropy_floor < 0.0:
+            errors.append(
+                "echo_entropy_floor must be >= 0. Try: echo_entropy_floor = 0.01"
+            )
+        if self.echo_min_prompt_overlap < 0.0 or self.echo_min_prompt_overlap > 1.0:
+            errors.append(
+                "echo_min_prompt_overlap must be in [0.0, 1.0]. "
+                "Try: echo_min_prompt_overlap = 0.5"
             )
         if self.generation_log_samples_per_prompt < 0:
             errors.append(
@@ -586,6 +624,15 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_data_path": "sft_data_path",
         "sft_lr": "sft_lr",
         "sft_loss_fn": "sft_loss_fn",
+    },
+    "echo": {
+        "enabled": "echo_enabled",
+        "weight": "echo_weight",
+        "loss_fn": "echo_loss_fn",
+        "max_tokens_per_step": "echo_max_tokens_per_step",
+        "max_token_ratio": "echo_max_token_ratio",
+        "entropy_floor": "echo_entropy_floor",
+        "min_prompt_overlap": "echo_min_prompt_overlap",
     },
     "optimizer": {
         "beta1": "optim_beta1",
