@@ -8,6 +8,7 @@ environments should stay message-level and reward-focused.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Protocol
 
 
@@ -58,7 +59,7 @@ def common_prefix_len(left: list[int], right: list[int]) -> int:
 
 
 def build_prompt_suffix_echo_datums(
-    rollout_turns: list[list[EchoTurnLike]],
+    rollout_turns: Sequence[Sequence[EchoTurnLike]],
     *,
     weight: float,
     min_prompt_overlap: float,
