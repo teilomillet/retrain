@@ -1095,3 +1095,129 @@ def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
     assert step_metrics["echo/skipped_entropy_floor"] == 1
     assert step_metrics["echo/joint_optimizer_step"] == 0
     assert step_metrics["echo/mode_collapse_guard"] == 1
+
+
+def test_train_echo_keeps_uniform_failed_rollout_observations(monkeypatch, tmp_path):
+    helper = _EchoRecordingFakeHelper(adapter_path=str(tmp_path / "adapter"))
+    env = SimpleNamespace(env_id="fake/multiturn")
+
+    def fake_run_multiturn_group(*args: object, **kwargs: object):
+        _ = args, kwargs
+        turns = [
+            [
+                VerifiersTurnSample(
+                    prompt_ids=[1, 2],
+                    completion_ids=[3],
+                    completion_logprobs=[-0.1],
+                    completion_text="a",
+                ),
+                VerifiersTurnSample(
+                    prompt_ids=[1, 2, 3, 50, 51],
+                    completion_ids=[4],
+                    completion_logprobs=[-0.2],
+                    completion_text="b",
+                    observation_mask=[0, 0, 0, 1, 1],
+                ),
+            ],
+            [
+                VerifiersTurnSample(
+                    prompt_ids=[1, 2],
+                    completion_ids=[5],
+                    completion_logprobs=[-0.1],
+                    completion_text="c",
+                ),
+                VerifiersTurnSample(
+                    prompt_ids=[1, 2, 5, 60],
+                    completion_ids=[6],
+                    completion_logprobs=[-0.2],
+                    completion_text="d",
+                    observation_mask=[0, 0, 0, 1],
+                ),
+            ],
+        ]
+        return (
+            [0.0, 0.0],
+            turns,
+            ["ab", "cd"],
+            [],
+            [],
+            [],
+            [],
+            VerifiersRolloutTiming(model_tokens=4, turns=4),
+        )
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "load_verifiers_environment", lambda _cfg: env)
+    monkeypatch.setattr(
+        trainer_mod,
+        "load_examples_from_environment",
+        lambda _env, _cfg: [
+            Example(
+                prompt=[{"role": "user", "content": "task"}],
+                reference="42",
+                task="fake",
+                info={"id": 1},
+            )
+        ],
+    )
+    monkeypatch.setattr(trainer_mod, "is_multiturn_environment", lambda _env: True)
+    monkeypatch.setattr(trainer_mod, "run_multiturn_group", fake_run_multiturn_group)
+    monkeypatch.setattr(
+        trainer_mod,
+        "encode_prompt_for_sampling",
+        lambda _tokenizer, _prompt: [101],
+    )
+    monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
+
+    cfg = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=0,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        environment_provider="verifiers",
+        environment_id="fake/multiturn",
+        advantage_mode="grpo",
+        transform_mode="none",
+        echo_enabled=True,
+        echo_weight=0.2,
+        echo_max_token_ratio=10.0,
+    )
+
+    flow = _make_fake_flow(cfg, helper)
+    trainer_mod.train(cfg, flow=flow)
+
+    assert helper.train_calls == []
+    assert helper.hybrid_calls == []
+    assert len(helper.sft_calls) == 1
+    assert helper.sft_calls[0]["tokens"] == [
+        [1, 2, 3, 50, 51],
+        [1, 2, 5, 60],
+    ]
+    assert helper.sft_calls[0]["advantages"] == [
+        [0.0, 0.0, 0.0, 0.2, 0.2],
+        [0.0, 0.0, 0.0, 0.2],
+    ]
+
+    metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
+    entries = [
+        json.loads(line)
+        for line in metrics_path.read_text().splitlines()
+        if line.strip()
+    ]
+    step_metrics = entries[-1]
+    assert step_metrics["rl/completion_tokens"] == 0
+    assert step_metrics["echo/candidate_tokens"] == 3
+    assert step_metrics["echo/kept_tokens"] == 3
+    assert step_metrics["echo/reference_completion_tokens"] == 4
+    assert step_metrics["echo/token_ratio"] == pytest.approx(0.75)
+    assert step_metrics["echo/skipped_entropy_floor"] == 0
+    assert step_metrics["echo/joint_optimizer_step"] == 0
