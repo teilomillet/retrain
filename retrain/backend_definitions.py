@@ -61,6 +61,19 @@ class BackendDefinition:
     option_schema: dict[str, BackendOptionSpec] = field(default_factory=dict)
 
 
+def _backend_option_int(
+    options: Mapping[str, object],
+    key: str,
+    default: int = 0,
+) -> int:
+    raw = options.get(key, default)
+    if isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, int | float | str):
+        return int(raw)
+    return default
+
+
 def _create_local(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.local_train_helper import LocalTrainHelper
@@ -83,8 +96,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         optim_eps=config.optim_eps,
         clip_eps=config.clip_eps,
         clip_eps_high=config.clip_eps_high,
-        train_microbatch_size=int(
-            config.backend_options.get("train_microbatch_size", 0)
+        train_microbatch_size=_backend_option_int(
+            config.backend_options,
+            "train_microbatch_size",
         ),
         cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", False)),
         sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),

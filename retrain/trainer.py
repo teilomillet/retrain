@@ -1064,7 +1064,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     )
                     _accumulate_metric_totals(
                         rollout_timing_metrics,
-                        cast(VerifiersRolloutTiming, rollout_timing).as_metrics(),
+                        rollout_timing.as_metrics(),
                     )
 
                     logprobs_G: list[list[float]] = []

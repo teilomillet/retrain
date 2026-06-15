@@ -84,7 +84,7 @@ class _Tokenizer(Protocol):
 
 def _require_verifiers() -> types.ModuleType:
     try:
-        import verifiers as vf  # type: ignore[unresolved-import]
+        import verifiers as vf
     except ModuleNotFoundError:
         raise ImportError(
             "Verifiers environment bridge requires the verifiers package.\n"
@@ -186,7 +186,7 @@ def _collect_observation_timing(
         candidate_map = cast(Mapping[str, object], candidate)
         timing = candidate_map.get("timing")
         if isinstance(timing, Mapping):
-            _accumulate_numeric_timing(timing, totals)
+            _accumulate_numeric_timing(cast(Mapping[object, object], timing), totals)
 
 
 def _accumulate_numeric_timing(
@@ -242,7 +242,7 @@ def _hub_env_suggestions(env_id: str, limit: int = 5) -> list[str]:
 
     try:
         import requests
-        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL  # type: ignore[unresolved-import]
+        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL
     except Exception:
         return []
 
@@ -288,7 +288,7 @@ def load_verifiers_environment(config: "TrainConfig") -> object:
         install_from_hub_fn: Callable[[str], bool] | None
         is_hub_env_fn: Callable[[str], bool] | None
         try:
-            from verifiers.utils.install_utils import (  # type: ignore[unresolved-import]
+            from verifiers.utils.install_utils import (
                 check_hub_env_installed,
                 install_from_hub,
                 is_hub_env,
