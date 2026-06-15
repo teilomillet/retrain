@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from retrain.advantages import (
+    AdvantageResult,
     AlgorithmSpec,
     AdvantageSpec,
     TransformSpec,
@@ -203,6 +204,20 @@ class TrainingFlow:
                     "Use backend='local' or backend='tinker'."
                 ),
             ))
+        elif (
+            self.config.echo_enabled
+            and not self.backend_capabilities.supports_echo_shared_forward
+        ):
+            issues.append(TraceIssue(
+                severity="warning",
+                category="compat",
+                message=(
+                    f"backend='{self.config.backend}' can run the ECHO objective, "
+                    "but does not report strict same-forward ECHO support. "
+                    "It may accumulate RL and ECHO losses before one optimizer "
+                    "step using backend-specific forward/backward calls."
+                ),
+            ))
 
         # Check 3 — planning dependency
         if self.needs_planning and self.config.planning_detector in ("none", ""):
@@ -278,7 +293,7 @@ def _token_advs_are_uniform(
 def _run_probe(
     flow: TrainingFlow,
     case: dict[str, object],
-) -> object:
+) -> AdvantageResult:
     """Run one synthetic probe case through the advantage pipeline."""
     config = flow.config
     rewards = list(case["rewards_G"])  # type: ignore[arg-type]

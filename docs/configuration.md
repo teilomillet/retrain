@@ -266,6 +266,13 @@ role-aligned mask. Built-in token-preserving backends accumulate the RL and
 ECHO losses before one optimizer step; older custom helpers may fall back to a
 separate auxiliary step.
 
+For strict paper-style computation, the local PyTorch backend gathers RL and
+ECHO losses from the same actor forward pass for each training microbatch.
+Tinker preserves the same objective and optimizer-step semantics, but its public
+remote loss API currently runs RL and ECHO as separate `forward_backward` calls
+before one optimizer step. `retrain explain` reports this distinction as a
+warning when ECHO is enabled on a backend without strict shared-forward support.
+
 The explicit-mask path is the intended ECHO path. Check
 `echo/observation_mask_datums` in metrics to confirm a run is using it; a value
 of zero means retrain used the compatibility suffix fallback or no eligible

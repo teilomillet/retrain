@@ -47,6 +47,7 @@ class BackendCapabilities:
     preserves_token_advantages: bool
     supports_checkpoint_resume: bool
     resume_runtime_dependent: bool
+    supports_echo_shared_forward: bool = False
 
 
 @dataclass(frozen=True)
@@ -211,6 +212,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            supports_echo_shared_forward=True,
         ),
         option_schema={
             "train_microbatch_size": BackendOptionSpec(
@@ -232,6 +234,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=True,
+            supports_echo_shared_forward=False,
         ),
         option_schema={},
     ),
@@ -245,6 +248,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=False,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            supports_echo_shared_forward=False,
         ),
         option_schema={
             "transport": BackendOptionSpec(
@@ -318,6 +322,9 @@ def _coerce_backend_capabilities(raw: object) -> BackendCapabilities | None:
                 preserves_token_advantages=bool(payload["preserves_token_advantages"]),
                 supports_checkpoint_resume=bool(payload["supports_checkpoint_resume"]),
                 resume_runtime_dependent=bool(payload["resume_runtime_dependent"]),
+                supports_echo_shared_forward=bool(
+                    payload.get("supports_echo_shared_forward", False)
+                ),
             )
         except KeyError:
             return None
