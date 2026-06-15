@@ -1,8 +1,9 @@
-"""ECHO prompt-suffix helpers.
+"""ECHO observation-token helpers.
 
-ECHO trains on environment/tool tokens that appear in later multi-turn
-prompts. The trainer owns this because it decides which tokens enter the loss;
-environments should stay message-level and reward-focused.
+ECHO trains on environment/tool tokens that appear in later multi-turn prompts.
+The bridge records exact prompt-aligned observation masks when the prompt is a
+role-structured chat transcript; suffix extraction remains a compatibility
+fallback for older message renderers.
 """
 
 from __future__ import annotations
@@ -30,13 +31,15 @@ class EchoDatum:
 
 @dataclass(frozen=True)
 class EchoBuildStats:
-    """Accounting for prompt-suffix extraction before step-level caps."""
+    """Accounting for observation-token extraction before step-level caps."""
 
     candidate_datums: int = 0
     candidate_tokens: int = 0
+    observation_mask_datums: int = 0
     skipped_first_turns: int = 0
     skipped_no_suffix: int = 0
     skipped_low_overlap: int = 0
+    skipped_bad_observation_mask: int = 0
 
 
 @dataclass(frozen=True)
@@ -64,18 +67,21 @@ def build_prompt_suffix_echo_datums(
     weight: float,
     min_prompt_overlap: float,
 ) -> tuple[list[EchoDatum], EchoBuildStats]:
-    """Extract new prompt suffixes introduced after each previous turn.
+    """Extract observation-token ECHO datums from multi-turn rollouts.
 
-    The suffix is computed against ``previous prompt + previous completion``.
-    We require the next prompt to share at least the previous prompt prefix; this
-    avoids training on the original user prompt when a tokenizer/chat template
-    re-render is not prefix-stable enough to identify tool/environment tokens.
+    Exact prompt-aligned observation masks are preferred because they identify
+    the environment/tool tokens the model actually consumed. If a turn lacks an
+    explicit mask, use the legacy prompt-suffix heuristic: compare the next
+    prompt against ``previous prompt + previous completion`` and train only the
+    newly introduced suffix when the overlap is sufficiently stable.
     """
 
     datums: list[EchoDatum] = []
+    observation_mask_datums = 0
     skipped_first_turns = 0
     skipped_no_suffix = 0
     skipped_low_overlap = 0
+    skipped_bad_observation_mask = 0
 
     for turns in rollout_turns:
         previous_full: list[int] | None = None
@@ -85,23 +91,42 @@ def build_prompt_suffix_echo_datums(
             if previous_full is None:
                 skipped_first_turns += 1
             else:
-                common = common_prefix_len(previous_full, prompt_ids)
-                overlap_base = max(min(len(previous_full), len(prompt_ids)), 1)
-                overlap = common / overlap_base
-                if common < previous_prompt_len or overlap < min_prompt_overlap:
-                    skipped_low_overlap += 1
-                elif common >= len(prompt_ids):
-                    skipped_no_suffix += 1
-                else:
-                    suffix_len = len(prompt_ids) - common
-                    advantages = [0.0] * common + [weight] * suffix_len
-                    datums.append(
-                        EchoDatum(
-                            tokens=prompt_ids,
-                            advantages=advantages,
-                            positive_tokens=suffix_len,
+                observation_mask = getattr(turn, "observation_mask", None)
+                if observation_mask is not None:
+                    mask = [_coerce_mask_value(value) for value in observation_mask]
+                    if len(mask) != len(prompt_ids):
+                        skipped_bad_observation_mask += 1
+                    elif any(mask):
+                        advantages = [weight if include else 0.0 for include in mask]
+                        positive_tokens = sum(mask)
+                        datums.append(
+                            EchoDatum(
+                                tokens=prompt_ids,
+                                advantages=advantages,
+                                positive_tokens=positive_tokens,
+                            )
                         )
-                    )
+                        observation_mask_datums += 1
+                    else:
+                        skipped_no_suffix += 1
+                else:
+                    common = common_prefix_len(previous_full, prompt_ids)
+                    overlap_base = max(min(len(previous_full), len(prompt_ids)), 1)
+                    overlap = common / overlap_base
+                    if common < previous_prompt_len or overlap < min_prompt_overlap:
+                        skipped_low_overlap += 1
+                    elif common >= len(prompt_ids):
+                        skipped_no_suffix += 1
+                    else:
+                        suffix_len = len(prompt_ids) - common
+                        advantages = [0.0] * common + [weight] * suffix_len
+                        datums.append(
+                            EchoDatum(
+                                tokens=prompt_ids,
+                                advantages=advantages,
+                                positive_tokens=suffix_len,
+                            )
+                        )
 
             previous_prompt_len = len(prompt_ids)
             previous_full = prompt_ids + list(turn.completion_ids)
@@ -109,11 +134,17 @@ def build_prompt_suffix_echo_datums(
     stats = EchoBuildStats(
         candidate_datums=len(datums),
         candidate_tokens=sum(d.positive_tokens for d in datums),
+        observation_mask_datums=observation_mask_datums,
         skipped_first_turns=skipped_first_turns,
         skipped_no_suffix=skipped_no_suffix,
         skipped_low_overlap=skipped_low_overlap,
+        skipped_bad_observation_mask=skipped_bad_observation_mask,
     )
     return datums, stats
+
+
+def _coerce_mask_value(raw: object) -> int:
+    return 1 if bool(raw) else 0
 
 
 def limit_echo_datums(

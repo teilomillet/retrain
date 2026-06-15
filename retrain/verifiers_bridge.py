@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import json
 import math
 import sys
@@ -36,6 +37,8 @@ _FALLBACK_TRAINING_ENVS = (
     "primeintellect/wordle",
     "primeintellect/hendrycks-math",
 )
+
+_ECHO_OBSERVATION_ROLES = frozenset({"tool", "environment", "observation"})
 
 
 StateDict = dict[str, object]
@@ -113,7 +116,7 @@ def _make_env_client() -> object | None:
     except ImportError:
         return None
 
-    class _RetrainNullClient(Client):  # type: ignore[misc]
+    class _RetrainNullClient(Client):
         def setup_client(self, config: object) -> object:
             raise NotImplementedError(_NULL_CLIENT_MSG)
 
@@ -455,6 +458,50 @@ def prompt_preview(prompt: PromptLike, max_chars: int = 200) -> str:
     return text[:max_chars]
 
 
+def _chat_template_kwargs(tokenizer: object) -> dict[str, object]:
+    """Return optional chat-template kwargs supported by the tokenizer."""
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        return {}
+    try:
+        sig = inspect.signature(apply_chat_template)
+    except (TypeError, ValueError):
+        return {}
+    if "enable_thinking" in sig.parameters:
+        return {"enable_thinking": False}
+    return {}
+
+
+def _coerce_tokenizer_ids(raw: object) -> list[int]:
+    if isinstance(raw, Mapping):
+        input_ids = cast(Mapping[str, object], raw).get("input_ids")
+        if input_ids is not None:
+            return _coerce_int_ids(input_ids)
+    if hasattr(raw, "input_ids"):
+        return _coerce_int_ids(getattr(raw, "input_ids"))
+    return _coerce_int_ids(raw)
+
+
+def _encode_chat_template_ids(
+    tokenizer: object,
+    messages: list[dict[str, object]],
+    *,
+    add_generation_prompt: bool,
+) -> list[int]:
+    if not messages:
+        return []
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise TypeError("Tokenizer must expose apply_chat_template() for chat prompts.")
+    ids = apply_chat_template(
+        messages,
+        add_generation_prompt=add_generation_prompt,
+        tokenize=True,
+        **_chat_template_kwargs(tokenizer),
+    )
+    return _coerce_tokenizer_ids(ids)
+
+
 def encode_prompt_for_sampling(tokenizer: object, prompt: PromptLike) -> list[int]:
     """Encode a prompt object (string or chat messages) for model sampling.
 
@@ -464,41 +511,98 @@ def encode_prompt_for_sampling(tokenizer: object, prompt: PromptLike) -> list[in
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     encode = getattr(tokenizer, "encode", None)
 
-    # Check if tokenizer supports enable_thinking
-    import inspect
-    _supports_thinking = False
-    if callable(apply_chat_template):
-        try:
-            sig = inspect.signature(apply_chat_template)
-            _supports_thinking = "enable_thinking" in sig.parameters
-        except (TypeError, ValueError):
-            pass
-    _thinking_kwargs = {"enable_thinking": False} if _supports_thinking else {}
-
     if isinstance(prompt, str):
         if callable(apply_chat_template):
-            messages = [{"role": "user", "content": prompt}]
-            ids = apply_chat_template(messages, add_generation_prompt=True, tokenize=True, **_thinking_kwargs)
+            messages: list[dict[str, object]] = [{"role": "user", "content": prompt}]
+            return _encode_chat_template_ids(
+                tokenizer,
+                messages,
+                add_generation_prompt=True,
+            )
         else:
             if not callable(encode):
                 raise TypeError("Tokenizer must expose encode() for string prompts.")
             ids = encode(prompt)
     else:
         if callable(apply_chat_template):
-            ids = apply_chat_template(prompt, add_generation_prompt=True, tokenize=True, **_thinking_kwargs)
+            messages = [
+                dict(cast(Mapping[str, object], msg))
+                if isinstance(msg, Mapping)
+                else {"role": "", "content": str(msg)}
+                for msg in prompt
+            ]
+            return _encode_chat_template_ids(
+                tokenizer,
+                messages,
+                add_generation_prompt=True,
+            )
         else:
             text = "\n".join(str(msg.get("content", "")) for msg in prompt)
             if not callable(encode):
                 raise TypeError("Tokenizer must expose encode() for chat prompts.")
             ids = encode(text)
 
-    if isinstance(ids, Mapping):
-        input_ids = ids.get("input_ids")
-        if input_ids is not None:
-            return _coerce_int_ids(input_ids)
-    if hasattr(ids, "input_ids"):
-        return _coerce_int_ids(getattr(ids, "input_ids"))
-    return _coerce_int_ids(ids)
+    return _coerce_tokenizer_ids(ids)
+
+
+def _is_prefix(prefix: list[int], full: list[int]) -> bool:
+    return len(prefix) <= len(full) and full[: len(prefix)] == prefix
+
+
+def observation_mask_for_prompt(
+    tokenizer: object,
+    prompt: PromptLike,
+    prompt_ids: list[int],
+) -> list[int] | None:
+    """Build a prompt-aligned mask for environment/tool observation tokens.
+
+    The mask is derived only when the tokenizer's chat template is prefix-stable
+    between message prefixes and the sampled prompt. Returning ``None`` is safer
+    than training on guessed positions.
+    """
+
+    if isinstance(prompt, str):
+        return None
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        return None
+
+    messages = [
+        dict(cast(Mapping[str, object], msg))
+        if isinstance(msg, Mapping)
+        else {"role": "", "content": str(msg)}
+        for msg in prompt
+    ]
+    if not messages:
+        return None
+
+    mask = [0] * len(prompt_ids)
+    for idx, message in enumerate(messages):
+        role = str(message.get("role", "")).lower()
+        if role not in _ECHO_OBSERVATION_ROLES:
+            continue
+        try:
+            before_ids = _encode_chat_template_ids(
+                tokenizer,
+                messages[:idx],
+                add_generation_prompt=False,
+            )
+            through_ids = _encode_chat_template_ids(
+                tokenizer,
+                messages[: idx + 1],
+                add_generation_prompt=False,
+            )
+        except (TypeError, ValueError):
+            return None
+        if not _is_prefix(before_ids, through_ids):
+            return None
+        if not _is_prefix(through_ids, prompt_ids):
+            return None
+        for token_idx in range(len(before_ids), len(through_ids)):
+            mask[token_idx] = 1
+
+    return mask if any(mask) else None
+
 
 
 def _completion_messages_for_env(
@@ -574,6 +678,7 @@ class VerifiersTurnSample:
     completion_ids: list[int]
     completion_logprobs: list[float]
     completion_text: str
+    observation_mask: list[int] | None = None
 
 
 @dataclass
@@ -1013,7 +1118,7 @@ def run_multiturn_group(
 
             turn_count = 0
             while True:
-                active: list[tuple[int, PromptLike, list[int]]] = []
+                active: list[tuple[int, PromptLike, list[int], list[int] | None]] = []
                 for idx, state in enumerate(states):
                     if await env_typed.is_completed(state):
                         continue
@@ -1029,16 +1134,21 @@ def run_multiturn_group(
                         continue
                     encode_started = time.perf_counter()
                     prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
+                    observation_mask = observation_mask_for_prompt(
+                        tokenizer,
+                        prompt_messages,
+                        prompt_ids,
+                    )
                     rollout_timing.prompt_encode_s += (
                         time.perf_counter() - encode_started
                     )
-                    active.append((idx, prompt_messages, prompt_ids))
+                    active.append((idx, prompt_messages, prompt_ids, observation_mask))
 
                 if not active:
                     break
 
                 if max_turns_override > 0 and turn_count >= max_turns_override:
-                    for idx, _messages, _prompt_ids in active:
+                    for idx, _messages, _prompt_ids, _observation_mask in active:
                         states[idx]["is_completed"] = True
                         states[idx]["is_truncated"] = True
                         states[idx]["stop_condition"] = "retrain_max_turns"
@@ -1073,7 +1183,12 @@ def run_multiturn_group(
                 )
                 rollout_timing.decode_s += time.perf_counter() - decode_started
 
-                for pos, (idx, prompt_messages, prompt_ids) in enumerate(active):
+                for pos, (
+                    idx,
+                    prompt_messages,
+                    prompt_ids,
+                    observation_mask,
+                ) in enumerate(active):
                     completion_ids = completion_ids_batch[pos]
                     completion_logprobs = completion_logprobs_batch[pos]
                     completion_text = completion_texts[pos]
@@ -1127,6 +1242,11 @@ def run_multiturn_group(
                             completion_ids=list(completion_ids),
                             completion_logprobs=list(completion_logprobs),
                             completion_text=completion_text,
+                            observation_mask=(
+                                list(observation_mask)
+                                if observation_mask is not None
+                                else None
+                            ),
                         )
                     )
 

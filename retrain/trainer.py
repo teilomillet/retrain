@@ -1290,6 +1290,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 echo_build.candidate_tokens
                                 + group_echo_build.candidate_tokens
                             ),
+                            observation_mask_datums=(
+                                echo_build.observation_mask_datums
+                                + group_echo_build.observation_mask_datums
+                            ),
                             skipped_first_turns=(
                                 echo_build.skipped_first_turns
                                 + group_echo_build.skipped_first_turns
@@ -1301,6 +1305,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             skipped_low_overlap=(
                                 echo_build.skipped_low_overlap
                                 + group_echo_build.skipped_low_overlap
+                            ),
+                            skipped_bad_observation_mask=(
+                                echo_build.skipped_bad_observation_mask
+                                + group_echo_build.skipped_bad_observation_mask
                             ),
                         )
 
@@ -1406,12 +1414,20 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:
                             turn_summary = []
                             for tl in turn_logs_G[s_idx]:
-                                obs = tl.get("observation", {})
+                                obs_raw = tl.get("observation", {})
+                                obs = (
+                                    cast(Mapping[str, object], obs_raw)
+                                    if isinstance(obs_raw, Mapping)
+                                    else {}
+                                )
                                 entry: dict[str, object] = {
                                     "turn": tl.get("turn"),
-                                    "tick": obs.get("tick", 0) if isinstance(obs, dict) else 0,  # type: ignore[no-matching-overload]
-                                    "customer_waiting": obs.get("customer_waiting") if isinstance(obs, dict) else False,  # type: ignore[invalid-argument-type]
-                                    "inventory": obs.get("inventory") if isinstance(obs, dict) else 0,  # type: ignore[invalid-argument-type]
+                                    "tick": obs.get("tick", 0),
+                                    "customer_waiting": obs.get(
+                                        "customer_waiting",
+                                        False,
+                                    ),
+                                    "inventory": obs.get("inventory", 0),
                                     "operation": tl.get("operation"),
                                     "reward_delta": tl.get("reward_delta", 0.0),
                                     "valid": tl.get("valid", True),
@@ -1935,6 +1951,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/allowed_tokens"] = echo_allowed
             metrics["echo/candidate_datums"] = echo_build.candidate_datums
             metrics["echo/candidate_tokens"] = echo_build.candidate_tokens
+            metrics["echo/observation_mask_datums"] = (
+                echo_build.observation_mask_datums
+            )
             metrics["echo/kept_datums"] = echo_limit.kept_datums
             metrics["echo/kept_tokens"] = echo_limit.kept_tokens
             metrics["echo/truncated_tokens"] = echo_limit.truncated_tokens
@@ -1942,6 +1961,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/skipped_first_turns"] = echo_build.skipped_first_turns
             metrics["echo/skipped_no_suffix"] = echo_build.skipped_no_suffix
             metrics["echo/skipped_low_overlap"] = echo_build.skipped_low_overlap
+            metrics["echo/skipped_bad_observation_mask"] = (
+                echo_build.skipped_bad_observation_mask
+            )
             metrics["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
             metrics["echo/entropy_floor"] = config.echo_entropy_floor
             metrics["echo/mode_collapse_guard"] = int(echo_skipped_entropy_floor)
@@ -2092,11 +2114,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "echo/allowed_tokens",
                     "echo/candidate_datums",
                     "echo/candidate_tokens",
+                    "echo/observation_mask_datums",
                     "echo/kept_datums",
                     "echo/kept_tokens",
                     "echo/truncated_tokens",
                     "echo/token_ratio",
                     "echo/skipped_low_overlap",
+                    "echo/skipped_bad_observation_mask",
                     "echo/skipped_entropy_floor",
                     "echo/entropy_floor",
                     "echo/mode_collapse_guard",
