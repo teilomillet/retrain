@@ -13,6 +13,7 @@ Supports:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import math
 import sys
@@ -85,13 +86,12 @@ class _Tokenizer(Protocol):
 
 def _require_verifiers() -> types.ModuleType:
     try:
-        import verifiers as vf
+        return importlib.import_module("verifiers")
     except ModuleNotFoundError:
         raise ImportError(
             "Verifiers environment bridge requires the verifiers package.\n"
             "Install it with: pip install 'retrain[verifiers]'"
         ) from None
-    return vf
 
 
 def _coerce_prompt(raw: object) -> PromptLike:
@@ -247,13 +247,14 @@ def _hub_env_suggestions(env_id: str, limit: int = 5) -> list[str]:
 
     try:
         import requests
-        from verifiers.utils.install_utils import ENVIRONMENTS_HUB_URL
+        install_utils = importlib.import_module("verifiers.utils.install_utils")
+        environments_hub_url = str(getattr(install_utils, "ENVIRONMENTS_HUB_URL"))
     except Exception:
         return []
 
     try:
         response = requests.get(
-            ENVIRONMENTS_HUB_URL,
+            environments_hub_url,
             params={"search": query, "limit": max(1, limit)},
             timeout=10,
         )
@@ -293,14 +294,29 @@ def load_verifiers_environment(config: "TrainConfig") -> object:
         install_from_hub_fn: Callable[[str], bool] | None
         is_hub_env_fn: Callable[[str], bool] | None
         try:
-            from verifiers.utils.install_utils import (
-                check_hub_env_installed,
-                install_from_hub,
-                is_hub_env,
+            install_utils = importlib.import_module("verifiers.utils.install_utils")
+            check_hub_env_installed_obj = getattr(
+                install_utils,
+                "check_hub_env_installed",
+                None,
             )
-            check_hub_env_installed_fn = check_hub_env_installed
-            install_from_hub_fn = install_from_hub
-            is_hub_env_fn = is_hub_env
+            install_from_hub_obj = getattr(install_utils, "install_from_hub", None)
+            is_hub_env_obj = getattr(install_utils, "is_hub_env", None)
+            check_hub_env_installed_fn = (
+                cast(Callable[[str], bool], check_hub_env_installed_obj)
+                if callable(check_hub_env_installed_obj)
+                else None
+            )
+            install_from_hub_fn = (
+                cast(Callable[[str], bool], install_from_hub_obj)
+                if callable(install_from_hub_obj)
+                else None
+            )
+            is_hub_env_fn = (
+                cast(Callable[[str], bool], is_hub_env_obj)
+                if callable(is_hub_env_obj)
+                else None
+            )
         except Exception:
             # Keep loading path robust even if helper APIs change in verifiers.
             check_hub_env_installed_fn = None
