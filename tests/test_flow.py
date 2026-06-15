@@ -7,6 +7,7 @@ import textwrap
 
 import pytest
 
+from retrain.advantages import get_builtin_algorithm_modes
 from retrain.config import TrainConfig
 from retrain.flow import (
     TraceIssue,
@@ -269,6 +270,23 @@ class TestTrace:
         result = flow.trace()
         assert result.probe_cases_run == len(_FLOW_PROBE_CASES)
         assert result.probe_cases_passed == result.probe_cases_run
+
+    @pytest.mark.parametrize("algorithm_mode", get_builtin_algorithm_modes())
+    def test_echo_passes_for_every_builtin_algorithm_mode_on_local(
+        self,
+        algorithm_mode,
+    ):
+        cfg = TrainConfig(
+            backend="local",
+            algorithm_mode=algorithm_mode,
+            environment_provider="verifiers",
+            environment_id="fake/env",
+            echo_enabled=True,
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert errors == []
 
     def test_planning_detector_none_warning(self):
         cfg = TrainConfig(
