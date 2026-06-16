@@ -179,6 +179,9 @@ OPTIONS
         --bp-peak-gflops
         --bp-throttle-margin
         --bp-warmup-steps
+        --clip-cov-max
+        --clip-cov-min
+        --clip-cov-ratio
         --clip-eps
         --clip-eps-high
         --clip-ratio-c
@@ -205,6 +208,8 @@ OPTIONS
         --inference-dtype
         --inference-engine
         --inference-url
+        --kl-cov-coef
+        --kl-cov-percent
         --kv-cache-dtype
         --log-dir
         --log-generations
@@ -224,6 +229,7 @@ OPTIONS
         --planning-threshold
         --plugins-search-paths
         --plugins-strict
+        --policy-loss-mode
         --prefix-caching
         --resume-from
         --reward-custom-function
