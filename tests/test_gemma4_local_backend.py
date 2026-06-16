@@ -15,7 +15,11 @@ from retrain.gemma4_text import (
     is_gemma4_text_model,
     resolve_lora_target_modules,
 )
-from retrain.inference_engine.pytorch_engine import PyTorchEngine, _sample_next_token
+from retrain.inference_engine.pytorch_engine import (
+    PyTorchEngine,
+    _sample_next_token,
+    _shannon_entropy_from_probs_logprobs,
+)
 from retrain.local_train_helper import LocalTrainHelper
 
 
@@ -193,6 +197,16 @@ def test_top_p_sampling_entropy_uses_full_distribution():
     assert token.tolist() == [[0]]
     assert logprob.tolist() == pytest.approx([0.0])
     assert entropy.tolist() == pytest.approx(expected_entropy.tolist())
+
+
+def test_entropy_helper_treats_zero_probability_as_zero_contribution():
+    probs = torch.tensor([[1.0, 0.0, 0.0]])
+    log_probs = torch.tensor([[0.0, float("-inf"), float("-inf")]])
+
+    entropy = _shannon_entropy_from_probs_logprobs(probs, log_probs)
+
+    assert torch.isfinite(entropy).all()
+    assert entropy.tolist() == pytest.approx([0.0])
 
 
 def test_local_sample_empty_cache_runs_after_engine_error(monkeypatch):

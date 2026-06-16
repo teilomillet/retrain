@@ -18,10 +18,18 @@ from retrain.gemma4_text import eos_token_ids, is_gemma4_text_model, unwrap_peft
 from retrain.inference_engine.base import InferenceEngine, SampleResult
 
 
+def _shannon_entropy_from_probs_logprobs(probs, log_probs):
+    safe_log_probs = log_probs.masked_fill(probs == 0, 0.0)
+    return -(probs * safe_log_probs).sum(dim=-1)
+
+
 def _sample_next_token(logits, temperature, top_p):
     scaled = logits / max(float(temperature), 1e-7)
     probs = F.softmax(scaled.float(), dim=-1)
-    entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1)
+    entropy = _shannon_entropy_from_probs_logprobs(
+        probs,
+        probs.clamp_min(1e-12).log(),
+    )
 
     if top_p < 1.0:
         sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
@@ -119,8 +127,12 @@ class PyTorchEngine(InferenceEngine):
 
                     if compute_entropy:
                         all_probs = F.softmax(all_scores.float(), dim=-1)
-                        # H(t) = -sum(p * log(p)) per position
-                        all_entropies = -(all_probs * all_log_probs).sum(dim=-1)
+                        # H(t) = -sum(p * log(p)) per position.
+                        # Zero-probability entries contribute 0, not NaN from 0 * -inf.
+                        all_entropies = _shannon_entropy_from_probs_logprobs(
+                            all_probs,
+                            all_log_probs,
+                        )
 
                 group = []
                 for i in range(num_samples):
