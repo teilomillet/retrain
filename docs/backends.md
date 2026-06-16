@@ -183,7 +183,7 @@ The tokenizer and dataset still load locally (for prompt encoding and reward sco
 | Training | PyTorch/PEFT | Tinker training API |
 | Weight sync | In-memory or disk | Server-managed |
 | Checkpoints | Saved to `adapter_path` | Saved on Tinker service |
-| ECHO strict shared forward | Yes, per local training microbatch | No, remote RL/ECHO `forward_backward` calls share one optimizer step |
+| ECHO strict shared forward | Yes, per local training microbatch | No; ECHO configs are rejected until the remote API can provide one shared actor pass |
 | Setup | `pip install -e .` + CUDA GPU | `pip install -e ".[tinker]"` + service URL |
 
 ## PRIME-RL backend (experimental)

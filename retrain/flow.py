@@ -191,8 +191,9 @@ class TrainingFlow:
 
             probe_passed += 1
 
-        # Check 2b — ECHO needs token-preserving backends because it adds
-        # prompt-side supervised token losses next to sampled-token RL losses.
+        # Check 2b — ECHO needs token-preserving, strict shared-forward
+        # backends because it adds prompt-side supervised token losses next to
+        # sampled-token RL losses in the same actor pass.
         if self.config.echo_enabled and not self.backend_capabilities.preserves_token_advantages:
             issues.append(TraceIssue(
                 severity="error",
@@ -201,7 +202,8 @@ class TrainingFlow:
                     f"backend='{self.config.backend}' cannot run ECHO: "
                     "ECHO requires token-preserving training so prompt-side "
                     "environment/tool tokens can carry their own loss mask. "
-                    "Use backend='local' or backend='tinker'."
+                    "Use backend='local' or a backend that preserves "
+                    "token-level advantages."
                 ),
             ))
         elif (
@@ -209,13 +211,13 @@ class TrainingFlow:
             and not self.backend_capabilities.supports_echo_shared_forward
         ):
             issues.append(TraceIssue(
-                severity="warning",
+                severity="error",
                 category="compat",
                 message=(
-                    f"backend='{self.config.backend}' can run the ECHO objective, "
-                    "but does not report strict same-forward ECHO support. "
-                    "It may accumulate RL and ECHO losses before one optimizer "
-                    "step using backend-specific forward/backward calls."
+                    f"backend='{self.config.backend}' cannot run paper-faithful "
+                    "ECHO: ECHO requires RL and environment-token losses from "
+                    "the same actor forward/backward pass. Use backend='local' "
+                    "or a backend that declares supports_echo_shared_forward."
                 ),
             ))
 

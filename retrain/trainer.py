@@ -294,9 +294,9 @@ def _run_rl_echo_train_step(
 
     ECHO is independent of the chosen RL algorithm: algorithms produce the
     sampled-token advantages above, while ECHO adds prompt-side observation
-    tokens as an auxiliary supervised mask. Backends that implement
-    ``train_step_with_echo`` accumulate both losses before one optimizer step;
-    older/custom helpers fall back to the historical two-step behavior.
+    tokens as an auxiliary supervised mask. Paper-faithful RL+ECHO requires a
+    backend ``train_step_with_echo`` implementation that computes both losses
+    from the same actor forward/backward pass.
     """
 
     if not all_tokens:
@@ -326,6 +326,11 @@ def _run_rl_echo_train_step(
                 weight_decay,
             )
             return float(rl_loss), float(echo_loss), True
+        raise RuntimeError(
+            "ECHO requires a backend train_step_with_echo implementation so "
+            "RL and environment-token losses are computed in the same actor "
+            "forward/backward pass."
+        )
 
     train_step = getattr(helper, "train_step")
     rl_loss = float(

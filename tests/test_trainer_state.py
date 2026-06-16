@@ -213,6 +213,24 @@ class TestEchoStepSemantics:
         assert helper.calls[0]["advantages"] is algorithm_advantages
         assert helper.calls[0]["echo_advantages"] == [[0.0, 0.0, 0.0, 0.3]]
 
+    def test_echo_rejects_helper_without_shared_forward_step(self):
+        class Helper:
+            def train_step(self, *args, **kwargs):
+                raise AssertionError("separate RL step must not run")
+
+        with pytest.raises(RuntimeError, match="same actor forward/backward pass"):
+            _run_rl_echo_train_step(
+                Helper(),
+                all_tokens=[[10, 11]],
+                all_logprobs=[[-0.1, -0.2]],
+                all_advantages=[[0.5, -0.5]],
+                echo_tokens=[[10, 11, 90]],
+                echo_advantages=[[0.0, 0.0, 0.3]],
+                echo_loss_fn="cross_entropy",
+                lr=1e-4,
+                weight_decay=0.0,
+            )
+
 
 class TestBackendAdvantageFlowGuard:
     def test_rejects_builtin_token_varying_transform_mode(self):
@@ -386,7 +404,7 @@ class TestBackendAdvantageFlowGuard:
         errors = [i for i in result.issues if i.severity == "error"]
         assert any("cannot run ECHO" in e.message for e in errors)
 
-    def test_warns_when_echo_backend_lacks_shared_forward(self):
+    def test_rejects_when_echo_backend_lacks_shared_forward(self):
         from retrain.config import TrainConfig
 
         cfg = TrainConfig(
@@ -397,9 +415,9 @@ class TestBackendAdvantageFlowGuard:
         )
         flow = build_flow(cfg, gpu=False)
         result = flow.trace()
-        assert result.ok
-        warnings = [i for i in result.issues if i.severity == "warning"]
-        assert any("strict same-forward ECHO" in w.message for w in warnings)
+        assert not result.ok
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert any("paper-faithful ECHO" in e.message for e in errors)
 
     def test_local_echo_backend_reports_shared_forward(self):
         from retrain.config import TrainConfig
