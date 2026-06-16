@@ -262,16 +262,14 @@ verifiers bridge records exact prompt-aligned masks for rendered messages whose
 roles are `tool`, `environment`, or `observation`. Those masks are preferred so
 only observed environment/tool tokens receive the auxiliary loss. Prompt-suffix
 extraction remains a fallback for older renderers that cannot expose a stable
-role-aligned mask. Built-in token-preserving backends accumulate the RL and
-ECHO losses before one optimizer step; older custom helpers may fall back to a
-separate auxiliary step.
+role-aligned mask. ECHO is only enabled for backends that can compute the RL
+and ECHO losses from the same actor forward/backward pass.
 
-For strict paper-style computation, the local PyTorch backend gathers RL and
-ECHO losses from the same actor forward pass for each training microbatch.
-Tinker preserves the same objective and optimizer-step semantics, but its public
-remote loss API currently runs RL and ECHO as separate `forward_backward` calls
-before one optimizer step. `retrain explain` reports this distinction as a
-warning when ECHO is enabled on a backend without strict shared-forward support.
+The local PyTorch backend gathers RL and ECHO losses from the same actor
+forward pass for each training microbatch. Tinker's public remote loss API
+currently exposes separate RL and ECHO `forward_backward` calls rather than one
+shared actor pass, so `retrain explain` rejects ECHO on `backend = "tinker"`
+until that backend can declare strict shared-forward support.
 
 The explicit-mask path is the intended ECHO path. Check
 `echo/observation_mask_datums` in metrics to confirm a run is using it; a value
@@ -287,9 +285,11 @@ environment-prediction objective even when they provide no policy-gradient
 contrast. In that case retrain may run an ECHO-only auxiliary update for the
 step.
 
-ECHO requires a token-preserving backend (`local` or `tinker`). `prime_rl` is
-rejected because it cannot carry prompt-side token masks without silently
-collapsing them to scalar advantages.
+ECHO requires a token-preserving backend with strict shared-forward support.
+Today that means `backend = "local"`. `prime_rl` is rejected because it cannot
+carry prompt-side token masks without silently collapsing them to scalar
+advantages; `tinker` is rejected because it cannot currently compute the RL and
+ECHO losses from one shared actor pass.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
