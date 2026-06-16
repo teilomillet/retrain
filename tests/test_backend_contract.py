@@ -143,6 +143,7 @@ def test_local_backend_contract(monkeypatch):
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 0
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
 
 
 def test_local_backend_passes_memory_control_options(monkeypatch):
@@ -157,12 +158,18 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "cuda_empty_cache": True,
             "sample_use_cache": False,
         },
+        policy_loss_mode="kl_cov",
+        kl_cov_percent=0.4,
+        kl_cov_coef=0.5,
     )
     backend.create("local", cfg)
 
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 2
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_coef"] == 0.5
 
 
 def test_tinker_backend_contract(monkeypatch):

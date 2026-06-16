@@ -41,6 +41,12 @@ class TestDefaults:
         assert c.echo_max_token_ratio == pytest.approx(0.5)
         assert c.echo_entropy_floor == pytest.approx(0.01)
         assert c.echo_min_prompt_overlap == pytest.approx(0.5)
+        assert c.policy_loss_mode == "standard"
+        assert c.kl_cov_percent == pytest.approx(0.2)
+        assert c.kl_cov_coef == pytest.approx(1.0)
+        assert c.clip_cov_ratio == pytest.approx(0.0002)
+        assert c.clip_cov_min == pytest.approx(1.0)
+        assert c.clip_cov_max == pytest.approx(5.0)
 
 
 class TestLoadConfig:
@@ -838,6 +844,53 @@ class TestClipEpsConfig:
         c = load_config(str(toml), overrides={"clip_eps": "0.2", "clip_eps_high": "0.28"})
         assert c.clip_eps == pytest.approx(0.2)
         assert c.clip_eps_high == pytest.approx(0.28)
+
+
+class TestPolicyLossModeConfig:
+    def test_kl_cov_valid_on_local(self):
+        c = TrainConfig(policy_loss_mode="kl_cov", backend="local")
+        assert c.policy_loss_mode == "kl_cov"
+
+    def test_clip_cov_valid_on_local(self):
+        c = TrainConfig(policy_loss_mode="clip_cov", backend="local")
+        assert c.policy_loss_mode == "clip_cov"
+
+    def test_invalid_policy_loss_mode_raises(self):
+        with pytest.raises(ValueError, match="policy_loss_mode"):
+            TrainConfig(policy_loss_mode="entropy_magic")
+
+    def test_covariance_loss_rejects_nonlocal_backend(self):
+        with pytest.raises(ValueError, match="requires backend='local'"):
+            TrainConfig(policy_loss_mode="kl_cov", backend="tinker")
+
+    def test_covariance_ranges_validate(self):
+        with pytest.raises(ValueError, match="kl_cov_percent"):
+            TrainConfig(kl_cov_percent=101.0)
+        with pytest.raises(ValueError, match="kl_cov_coef"):
+            TrainConfig(kl_cov_coef=-0.1)
+        with pytest.raises(ValueError, match="clip_cov_ratio"):
+            TrainConfig(clip_cov_ratio=1.1)
+        with pytest.raises(ValueError, match="clip_cov_min"):
+            TrainConfig(clip_cov_min=5.0, clip_cov_max=5.0)
+
+    def test_policy_loss_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            "[training]\n"
+            "policy_loss_mode = \"kl_cov\"\n"
+            "kl_cov_percent = 0.3\n"
+            "kl_cov_coef = 0.7\n"
+            "clip_cov_ratio = 0.002\n"
+            "clip_cov_min = 0.2\n"
+            "clip_cov_max = 6.0\n"
+        )
+        c = load_config(str(toml))
+        assert c.policy_loss_mode == "kl_cov"
+        assert c.kl_cov_percent == pytest.approx(0.3)
+        assert c.kl_cov_coef == pytest.approx(0.7)
+        assert c.clip_cov_ratio == pytest.approx(0.002)
+        assert c.clip_cov_min == pytest.approx(0.2)
+        assert c.clip_cov_max == pytest.approx(6.0)
 
 
 class TestAdvClipMaxConfig:

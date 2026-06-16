@@ -97,6 +97,12 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         optim_eps=config.optim_eps,
         clip_eps=config.clip_eps,
         clip_eps_high=config.clip_eps_high,
+        policy_loss_mode=config.policy_loss_mode,
+        kl_cov_percent=config.kl_cov_percent,
+        kl_cov_coef=config.kl_cov_coef,
+        clip_cov_ratio=config.clip_cov_ratio,
+        clip_cov_min=config.clip_cov_min,
+        clip_cov_max=config.clip_cov_max,
         train_microbatch_size=_backend_option_int(
             config.backend_options,
             "train_microbatch_size",

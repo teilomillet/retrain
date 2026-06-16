@@ -866,6 +866,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "batch_advantage_norm": int(config.batch_advantage_norm),
                 "clip_eps": config.clip_eps,
                 "clip_eps_high": config.clip_eps_high,
+                "policy_loss_mode": config.policy_loss_mode,
+                "kl_cov_percent": config.kl_cov_percent,
+                "kl_cov_coef": config.kl_cov_coef,
+                "clip_cov_ratio": config.clip_cov_ratio,
+                "clip_cov_min": config.clip_cov_min,
+                "clip_cov_max": config.clip_cov_max,
                 "adv_clip_max": config.adv_clip_max,
                 "sft_warmup_steps": config.sft_warmup_steps,
                 "tl_grpo": int(config.tl_grpo),
@@ -1849,6 +1855,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             rl_train_time = train_time if num_datums > 0 else 0.0
             echo_train_time = train_time if echo_has_datums else 0.0
             clip_fraction = getattr(helper, '_clip_fraction', 0.0)
+            policy_cov_fraction = getattr(helper, "_policy_cov_fraction", 0.0)
+            policy_abs_kl = getattr(helper, "_policy_abs_kl", 0.0)
 
             step_time = time.perf_counter() - step_start
 
@@ -2048,6 +2056,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 metrics["post_plan_surprisal_mean"] = step_post_plan_mean
                 metrics["post_plan_surprisal_var"] = step_post_plan_var
             metrics["clip_fraction"] = clip_fraction
+            metrics["policy_loss_mode"] = config.policy_loss_mode
+            metrics["policy/cov_fraction"] = policy_cov_fraction
+            metrics["policy/abs_kl"] = policy_abs_kl
             metrics["adv_cap_fraction"] = adv_cap_fraction
             metrics["adv_cap_magnitude"] = adv_cap_magnitude
             if batch_norm_metrics:
@@ -2138,6 +2149,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "train/surprisal/post_plan_mean": step_post_plan_mean,
                     "train/surprisal/post_plan_var": step_post_plan_var,
                     "train/clip_fraction": clip_fraction,
+                    "train/policy_cov_fraction": policy_cov_fraction,
+                    "train/policy_abs_kl": policy_abs_kl,
                     "train/adv_cap_fraction": adv_cap_fraction,
                     "train/adv_cap_magnitude": adv_cap_magnitude,
                     **{f"train/{k}": v for k, v in batch_norm_metrics.items()},
@@ -2210,6 +2223,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
                 step_entry["post_plan_surprisal_var"] = step_post_plan_var
             step_entry["clip_fraction"] = clip_fraction
+            step_entry["policy_loss_mode"] = config.policy_loss_mode
+            step_entry["policy/cov_fraction"] = policy_cov_fraction
+            step_entry["policy/abs_kl"] = policy_abs_kl
             step_entry["adv_cap_fraction"] = adv_cap_fraction
             step_entry["adv_cap_magnitude"] = adv_cap_magnitude
             step_entry["echo/enabled"] = int(config.echo_enabled)

@@ -129,6 +129,12 @@ class TrainConfig:
     weight_decay: float = 0.0
     clip_eps: float = 0.0        # 0 = disabled (no PPO-style ratio clipping)
     clip_eps_high: float = 0.0   # 0 = symmetric (uses clip_eps for upper bound)
+    policy_loss_mode: str = "standard"  # "standard", "kl_cov", or "clip_cov"
+    kl_cov_percent: float = 0.2  # percent of valid policy tokens receiving KL-Cov
+    kl_cov_coef: float = 1.0
+    clip_cov_ratio: float = 0.0002
+    clip_cov_min: float = 1.0
+    clip_cov_max: float = 5.0
     adv_clip_max: float = 0.0    # 0 = disabled; caps token advantages to [-max, +max]
     batch_advantage_norm: bool = False  # REINFORCE++: normalize advantages across full batch
     max_examples: int = 0
@@ -304,6 +310,31 @@ class TrainConfig:
             errors.append(
                 "clip_eps_high > 0 requires clip_eps > 0. "
                 "Set clip_eps first. Try: clip_eps = 0.2"
+            )
+        if self.policy_loss_mode not in ("standard", "kl_cov", "clip_cov"):
+            errors.append(
+                "policy_loss_mode must be 'standard', 'kl_cov', or 'clip_cov'."
+            )
+        if self.policy_loss_mode != "standard" and self.backend != "local":
+            errors.append(
+                f"policy_loss_mode='{self.policy_loss_mode}' currently requires "
+                "backend='local' so covariance-aware entropy control is not "
+                "silently dropped by another backend."
+            )
+        if self.kl_cov_percent < 0.0 or self.kl_cov_percent > 100.0:
+            errors.append(
+                "kl_cov_percent must be in [0.0, 100.0]. Try: kl_cov_percent = 0.2"
+            )
+        if self.kl_cov_coef < 0.0:
+            errors.append("kl_cov_coef must be >= 0. Try: kl_cov_coef = 1.0")
+        if self.clip_cov_ratio < 0.0 or self.clip_cov_ratio > 1.0:
+            errors.append(
+                "clip_cov_ratio must be in [0.0, 1.0]. Try: clip_cov_ratio = 0.0002"
+            )
+        if self.clip_cov_min >= self.clip_cov_max:
+            errors.append(
+                "clip_cov_min must be < clip_cov_max. Try: clip_cov_min = 1.0, "
+                "clip_cov_max = 5.0"
             )
         if self.adv_clip_max < 0:
             errors.append(
@@ -607,6 +638,12 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "weight_decay": "weight_decay",
         "clip_eps": "clip_eps",
         "clip_eps_high": "clip_eps_high",
+        "policy_loss_mode": "policy_loss_mode",
+        "kl_cov_percent": "kl_cov_percent",
+        "kl_cov_coef": "kl_cov_coef",
+        "clip_cov_ratio": "clip_cov_ratio",
+        "clip_cov_min": "clip_cov_min",
+        "clip_cov_max": "clip_cov_max",
         "clip_ratio_c": "clip_ratio_c",
         "adv_clip_max": "adv_clip_max",
         "batch_advantage_norm": "batch_advantage_norm",

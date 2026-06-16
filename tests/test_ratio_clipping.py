@@ -6,6 +6,20 @@ import torch
 from retrain.local_train_helper import _compute_policy_loss
 
 
+def _loss_from_ratio(ratio, adv, mask, *, clip_eps, clip_eps_high):
+    old = torch.zeros_like(ratio)
+    new = torch.log(ratio)
+    loss, frac, _, _ = _compute_policy_loss(
+        old,
+        new,
+        adv,
+        mask,
+        clip_eps=clip_eps,
+        clip_eps_high=clip_eps_high,
+    )
+    return loss, frac
+
+
 class TestComputePolicyLoss:
     def test_disabled_matches_unclipped(self):
         """clip_eps=0 gives same result as raw -(ratio * adv) formula."""
@@ -13,7 +27,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, -0.5, 0.3, -0.2])
         mask = torch.tensor([1.0, 1.0, 1.0, 1.0])
 
-        loss, frac = _compute_policy_loss(ratio, adv, mask, clip_eps=0.0, clip_eps_high=0.0)
+        loss, frac = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.0, clip_eps_high=0.0
+        )
 
         expected = -(ratio * adv)
         expected_loss = expected.sum() / mask.sum()
@@ -27,7 +43,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0])  # positive advantage
         mask = torch.tensor([1.0, 1.0, 1.0])
 
-        loss, frac = _compute_policy_loss(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
+        loss, frac = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
+        )
 
         # For positive advantage:
         # surr1 = [1.5, 0.5, 1.0], surr2 = [1.2, 0.8, 1.0]
@@ -43,7 +61,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0])  # positive advantage
         mask = torch.tensor([1.0, 1.0, 1.0])
 
-        loss, frac = _compute_policy_loss(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.28)
+        loss, frac = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.28
+        )
 
         # Bounds: [0.8, 1.28]
         # ratio=1.3 > 1.28 -> clipped_ratio=1.28
@@ -61,7 +81,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
         mask = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
 
-        _, frac = _compute_policy_loss(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
+        _, frac = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
+        )
 
         # Bounds [0.8, 1.2]: 0.7 and 1.3 are outside -> 2/5
         assert frac == pytest.approx(2.0 / 5.0, abs=1e-6)
@@ -72,7 +94,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0, 1.0])
         mask = torch.tensor([1.0, 1.0, 0.0, 0.0])  # last 2 are padding
 
-        _, frac = _compute_policy_loss(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
+        _, frac = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
+        )
 
         # Only 2 real tokens: 0.5 is clipped, 1.0 is not -> 1/2
         assert frac == pytest.approx(0.5, abs=1e-6)
@@ -83,7 +107,9 @@ class TestComputePolicyLoss:
         adv = torch.tensor([-1.0])  # negative advantage
         mask = torch.tensor([1.0])
 
-        loss, _ = _compute_policy_loss(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
+        loss, _ = _loss_from_ratio(
+            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
+        )
 
         # surr1 = 1.5 * (-1) = -1.5, surr2 = 1.2 * (-1) = -1.2
         # min(-1.5, -1.2) = -1.5

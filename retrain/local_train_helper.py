@@ -30,33 +30,134 @@ from retrain.gemma4_text import (
 from retrain.inference_engine import create_engine
 
 
-def _compute_policy_loss(ratio, adv, mask, clip_eps, clip_eps_high):
-    """Compute PPO-style clipped policy loss.
+def _masked_mean(values, mask):
+    denom = mask.float().sum().clamp(min=1)
+    return (values * mask.float()).sum() / denom
+
+
+def _compute_policy_loss(
+    old_logprobs,
+    new_logprobs,
+    adv,
+    mask,
+    clip_eps,
+    clip_eps_high,
+    policy_loss_mode="standard",
+    kl_cov_percent=0.2,
+    kl_cov_coef=1.0,
+    clip_cov_ratio=0.0002,
+    clip_cov_min=1.0,
+    clip_cov_max=5.0,
+):
+    """Compute policy loss, optionally with covariance-aware entropy control.
 
     Args:
-        ratio: Importance sampling ratio (new_prob / old_prob).
+        old_logprobs: Log probability under rollout policy.
+        new_logprobs: Log probability under current policy.
         adv: Per-token advantages.
         mask: Attention mask (1 for real tokens, 0 for padding).
         clip_eps: Lower clipping epsilon. 0 = no clipping.
         clip_eps_high: Upper clipping epsilon. 0 = use clip_eps (symmetric).
+        policy_loss_mode: ``standard``, ``kl_cov``, or ``clip_cov``.
 
     Returns:
-        (masked_loss, clip_fraction) tuple.
+        ``(masked_loss, clip_fraction, cov_fraction, abs_kl)`` tuple.
     """
-    if clip_eps > 0:
-        eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
-        clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high)
-        surr1 = ratio * adv
-        surr2 = clipped_ratio * adv
-        per_token_loss = -torch.min(surr1, surr2)
-        with torch.no_grad():
-            clipped = ((ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)).float()
-            frac = (clipped * mask).sum().item() / mask.sum().clamp(min=1).item()
-    else:
+    logprob_delta = new_logprobs - old_logprobs
+    ratio = torch.exp(logprob_delta)
+    abs_kl = _masked_mean(logprob_delta.abs(), mask)
+
+    def _standard_loss():
+        if clip_eps > 0:
+            eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
+            clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high)
+            surr1 = ratio * adv
+            surr2 = clipped_ratio * adv
+            per_token_loss = -torch.min(surr1, surr2)
+            with torch.no_grad():
+                clipped = (
+                    (ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)
+                ).float()
+                frac = (clipped * mask).sum().item() / mask.sum().clamp(min=1).item()
+        else:
+            per_token_loss = -(ratio * adv)
+            frac = 0.0
+        return per_token_loss, frac
+
+    if policy_loss_mode == "kl_cov":
         per_token_loss = -(ratio * adv)
-        frac = 0.0
-    masked_loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1)
-    return masked_loss, frac
+        valid = mask > 0
+        valid_count = int(valid.sum().item())
+        cov_selected = torch.zeros_like(mask, dtype=torch.bool)
+        if valid_count > 0 and kl_cov_percent > 0:
+            with torch.no_grad():
+                valid_adv = adv[valid]
+                valid_logp = new_logprobs[valid]
+                cov_values = (
+                    (valid_adv - valid_adv.mean())
+                    * (valid_logp - valid_logp.mean())
+                )
+                k_tokens = max(1, int(valid_count * min(kl_cov_percent, 100.0) / 100.0))
+                selected_flat = torch.topk(cov_values, k_tokens, largest=True).indices
+                valid_indices = torch.nonzero(valid.reshape(-1), as_tuple=True)[0]
+                selected_indices = valid_indices[selected_flat]
+                cov_selected = cov_selected.reshape(-1)
+                cov_selected[selected_indices] = True
+                cov_selected = cov_selected.reshape_as(mask)
+        if cov_selected.any():
+            per_token_loss = torch.where(
+                cov_selected,
+                per_token_loss + kl_cov_coef * logprob_delta.abs(),
+                per_token_loss,
+            )
+        cov_fraction = (cov_selected.float() * mask.float()).sum() / mask.float().sum().clamp(min=1)
+        masked_loss = (per_token_loss * mask.float()).sum() / mask.float().sum().clamp(min=1)
+        return masked_loss, 0.0, float(cov_fraction.detach().item()), float(abs_kl.detach().item())
+
+    if policy_loss_mode == "clip_cov":
+        cov_selected = torch.zeros_like(mask, dtype=torch.bool)
+        eps_low = clip_eps if clip_eps > 0 else 1.0
+        eps_high = clip_eps_high if clip_eps_high > 0 else eps_low
+        pg_loss_unclipped = -(ratio * adv)
+        pg_loss_clipped = -(
+            torch.clamp(ratio, 1.0 - eps_low, 1.0 + eps_high) * adv
+        )
+        clip_by_origin = (pg_loss_clipped > pg_loss_unclipped) & (mask > 0)
+        per_token_loss = torch.maximum(pg_loss_unclipped, pg_loss_clipped)
+        with torch.no_grad():
+            cov_all = (
+                (adv - _masked_mean(adv, mask))
+                * (new_logprobs - _masked_mean(new_logprobs, mask))
+            )
+            eligible = (
+                (mask > 0)
+                & ~clip_by_origin
+                & (cov_all > clip_cov_min)
+                & (cov_all < clip_cov_max)
+            )
+            eligible_idx = torch.nonzero(eligible)
+            clip_num = max(int(float(clip_cov_ratio) * mask.sum().item()), 1)
+            if len(eligible_idx) > 0:
+                perm = torch.randperm(len(eligible_idx), device=eligible_idx.device)
+                selected = eligible_idx[perm[: min(clip_num, len(eligible_idx))]]
+                cov_selected[selected[:, 0], selected[:, 1]] = True
+        per_token_loss = torch.where(
+            cov_selected,
+            torch.zeros_like(per_token_loss),
+            per_token_loss,
+        )
+        cov_fraction = (cov_selected.float() * mask.float()).sum() / mask.float().sum().clamp(min=1)
+        masked_loss = (per_token_loss * mask.float()).sum() / mask.float().sum().clamp(min=1)
+        return masked_loss, float(cov_fraction.detach().item()), float(cov_fraction.detach().item()), float(abs_kl.detach().item())
+
+    if policy_loss_mode != "standard":
+        raise ValueError(
+            "policy_loss_mode must be 'standard', 'kl_cov', or 'clip_cov'."
+        )
+
+    per_token_loss, frac = _standard_loss()
+    masked_loss = (per_token_loss * mask.float()).sum() / mask.float().sum().clamp(min=1)
+    return masked_loss, frac, 0.0, float(abs_kl.detach().item())
 
 
 def _parse_device(device_str):
@@ -86,6 +187,12 @@ class LocalTrainHelper:
                  lora_alpha=0, lora_dropout=0.0,
                  optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
                  clip_eps=0.0, clip_eps_high=0.0,
+                 policy_loss_mode="standard",
+                 kl_cov_percent=0.2,
+                 kl_cov_coef=1.0,
+                 clip_cov_ratio=0.0002,
+                 clip_cov_min=1.0,
+                 clip_cov_max=5.0,
                  train_microbatch_size=0,
                  cuda_empty_cache=False,
                  sample_use_cache=True):
@@ -95,6 +202,14 @@ class LocalTrainHelper:
         self.clip_eps = clip_eps
         self.clip_eps_high = clip_eps_high
         self._clip_fraction = 0.0
+        self.policy_loss_mode = policy_loss_mode
+        self.kl_cov_percent = float(kl_cov_percent)
+        self.kl_cov_coef = float(kl_cov_coef)
+        self.clip_cov_ratio = float(clip_cov_ratio)
+        self.clip_cov_min = float(clip_cov_min)
+        self.clip_cov_max = float(clip_cov_max)
+        self._policy_cov_fraction = 0.0
+        self._policy_abs_kl = 0.0
         self.train_microbatch_size = max(0, int(train_microbatch_size))
         self.cuda_empty_cache = bool(cuda_empty_cache)
         self.sample_use_cache = bool(sample_use_cache)
@@ -364,14 +479,23 @@ class LocalTrainHelper:
             adv = advantages[:, 1:]       # [N, max_len-1]
             mask = attention_mask[:, 1:]   # [N, max_len-1] — exclude padding
 
-            # Importance sampling loss with optional PPO-style ratio clipping
-            ratio = torch.exp(new_logprobs - old_lp)
-            masked_loss, clip_frac = _compute_policy_loss(
-                ratio, adv, mask, self.clip_eps, self.clip_eps_high
+            masked_loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
+                old_lp,
+                new_logprobs,
+                adv,
+                mask,
+                self.clip_eps,
+                self.clip_eps_high,
+                getattr(self, "policy_loss_mode", "standard"),
+                getattr(self, "kl_cov_percent", 0.2),
+                getattr(self, "kl_cov_coef", 1.0),
+                getattr(self, "clip_cov_ratio", 0.0002),
+                getattr(self, "clip_cov_min", 1.0),
+                getattr(self, "clip_cov_max", 5.0),
             )
             token_count = mask.sum().clamp(min=1)
 
-        return masked_loss, token_count, clip_frac
+        return masked_loss, token_count, clip_frac, cov_frac, abs_kl
 
     def _compute_sft_loss(self, input_ids, advantages, attention_mask):
         """Compute weighted next-token cross-entropy for SFT/ECHO datums."""
@@ -409,10 +533,12 @@ class LocalTrainHelper:
             total_tokens_value = float(total_tokens.item())
             loss_sum = 0.0
             clip_count = 0.0
+            cov_count = 0.0
+            abs_kl_sum = 0.0
 
             for start in range(0, batch_size, microbatch_size):
                 stop = min(start + microbatch_size, batch_size)
-                masked_loss, token_count, clip_frac = self._compute_train_loss(
+                masked_loss, token_count, clip_frac, cov_frac, abs_kl = self._compute_train_loss(
                     input_ids[start:stop],
                     old_logprobs[start:stop],
                     advantages[start:stop],
@@ -423,11 +549,15 @@ class LocalTrainHelper:
                 self.scaler.scale(scaled_loss).backward()
                 loss_sum += float(masked_loss.detach().item()) * token_count_value
                 clip_count += clip_frac * token_count_value
+                cov_count += cov_frac * token_count_value
+                abs_kl_sum += abs_kl * token_count_value
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
             self._clip_fraction = clip_count / total_tokens_value
+            self._policy_cov_fraction = cov_count / total_tokens_value
+            self._policy_abs_kl = abs_kl_sum / total_tokens_value
             loss_val = loss_sum / total_tokens_value
 
             # Snapshot LoRA weights for safe cross-thread sync
@@ -507,6 +637,8 @@ class LocalTrainHelper:
             total_tokens_value = float(total_tokens.item())
             loss_sum = 0.0
             clip_count = 0.0
+            cov_count = 0.0
+            abs_kl_sum = 0.0
 
             echo_loss_sum = 0.0
             echo_total_tokens_value = 0.0
@@ -585,13 +717,19 @@ class LocalTrainHelper:
                         rl_old_lp = mb_old_logprobs[rl_rows, 1:]
                         rl_adv = mb_advantages[rl_rows, 1:]
                         rl_mask = mb_attention_mask[rl_rows, 1:]
-                        ratio = torch.exp(rl_lp - rl_old_lp)
-                        masked_loss, clip_frac = _compute_policy_loss(
-                            ratio,
+                        masked_loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
+                            rl_old_lp,
+                            rl_lp,
                             rl_adv,
                             rl_mask,
                             self.clip_eps,
                             self.clip_eps_high,
+                            getattr(self, "policy_loss_mode", "standard"),
+                            getattr(self, "kl_cov_percent", 0.2),
+                            getattr(self, "kl_cov_coef", 1.0),
+                            getattr(self, "clip_cov_ratio", 0.0002),
+                            getattr(self, "clip_cov_min", 1.0),
+                            getattr(self, "clip_cov_max", 5.0),
                         )
                         token_count = rl_mask.sum().clamp(min=1)
                         token_count_value = float(token_count.item())
@@ -602,6 +740,8 @@ class LocalTrainHelper:
                             float(masked_loss.detach().item()) * token_count_value
                         )
                         clip_count += clip_frac * token_count_value
+                        cov_count += cov_frac * token_count_value
+                        abs_kl_sum += abs_kl * token_count_value
 
                     if echo_rows.any():
                         echo_lp = token_logprobs[echo_rows]
@@ -615,9 +755,9 @@ class LocalTrainHelper:
                             echo_loss = (-echo_lp * echo_weights).sum() / echo_token_count
                         else:
                             echo_old_lp = mb_old_logprobs[echo_rows, 1:]
-                            ratio = torch.exp(echo_lp - echo_old_lp)
-                            echo_loss, _ = _compute_policy_loss(
-                                ratio,
+                            echo_loss, _, _, _ = _compute_policy_loss(
+                                echo_old_lp,
+                                echo_lp,
                                 echo_adv,
                                 echo_mask,
                                 self.clip_eps,
@@ -638,6 +778,8 @@ class LocalTrainHelper:
             self.scaler.update()
 
             self._clip_fraction = clip_count / total_tokens_value
+            self._policy_cov_fraction = cov_count / total_tokens_value
+            self._policy_abs_kl = abs_kl_sum / total_tokens_value
             loss_val = loss_sum / total_tokens_value
             echo_loss_val = (
                 echo_loss_sum / echo_total_tokens_value
