@@ -288,6 +288,38 @@ class TestTrace:
         errors = [i for i in result.issues if i.severity == "error"]
         assert errors == []
 
+    def test_echo_allows_plugin_backend_declaring_shared_forward(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        module_name = "custom_echo_backend"
+        plugin_file = tmp_path / f"{module_name}.py"
+        plugin_file.write_text(
+            "class Factory:\n"
+            "    retrain_backend_capabilities = {\n"
+            "        'reports_sync_loss': True,\n"
+            "        'preserves_token_advantages': True,\n"
+            "        'supports_checkpoint_resume': True,\n"
+            "        'resume_runtime_dependent': False,\n"
+            "        'supports_echo_shared_forward': True,\n"
+            "    }\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        cfg = TrainConfig(
+            backend=f"{module_name}.Factory",
+            advantage_mode="grpo",
+            transform_mode="none",
+            environment_provider="verifiers",
+            environment_id="fake/env",
+            echo_enabled=True,
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        assert result.ok
+        assert flow.backend_capabilities.supports_echo_shared_forward is True
+
     def test_planning_detector_none_warning(self):
         cfg = TrainConfig(
             advantage_mode="maxrl",
