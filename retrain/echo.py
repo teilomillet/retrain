@@ -18,14 +18,23 @@ class EchoTurnLike(Protocol):
 
     prompt_ids: list[int]
     completion_ids: list[int]
+    completion_logprobs: list[float]
 
 
 @dataclass(frozen=True)
-class EchoDatum:
-    """One supervised prompt-suffix training datum."""
+class EchoRolloutDatum:
+    """One faithful full-rollout training datum.
+
+    The token row contains both assistant action tokens and later observation
+    tokens. ``advantages`` is the RL/action-token mask, while
+    ``echo_advantages`` is the environment-prediction mask scaled by lambda.
+    """
 
     tokens: list[int]
+    logprobs: list[float]
     advantages: list[float]
+    echo_advantages: list[float]
+    full_observation_count: int
     positive_tokens: int
 
 
@@ -61,148 +70,181 @@ def common_prefix_len(left: list[int], right: list[int]) -> int:
     return n
 
 
-def build_prompt_suffix_echo_datums(
-    rollout_turns: Sequence[Sequence[EchoTurnLike]],
+def build_rollout_echo_datum(
+    turns: Sequence[EchoTurnLike],
     *,
+    completion_advantages: Sequence[Sequence[float]],
     weight: float,
     min_prompt_overlap: float,
-) -> tuple[list[EchoDatum], EchoBuildStats]:
-    """Extract observation-token ECHO datums from multi-turn rollouts.
+) -> tuple[EchoRolloutDatum | None, EchoBuildStats]:
+    """Build one same-rollout RL+ECHO datum from a multi-turn transcript.
 
-    Exact prompt-aligned observation masks are preferred because they identify
-    the environment/tool tokens the model actually consumed. If a turn lacks an
-    explicit mask, use the legacy prompt-suffix heuristic: compare the next
-    prompt against ``previous prompt + previous completion`` and train only the
-    newly introduced suffix when the overlap is sufficiently stable.
+    This mirrors the reference ECHO shape: action tokens and observation tokens
+    live in one sequence, with separate masks. Observation tokens are recovered
+    from the suffix added to the next rendered prompt. Exact prompt-aligned
+    observation masks are preferred; the suffix heuristic is only a compatibility
+    fallback when a renderer cannot provide stable role masks.
     """
 
-    datums: list[EchoDatum] = []
+    if not turns:
+        return None, EchoBuildStats()
+
+    tokens = list(turns[0].prompt_ids)
+    logprobs = [0.0] * len(tokens)
+    advantages = [0.0] * len(tokens)
+    echo_advantages = [0.0] * len(tokens)
+
     observation_mask_datums = 0
-    skipped_first_turns = 0
+    skipped_first_turns = 1
     skipped_no_suffix = 0
     skipped_low_overlap = 0
     skipped_bad_observation_mask = 0
+    positive_tokens = 0
+    full_observation_count = 0
 
-    for turns in rollout_turns:
-        previous_full: list[int] | None = None
-        previous_prompt_len = 0
-        for turn in turns:
-            prompt_ids = list(turn.prompt_ids)
-            if previous_full is None:
-                skipped_first_turns += 1
+    for turn_idx, turn in enumerate(turns):
+        completion_ids = list(turn.completion_ids)
+        completion_logprobs = list(turn.completion_logprobs)
+        turn_advantages = (
+            list(completion_advantages[turn_idx])
+            if turn_idx < len(completion_advantages)
+            else []
+        )
+        if len(completion_logprobs) < len(completion_ids):
+            completion_logprobs = completion_logprobs + [0.0] * (
+                len(completion_ids) - len(completion_logprobs)
+            )
+        if len(turn_advantages) < len(completion_ids):
+            turn_advantages = turn_advantages + [0.0] * (
+                len(completion_ids) - len(turn_advantages)
+            )
+
+        tokens.extend(completion_ids)
+        logprobs.extend(completion_logprobs[: len(completion_ids)])
+        advantages.extend(turn_advantages[: len(completion_ids)])
+        echo_advantages.extend([0.0] * len(completion_ids))
+
+        if turn_idx + 1 >= len(turns):
+            continue
+
+        next_turn = turns[turn_idx + 1]
+        next_prompt = list(next_turn.prompt_ids)
+        common = common_prefix_len(tokens, next_prompt)
+        overlap_base = max(min(len(tokens), len(next_prompt)), 1)
+        overlap = common / overlap_base
+        if overlap < min_prompt_overlap:
+            return None, EchoBuildStats(
+                skipped_first_turns=skipped_first_turns,
+                skipped_low_overlap=1,
+            )
+        if common >= len(next_prompt):
+            skipped_no_suffix += 1
+            continue
+
+        suffix = next_prompt[common:]
+        suffix_echo = [0.0] * len(suffix)
+        observation_mask = getattr(next_turn, "observation_mask", None)
+        if observation_mask is not None:
+            mask = [_coerce_mask_value(value) for value in observation_mask]
+            if len(mask) != len(next_prompt):
+                skipped_bad_observation_mask += 1
             else:
-                observation_mask = getattr(turn, "observation_mask", None)
-                if observation_mask is not None:
-                    mask = [_coerce_mask_value(value) for value in observation_mask]
-                    if len(mask) != len(prompt_ids):
-                        skipped_bad_observation_mask += 1
-                    elif any(mask):
-                        advantages = [weight if include else 0.0 for include in mask]
-                        positive_tokens = sum(mask)
-                        datums.append(
-                            EchoDatum(
-                                tokens=prompt_ids,
-                                advantages=advantages,
-                                positive_tokens=positive_tokens,
-                            )
-                        )
-                        observation_mask_datums += 1
-                    else:
-                        skipped_no_suffix += 1
+                suffix_mask = mask[common:]
+                selected = sum(suffix_mask)
+                if selected:
+                    suffix_echo = [
+                        weight if include else 0.0 for include in suffix_mask
+                    ]
+                    observation_mask_datums += 1
+                    positive_tokens += selected
+                    full_observation_count += selected
                 else:
-                    common = common_prefix_len(previous_full, prompt_ids)
-                    overlap_base = max(min(len(previous_full), len(prompt_ids)), 1)
-                    overlap = common / overlap_base
-                    if common < previous_prompt_len or overlap < min_prompt_overlap:
-                        skipped_low_overlap += 1
-                    elif common >= len(prompt_ids):
-                        skipped_no_suffix += 1
-                    else:
-                        suffix_len = len(prompt_ids) - common
-                        advantages = [0.0] * common + [weight] * suffix_len
-                        datums.append(
-                            EchoDatum(
-                                tokens=prompt_ids,
-                                advantages=advantages,
-                                positive_tokens=suffix_len,
-                            )
-                        )
+                    skipped_no_suffix += 1
+        else:
+            suffix_len = len(suffix)
+            if suffix_len:
+                suffix_echo = [weight] * suffix_len
+                positive_tokens += suffix_len
+                full_observation_count += suffix_len
+            else:
+                skipped_no_suffix += 1
 
-            previous_prompt_len = len(prompt_ids)
-            previous_full = prompt_ids + list(turn.completion_ids)
+        tokens.extend(suffix)
+        logprobs.extend([0.0] * len(suffix))
+        advantages.extend([0.0] * len(suffix))
+        echo_advantages.extend(suffix_echo)
 
     stats = EchoBuildStats(
-        candidate_datums=len(datums),
-        candidate_tokens=sum(d.positive_tokens for d in datums),
+        candidate_datums=1 if positive_tokens else 0,
+        candidate_tokens=positive_tokens,
         observation_mask_datums=observation_mask_datums,
         skipped_first_turns=skipped_first_turns,
         skipped_no_suffix=skipped_no_suffix,
         skipped_low_overlap=skipped_low_overlap,
         skipped_bad_observation_mask=skipped_bad_observation_mask,
     )
-    return datums, stats
+    return (
+        EchoRolloutDatum(
+            tokens=tokens,
+            logprobs=logprobs,
+            advantages=advantages,
+            echo_advantages=echo_advantages,
+            full_observation_count=full_observation_count,
+            positive_tokens=positive_tokens,
+        ),
+        stats,
+    )
 
 
 def _coerce_mask_value(raw: object) -> int:
     return 1 if bool(raw) else 0
 
 
-def limit_echo_datums(
-    datums: list[EchoDatum],
+def zero_echo_mask(advantages: list[float]) -> list[float]:
+    return [0.0] * len(advantages)
+
+
+def limit_echo_masks(
+    echo_advantages: list[list[float]],
     *,
     max_positive_tokens: int,
-) -> tuple[list[EchoDatum], EchoLimitStats]:
-    """Apply a step-level cap to positive ECHO tokens.
+) -> tuple[list[list[float]], EchoLimitStats]:
+    """Cap ECHO target tokens while preserving full rollout rows."""
 
-    The zero-weight prefix is kept only up to the last supervised token, so the
-    backend sees the required context without wasting sequence length after the
-    cap is reached.
-    """
-
+    total_positive = sum(1 for row in echo_advantages for adv in row if adv > 0.0)
     if max_positive_tokens <= 0:
-        return [], EchoLimitStats(
+        return [zero_echo_mask(row) for row in echo_advantages], EchoLimitStats(
             kept_datums=0,
             kept_tokens=0,
-            truncated_tokens=sum(d.positive_tokens for d in datums),
+            truncated_tokens=total_positive,
         )
 
-    kept: list[EchoDatum] = []
+    kept_rows: list[list[float]] = []
     remaining = max_positive_tokens
+    kept_tokens = 0
+    kept_datums = 0
     truncated = 0
-    for datum in datums:
-        if remaining <= 0:
-            truncated += datum.positive_tokens
-            continue
-        keep_positive = min(datum.positive_tokens, remaining)
-        if keep_positive <= 0:
-            truncated += datum.positive_tokens
-            continue
-
-        seen_positive = 0
-        cut_idx = 0
-        for idx, adv in enumerate(datum.advantages):
+    for row in echo_advantages:
+        out: list[float] = []
+        row_kept = 0
+        for adv in row:
             if adv > 0.0:
-                seen_positive += 1
-            if seen_positive == keep_positive:
-                cut_idx = idx + 1
-                break
-        if cut_idx == 0:
-            truncated += datum.positive_tokens
-            continue
+                if remaining > 0:
+                    out.append(adv)
+                    remaining -= 1
+                    kept_tokens += 1
+                    row_kept += 1
+                else:
+                    out.append(0.0)
+                    truncated += 1
+            else:
+                out.append(adv)
+        if row_kept:
+            kept_datums += 1
+        kept_rows.append(out)
 
-        kept.append(
-            EchoDatum(
-                tokens=datum.tokens[:cut_idx],
-                advantages=datum.advantages[:cut_idx],
-                positive_tokens=keep_positive,
-            )
-        )
-        remaining -= keep_positive
-        truncated += datum.positive_tokens - keep_positive
-
-    kept_tokens = sum(d.positive_tokens for d in kept)
-    return kept, EchoLimitStats(
-        kept_datums=len(kept),
+    return kept_rows, EchoLimitStats(
+        kept_datums=kept_datums,
         kept_tokens=kept_tokens,
         truncated_tokens=truncated,
     )

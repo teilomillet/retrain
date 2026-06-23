@@ -695,6 +695,10 @@ class TestNumericValidation:
         assert "batch_size" in msg
         assert "lr" in msg
 
+    def test_echo_rejects_non_cross_entropy_loss(self):
+        with pytest.raises(ValueError, match="paper-faithful ECHO"):
+            TrainConfig(echo_loss_fn="importance_sampling")
+
 
 # ---------------------------------------------------------------------------
 # Validation warnings

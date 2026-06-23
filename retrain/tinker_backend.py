@@ -326,19 +326,20 @@ class TinkerTrainHelper:
                 return float(loss_sum) / n
             return 0.0
 
-    def train_step_with_echo(
+    def train_step_with_echo_masks(
         self,
         all_tokens: list[list[int]],
         all_logprobs: list[list[float]],
         all_advantages: list[list[float]],
-        echo_tokens: list[list[int]],
         echo_advantages: list[list[float]],
+        echo_full_observation_counts: list[int],
         echo_loss_fn: str,
         lr: float,
         weight_decay: float,
     ) -> tuple[float, float]:
         """Reject ECHO until the remote API can provide strict shared-forward loss."""
-        if not echo_tokens:
+        _ = echo_full_observation_counts, echo_loss_fn
+        if not echo_advantages:
             return self.train_step(
                 all_tokens,
                 all_logprobs,
@@ -348,9 +349,8 @@ class TinkerTrainHelper:
             ), 0.0
         raise RuntimeError(
             "The Tinker backend cannot run paper-faithful ECHO because its "
-            "public remote loss API exposes separate RL and ECHO "
-            "forward_backward calls rather than one shared actor "
-            "forward/backward pass."
+            "public remote loss API does not expose an auxiliary same-rollout "
+            "environment-token loss in the actor forward/backward pass."
         )
 
     def _ppo_dual_clip_loss(

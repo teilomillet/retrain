@@ -65,9 +65,9 @@ max_examples = 0           # 0 = use all examples
 save_every = 20
 
 [echo]
-enabled = false             # train prompt-side environment/tool tokens in multi-turn envs
+enabled = false             # train same-rollout environment/tool tokens in multi-turn envs
 weight = 0.05               # supervised token weight; kept small to avoid dominating RL
-loss_fn = "cross_entropy"   # cross_entropy | importance_sampling
+loss_fn = "cross_entropy"   # paper-faithful ECHO cross-entropy loss
 max_tokens_per_step = 2048  # hard cap on supervised ECHO tokens per step
 max_token_ratio = 0.5       # cap ECHO tokens to this fraction of RL completion tokens
 entropy_floor = 0.01        # skip ECHO when completion surprisal falls below this floor
@@ -265,6 +265,16 @@ extraction remains a fallback for older renderers that cannot expose a stable
 role-aligned mask. ECHO is only enabled for backends that can compute the RL
 and ECHO losses from the same actor forward/backward pass.
 
+For `loss_fn = "cross_entropy"`, retrain follows the ECHO normalization shape:
+selected environment-token negative log-probabilities are divided by the
+full observation length for that rollout row, then scaled by `weight`. With the
+current verifiers bridge, the full-observation length is reconstructed from the
+same prompt-aligned observation-body mask used for ECHO targets. This is exact
+when the mask marks the whole observation body, which is the intended bridge
+contract. If a harness wants to train only an `env_only` subspan inside a larger
+observation body, the bridge must expose a separate full-body denominator before
+that variant can be exact.
+
 The local PyTorch backend gathers RL and ECHO losses from the same actor
 forward pass for each training microbatch. Tinker's public remote loss API
 currently exposes separate RL and ECHO `forward_backward` calls rather than one
@@ -282,8 +292,9 @@ excluded from ECHO.
 ECHO candidates are collected before reward-uniform groups are skipped for RL.
 This keeps the paper's intended signal: all-failed rollouts can still train the
 environment-prediction objective even when they provide no policy-gradient
-contrast. In that case retrain may run an ECHO-only auxiliary update for the
-step.
+contrast. In that case retrain sends a same-rollout hybrid batch with zero RL
+advantages and nonzero ECHO masks. If both RL advantages and ECHO masks are
+zero after caps and guards, the step is skipped as uninformative.
 
 ECHO requires a token-preserving backend with strict shared-forward support.
 Today that means `backend = "local"`. `prime_rl` is rejected because it cannot
@@ -295,7 +306,7 @@ ECHO losses from one shared actor pass.
 |----------|------|---------|-------------|
 | `enabled` | bool | `false` | Enable auxiliary ECHO training on multi-turn environment/tool observation tokens |
 | `weight` | float | `0.05` | Positive supervised weight for ECHO tokens. Must be in `[0, 1]` |
-| `loss_fn` | str | `"cross_entropy"` | ECHO loss. Use `"cross_entropy"` for direct supervised token training or `"importance_sampling"` for the older SFT-as-RL loss |
+| `loss_fn` | str | `"cross_entropy"` | ECHO loss. Only `"cross_entropy"` is supported for paper-faithful ECHO |
 | `max_tokens_per_step` | int | `2048` | Absolute cap on positive ECHO tokens per step |
 | `max_token_ratio` | float | `0.5` | Cap positive ECHO tokens to this fraction of RL completion tokens, so ECHO cannot dominate the step |
 | `entropy_floor` | float | `0.01` | Skip the ECHO step when sampled-completion mean surprisal is below this floor; this is a mode-collapse guard |

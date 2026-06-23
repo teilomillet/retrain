@@ -216,7 +216,7 @@ class TrainConfig:
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
     sft_loss_fn: str = "importance_sampling"  # "importance_sampling" or "cross_entropy"
 
-    # ECHO: supervised world-modeling on prompt-side environment/tool tokens.
+    # ECHO: same-rollout supervised world-modeling on environment/tool tokens.
     echo_enabled: bool = False
     echo_weight: float = 0.05
     echo_loss_fn: str = "cross_entropy"
@@ -348,9 +348,9 @@ class TrainConfig:
             errors.append(
                 "echo_enabled requires echo_weight > 0. Try: echo_weight = 0.05"
             )
-        if self.echo_loss_fn not in ("importance_sampling", "cross_entropy"):
+        if self.echo_loss_fn != "cross_entropy":
             errors.append(
-                "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+                "echo_loss_fn must be 'cross_entropy' for paper-faithful ECHO."
             )
         if self.echo_max_tokens_per_step <= 0:
             errors.append(

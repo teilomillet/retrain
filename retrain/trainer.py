@@ -28,10 +28,9 @@ from retrain.backpressure import (
 from retrain.config import TrainConfig
 from retrain.echo import (
     EchoBuildStats,
-    EchoDatum,
     EchoLimitStats,
-    build_prompt_suffix_echo_datums,
-    limit_echo_datums,
+    build_rollout_echo_datum,
+    limit_echo_masks,
 )
 from retrain.flow import (
     TrainingFlow,
@@ -249,33 +248,8 @@ def _apply_advantage_cap(
     return result, frac, mean_mag
 
 
-def _run_echo_train_step(
-    helper: object,
-    tokens: list[list[int]],
-    advantages: list[list[float]],
-    *,
-    loss_fn: str,
-    lr: float,
-    weight_decay: float,
-) -> float:
-    """Run an ECHO supervised step with a backend-compatible fallback."""
-
-    sft_train_step = getattr(helper, "sft_train_step", None)
-    if callable(sft_train_step):
-        had_loss_fn = hasattr(helper, "sft_loss_fn")
-        old_loss_fn = getattr(helper, "sft_loss_fn", None)
-        setattr(helper, "sft_loss_fn", loss_fn)
-        try:
-            return float(sft_train_step(tokens, advantages, lr, weight_decay))
-        finally:
-            if had_loss_fn:
-                setattr(helper, "sft_loss_fn", old_loss_fn)
-            else:
-                delattr(helper, "sft_loss_fn")
-
-    train_step = getattr(helper, "train_step")
-    zero_logprobs = [[0.0] * len(seq) for seq in tokens]
-    return float(train_step(tokens, zero_logprobs, advantages, lr, weight_decay))
+def _has_nonzero_advantage(rows: list[list[float]]) -> bool:
+    return any(abs(value) > 0.0 for row in rows for value in row)
 
 
 def _run_rl_echo_train_step(
@@ -283,8 +257,8 @@ def _run_rl_echo_train_step(
     all_tokens: list[list[int]],
     all_logprobs: list[list[float]],
     all_advantages: list[list[float]],
-    echo_tokens: list[list[int]],
     echo_advantages: list[list[float]],
+    echo_full_observation_counts: list[int],
     *,
     echo_loss_fn: str,
     lr: float,
@@ -293,43 +267,33 @@ def _run_rl_echo_train_step(
     """Run one RL update, optionally with ECHO in the same optimizer step.
 
     ECHO is independent of the chosen RL algorithm: algorithms produce the
-    sampled-token advantages above, while ECHO adds prompt-side observation
-    tokens as an auxiliary supervised mask. Paper-faithful RL+ECHO requires a
-    backend ``train_step_with_echo`` implementation that computes both losses
-    from the same actor forward/backward pass.
+    sampled-token advantages above, while ECHO adds a same-rollout
+    environment-token mask. Paper-faithful RL+ECHO requires a backend
+    ``train_step_with_echo_masks`` implementation that computes both losses
+    from the same actor forward/backward pass over those rollout rows.
     """
 
     if not all_tokens:
-        if echo_tokens:
-            echo_loss = _run_echo_train_step(
-                helper,
-                echo_tokens,
-                echo_advantages,
-                loss_fn=echo_loss_fn,
-                lr=lr,
-                weight_decay=weight_decay,
-            )
-            return 0.0, echo_loss, False
         return 0.0, 0.0, False
 
-    if echo_tokens:
-        train_step_with_echo = getattr(helper, "train_step_with_echo", None)
-        if callable(train_step_with_echo):
-            rl_loss, echo_loss = train_step_with_echo(
+    if echo_advantages:
+        train_step_with_echo_masks = getattr(helper, "train_step_with_echo_masks", None)
+        if callable(train_step_with_echo_masks):
+            rl_loss, echo_loss = train_step_with_echo_masks(
                 all_tokens,
                 all_logprobs,
                 all_advantages,
-                echo_tokens,
                 echo_advantages,
+                echo_full_observation_counts,
                 echo_loss_fn,
                 lr,
                 weight_decay,
             )
             return float(rl_loss), float(echo_loss), True
         raise RuntimeError(
-            "ECHO requires a backend train_step_with_echo implementation so "
-            "RL and environment-token losses are computed in the same actor "
-            "forward/backward pass."
+            "ECHO requires a backend train_step_with_echo_masks implementation "
+            "so RL and environment-token losses are computed from the same "
+            "rollout rows in one actor forward/backward pass."
         )
 
     train_step = getattr(helper, "train_step")
@@ -342,17 +306,7 @@ def _run_rl_echo_train_step(
             weight_decay,
         )
     )
-    echo_loss = 0.0
-    if echo_tokens:
-        echo_loss = _run_echo_train_step(
-            helper,
-            echo_tokens,
-            echo_advantages,
-            loss_fn=echo_loss_fn,
-            lr=lr,
-            weight_decay=weight_decay,
-        )
-    return rl_loss, echo_loss, False
+    return rl_loss, 0.0, False
 
 
 def _echo_allowed_tokens(
@@ -365,6 +319,25 @@ def _echo_allowed_tokens(
 
     ratio_cap = int(rl_completion_tokens * max_token_ratio)
     return max(0, min(max_tokens_per_step, ratio_cap))
+
+
+def _add_echo_build_stats(
+    left: EchoBuildStats,
+    right: EchoBuildStats,
+) -> EchoBuildStats:
+    return EchoBuildStats(
+        candidate_datums=left.candidate_datums + right.candidate_datums,
+        candidate_tokens=left.candidate_tokens + right.candidate_tokens,
+        observation_mask_datums=(
+            left.observation_mask_datums + right.observation_mask_datums
+        ),
+        skipped_first_turns=left.skipped_first_turns + right.skipped_first_turns,
+        skipped_no_suffix=left.skipped_no_suffix + right.skipped_no_suffix,
+        skipped_low_overlap=left.skipped_low_overlap + right.skipped_low_overlap,
+        skipped_bad_observation_mask=(
+            left.skipped_bad_observation_mask + right.skipped_bad_observation_mask
+        ),
+    )
 
 
 class TrainerState(TypedDict):
@@ -1158,8 +1131,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             all_datum_tokens: list[list[int]] = []
             all_datum_logprobs: list[list[float]] = []
             all_datum_advantages: list[list[float]] = []
-            all_echo_tokens: list[list[int]] = []
-            all_echo_advantages: list[list[float]] = []
+            all_datum_echo_advantages: list[list[float]] = []
+            all_datum_echo_full_observation_counts: list[int] = []
             echo_build = EchoBuildStats()
             echo_limit = EchoLimitStats()
             echo_loss = 0.0
@@ -1303,50 +1276,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             reward_tie_stats["unique_count"] / len(rewards_G)
                         )
 
-                    if config.echo_enabled:
-                        echo_datums, group_echo_build = build_prompt_suffix_echo_datums(
-                            turns_G,
-                            weight=config.echo_weight,
-                            min_prompt_overlap=config.echo_min_prompt_overlap,
-                        )
-                        all_echo_tokens.extend(d.tokens for d in echo_datums)
-                        all_echo_advantages.extend(d.advantages for d in echo_datums)
-                        echo_build = EchoBuildStats(
-                            candidate_datums=(
-                                echo_build.candidate_datums
-                                + group_echo_build.candidate_datums
-                            ),
-                            candidate_tokens=(
-                                echo_build.candidate_tokens
-                                + group_echo_build.candidate_tokens
-                            ),
-                            observation_mask_datums=(
-                                echo_build.observation_mask_datums
-                                + group_echo_build.observation_mask_datums
-                            ),
-                            skipped_first_turns=(
-                                echo_build.skipped_first_turns
-                                + group_echo_build.skipped_first_turns
-                            ),
-                            skipped_no_suffix=(
-                                echo_build.skipped_no_suffix
-                                + group_echo_build.skipped_no_suffix
-                            ),
-                            skipped_low_overlap=(
-                                echo_build.skipped_low_overlap
-                                + group_echo_build.skipped_low_overlap
-                            ),
-                            skipped_bad_observation_mask=(
-                                echo_build.skipped_bad_observation_mask
-                                + group_echo_build.skipped_bad_observation_mask
-                            ),
-                        )
-
                     if reward_tie_stats["is_uniform"] and not config.tl_grpo:
                         # With batch_advantage_norm, keep uniform groups — cross-group
                         # reward differences provide signal after batch normalization.
                         if config.batch_advantage_norm:
                             print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
+                        elif config.echo_enabled:
+                            print(
+                                f"    -> uniform (reward={rewards_G[0]:.3f}, "
+                                "kept for ECHO)"
+                            )
                         elif rewards_G[0] > _CORRECT_THRESHOLD:
                             print("    -> skipped (all correct)")
                             continue
@@ -1390,7 +1329,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         batch_adv_results.append(adv_result)
 
                     for s_idx in range(len(rewards_G)):
-                        turn_prompt_ids = turns_prompt_ids_G[s_idx]
                         turn_token_ids = turns_token_ids_G[s_idx]
                         turn_logprobs = turns_logprobs_G[s_idx]
                         token_advs = all_token_advs_G[s_idx]
@@ -1409,10 +1347,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 s_turn_advs = candidate
 
                         offset = 0
+                        seq_advs_by_turn: list[list[float]] = []
                         for t_idx in range(len(turn_token_ids)):
                             seq_tokens = turn_token_ids[t_idx]
-                            seq_logprobs = turn_logprobs[t_idx]
-                            prompt_ids = turn_prompt_ids[t_idx]
 
                             if s_turn_advs is not None:
                                 # Per-turn advantage: broadcast the turn's advantage
@@ -1423,12 +1360,54 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 seq_advs = token_advs[offset : offset + len(seq_tokens)]
 
                             offset += len(seq_tokens)
+                            seq_advs_by_turn.append(seq_advs)
+
+                        if config.echo_enabled:
+                            rollout_datum, rollout_echo_build = build_rollout_echo_datum(
+                                turns_G[s_idx],
+                                completion_advantages=seq_advs_by_turn,
+                                weight=config.echo_weight,
+                                min_prompt_overlap=config.echo_min_prompt_overlap,
+                            )
+                            echo_build = _add_echo_build_stats(
+                                echo_build,
+                                rollout_echo_build,
+                            )
+                            if rollout_datum is not None:
+                                all_datum_tokens.append(rollout_datum.tokens)
+                                all_datum_logprobs.append(rollout_datum.logprobs)
+                                all_datum_advantages.append(rollout_datum.advantages)
+                                all_datum_echo_advantages.append(
+                                    rollout_datum.echo_advantages
+                                )
+                                all_datum_echo_full_observation_counts.append(
+                                    rollout_datum.full_observation_count
+                                )
+                                rl_completion_token_count += sum(
+                                    len(tokens) for tokens in turn_token_ids
+                                )
+                                rl_completion_surprisal_sum += sum(
+                                    -lp for turn_lps in turn_logprobs for lp in turn_lps
+                                )
+                                continue
+
+                        turn_prompt_ids = turns_prompt_ids_G[s_idx]
+                        for t_idx in range(len(turn_token_ids)):
+                            seq_tokens = turn_token_ids[t_idx]
+                            seq_logprobs = turn_logprobs[t_idx]
+                            prompt_ids = turn_prompt_ids[t_idx]
+                            seq_advs = seq_advs_by_turn[t_idx]
+
                             full_tokens = list(prompt_ids) + list(seq_tokens)
                             padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
                             padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
                             all_datum_tokens.append(full_tokens)
                             all_datum_logprobs.append(padded_logprobs)
                             all_datum_advantages.append(padded_advantages)
+                            all_datum_echo_advantages.append(
+                                [0.0] * len(full_tokens)
+                            )
+                            all_datum_echo_full_observation_counts.append(0)
                             rl_completion_token_count += len(seq_tokens)
                             rl_completion_surprisal_sum += sum(
                                 -lp for lp in seq_logprobs
@@ -1688,6 +1667,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         all_datum_tokens.append(full_tokens)
                         all_datum_logprobs.append(padded_logprobs)
                         all_datum_advantages.append(padded_advantages)
+                        all_datum_echo_advantages.append([0.0] * len(full_tokens))
+                        all_datum_echo_full_observation_counts.append(0)
                         rl_completion_token_count += len(sample.token_ids)
                         rl_completion_surprisal_sum += sum(
                             -lp for lp in sample.logprobs
@@ -1789,41 +1770,27 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 )
                 if echo_completion_surprisal_mean < config.echo_entropy_floor:
                     echo_skipped_entropy_floor = True
-                    all_echo_tokens = []
-                    all_echo_advantages = []
+                    all_datum_echo_advantages = [
+                        [0.0] * len(row) for row in all_datum_echo_advantages
+                    ]
                     echo_limit = EchoLimitStats(
                         kept_datums=0,
                         kept_tokens=0,
                         truncated_tokens=echo_build.candidate_tokens,
                     )
                 else:
-                    echo_candidates = [
-                        (tokens, advantages)
-                        for tokens, advantages in zip(
-                            all_echo_tokens,
-                            all_echo_advantages,
-                        )
-                    ]
-                    limited_echo_datums, echo_limit = limit_echo_datums(
-                        [
-                            EchoDatum(
-                                tokens=tokens,
-                                advantages=advantages,
-                                positive_tokens=sum(
-                                    1 for adv in advantages if adv > 0.0
-                                ),
-                            )
-                            for tokens, advantages in echo_candidates
-                        ],
+                    all_datum_echo_advantages, echo_limit = limit_echo_masks(
+                        all_datum_echo_advantages,
                         max_positive_tokens=echo_allowed,
                     )
-                    all_echo_tokens = [d.tokens for d in limited_echo_datums]
-                    all_echo_advantages = [
-                        d.advantages for d in limited_echo_datums
-                    ]
 
-            echo_has_datums = bool(config.echo_enabled and all_echo_tokens)
-            if num_datums == 0 and not echo_has_datums:
+            rl_has_signal = _has_nonzero_advantage(all_datum_advantages)
+            echo_has_datums = bool(
+                config.echo_enabled and _has_nonzero_advantage(
+                    all_datum_echo_advantages
+                )
+            )
+            if not rl_has_signal and not echo_has_datums:
                 print(f"Step {batch_idx}: no informative datums, skipping.")
                 obs = StepObservation(
                     step_time_s=time.perf_counter() - step_start,
@@ -1837,7 +1804,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             print(
                 f"Step {batch_idx}: submitting {num_datums} RL datums "
-                f"and {len(all_echo_tokens) if echo_has_datums else 0} ECHO datums..."
+                f"and {echo_limit.kept_datums if echo_has_datums else 0} ECHO datums..."
             )
             train_start = time.perf_counter()
             loss_value, echo_loss, echo_joint_optimizer_step = _run_rl_echo_train_step(
@@ -1845,8 +1812,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 all_datum_tokens,
                 all_datum_logprobs,
                 all_datum_advantages,
-                all_echo_tokens if echo_has_datums else [],
-                all_echo_advantages if echo_has_datums else [],
+                all_datum_echo_advantages if echo_has_datums else [],
+                all_datum_echo_full_observation_counts if echo_has_datums else [],
                 echo_loss_fn=config.echo_loss_fn,
                 lr=config.lr,
                 weight_decay=config.weight_decay,

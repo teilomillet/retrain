@@ -549,6 +549,30 @@ def _is_prefix(prefix: list[int], full: list[int]) -> bool:
     return len(prefix) <= len(full) and full[: len(prefix)] == prefix
 
 
+def _common_prefix_len(left: list[int], right: list[int]) -> int:
+    n = min(len(left), len(right))
+    for idx in range(n):
+        if left[idx] != right[idx]:
+            return idx
+    return n
+
+
+def _common_suffix_len(
+    left: list[int],
+    right: list[int],
+    *,
+    prefix_len: int,
+) -> int:
+    max_suffix = min(len(left), len(right)) - prefix_len
+    count = 0
+    while (
+        count < max_suffix
+        and left[len(left) - 1 - count] == right[len(right) - 1 - count]
+    ):
+        count += 1
+    return count
+
+
 def observation_mask_for_prompt(
     tokenizer: object,
     prompt: PromptLike,
@@ -587,6 +611,13 @@ def observation_mask_for_prompt(
                 messages[:idx],
                 add_generation_prompt=False,
             )
+            empty_message = dict(message)
+            empty_message["content"] = ""
+            empty_ids = _encode_chat_template_ids(
+                tokenizer,
+                [*messages[:idx], empty_message],
+                add_generation_prompt=False,
+            )
             through_ids = _encode_chat_template_ids(
                 tokenizer,
                 messages[: idx + 1],
@@ -594,11 +625,25 @@ def observation_mask_for_prompt(
             )
         except (TypeError, ValueError):
             return None
+        if not _is_prefix(before_ids, empty_ids):
+            return None
         if not _is_prefix(before_ids, through_ids):
             return None
         if not _is_prefix(through_ids, prompt_ids):
             return None
-        for token_idx in range(len(before_ids), len(through_ids)):
+        empty_delta = empty_ids[len(before_ids) :]
+        full_delta = through_ids[len(before_ids) :]
+        prefix_len = _common_prefix_len(empty_delta, full_delta)
+        suffix_len = _common_suffix_len(
+            empty_delta,
+            full_delta,
+            prefix_len=prefix_len,
+        )
+        content_start = len(before_ids) + prefix_len
+        content_end = len(through_ids) - suffix_len
+        if content_end <= content_start:
+            continue
+        for token_idx in range(content_start, content_end):
             mask[token_idx] = 1
 
     return mask if any(mask) else None

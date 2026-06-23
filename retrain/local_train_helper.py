@@ -616,81 +616,40 @@ class LocalTrainHelper:
             self.optimizer.zero_grad()
             self._empty_cuda_cache_if_requested()
 
-    def _do_hybrid_impl(
+    def _do_hybrid_mask_impl(
         self,
         input_ids,
         old_logprobs,
         advantages,
         attention_mask,
-        echo_input_ids,
         echo_advantages,
-        echo_attention_mask,
+        echo_full_observation_counts,
         echo_loss_fn,
     ):
-        """Execute RL + ECHO as one hybrid optimizer step."""
+        """Execute RL + ECHO on the same rollout rows in one optimizer step."""
         self.train_model.train()
         self.optimizer.zero_grad()
 
         try:
             batch_size = int(input_ids.shape[0])
+            microbatch_size = self.train_microbatch_size or batch_size
             total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
             total_tokens_value = float(total_tokens.item())
             loss_sum = 0.0
             clip_count = 0.0
             cov_count = 0.0
             abs_kl_sum = 0.0
-
             echo_loss_sum = 0.0
-            echo_total_tokens_value = 0.0
-            echo_batch_size = int(echo_input_ids.shape[0])
-            if echo_batch_size > 0:
-                if echo_loss_fn == "cross_entropy":
-                    echo_weights = torch.clamp(echo_advantages[:, 1:], min=0.0)
-                    echo_total_tokens = (
-                        echo_weights * echo_attention_mask[:, 1:].float() > 0
-                    ).sum().clamp(min=1)
-                elif echo_loss_fn == "importance_sampling":
-                    echo_total_tokens = echo_attention_mask[:, 1:].sum().clamp(min=1)
-                else:
-                    raise ValueError(
-                        "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
-                    )
-                echo_total_tokens_value = float(echo_total_tokens.item())
 
-            max_width = max(input_ids.shape[1], echo_input_ids.shape[1])
-            rl_input_ids = _pad_to_width(input_ids, max_width, 0)
-            rl_old_logprobs = _pad_to_width(old_logprobs, max_width, 0.0)
-            rl_advantages = _pad_to_width(advantages, max_width, 0.0)
-            rl_attention_mask = _pad_to_width(attention_mask, max_width, False)
-            echo_padded_ids = _pad_to_width(echo_input_ids, max_width, 0)
-            echo_old_logprobs = torch.zeros_like(echo_advantages)
-            echo_old_logprobs = _pad_to_width(echo_old_logprobs, max_width, 0.0)
-            echo_padded_advantages = _pad_to_width(echo_advantages, max_width, 0.0)
-            echo_padded_mask = _pad_to_width(echo_attention_mask, max_width, False)
+            for start in range(0, batch_size, microbatch_size):
+                stop = min(start + microbatch_size, batch_size)
+                mb_input_ids = input_ids[start:stop]
+                mb_old_logprobs = old_logprobs[start:stop]
+                mb_advantages = advantages[start:stop]
+                mb_attention_mask = attention_mask[start:stop]
+                mb_echo_advantages = echo_advantages[start:stop]
+                mb_echo_counts = echo_full_observation_counts[start:stop]
 
-            combined_input_ids = torch.cat([rl_input_ids, echo_padded_ids], dim=0)
-            combined_old_logprobs = torch.cat(
-                [rl_old_logprobs, echo_old_logprobs],
-                dim=0,
-            )
-            combined_advantages = torch.cat(
-                [rl_advantages, echo_padded_advantages],
-                dim=0,
-            )
-            combined_attention_mask = torch.cat(
-                [rl_attention_mask, echo_padded_mask],
-                dim=0,
-            )
-
-            combined_batch_size = int(combined_input_ids.shape[0])
-            microbatch_size = self.train_microbatch_size or combined_batch_size
-
-            for start in range(0, combined_batch_size, microbatch_size):
-                stop = min(start + microbatch_size, combined_batch_size)
-                mb_input_ids = combined_input_ids[start:stop]
-                mb_old_logprobs = combined_old_logprobs[start:stop]
-                mb_advantages = combined_advantages[start:stop]
-                mb_attention_mask = combined_attention_mask[start:stop]
                 with torch.amp.autocast(
                     device_type=self.train_device.split(":")[0],
                     enabled=self.use_amp,
@@ -707,72 +666,51 @@ class LocalTrainHelper:
                         target_ids.unsqueeze(2),
                     ).squeeze(2)
 
-                    mb_global_rows = torch.arange(start, stop, device=input_ids.device)
-                    rl_rows = mb_global_rows < batch_size
-                    echo_rows = ~rl_rows
-                    scaled_loss = token_logprobs.sum() * 0.0
+                    old_lp = mb_old_logprobs[:, 1:]
+                    adv = mb_advantages[:, 1:]
+                    mask = mb_attention_mask[:, 1:]
+                    masked_loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
+                        old_lp,
+                        token_logprobs,
+                        adv,
+                        mask,
+                        self.clip_eps,
+                        self.clip_eps_high,
+                        getattr(self, "policy_loss_mode", "standard"),
+                        getattr(self, "kl_cov_percent", 0.2),
+                        getattr(self, "kl_cov_coef", 1.0),
+                        getattr(self, "clip_cov_ratio", 0.0002),
+                        getattr(self, "clip_cov_min", 1.0),
+                        getattr(self, "clip_cov_max", 5.0),
+                    )
+                    token_count = mask.sum().clamp(min=1)
+                    token_count_value = float(token_count.item())
+                    scaled_loss = masked_loss * (token_count / total_tokens)
 
-                    if rl_rows.any():
-                        rl_lp = token_logprobs[rl_rows]
-                        rl_old_lp = mb_old_logprobs[rl_rows, 1:]
-                        rl_adv = mb_advantages[rl_rows, 1:]
-                        rl_mask = mb_attention_mask[rl_rows, 1:]
-                        masked_loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
-                            rl_old_lp,
-                            rl_lp,
-                            rl_adv,
-                            rl_mask,
-                            self.clip_eps,
-                            self.clip_eps_high,
-                            getattr(self, "policy_loss_mode", "standard"),
-                            getattr(self, "kl_cov_percent", 0.2),
-                            getattr(self, "kl_cov_coef", 1.0),
-                            getattr(self, "clip_cov_ratio", 0.0002),
-                            getattr(self, "clip_cov_min", 1.0),
-                            getattr(self, "clip_cov_max", 5.0),
+                    if echo_loss_fn != "cross_entropy":
+                        raise ValueError(
+                            "echo_loss_fn must be 'cross_entropy' for paper-faithful ECHO."
                         )
-                        token_count = rl_mask.sum().clamp(min=1)
-                        token_count_value = float(token_count.item())
-                        scaled_loss = scaled_loss + masked_loss * (
-                            token_count / total_tokens
-                        )
-                        loss_sum += (
-                            float(masked_loss.detach().item()) * token_count_value
-                        )
-                        clip_count += clip_frac * token_count_value
-                        cov_count += cov_frac * token_count_value
-                        abs_kl_sum += abs_kl * token_count_value
+                    echo_weights = torch.clamp(
+                        mb_echo_advantages[:, 1:],
+                        min=0.0,
+                    )
+                    echo_weights = echo_weights * mask.float()
+                    echo_selected = (echo_weights > 0.0).float()
+                    if echo_selected.sum() > 0:
+                        denom = mb_echo_counts.float().clamp(min=1e-3).unsqueeze(1)
+                        echo_loss = ((-token_logprobs * echo_weights) / denom).sum()
+                    else:
+                        echo_loss = token_logprobs.sum() * 0.0
 
-                    if echo_rows.any():
-                        echo_lp = token_logprobs[echo_rows]
-                        echo_adv = mb_advantages[echo_rows, 1:]
-                        echo_mask = mb_attention_mask[echo_rows, 1:]
-                        if echo_loss_fn == "cross_entropy":
-                            echo_weights = torch.clamp(echo_adv, min=0.0)
-                            echo_weights = echo_weights * echo_mask.float()
-                            echo_token_mask = (echo_weights > 0).float()
-                            echo_token_count = echo_token_mask.sum().clamp(min=1)
-                            echo_loss = (-echo_lp * echo_weights).sum() / echo_token_count
-                        else:
-                            echo_old_lp = mb_old_logprobs[echo_rows, 1:]
-                            echo_loss, _, _, _ = _compute_policy_loss(
-                                echo_old_lp,
-                                echo_lp,
-                                echo_adv,
-                                echo_mask,
-                                self.clip_eps,
-                                self.clip_eps_high,
-                            )
-                            echo_token_count = echo_mask.sum().clamp(min=1)
-                        echo_token_count_value = float(echo_token_count.item())
-                        scaled_loss = scaled_loss + echo_loss * (
-                            echo_token_count / echo_total_tokens
-                        )
-                        echo_loss_sum += (
-                            float(echo_loss.detach().item()) * echo_token_count_value
-                        )
+                    scaled_loss = scaled_loss + echo_loss / max(batch_size, 1)
 
                 self.scaler.scale(scaled_loss).backward()
+                loss_sum += float(masked_loss.detach().item()) * token_count_value
+                clip_count += clip_frac * token_count_value
+                cov_count += cov_frac * token_count_value
+                abs_kl_sum += abs_kl * token_count_value
+                echo_loss_sum += float(echo_loss.detach().item())
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -781,11 +719,7 @@ class LocalTrainHelper:
             self._policy_cov_fraction = cov_count / total_tokens_value
             self._policy_abs_kl = abs_kl_sum / total_tokens_value
             loss_val = loss_sum / total_tokens_value
-            echo_loss_val = (
-                echo_loss_sum / echo_total_tokens_value
-                if echo_total_tokens_value > 0
-                else 0.0
-            )
+            echo_loss_val = echo_loss_sum / max(batch_size, 1)
 
             if self.split_mode or self._external_engine:
                 snapshot = {}
@@ -907,24 +841,19 @@ class LocalTrainHelper:
 
         return self._do_sft_impl(input_ids, advantages, attention_mask)
 
-    def train_step_with_echo(
+    def train_step_with_echo_masks(
         self,
         all_tokens,
         all_logprobs,
         all_advantages,
-        echo_tokens,
         echo_advantages,
+        echo_full_observation_counts,
         echo_loss_fn,
         lr,
         weight_decay,
     ):
-        """Run RL + ECHO as one optimizer step.
-
-        The RL datums already contain the configured algorithm's token
-        advantages. ECHO contributes a separate prompt-side supervised mask,
-        and both losses are accumulated before the optimizer step.
-        """
-        if not echo_tokens:
+        """Run RL + ECHO masks over the same rollout rows."""
+        if not echo_advantages:
             return self.train_step(
                 all_tokens,
                 all_logprobs,
@@ -933,9 +862,15 @@ class LocalTrainHelper:
                 weight_decay,
             ), 0.0
 
-        if echo_loss_fn not in ("importance_sampling", "cross_entropy"):
+        if echo_loss_fn != "cross_entropy":
             raise ValueError(
-                "echo_loss_fn must be 'importance_sampling' or 'cross_entropy'."
+                "echo_loss_fn must be 'cross_entropy' for paper-faithful ECHO."
+            )
+        if len(echo_advantages) != len(all_tokens):
+            raise ValueError("echo_advantages must have one row per training datum.")
+        if len(echo_full_observation_counts) != len(all_tokens):
+            raise ValueError(
+                "echo_full_observation_counts must have one value per training datum."
             )
 
         if self._train_future is not None:
@@ -949,29 +884,31 @@ class LocalTrainHelper:
         token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
         lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
         adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
+        echo_adv_tensors = [
+            torch.tensor(a, dtype=torch.float32) for a in echo_advantages
+        ]
+
         input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
         old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
         advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        echo_advantages_tensor = pad_sequence(echo_adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
+        echo_counts = torch.tensor(
+            [float(c) for c in echo_full_observation_counts],
+            dtype=torch.float32,
+            device=self.train_device,
+        )
+
         lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
         max_len = input_ids.shape[1]
         attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
 
-        echo_token_tensors = [torch.tensor(t, dtype=torch.long) for t in echo_tokens]
-        echo_adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in echo_advantages]
-        echo_input_ids = pad_sequence(echo_token_tensors, batch_first=True, padding_value=0).to(self.train_device)
-        echo_advantages_tensor = pad_sequence(echo_adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        echo_lengths = torch.tensor([len(t) for t in echo_tokens], device=self.train_device)
-        echo_max_len = echo_input_ids.shape[1]
-        echo_attention_mask = torch.arange(echo_max_len, device=self.train_device).unsqueeze(0) < echo_lengths.unsqueeze(1)
-
-        return self._do_hybrid_impl(
+        return self._do_hybrid_mask_impl(
             input_ids,
             old_logprobs,
             advantages,
             attention_mask,
-            echo_input_ids,
             echo_advantages_tensor,
-            echo_attention_mask,
+            echo_counts,
             echo_loss_fn,
         )
 

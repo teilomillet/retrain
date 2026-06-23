@@ -242,7 +242,7 @@ class TestPromptHelpers:
         )
         assert ids == [11, 21]
 
-    def test_observation_mask_for_prompt_marks_tool_role_span(self):
+    def test_observation_mask_for_prompt_marks_tool_content_span(self):
         tok = _RoleTemplateTokenizer()
         prompt: list[dict[str, object]] = [
             {"role": "user", "content": "task"},
@@ -256,8 +256,8 @@ class TestPromptHelpers:
 
         assert mask is not None
         marked = [idx for idx, value in enumerate(mask) if value]
-        assert len(marked) == len("result") + 1
-        assert prompt_ids[marked[0] : marked[-1] + 1] == [4, *map(ord, "result")]
+        assert len(marked) == len("result")
+        assert prompt_ids[marked[0] : marked[-1] + 1] == [*map(ord, "result")]
 
     def test_observation_mask_for_prompt_returns_none_on_unstable_prefix(self):
         tok = _NonPrefixRoleTemplateTokenizer()
@@ -366,7 +366,7 @@ class TestRunMultiturnGroup:
         assert len(turns[0]) == 2
         assert turns[0][0].observation_mask is None
         assert turns[0][1].observation_mask is not None
-        assert sum(turns[0][1].observation_mask or []) == len("result") + 1
+        assert sum(turns[0][1].observation_mask or []) == len("result")
 
     def test_prefers_openenv_resource_cleanup_when_available(self, monkeypatch):
         monkeypatch.setattr(

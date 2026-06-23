@@ -151,13 +151,13 @@ class _EchoRecordingFakeHelper(_FakeHelper):
         )
         return 0.031
 
-    def train_step_with_echo(
+    def train_step_with_echo_masks(
         self,
         all_tokens: list[list[int]],
         all_logprobs: list[list[float]],
         all_advantages: list[list[float]],
-        echo_tokens: list[list[int]],
         echo_advantages: list[list[float]],
+        echo_full_observation_counts: list[int],
         echo_loss_fn: str,
         lr: float,
         weight_decay: float,
@@ -167,8 +167,8 @@ class _EchoRecordingFakeHelper(_FakeHelper):
                 "tokens": all_tokens,
                 "logprobs": all_logprobs,
                 "advantages": all_advantages,
-                "echo_tokens": echo_tokens,
                 "echo_advantages": echo_advantages,
+                "echo_full_observation_counts": echo_full_observation_counts,
                 "echo_loss_fn": echo_loss_fn,
                 "lr": lr,
                 "weight_decay": weight_decay,
@@ -959,11 +959,16 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
     assert helper.sft_calls == []
     assert len(helper.hybrid_calls) == 1
     assert helper.hybrid_calls[0]["echo_loss_fn"] == "cross_entropy"
+    assert helper.hybrid_calls[0]["tokens"] == [
+        [1, 2, 3, 50, 51, 4],
+        [1, 2, 5, 60, 6],
+    ]
     echo_advantages = helper.hybrid_calls[0]["echo_advantages"]
     assert echo_advantages == [
-        [0.0, 0.0, 0.0, 0.2, 0.2],
-        [0.0, 0.0, 0.0, 0.2],
+        [0.0, 0.0, 0.0, 0.2, 0.2, 0.0],
+        [0.0, 0.0, 0.0, 0.2, 0.0],
     ]
+    assert helper.hybrid_calls[0]["echo_full_observation_counts"] == [2, 1]
 
     metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
     entries = [
@@ -1196,16 +1201,21 @@ def test_train_echo_keeps_uniform_failed_rollout_observations(monkeypatch, tmp_p
     trainer_mod.train(cfg, flow=flow)
 
     assert helper.train_calls == []
-    assert helper.hybrid_calls == []
-    assert len(helper.sft_calls) == 1
-    assert helper.sft_calls[0]["tokens"] == [
-        [1, 2, 3, 50, 51],
-        [1, 2, 5, 60],
+    assert helper.sft_calls == []
+    assert len(helper.hybrid_calls) == 1
+    assert helper.hybrid_calls[0]["tokens"] == [
+        [1, 2, 3, 50, 51, 4],
+        [1, 2, 5, 60, 6],
     ]
-    assert helper.sft_calls[0]["advantages"] == [
-        [0.0, 0.0, 0.0, 0.2, 0.2],
-        [0.0, 0.0, 0.0, 0.2],
+    assert helper.hybrid_calls[0]["advantages"] == [
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0],
     ]
+    assert helper.hybrid_calls[0]["echo_advantages"] == [
+        [0.0, 0.0, 0.0, 0.2, 0.2, 0.0],
+        [0.0, 0.0, 0.0, 0.2, 0.0],
+    ]
+    assert helper.hybrid_calls[0]["echo_full_observation_counts"] == [2, 1]
 
     metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
     entries = [
@@ -1214,10 +1224,10 @@ def test_train_echo_keeps_uniform_failed_rollout_observations(monkeypatch, tmp_p
         if line.strip()
     ]
     step_metrics = entries[-1]
-    assert step_metrics["rl/completion_tokens"] == 0
+    assert step_metrics["rl/completion_tokens"] == 4
     assert step_metrics["echo/candidate_tokens"] == 3
     assert step_metrics["echo/kept_tokens"] == 3
     assert step_metrics["echo/reference_completion_tokens"] == 4
     assert step_metrics["echo/token_ratio"] == pytest.approx(0.75)
     assert step_metrics["echo/skipped_entropy_floor"] == 0
-    assert step_metrics["echo/joint_optimizer_step"] == 0
+    assert step_metrics["echo/joint_optimizer_step"] == 1
