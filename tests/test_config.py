@@ -275,14 +275,25 @@ min_prompt_overlap = 0.75
         assert c.lora_dropout == pytest.approx(0.0)
         assert c.backend_options == {
             "train_microbatch_size": 0,
-            "cuda_empty_cache": False,
+            "train_logprob_chunk_size": 0,
+            "liger_kernel": True,
+            "liger_fused_linear_ce": True,
+            "cuda_empty_cache": True,
             "sample_use_cache": True,
+            "gradient_checkpointing": True,
+            "train_selective_suffix_logits": False,
+            "train_save_on_cpu": False,
+            "train_save_on_cpu_pin_memory": True,
+            "train_save_on_cpu_min_numel": 0,
+            "train_supervised_context_tokens": 0,
         }
         assert c.environment_provider == ""
         assert c.environment_id == ""
         assert c.environment_args == ""
         assert c.environment_max_turns == -1
         assert c.environment_auto_install is False
+        assert c.environment_rollout_env_workers == 1
+        assert c.environment_rollout_buffer_size == 0
         assert c.log_generations is True
         assert c.generation_log_samples_per_prompt == 1
         assert c.generation_top_surprisal_limit == 0
@@ -353,6 +364,8 @@ min_prompt_overlap = 0.75
             'args = "{\\"split\\": \\"train\\"}"\n'
             'max_turns = 8\n'
             'auto_install = true\n'
+            'rollout_env_workers = 4\n'
+            'rollout_buffer_size = 6\n'
         )
         c = load_config(str(toml))
         assert c.environment_provider == "verifiers"
@@ -360,6 +373,8 @@ min_prompt_overlap = 0.75
         assert c.environment_args == '{"split": "train"}'
         assert c.environment_max_turns == 8
         assert c.environment_auto_install is True
+        assert c.environment_rollout_env_workers == 4
+        assert c.environment_rollout_buffer_size == 6
 
     def test_environment_args_table_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
@@ -490,6 +505,12 @@ class TestValidation:
                 environment_args='["not","an","object"]',
             )
 
+    def test_environment_rollout_scheduler_values_must_be_non_negative(self):
+        with pytest.raises(ValueError, match="environment_rollout_env_workers"):
+            TrainConfig(environment_rollout_env_workers=0)
+        with pytest.raises(ValueError, match="environment_rollout_buffer_size"):
+            TrainConfig(environment_rollout_buffer_size=-1)
+
     def test_backend_options_unknown_key_raises(self):
         with pytest.raises(ValueError, match="Unknown \\[backend\\.options\\] key"):
             TrainConfig(
@@ -516,6 +537,16 @@ class TestValidation:
             TrainConfig(
                 backend="prime_rl",
                 backend_options={"strict_advantages": False},
+            )
+
+    def test_unsloth_rejects_multiple_precision_modes(self):
+        with pytest.raises(ValueError, match="only one precision mode"):
+            TrainConfig(
+                backend="unsloth",
+                backend_options={
+                    "load_in_4bit": True,
+                    "load_in_16bit": True,
+                },
             )
 
     def test_backend_options_accepts_dotted_plugin_backend(self):

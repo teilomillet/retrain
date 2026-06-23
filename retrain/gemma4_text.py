@@ -61,6 +61,37 @@ def forward_logits(model, input_ids, attention_mask):
     return unwrapped.lm_head(outputs.last_hidden_state)
 
 
+def forward_hidden_states_and_lm_head(model, input_ids, attention_mask):
+    """Return LM hidden states and head for chunked logprob computation.
+
+    Returns ``None`` when the wrapped model does not expose a standard
+    text-backbone + lm_head structure.
+    """
+    if is_gemma4_text_model(model):
+        unwrapped = unwrap_peft_model(model)
+        outputs = unwrapped.model.language_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=False,
+        )
+        return outputs.last_hidden_state, unwrapped.lm_head
+
+    unwrapped = unwrap_peft_model(model)
+    body = getattr(unwrapped, "model", None)
+    lm_head = getattr(unwrapped, "lm_head", None)
+    if body is None or lm_head is None:
+        return None
+    outputs = body(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        use_cache=False,
+    )
+    hidden_states = getattr(outputs, "last_hidden_state", None)
+    if hidden_states is None:
+        return None
+    return hidden_states, lm_head
+
+
 def eos_token_ids(model) -> set[int]:
     generation_config = getattr(model, "generation_config", None)
     token_ids = getattr(generation_config, "eos_token_id", None)

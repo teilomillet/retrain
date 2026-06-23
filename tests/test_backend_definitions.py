@@ -24,9 +24,11 @@ def _as_tuple(backend_name: str) -> tuple[bool, bool, bool, bool]:
 
 def test_builtin_capabilities_match_spec() -> None:
     assert _as_tuple("local") == (True, True, True, False)
+    assert _as_tuple("unsloth") == (True, True, True, False)
     assert _as_tuple("tinker") == (True, True, True, True)
     assert _as_tuple("prime_rl") == (False, False, True, False)
     assert backend_capability_source("local") == "builtin"
+    assert resolve_backend_capabilities("unsloth", {}).supports_echo_shared_forward
 
 
 def test_plugin_capabilities_use_conservative_defaults() -> None:
@@ -53,12 +55,63 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "train_microbatch_size": "2",
             "cuda_empty_cache": "true",
             "sample_use_cache": "false",
+            "gradient_checkpointing": "false",
         },
-    ) == {
-        "train_microbatch_size": 2,
-        "cuda_empty_cache": True,
-        "sample_use_cache": False,
-    }
+        ) == {
+            "train_microbatch_size": 2,
+            "train_logprob_chunk_size": 0,
+            "liger_kernel": True,
+            "liger_fused_linear_ce": True,
+            "cuda_empty_cache": True,
+            "sample_use_cache": False,
+            "gradient_checkpointing": False,
+            "train_selective_suffix_logits": False,
+            "train_save_on_cpu": False,
+            "train_save_on_cpu_pin_memory": True,
+            "train_save_on_cpu_min_numel": 0,
+            "train_supervised_context_tokens": 0,
+        }
+
+
+def test_unsloth_backend_options_accept_long_context_controls() -> None:
+    normalized = normalize_backend_options(
+        "unsloth",
+        {
+            "max_seq_length": "262144",
+            "load_in_4bit": "true",
+            "fast_inference": "false",
+            "gpu_memory_utilization": "0.9",
+            "device_map": "retrain",
+            "offload_embedding": "true",
+            "unsloth_tiled_mlp": "true",
+            "unsloth_tiled_mlp_mode": "target:0.25",
+            "train_selective_suffix_logits": "true",
+            "train_save_on_cpu": "true",
+            "train_save_on_cpu_pin_memory": "false",
+            "train_save_on_cpu_min_numel": "65536",
+            "train_supervised_context_tokens": "4096",
+            "train_microbatch_size": "1",
+        },
+    )
+    assert normalized["max_seq_length"] == 262144
+    assert normalized["load_in_4bit"] is True
+    assert normalized["load_in_8bit"] is False
+    assert normalized["load_in_16bit"] is False
+    assert normalized["fast_inference"] is False
+    assert normalized["gpu_memory_utilization"] == 0.9
+    assert normalized["device_map"] == "retrain"
+    assert normalized["offload_embedding"] is True
+    assert normalized["unsloth_tiled_mlp"] is True
+    assert normalized["unsloth_tiled_mlp_mode"] == "target:0.25"
+    assert normalized["train_selective_suffix_logits"] is True
+    assert normalized["train_save_on_cpu"] is True
+    assert normalized["train_save_on_cpu_pin_memory"] is False
+    assert normalized["train_save_on_cpu_min_numel"] == 65536
+    assert normalized["train_supervised_context_tokens"] == 4096
+    assert normalized["train_microbatch_size"] == 1
+    assert normalized["liger_kernel"] is False
+    assert normalized["liger_fused_linear_ce"] is True
+    assert normalized["qwen35_gated_delta_chunk_size"] == "auto"
 
 
 def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
@@ -105,5 +158,7 @@ def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
 def test_backends_catalog_payload_shape() -> None:
     payload = describe_backends_catalog()
     names = {item["name"] for item in payload["builtins"]}
-    assert {"local", "tinker", "prime_rl"} <= names
+    assert {"local", "unsloth", "tinker", "prime_rl"} <= names
     assert "capability_hooks" in payload["plugin"]
+    unsloth = next(item for item in payload["builtins"] if item["name"] == "unsloth")
+    assert unsloth["capabilities"]["supports_echo_shared_forward"] is True

@@ -199,6 +199,8 @@ OPTIONS
         --environment-id
         --environment-max-turns
         --environment-provider
+        --environment-rollout-buffer-size
+        --environment-rollout-env-workers
         --generation-log-samples-per-prompt
         --generation-top-surprisal-limit
         --grad-clip-norm
@@ -409,6 +411,40 @@ CONFIGURATION
             PyTorch/PEFT train_step datums into chunks of that size, preserving
             the token-weighted loss while reducing peak VRAM at extra compute
             cost. Use 1 for tight single-GPU memory probes.
+        cuda_empty_cache = false
+            Release cached CUDA allocator blocks after local sample/train calls.
+            This can reduce fragmentation pressure but may hurt throughput.
+        sample_use_cache = true
+            Use KV-cache during local PyTorch sampling. Set false only for
+            memory-fit probes where slower generation is acceptable.
+        gradient_checkpointing = true
+            Enable train-time gradient checkpointing. Set false in throughput
+            sweeps when VRAM headroom is available.
+        train_selective_suffix_logits = false
+            Compute training logits only for suffix tokens that carry RL or
+            ECHO weight when possible. This is useful for long-context rows
+            whose prompt tokens have placeholder zero advantages.
+        train_save_on_cpu = false
+            Offload autograd saved tensors to CPU during train forward/backward.
+            This preserves exact autograd behavior and can make very long rows
+            fit on small GPUs, but backward can be much slower.
+        train_save_on_cpu_pin_memory = true
+            Use pinned CPU memory for train_save_on_cpu transfers. Keep true by
+            default; the measured 4070 Ti Qwen3.5 30k run was slower with this
+            disabled.
+        train_save_on_cpu_min_numel = 0
+            0 offloads every autograd-saved tensor when train_save_on_cpu is
+            enabled. A positive value uses exact selective offload: tensors
+            with fewer elements stay on GPU, and larger tensors are offloaded
+            to CPU. This preserves the full-context train gradient but may OOM
+            if the threshold is too high.
+        train_supervised_context_tokens = 0
+            0 disables train-row cropping. A positive value is an approximate
+            long-context speed knob used with train_selective_suffix_logits:
+            retrain crops each training row to this many context tokens before
+            the earliest weighted RL/ECHO token. Rollout/inference can still
+            use the full prompt, but the train gradient is no longer the exact
+            full-context objective.
 
     For backend = "prime_rl":
         transport = "filesystem"   # or "zmq"
@@ -571,7 +607,9 @@ CONFIGURATION
         KV cache dtype.
 
     prefix_caching = true
-        Enable/disable prefix caching.
+        Enable bounded exact-prefix KV reuse for local PyTorch rollout
+        sampling. Cleared at checkpoint/weight-sync boundaries to avoid stale
+        adapter-weight KV reuse.
 
   [backpressure]
 
@@ -641,6 +679,16 @@ CONFIGURATION
 
     auto_install = false
         Auto-download Hub environments via verifiers SDK.
+
+    rollout_env_workers = 1
+        Maximum concurrent async environment jobs for multi-turn rollout setup,
+        prompt rendering, trajectory steps, and completion rendering.
+        Increase this for CPU/I/O-heavy environments after measuring
+        rollout/scheduler_* and rollout/env/* metrics.
+
+    rollout_buffer_size = 0
+        Maximum in-flight rollout environment jobs. 0 means buffer up to the
+        current rollout group size.
 
   [reward]
 
@@ -975,7 +1023,7 @@ INFERENCE ENGINES
     pytorch     local    (none, local inference)       Default. Works on CPU/GPU/Mac.
     max         hybrid   (empty = in-process)          Set url for max serve (multi-GPU).
     vllm        server   http://localhost:8000         Supports /v1/load_lora_adapter.
-    sglang      server   http://localhost:30000        Supports /v1/load_lora_adapter.
+    sglang      server   http://localhost:30000        Supports /load_lora_adapter.
     mlx         server   http://localhost:8080         Apple Silicon. Adapter via request.
     openai      server   http://localhost:8000         Any OpenAI-compatible endpoint.
 
@@ -1043,11 +1091,66 @@ BENCHMARKING
         mean_sample_share        Fraction of step time spent sampling
         mean_train_share         Fraction of step time spent training
         peak_process_max_rss_mb  Peak process RSS reported by the run
+        mean_engine_prompt_prefill_s
+                                Mean local PyTorch prompt prefill time
+        mean_engine_decode_s     Mean local PyTorch decode time
+        mean_engine_generation_tokens_per_s
+                                Mean generated-token throughput from the
+                                inference engine
+        mean_local_train_forward_s
+                                Mean local train forward/loss time
+        mean_local_train_backward_s
+                                Mean local train backward time
+        mean_local_train_optimizer_s
+                                Mean local optimizer-step time
+        mean_local_adapter_sync_s
+                                Mean LoRA adapter sync/reload time
+        mean_rollout_total_s     Mean multi-turn rollout environment envelope
+        mean_rollout_trajectory_step_s
+                                Mean environment trajectory-step time
+        mean_rollout_env_dbt_total_s
+                                Mean dbt time reported by quaero/openenv timing
+        mean_rollout_scheduler_worker_s
+                                Mean bounded scheduler worker time
+        peak_local_train_gpu_peak_memory_allocated_mb
+                                Peak train-phase CUDA allocated memory
+        peak_local_sample_gpu_peak_memory_allocated_mb
+                                Peak sample-phase CUDA allocated memory
 
     Practical use:
         1) Start with 3 repeats on a short representative config.
         2) Compare sample_share vs train_share to localize the bottleneck.
         3) Use retrain diff and retrain status to inspect the resulting runs.
+
+    Local one-GPU sweep helper:
+
+        uv run python scripts/one_gpu_local_sweep.py config.toml --dry-run
+        uv run python scripts/one_gpu_local_sweep.py config.toml --max-conditions 4
+
+    The helper varies sample_use_cache, cuda_empty_cache,
+    gradient_checkpointing, train_microbatch_size, and group_size. Each
+    condition writes an isolated benchmark suite under the sweep output root.
+    Pass --continue-on-error to keep sweeping after an OOM or server failure
+    and record the failure in condition_status.json.
+
+    One-GPU inference backend comparison helper:
+
+        uv run python scripts/one_gpu_backend_compare.py config.toml \
+          --engines pytorch,vllm,sglang \
+          --vllm-url http://127.0.0.1:8000 \
+          --sglang-url http://127.0.0.1:30000 \
+          --group-size 2 --microbatch-size 1
+
+    This keeps the training backend local while changing only the inference
+    engine. vLLM and SGLang servers are preflighted via /health or /v1/models,
+    token-native prompts are required by default for those engines, and
+    multi-step runs fail if dynamic LoRA adapter reload is missing or failing.
+    vLLM reloads through /v1/load_lora_adapter with load_inplace; SGLang
+    reloads through /load_lora_adapter and replaces the live default adapter.
+    On one GPU, run the PyTorch baseline first, then start either vLLM or
+    SGLang and compare one external engine at a time. Each external server
+    loads a second base-model copy, so running both alongside the trainer
+    mainly measures memory contention.
 
 LOGGING
     retrain writes structured JSONL logs to log_dir:
@@ -1112,6 +1215,18 @@ LOGGING
                                 Cumulative external-engine prompt cache hits
         engine_prompt_cache_size
                                 Current external-engine prompt cache size
+        engine_token_prompt_calls
+                                Cumulative vLLM/SGLang token-prompt requests
+        engine_token_prompt_fallbacks
+                                Token-prompt requests that fell back to text
+        engine_token_native_prompt_enabled
+                                1 when the engine uses token-native prompts
+        engine_adapter_reload_calls
+                                Cumulative vLLM/SGLang adapter reload requests
+        engine_adapter_reload_failures
+                                Adapter reload requests that failed
+        engine_adapter_reload_skips
+                                Adapter reload calls skipped by engine-side cache
 
     emergence/steps.jsonl: compact per-step summaries for emergence
     analysis (step, mean_reward, correct_count, total_count, condition).

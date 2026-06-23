@@ -29,8 +29,9 @@ retrain
 ├── campaign.py         # Sweep orchestrator (conditions x seeds) with auto-squeeze
 ├── squeeze.py          # LoRA-Squeeze rank analysis and compression
 ├── local_train_helper.py   # Local GPU backend (PyTorch/PEFT + inference engine)
+├── unsloth_backend.py      # Optional Unsloth-backed local TrainHelper
 ├── tinker_backend.py       # Remote GPU backend (Tinker API)
-├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, MLX-LM)
+├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
 ├── data.py             # MATH dataset loader
 └── logging_utils.py    # JSONL logger
 ```

@@ -208,9 +208,17 @@ class TestReloadWeightsFaults:
         engine.reload_weights("/path/to/adapter")
         assert engine._current_adapter_path == "/path/to/adapter"
 
-    def test_same_adapter_skips_reload(self, engine: OpenAIEngine) -> None:
-        """Reloading same adapter path is a no-op."""
+    def test_same_http_adapter_path_reloads(self, engine: OpenAIEngine) -> None:
+        """HTTP LoRA servers must reload when the live adapter path is reused."""
         engine._current_adapter_path = "/existing"
         with patch.object(engine, "_post") as mock_post:
             engine.reload_weights("/existing")
-        mock_post.assert_not_called()
+        mock_post.assert_called_once_with(
+            "/v1/load_lora_adapter",
+            {
+                "lora_name": "default",
+                "lora_path": "/existing",
+                "load_inplace": True,
+            },
+            expect_json=False,
+        )

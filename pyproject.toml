@@ -19,6 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 local = ["torch>=2.4.0"]
+cuda-accelerated = [
+    "torch>=2.4.0",
+    "flash-linear-attention[cuda]",
+    "causal-conv1d",
+    "liger-kernel",
+    "flash-attn",
+]
 tinker = ["tinker>=0.13.1"]
 mlx = ["mlx-lm>=0.20.0; platform_system == 'Darwin'"]
 verifiers = ["verifiers>=0.1.0"]

@@ -107,8 +107,127 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             config.backend_options,
             "train_microbatch_size",
         ),
-        cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", False)),
+        train_logprob_chunk_size=_backend_option_int(
+            config.backend_options,
+            "train_logprob_chunk_size",
+        ),
+        liger_kernel=bool(config.backend_options.get("liger_kernel", True)),
+        liger_fused_linear_ce=bool(
+            config.backend_options.get("liger_fused_linear_ce", True)
+        ),
+        cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", True)),
         sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),
+        gradient_checkpointing=bool(
+            config.backend_options.get("gradient_checkpointing", True)
+        ),
+        attention_kernel=config.attention_kernel,
+        prefix_caching=config.prefix_caching,
+        train_selective_suffix_logits=bool(
+            config.backend_options.get("train_selective_suffix_logits", False)
+        ),
+        train_save_on_cpu=bool(config.backend_options.get("train_save_on_cpu", False)),
+        train_save_on_cpu_pin_memory=bool(
+            config.backend_options.get("train_save_on_cpu_pin_memory", True)
+        ),
+        train_save_on_cpu_min_numel=_backend_option_int(
+            config.backend_options,
+            "train_save_on_cpu_min_numel",
+        ),
+        train_supervised_context_tokens=_backend_option_int(
+            config.backend_options,
+            "train_supervised_context_tokens",
+        ),
+    )
+    setattr(helper, "sft_loss_fn", config.sft_loss_fn)
+    return helper
+
+
+def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
+    try:
+        from retrain.unsloth_backend import UnslothTrainHelper
+    except ImportError:
+        raise RuntimeError(
+            "Backend 'unsloth' requires PyTorch and Unsloth Core.\n"
+            "Install Unsloth with: uv pip install unsloth --torch-backend=auto"
+        ) from None
+
+    options = config.backend_options
+    max_seq_length = _backend_option_int(options, "max_seq_length")
+    if max_seq_length <= 0:
+        max_seq_length = max(2048, int(config.max_tokens))
+    helper = UnslothTrainHelper(
+        config.model,
+        config.adapter_path,
+        config.devices,
+        config.lora_rank,
+        config.inference_engine,
+        config.inference_url,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        optim_beta1=config.optim_beta1,
+        optim_beta2=config.optim_beta2,
+        optim_eps=config.optim_eps,
+        clip_eps=config.clip_eps,
+        clip_eps_high=config.clip_eps_high,
+        policy_loss_mode=config.policy_loss_mode,
+        kl_cov_percent=config.kl_cov_percent,
+        kl_cov_coef=config.kl_cov_coef,
+        clip_cov_ratio=config.clip_cov_ratio,
+        clip_cov_min=config.clip_cov_min,
+        clip_cov_max=config.clip_cov_max,
+        train_microbatch_size=_backend_option_int(
+            options,
+            "train_microbatch_size",
+        ),
+        train_logprob_chunk_size=_backend_option_int(
+            options,
+            "train_logprob_chunk_size",
+        ),
+        train_selective_suffix_logits=bool(
+            options.get("train_selective_suffix_logits", True)
+        ),
+        train_save_on_cpu=bool(options.get("train_save_on_cpu", False)),
+        train_save_on_cpu_pin_memory=bool(
+            options.get("train_save_on_cpu_pin_memory", True)
+        ),
+        train_save_on_cpu_min_numel=_backend_option_int(
+            options,
+            "train_save_on_cpu_min_numel",
+        ),
+        train_supervised_context_tokens=_backend_option_int(
+            options,
+            "train_supervised_context_tokens",
+        ),
+        liger_kernel=bool(options.get("liger_kernel", False)),
+        liger_fused_linear_ce=bool(options.get("liger_fused_linear_ce", True)),
+        cuda_empty_cache=bool(options.get("cuda_empty_cache", True)),
+        sample_use_cache=bool(options.get("sample_use_cache", True)),
+        gradient_checkpointing=bool(options.get("gradient_checkpointing", True)),
+        attention_kernel=config.attention_kernel,
+        prefix_caching=config.prefix_caching,
+        max_seq_length=max_seq_length,
+        load_in_4bit=bool(options.get("load_in_4bit", True)),
+        load_in_8bit=bool(options.get("load_in_8bit", False)),
+        load_in_16bit=bool(options.get("load_in_16bit", False)),
+        fast_inference=bool(options.get("fast_inference", False)),
+        gpu_memory_utilization=float(options.get("gpu_memory_utilization", 0.5)),
+        float8_kv_cache=bool(options.get("float8_kv_cache", False)),
+        max_lora_rank=_backend_option_int(options, "max_lora_rank", 64),
+        use_gradient_checkpointing=str(
+            options.get("use_gradient_checkpointing", "unsloth")
+        ),
+        device_map=str(options.get("device_map", "retrain")),
+        trust_remote_code=bool(options.get("trust_remote_code", False)),
+        use_exact_model_name=bool(options.get("use_exact_model_name", False)),
+        offload_embedding=bool(options.get("offload_embedding", False)),
+        unsloth_tiled_mlp=bool(options.get("unsloth_tiled_mlp", False)),
+        unsloth_tiled_mlp_mode=str(options.get("unsloth_tiled_mlp_mode", "")),
+        text_only=bool(options.get("text_only", False)),
+        use_rslora=bool(options.get("use_rslora", False)),
+        random_state=_backend_option_int(options, "random_state", 3407),
+        qwen35_gated_delta_chunk_size=str(
+            options.get("qwen35_gated_delta_chunk_size", "auto")
+        ),
     )
     setattr(helper, "sft_loss_fn", config.sft_loss_fn)
     return helper
@@ -207,6 +326,13 @@ def _validate_positive_float(value: object) -> str | None:
     return None
 
 
+def _validate_utilization_fraction(value: object) -> str | None:
+    v = cast(float, value)
+    if v <= 0 or v > 1:
+        return "must be in (0, 1]"
+    return None
+
+
 _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
     "local": BackendDefinition(
         name="local",
@@ -226,8 +352,121 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=0,
                 validator=_validate_non_negative_int,
             ),
-            "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=False),
+            "train_logprob_chunk_size": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "liger_kernel": BackendOptionSpec(value_type=bool, default=True),
+            "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),
+            "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=True),
             "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
+            "gradient_checkpointing": BackendOptionSpec(value_type=bool, default=True),
+            "train_selective_suffix_logits": BackendOptionSpec(
+                value_type=bool,
+                default=False,
+            ),
+            "train_save_on_cpu": BackendOptionSpec(value_type=bool, default=False),
+            "train_save_on_cpu_pin_memory": BackendOptionSpec(
+                value_type=bool,
+                default=True,
+            ),
+            "train_save_on_cpu_min_numel": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "train_supervised_context_tokens": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+        },
+    ),
+    "unsloth": BackendDefinition(
+        name="unsloth",
+        factory=_create_unsloth,
+        dependency_import="unsloth",
+        dependency_hint="uv pip install unsloth --torch-backend=auto",
+        capabilities=BackendCapabilities(
+            reports_sync_loss=True,
+            preserves_token_advantages=True,
+            supports_checkpoint_resume=True,
+            resume_runtime_dependent=False,
+            supports_echo_shared_forward=True,
+        ),
+        option_schema={
+            "max_seq_length": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "load_in_4bit": BackendOptionSpec(value_type=bool, default=True),
+            "load_in_8bit": BackendOptionSpec(value_type=bool, default=False),
+            "load_in_16bit": BackendOptionSpec(value_type=bool, default=False),
+            "fast_inference": BackendOptionSpec(value_type=bool, default=False),
+            "gpu_memory_utilization": BackendOptionSpec(
+                value_type=float,
+                default=0.5,
+                validator=_validate_utilization_fraction,
+            ),
+            "float8_kv_cache": BackendOptionSpec(value_type=bool, default=False),
+            "max_lora_rank": BackendOptionSpec(
+                value_type=int,
+                default=64,
+                validator=_validate_positive_int,
+            ),
+            "use_gradient_checkpointing": BackendOptionSpec(
+                value_type=str,
+                default="unsloth",
+            ),
+            "device_map": BackendOptionSpec(value_type=str, default="retrain"),
+            "trust_remote_code": BackendOptionSpec(value_type=bool, default=False),
+            "use_exact_model_name": BackendOptionSpec(value_type=bool, default=False),
+            "offload_embedding": BackendOptionSpec(value_type=bool, default=False),
+            "unsloth_tiled_mlp": BackendOptionSpec(value_type=bool, default=False),
+            "unsloth_tiled_mlp_mode": BackendOptionSpec(value_type=str, default=""),
+            "text_only": BackendOptionSpec(value_type=bool, default=False),
+            "use_rslora": BackendOptionSpec(value_type=bool, default=False),
+            "random_state": BackendOptionSpec(value_type=int, default=3407),
+            "qwen35_gated_delta_chunk_size": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+            ),
+            "train_microbatch_size": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "train_logprob_chunk_size": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "train_selective_suffix_logits": BackendOptionSpec(
+                value_type=bool,
+                default=True,
+            ),
+            "train_save_on_cpu": BackendOptionSpec(value_type=bool, default=False),
+            "train_save_on_cpu_pin_memory": BackendOptionSpec(
+                value_type=bool,
+                default=True,
+            ),
+            "train_save_on_cpu_min_numel": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "train_supervised_context_tokens": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
+            "liger_kernel": BackendOptionSpec(value_type=bool, default=False),
+            "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),
+            "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=True),
+            "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
+            "gradient_checkpointing": BackendOptionSpec(value_type=bool, default=True),
         },
     ),
     "tinker": BackendDefinition(
@@ -510,6 +749,7 @@ def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, object]:
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
         "resume_runtime_dependent": caps.resume_runtime_dependent,
+        "supports_echo_shared_forward": caps.supports_echo_shared_forward,
     }
 
 

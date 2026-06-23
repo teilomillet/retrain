@@ -207,6 +207,10 @@ def _ie_vllm(config: TrainConfig) -> None:
 def _ie_sglang(config: TrainConfig) -> None:
     pass
 
+@inference_engine.register("trtllm")
+def _ie_trtllm(config: TrainConfig) -> None:
+    pass
+
 @inference_engine.register("mlx")
 def _ie_mlx(config: TrainConfig) -> None:
     pass
@@ -464,6 +468,35 @@ def probe_backend_runtime(config: TrainConfig | None = None) -> list[BackendRunt
             BackendRuntimeProbe(
                 backend="local",
                 probe="torch_runtime",
+                status="fail",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        )
+
+    # Unsloth backend: optional import plus torch runtime visibility.
+    try:
+        unsloth = importlib.import_module("unsloth")
+        from retrain.unsloth_backend import validate_fast_language_model_api
+
+        validate_fast_language_model_api(unsloth.FastLanguageModel)
+        torch = importlib.import_module("torch")
+        cuda_ok = bool(torch.cuda.is_available())
+        probes.append(
+            BackendRuntimeProbe(
+                backend="unsloth",
+                probe="unsloth_runtime",
+                status="ok",
+                detail=(
+                    "unsloth import ok, FastLanguageModel API ok, "
+                    f"cuda_available={cuda_ok}"
+                ),
+            )
+        )
+    except Exception as exc:
+        probes.append(
+            BackendRuntimeProbe(
+                backend="unsloth",
+                probe="unsloth_runtime",
                 status="fail",
                 detail=f"{type(exc).__name__}: {exc}",
             )

@@ -18,7 +18,7 @@ import inspect
 import json
 import math
 import sys
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 import time
 from dataclasses import dataclass
 import types
@@ -739,9 +739,14 @@ class VerifiersRolloutTiming:
     render_completion_s: float = 0.0
     score_s: float = 0.0
     branch_s: float = 0.0
+    scheduler_wait_s: float = 0.0
+    scheduler_worker_s: float = 0.0
+    scheduler_buffer_wait_s: float = 0.0
     total_s: float = 0.0
     turns: int = 0
     model_tokens: int = 0
+    env_workers: int = 1
+    buffer_size: int = 1
     env_timing_s: dict[str, float] | None = None
 
     def as_metrics(self, prefix: str = "rollout/") -> dict[str, float]:
@@ -755,14 +760,79 @@ class VerifiersRolloutTiming:
             f"{prefix}render_completion_s": self.render_completion_s,
             f"{prefix}score_s": self.score_s,
             f"{prefix}branch_s": self.branch_s,
+            f"{prefix}scheduler_wait_s": self.scheduler_wait_s,
+            f"{prefix}scheduler_worker_s": self.scheduler_worker_s,
+            f"{prefix}scheduler_buffer_wait_s": self.scheduler_buffer_wait_s,
             f"{prefix}total_s": self.total_s,
             f"{prefix}turns": float(self.turns),
             f"{prefix}model_tokens": float(self.model_tokens),
+            f"{prefix}env_workers": float(self.env_workers),
+            f"{prefix}buffer_size": float(self.buffer_size),
         }
         if self.env_timing_s:
             for key, value in self.env_timing_s.items():
                 metrics[f"{prefix}env/{key}"] = value
         return metrics
+
+
+class RolloutScheduler:
+    """Bound async environment work for one multi-turn rollout group."""
+
+    def __init__(
+        self,
+        *,
+        max_env_workers: int,
+        max_buffered_rollouts: int,
+    ) -> None:
+        self.max_env_workers = max(1, int(max_env_workers))
+        self.max_buffered_rollouts = max(1, int(max_buffered_rollouts))
+
+    async def map_ordered(
+        self,
+        items: list[object],
+        worker: Callable[[object], Awaitable[object]],
+        timing: VerifiersRolloutTiming,
+    ) -> list[object]:
+        """Run async item work with bounded concurrency and stable ordering."""
+        if not items:
+            return []
+
+        if self.max_env_workers <= 1:
+            results = []
+            for item in items:
+                started = time.perf_counter()
+                result = await worker(item)
+                timing.scheduler_worker_s += time.perf_counter() - started
+                results.append(result)
+            return results
+
+        env_sem = asyncio.Semaphore(self.max_env_workers)
+        buffer_sem = asyncio.Semaphore(min(self.max_buffered_rollouts, len(items)))
+
+        async def run_one(pos: int, item: object) -> tuple[int, object]:
+            buffer_wait_started = time.perf_counter()
+            await buffer_sem.acquire()
+            timing.scheduler_buffer_wait_s += (
+                time.perf_counter() - buffer_wait_started
+            )
+            worker_wait_started = time.perf_counter()
+            await env_sem.acquire()
+            timing.scheduler_wait_s += time.perf_counter() - worker_wait_started
+            try:
+                started = time.perf_counter()
+                result = await worker(item)
+                timing.scheduler_worker_s += time.perf_counter() - started
+                return pos, result
+            finally:
+                env_sem.release()
+                buffer_sem.release()
+
+        slots: list[object | None] = [None] * len(items)
+        for pos, result in await asyncio.gather(
+            *(run_one(pos, item) for pos, item in enumerate(items))
+        ):
+            slots[pos] = result
+        return [cast(object, result) for result in slots]
 
 
 def is_multiturn_environment(env: object) -> bool:
@@ -1071,6 +1141,8 @@ def run_multiturn_group(
     tl_grpo_lookahead_steps: int = 0,
     tl_grpo_outcome_baseline: float | None = None,
     temperature_spread: float = 0.0,
+    rollout_env_workers: int = 1,
+    rollout_buffer_size: int = 0,
 ) -> tuple[
     list[float],
     list[list[VerifiersTurnSample]],
@@ -1114,6 +1186,12 @@ def run_multiturn_group(
         states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [[] for _ in range(num_rollouts)]
         rollout_timing = VerifiersRolloutTiming(env_timing_s={})
+        scheduler = RolloutScheduler(
+            max_env_workers=rollout_env_workers,
+            max_buffered_rollouts=rollout_buffer_size or max(1, num_rollouts),
+        )
+        rollout_timing.env_workers = scheduler.max_env_workers
+        rollout_timing.buffer_size = scheduler.max_buffered_rollouts
         rollout_started = time.perf_counter()
 
         async def cleanup_states() -> None:
@@ -1141,7 +1219,8 @@ def run_multiturn_group(
             rollout_temps = [temperature] * num_rollouts
 
         try:
-            for i in range(num_rollouts):
+            async def init_one(raw_idx: object) -> StateDict:
+                i = int(cast(int, raw_idx))
                 input_payload: dict[str, object] = {
                     "prompt": prompt,
                     "answer": answer,
@@ -1159,14 +1238,28 @@ def run_multiturn_group(
                 )
                 state = await env_typed.setup_state(state)
                 rollout_timing.init_state_s += time.perf_counter() - init_started
-                states.append(state)
+                return state
+
+            states = [
+                cast(StateDict, state)
+                for state in await scheduler.map_ordered(
+                    list(range(num_rollouts)),
+                    init_one,
+                    rollout_timing,
+                )
+            ]
 
             turn_count = 0
             while True:
                 active: list[tuple[int, PromptLike, list[int], list[int] | None]] = []
-                for idx, state in enumerate(states):
+                indexed_states = list(enumerate(states))
+
+                async def render_active(
+                    raw_item: object,
+                ) -> tuple[int, PromptLike, list[int], list[int] | None] | None:
+                    idx, state = cast(tuple[int, StateDict], raw_item)
                     if await env_typed.is_completed(state):
-                        continue
+                        return None
                     render_started = time.perf_counter()
                     prompt_messages = await env_typed.get_prompt_messages(state)
                     rollout_timing.prompt_render_s += (
@@ -1176,7 +1269,7 @@ def run_multiturn_group(
                     # prompt, so collect observation timings before appending a step.
                     _collect_observation_timing(state, rollout_timing.env_timing_s)
                     if state.get("final_env_response") is not None:
-                        continue
+                        return None
                     encode_started = time.perf_counter()
                     prompt_ids = encode_prompt_for_sampling(tokenizer, prompt_messages)
                     observation_mask = observation_mask_for_prompt(
@@ -1187,7 +1280,17 @@ def run_multiturn_group(
                     rollout_timing.prompt_encode_s += (
                         time.perf_counter() - encode_started
                     )
-                    active.append((idx, prompt_messages, prompt_ids, observation_mask))
+                    return (idx, prompt_messages, prompt_ids, observation_mask)
+
+                active = [
+                    cast(tuple[int, PromptLike, list[int], list[int] | None], item)
+                    for item in await scheduler.map_ordered(
+                        indexed_states,
+                        render_active,
+                        rollout_timing,
+                    )
+                    if item is not None
+                ]
 
                 if not active:
                     break
@@ -1228,19 +1331,25 @@ def run_multiturn_group(
                 )
                 rollout_timing.decode_s += time.perf_counter() - decode_started
 
-                for pos, (
-                    idx,
-                    prompt_messages,
-                    prompt_ids,
-                    observation_mask,
-                ) in enumerate(active):
+                step_jobs = list(enumerate(active))
+
+                async def add_step(
+                    raw_job: object,
+                ) -> tuple[int, VerifiersTurnSample, int]:
+                    pos, active_item = cast(
+                        tuple[
+                            int,
+                            tuple[int, PromptLike, list[int], list[int] | None],
+                        ],
+                        raw_job,
+                    )
+                    idx, prompt_messages, prompt_ids, observation_mask = active_item
                     completion_ids = completion_ids_batch[pos]
                     completion_logprobs = completion_logprobs_batch[pos]
                     completion_text = completion_texts[pos]
                     completion_messages = _completion_messages_for_env(
                         env_typed, completion_text
                     )
-                    rollout_timing.model_tokens += len(completion_ids)
 
                     tokens_payload = {
                         "prompt_ids": list(prompt_ids),
@@ -1281,29 +1390,42 @@ def run_multiturn_group(
                         time.perf_counter() - step_started
                     )
                     _collect_observation_timing(states[idx], rollout_timing.env_timing_s)
-                    per_rollout_turns[idx].append(
-                        VerifiersTurnSample(
-                            prompt_ids=list(prompt_ids),
-                            completion_ids=list(completion_ids),
-                            completion_logprobs=list(completion_logprobs),
-                            completion_text=completion_text,
-                            observation_mask=(
-                                list(observation_mask)
-                                if observation_mask is not None
-                                else None
-                            ),
-                        )
+                    turn_sample = VerifiersTurnSample(
+                        prompt_ids=list(prompt_ids),
+                        completion_ids=list(completion_ids),
+                        completion_logprobs=list(completion_logprobs),
+                        completion_text=completion_text,
+                        observation_mask=(
+                            list(observation_mask)
+                            if observation_mask is not None
+                            else None
+                        ),
                     )
+                    return idx, turn_sample, len(completion_ids)
+
+                for idx, turn_sample, token_count in (
+                    cast(tuple[int, VerifiersTurnSample, int], item)
+                    for item in await scheduler.map_ordered(
+                        step_jobs,
+                        add_step,
+                        rollout_timing,
+                    )
+                ):
+                    per_rollout_turns[idx].append(turn_sample)
+                    rollout_timing.model_tokens += token_count
 
                 turn_count += 1
                 rollout_timing.turns += len(active)
 
-            for state in states:
+            async def render_completion_one(raw_state: object) -> None:
+                state = cast(StateDict, raw_state)
                 render_started = time.perf_counter()
                 await env_typed.render_completion(state)
                 rollout_timing.render_completion_s += (
                     time.perf_counter() - render_started
                 )
+
+            await scheduler.map_ordered(states, render_completion_one, rollout_timing)
             score_started = time.perf_counter()
             await env_typed.rubric.score_group(states)
             rollout_timing.score_s += time.perf_counter() - score_started

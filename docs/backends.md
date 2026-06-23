@@ -1,16 +1,17 @@
 # Backends
 
-retrain supports three training backends: **local** (PyTorch/PEFT on your GPUs), **tinker** (remote GPU service), and **prime_rl** (external PRIME-RL trainer + inference).
+retrain supports four training backends: **local** (PyTorch/PEFT on your GPUs), **unsloth** (Unsloth-patched local model loading with retrain's trainer loop), **tinker** (remote GPU service), and **prime_rl** (external PRIME-RL trainer + inference).
 
 ## Backend capabilities
 
 `retrain doctor`, `retrain explain`, and trainer startup report capability metadata:
 
-| Backend | reports_sync_loss | preserves_token_advantages | supports_checkpoint_resume | resume_runtime_dependent |
-|---------|-------------------|----------------------------|----------------------------|--------------------------|
-| `local` | `true` | `true` | `true` | `false` |
-| `tinker` | `true` | `true` | `true` | `true` |
-| `prime_rl` | `false` | `false` | `true` | `false` |
+| Backend | reports_sync_loss | preserves_token_advantages | supports_checkpoint_resume | resume_runtime_dependent | supports_echo_shared_forward |
+|---------|-------------------|----------------------------|----------------------------|--------------------------|------------------------------|
+| `local` | `true` | `true` | `true` | `false` | `true` |
+| `unsloth` | `true` | `true` | `true` | `false` | `true` |
+| `tinker` | `true` | `true` | `true` | `true` | `false` |
+| `prime_rl` | `false` | `false` | `true` | `false` | `false` |
 
 - `reports_sync_loss=false` means the backend returns a placeholder loss value by design.
 - `preserves_token_advantages=false` means token-level advantages are aggregated before backend transport.
@@ -71,15 +72,74 @@ PyTorch sampling:
 [backend.options]
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
 cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
-sample_use_cache = false   # slower PyTorch sampling, lower KV-cache memory
+sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
+gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 ```
 
 This splits local train-step datums into smaller forward/backward chunks while
 preserving the token-weighted loss. Use it when sampling fits but training OOMs
-on the full datum batch. `cuda_empty_cache` does not change model math; it only
+on the full datum batch. `cuda_empty_cache` defaults to `true` for the local
+backend because multi-step cache-on runs can otherwise hit allocator
+fragmentation even when one-step probes fit. It does not change model math; it
 trades allocator reuse for lower fragmentation pressure. `sample_use_cache =
-false` is a compute-for-memory tradeoff for the PyTorch inference engine,
-especially Gemma4's text-only manual sampling path.
+true` keeps PyTorch generation on the fast KV-cache path; disable it only for
+low-memory fallback sweeps. `gradient_checkpointing` is enabled by default to
+preserve the historical local backend behavior; set it to `false` in throughput
+sweeps when VRAM headroom is available.
+
+On the shared-model one-GPU path, retrain temporarily disables gradient
+checkpointing during PyTorch sampling when `sample_use_cache = true`, then
+re-enables it before the train step. This keeps the train memory win without
+letting Hugging Face's checkpointing/use-cache incompatibility silently defeat
+KV-cache inference.
+
+For a reproducible 1-GPU sweep over the local backend memory/throughput axes,
+start with a dry run:
+
+```bash
+uv run python scripts/one_gpu_local_sweep.py config.toml --dry-run
+```
+
+Then run a small smoke subset before the full Cartesian product:
+
+```bash
+uv run python scripts/one_gpu_local_sweep.py config.toml \
+  --max-conditions 4 --isolate-conditions
+```
+
+The sweep varies `sample_use_cache`, `cuda_empty_cache`,
+`gradient_checkpointing`, `train_microbatch_size`, and `group_size`, and each
+condition writes an isolated benchmark suite plus a `sweep_manifest.json`.
+Use `--continue-on-error` for full sweeps where OOM or server failures should
+be recorded as condition data instead of aborting the remaining matrix.
+Use `--isolate-conditions` for GPU-memory sweeps so each condition runs in a
+fresh child process with a fresh CUDA context.
+
+To compare local PyTorch inference against already-running vLLM and SGLang
+servers under the same config seed and quality gates:
+
+```bash
+uv run python scripts/one_gpu_backend_compare.py config.toml \
+  --engines pytorch,vllm,sglang \
+  --vllm-url http://127.0.0.1:8000 \
+  --sglang-url http://127.0.0.1:30000 \
+  --group-size 2 --microbatch-size 1
+```
+
+The comparison harness preflights `/health` or `/v1/models` for external
+servers, enforces token-native prompt usage for vLLM/SGLang by default, and
+writes per-engine `condition_status.json` files. It also supports
+`--engines trtllm --trtllm-url http://127.0.0.1:31000` for TensorRT-LLM.
+It fails vLLM/SGLang/TensorRT-LLM runs by default if the adapter freshness
+signal is missing or failing. Use `--allow-adapter-reload-failure` only for
+throughput-only server experiments where stale adapter sampling is acceptable.
+
+On one GPU, prefer running `--engines pytorch` first, then one external engine
+at a time after starting only that server. vLLM, SGLang, and TensorRT-LLM each
+load a second base-model copy, so running multiple servers alongside the trainer
+measures memory contention more than inference quality. See
+[Inference Engines](inference-engines.md#one-gpu-external-engine-comparison)
+for memory-capped launch commands.
 
 ### Single GPU
 
@@ -186,6 +246,126 @@ The tokenizer and dataset still load locally (for prompt encoding and reward sco
 | ECHO strict shared forward | Yes, per local training microbatch | No; ECHO configs are rejected until the remote API can provide one shared actor pass |
 | Setup | `pip install -e .` + CUDA GPU | `pip install -e ".[tinker]"` + service URL |
 
+## Unsloth backend
+
+Uses Unsloth `FastLanguageModel` for local model loading and LoRA/QLoRA patching
+while keeping retrain's rollout, reward, token-advantage, ECHO, checkpoint, and
+logging contracts. This is the intended one-GPU long-context backend to test
+before rewriting retrain internals.
+
+```toml
+[backend]
+backend = "unsloth"
+devices = "gpu:0"
+
+[backend.options]
+max_seq_length = 32768       # set explicitly for long-context runs
+load_in_4bit = true          # QLoRA default
+device_map = "retrain"       # load directly on retrain's train device
+train_microbatch_size = 1
+cuda_empty_cache = true
+sample_use_cache = true
+gradient_checkpointing = true
+liger_fused_linear_ce = true
+qwen35_gated_delta_chunk_size = "auto"  # 4070 Ti-safe Qwen3.5 fallback
+train_selective_suffix_logits = true    # only backprop weighted RL/ECHO tokens
+train_save_on_cpu = true                # needed for 30k-token rows on 12 GB
+```
+
+For exact full-context long-row training on small GPUs, selective saved-tensor
+offload can keep small autograd-saved tensors on GPU while offloading larger
+tensors to CPU. This preserves the same train context and gradient objective as
+`train_save_on_cpu = true`; it only changes the saved-tensor placement policy.
+
+```toml
+[backend.options]
+train_save_on_cpu = true
+train_save_on_cpu_pin_memory = true
+train_save_on_cpu_min_numel = 1048576  # 0 = offload every saved tensor
+```
+
+For the fastest one-GPU iteration on very long prompts, use a supervised context
+window. This keeps rollout/inference on the full prompt but trains only on a
+suffix window before the earliest weighted RL/ECHO token. It is not the same
+gradient as full-context RL; use it when iteration speed matters more than
+full-context credit assignment.
+
+```toml
+[backend.options]
+train_selective_suffix_logits = true
+train_supervised_context_tokens = 16384  # 0 disables; 8192/16384 are useful probes
+train_save_on_cpu = false                # the cropped row should fit without CPU offload
+```
+
+Install Unsloth Core in the training environment:
+
+```bash
+uv pip install unsloth --torch-backend=auto
+```
+
+Then run a real backend smoke before any long Quaero run:
+
+```bash
+uv run python scripts/smoke_unsloth_backend.py \
+  --model Qwen/Qwen3.5-2B \
+  --device gpu:0 \
+  --max-seq-length 32768 \
+  --output /tmp/retrain_unsloth_smoke.json
+```
+
+The smoke imports the installed Unsloth package, verifies the
+`FastLanguageModel` API shape, loads the model through retrain's Unsloth
+backend, samples one token, runs one RL+ECHO update, and writes JSON evidence
+including losses, runtime counters, and CUDA peak-memory counters. A green local
+unit suite is not a substitute for this installed-package smoke.
+
+Measured on the remote 11.6 GB RTX 4070 Ti with `Qwen/Qwen3.5-2B`,
+`max_seq_length = 32768`, QLoRA rank 8, one 30k-token synthetic prompt, one
+sampled token, and one RL+ECHO update: `train_save_on_cpu = true` passed with
+about 7.48 GB peak CUDA reserved and 116 s train wall time. The same 30k train
+step OOMed without saved-tensor CPU offload even with Unsloth gradient
+checkpointing, Liger fused CE, selective suffix logits, and Tiled MLP. For
+shorter rows, keep `train_save_on_cpu = false` unless a smoke proves it is
+needed; 16k-token rows fit without it and are much faster.
+
+Measured exact selective-offload results on the same host and prompt:
+`train_save_on_cpu_min_numel = 65536` ran in 115.56 s, `1048576` ran in
+109.72 s, `1572864` ran in 109.63 s, and `2097152` ran in 109.62 s. These keep
+the full 30001-token train row (`local_train_context_tokens_removed = 0`) but
+do not reach a 25% speedup on the 4070 Ti; the best measured gain was about
+5.7%, with peak reserved memory near the card limit. Use this as a small exact
+throughput knob, not as a substitute for more VRAM or working native kernels.
+
+Measured approximate supervised-window results on the same host and prompt:
+`train_supervised_context_tokens = 4096` cropped the train row from 30001 to
+4098 tokens and reduced train wall time to 5.68 s; `8192` cropped to 8194 tokens
+and ran in 12.50 s; `16384` cropped to 16386 tokens and ran in 34.83 s. These
+are throughput wins, not proof that the shorter training context is quality
+equivalent.
+
+`offload_embedding = true` is exposed for API completeness, but it failed this
+shared-model PyTorch path because Unsloth moved embeddings to CPU while retrain
+feeds CUDA token IDs during sampling. Keep it `false` until a dedicated
+embedding-offload input path is implemented and smoked.
+
+`max_seq_length = 0` falls back to `max(2048, max_tokens)`, which is only a
+conservative smoke default. For Quaero long-horizon experiments, set the desired
+training sequence length explicitly. The backend rejects contradictory precision
+modes such as `load_in_4bit = true` and `load_in_16bit = true` in the same
+config. Full fine-tuning is intentionally not exposed yet because retrain's
+checkpoint and weight-sync contract is adapter-based.
+
+`device_map = "retrain"` asks Unsloth/HuggingFace to place the model on
+retrain's selected training device during load. This matters for 4-bit/8-bit
+QLoRA because those quantized models generally cannot be moved safely with a
+post-load `.to(device)` call. Advanced runs can pass an Unsloth/HuggingFace
+device-map string such as `"sequential"` or `"auto"` instead.
+
+ECHO works on this backend because it reuses retrain's lower-level
+`train_step_with_echo_masks` path: RL and environment-token losses are computed
+from the same actor forward/backward pass. This is different from handing control
+to an opaque external GRPO trainer.
+
 ## PRIME-RL backend (experimental)
 
 Uses a running PRIME-RL stack for training + inference while keeping retrain's
@@ -262,5 +442,9 @@ This restores:
 The resume directory must contain a `trainer_state.json` file (created automatically by `save_every` checkpoints and at the end of training).
 
 **Local backend:** Checkpoints are saved to `adapter_path` as subdirectories (e.g., `checkpoint_step_20/`, `final/`). LoRA weights are restored via `safetensors` or `.bin` files. Optimizer state (Adam momentum) is not restored -- the optimizer re-warms.
+
+**Unsloth backend:** Checkpoint semantics match the local adapter path: retrain
+saves and restores LoRA adapter directories under `adapter_path`. Optimizer state
+is not restored.
 
 **Tinker backend:** Checkpoint loading requires the Tinker SDK to support `load_state()` on the training client. If your SDK version doesn't have this method, resume will fail with an `AttributeError`. Check your Tinker SDK version supports checkpoint loading before relying on resume.

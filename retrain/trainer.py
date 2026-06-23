@@ -681,6 +681,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         flow = build_flow(config, gpu=True)
         trace_result = flow.trace()
         if not trace_result.ok:
+            shutdown = getattr(flow.backend, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    pass
             msgs = [i.message for i in trace_result.issues if i.severity == "error"]
             raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
         _print_flow_warnings(trace_result)
@@ -704,6 +710,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
     wandb_run: WandbRunLike | None = None
     wandb_enabled = False
+    backend_for_cleanup = getattr(flow, "backend", None)
 
     try:
         # -----------------------------------------------------------------------
@@ -1202,6 +1209,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         tl_grpo_branch_size=config.tl_grpo_branch_size,
                         tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
                         tl_grpo_outcome_baseline=tl_grpo_ema,
+                        rollout_env_workers=config.environment_rollout_env_workers,
+                        rollout_buffer_size=config.environment_rollout_buffer_size,
                     )
                     _accumulate_metric_totals(
                         rollout_timing_metrics,
@@ -2263,6 +2272,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if wandb_enabled and wandb_run is not None:
             try:
                 wandb_run.finish()
+            except Exception:
+                pass
+        shutdown = getattr(backend_for_cleanup, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
             except Exception:
                 pass
         for logger in (metrics_logger, steps_logger, generations_logger):

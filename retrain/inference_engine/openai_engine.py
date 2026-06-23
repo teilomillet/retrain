@@ -1,11 +1,14 @@
-"""OpenAI-compatible inference engine — HTTP client for vLLM, SGLang, MLX-LM, MAX serve.
+"""OpenAI-compatible inference engine — HTTP client for vLLM, SGLang, TensorRT-LLM, MLX-LM, MAX serve.
 
 Targets any server exposing /v1/completions with logprobs support.
-Decodes prompt token IDs to text, sends HTTP requests, recovers token IDs
-and logprobs from the response.
+For vLLM/SGLang, sends prompt token IDs directly to avoid client-side
+decode + server-side re-tokenization. Other OpenAI-compatible servers keep the
+text prompt fallback path.
 
 Weight reloading uses:
-- /v1/load_lora_adapter for vLLM/SGLang-style servers
+- /v1/load_lora_adapter for vLLM
+- /load_lora_adapter for SGLang
+- per-request "lora_request" payload field for TensorRT-LLM
 - per-request "adapters" payload field for MLX-LM server
 """
 
@@ -17,6 +20,11 @@ from transformers import AutoTokenizer
 from retrain.inference_engine.base import InferenceEngine, SampleResult
 
 
+_TOKEN_NATIVE_ENGINES = frozenset({"vllm", "sglang"})
+_LIVE_LORA_NAME = "default"
+_LIVE_LORA_INT_ID = 0
+
+
 class OpenAIEngine(InferenceEngine):
     """HTTP client targeting OpenAI-compatible /v1/completions endpoints."""
 
@@ -26,7 +34,7 @@ class OpenAIEngine(InferenceEngine):
         Args:
             base_url: Server URL (e.g. "http://localhost:8000").
             model_name: HuggingFace model ID (for tokenizer + model param).
-            engine_type: One of "vllm", "sglang", "mlx", "openai".
+            engine_type: One of "vllm", "sglang", "trtllm", "mlx", "openai".
         """
         self.base_url = base_url.rstrip("/")
         self.model_name = model_name
@@ -42,6 +50,11 @@ class OpenAIEngine(InferenceEngine):
         self._prompt_text_cache: dict[tuple[int, ...], str] = {}
         self._prompt_decode_calls = 0
         self._prompt_cache_hits = 0
+        self._token_prompt_calls = 0
+        self._token_prompt_fallbacks = 0
+        self._adapter_reload_calls = 0
+        self._adapter_reload_failures = 0
+        self._adapter_reload_skips = 0
 
         print(f"OpenAIEngine ready ({engine_type} @ {self.base_url}).")
 
@@ -49,18 +62,17 @@ class OpenAIEngine(InferenceEngine):
                  compute_entropy=False):
         """Generate completions via /v1/completions with logprobs.
 
-        Decodes prompt token IDs to text, sends request, recovers token IDs
-        from the response logprobs tokens field.
+        vLLM/SGLang receive prompt token IDs directly. Text-only servers receive
+        decoded prompts with a local decode cache.
         """
         results = []
 
         for prompt_ids in prompt_ids_list:
-            # Decode prompt to text for the API
-            prompt_text = self._prompt_text(prompt_ids)
+            prompt_payload, token_native = self._prompt_payload(prompt_ids)
 
             payload = {
-                "model": self.model_name,
-                "prompt": prompt_text,
+                "model": self._request_model_name(),
+                "prompt": prompt_payload,
                 "max_tokens": max_tokens,
                 "temperature": max(temperature, 1e-7),
                 "top_p": top_p,
@@ -70,8 +82,21 @@ class OpenAIEngine(InferenceEngine):
             # mlx_lm.server supports dynamic adapter selection via request payload.
             if self.engine_type == "mlx" and self._current_adapter_path:
                 payload["adapters"] = self._current_adapter_path
+            if self.engine_type == "trtllm" and self._current_adapter_path:
+                payload["lora_request"] = {
+                    "lora_name": _LIVE_LORA_NAME,
+                    "lora_int_id": _LIVE_LORA_INT_ID,
+                    "lora_path": self._current_adapter_path,
+                }
 
-            response = self._post("/v1/completions", payload)
+            try:
+                response = self._post("/v1/completions", payload)
+            except RuntimeError as exc:
+                if not token_native or not self._is_token_prompt_rejection(exc):
+                    raise
+                self._token_prompt_fallbacks += 1
+                payload["prompt"] = self._prompt_text(prompt_ids)
+                response = self._post("/v1/completions", payload)
             choices = response.get("choices", [])
 
             group = []
@@ -90,6 +115,19 @@ class OpenAIEngine(InferenceEngine):
             results.append(group)
 
         return results
+
+    def _request_model_name(self):
+        if self.engine_type == "vllm" and self._current_adapter_path:
+            return _LIVE_LORA_NAME
+        if self.engine_type == "sglang" and self._current_adapter_path:
+            return f"{self.model_name}:{_LIVE_LORA_NAME}"
+        return self.model_name
+
+    def _prompt_payload(self, prompt_ids):
+        if self.engine_type in _TOKEN_NATIVE_ENGINES:
+            self._token_prompt_calls += 1
+            return list(prompt_ids), True
+        return self._prompt_text(prompt_ids), False
 
     def _prompt_text(self, prompt_ids):
         """Decode prompt ids to text once per unique prompt."""
@@ -112,7 +150,20 @@ class OpenAIEngine(InferenceEngine):
             "engine_prompt_decode_calls": self._prompt_decode_calls,
             "engine_prompt_cache_hits": self._prompt_cache_hits,
             "engine_prompt_cache_size": len(self._prompt_text_cache),
+            "engine_token_prompt_calls": self._token_prompt_calls,
+            "engine_token_prompt_fallbacks": self._token_prompt_fallbacks,
+            "engine_token_native_prompt_enabled": int(
+                self.engine_type in _TOKEN_NATIVE_ENGINES
+            ),
+            "engine_adapter_reload_calls": self._adapter_reload_calls,
+            "engine_adapter_reload_failures": self._adapter_reload_failures,
+            "engine_adapter_reload_skips": self._adapter_reload_skips,
         }
+
+    @staticmethod
+    def _is_token_prompt_rejection(exc):
+        text = str(exc)
+        return "400" in text or "422" in text
 
     def _recover_tokens(self, prompt_ids, text, logprobs_info, choice=None):
         """Recover token IDs and logprobs from API response.
@@ -177,6 +228,17 @@ class OpenAIEngine(InferenceEngine):
             for i, lp in enumerate(token_logprobs):
                 logprobs.append(float(lp) if lp is not None else 0.0)
 
+            if isinstance(token_ids, int):
+                token_ids = [token_ids]
+            if (
+                not isinstance(token_ids, list)
+                or len(token_ids) != len(tokens)
+                or any(not isinstance(token_id, int) for token_id in token_ids)
+            ):
+                encoded_ids = self.tokenizer.encode(text, add_special_tokens=False)
+                min_len = min(len(encoded_ids), len(logprobs))
+                return list(encoded_ids[:min_len]), logprobs[:min_len]
+
             # Ensure lengths match
             min_len = min(len(token_ids), len(logprobs))
             return list(token_ids[:min_len]), logprobs[:min_len]
@@ -189,7 +251,10 @@ class OpenAIEngine(InferenceEngine):
     def _choice_token_ids(payload):
         raw_ids = payload.get("completion_ids") or payload.get("token_ids")
         if isinstance(raw_ids, list):
-            return [int(token_id) for token_id in raw_ids]
+            try:
+                return [int(token_id) for token_id in raw_ids]
+            except (TypeError, ValueError):
+                return None
         return None
 
     @staticmethod
@@ -206,11 +271,12 @@ class OpenAIEngine(InferenceEngine):
     def reload_weights(self, adapter_path):
         """Tell the server to load/reload a LoRA adapter.
 
-        Uses /v1/load_lora_adapter for vLLM/SGLang-style servers.
-        For MLX-LM, stores adapter path and sends it on each request as
-        the "adapters" field.
+        Uses the backend-specific LoRA load route for vLLM/SGLang servers.
+        For TensorRT-LLM and MLX-LM, stores adapter path and sends it on each
+        request using the server-specific per-request adapter field.
         """
-        if adapter_path == self._current_adapter_path:
+        if adapter_path == self._current_adapter_path and self.engine_type == "mlx":
+            self._adapter_reload_skips += 1
             return
 
         if self.engine_type == "mlx":
@@ -218,24 +284,45 @@ class OpenAIEngine(InferenceEngine):
             print(f"MLX-LM adapter set to {adapter_path}")
             return
 
+        if self.engine_type == "trtllm":
+            self._adapter_reload_calls += 1
+            self._current_adapter_path = adapter_path
+            print(f"TensorRT-LLM adapter set for per-request LoRA: {adapter_path}")
+            return
+
         payload = {
-            "lora_name": "default",
+            "lora_name": _LIVE_LORA_NAME,
             "lora_path": adapter_path,
         }
+        if self.engine_type == "vllm":
+            payload["load_inplace"] = True
 
+        self._adapter_reload_calls += 1
         try:
-            self._post("/v1/load_lora_adapter", payload)
+            if self.engine_type == "sglang" and self._current_adapter_path:
+                self._unload_sglang_adapter()
+            self._post(self._adapter_reload_endpoint(), payload, expect_json=False)
             self._current_adapter_path = adapter_path
             print(f"Server adapter reloaded from {adapter_path}")
         except Exception as e:
+            self._adapter_reload_failures += 1
             print(f"Warning: adapter reload failed ({e}). "
                   f"Server may not support dynamic LoRA loading.")
+
+    def _adapter_reload_endpoint(self):
+        if self.engine_type == "sglang":
+            return "/load_lora_adapter"
+        return "/v1/load_lora_adapter"
+
+    def _unload_sglang_adapter(self):
+        payload = {"lora_name": _LIVE_LORA_NAME}
+        self._post("/unload_lora_adapter", payload, expect_json=False)
 
     def shutdown(self):
         """Close HTTP session."""
         self.session.close()
 
-    def _post(self, endpoint, payload, max_retries=3):
+    def _post(self, endpoint, payload, max_retries=3, expect_json=True):
         """POST to server with retry logic for transient failures.
 
         Args:
@@ -255,6 +342,11 @@ class OpenAIEngine(InferenceEngine):
             try:
                 resp = self.session.post(url, json=payload, timeout=120)
                 resp.raise_for_status()
+                if not expect_json:
+                    try:
+                        return resp.json()
+                    except ValueError:
+                        return {"text": resp.text}
                 return resp.json()
             except requests.exceptions.ConnectionError:
                 if attempt < max_retries - 1:
@@ -267,7 +359,9 @@ class OpenAIEngine(InferenceEngine):
                         f"Is the inference server running?"
                     )
             except requests.exceptions.HTTPError as e:
-                raise RuntimeError(f"HTTP error from {url}: {e}")
+                body = getattr(e.response, "text", "") if e.response is not None else ""
+                detail = f": {body}" if body else ""
+                raise RuntimeError(f"HTTP error from {url}: {e}{detail}")
             except requests.exceptions.Timeout:
                 if attempt < max_retries - 1:
                     print(f"Timeout on {url}, retrying...")

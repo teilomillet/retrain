@@ -8,6 +8,7 @@ import pytest
 
 from retrain.config import TrainConfig
 from retrain import trainer as trainer_mod
+from retrain.flow import TraceIssue, TraceResult
 
 
 class _FakeLogger:
@@ -25,6 +26,14 @@ class _FakeLogger:
         self.closed = True
 
 
+class _FakeBackend:
+    def __init__(self) -> None:
+        self.shutdown_called = False
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
+
+
 class _FakeExample:
     def __init__(self) -> None:
         self.prompt = "prompt"
@@ -37,6 +46,49 @@ class _FakeRegistry:
     def create(self, *args, **kwargs):  # noqa: ANN002, ANN003
         _ = args, kwargs
         return SimpleNamespace(load=lambda: [_FakeExample()])
+
+
+def test_train_shuts_down_backend_when_flow_trace_fails(tmp_path, monkeypatch) -> None:
+    backend = _FakeBackend()
+
+    class _BadFlow:
+        def __init__(self, backend: _FakeBackend) -> None:
+            self.backend_capabilities = SimpleNamespace(
+                reports_sync_loss=True,
+                preserves_token_advantages=True,
+                supports_checkpoint_resume=True,
+                resume_runtime_dependent=False,
+            )
+            self.backend_capability_source = "builtin"
+            self.backend = backend
+
+        def trace(self) -> TraceResult:
+            return TraceResult(
+                issues=[
+                    TraceIssue(
+                        severity="error",
+                        category="compat",
+                        message="bad flow",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        trainer_mod,
+        "build_flow",
+        lambda *args, **kwargs: _BadFlow(backend),
+    )
+    monkeypatch.setattr(trainer_mod, "_print_config_summary", lambda config: None)
+    config = TrainConfig(
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        max_steps=1,
+    )
+
+    with pytest.raises(ValueError, match="bad flow"):
+        trainer_mod.train(config)
+
+    assert backend.shutdown_called is True
 
 
 def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -> None:
@@ -59,8 +111,9 @@ def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -
         lambda *args, **kwargs: None,  # noqa: ARG005
     )
 
+    backend = _FakeBackend()
     flow = SimpleNamespace(
-        backend=object(),
+        backend=backend,
         backend_capabilities=SimpleNamespace(
             reports_sync_loss=True,
             preserves_token_advantages=True,
@@ -85,3 +138,4 @@ def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -
 
     assert len(_FakeLogger.instances) == 3
     assert all(logger.closed for logger in _FakeLogger.instances)
+    assert backend.shutdown_called is True

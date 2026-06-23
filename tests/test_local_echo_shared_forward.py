@@ -27,6 +27,14 @@ class _ScalarLM(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.zeros(()))
 
 
+class _ClearCacheEngine:
+    def __init__(self) -> None:
+        self.clear_calls = 0
+
+    def clear_prefix_cache(self) -> None:
+        self.clear_calls += 1
+
+
 def _helper(model: torch.nn.Module) -> LocalTrainHelper:
     helper = object.__new__(LocalTrainHelper)
     helper.train_model = model
@@ -128,3 +136,22 @@ def test_local_echo_mask_train_step_updates_model_with_real_logits(monkeypatch) 
     assert math.isfinite(float(echo_loss))
     assert float(echo_loss) > 0.0
     assert changed
+
+
+def test_local_echo_train_step_clears_inference_prefix_cache() -> None:
+    helper = _helper(_TinyLM())
+    engine = _ClearCacheEngine()
+    helper.engine = engine
+
+    helper.train_step_with_echo_masks(
+        all_tokens=[[1, 2, 3, 4]],
+        all_logprobs=[[0.0, 0.0, -0.2, 0.0]],
+        all_advantages=[[0.0, 0.0, 0.3, 0.0]],
+        echo_advantages=[[0.0, 0.0, 0.2, 0.0]],
+        echo_full_observation_counts=[1],
+        echo_loss_fn="cross_entropy",
+        lr=0.05,
+        weight_decay=0.0,
+    )
+
+    assert engine.clear_calls == 1

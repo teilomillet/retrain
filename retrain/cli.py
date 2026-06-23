@@ -1179,6 +1179,7 @@ def _resolve_backend_capability_payload(
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
         "resume_runtime_dependent": caps.resume_runtime_dependent,
+        "supports_echo_shared_forward": caps.supports_echo_shared_forward,
     }
 
 
@@ -1188,7 +1189,8 @@ def _format_backend_capability_summary(capabilities: dict[str, object]) -> str:
         f"reports_sync_loss={capabilities['reports_sync_loss']}, "
         f"preserves_token_advantages={capabilities['preserves_token_advantages']}, "
         f"supports_checkpoint_resume={capabilities['supports_checkpoint_resume']}, "
-        f"resume_runtime_dependent={capabilities['resume_runtime_dependent']}"
+        f"resume_runtime_dependent={capabilities['resume_runtime_dependent']}, "
+        f"supports_echo_shared_forward={capabilities['supports_echo_shared_forward']}"
     )
 
 
@@ -1224,7 +1226,8 @@ def _run_backends(args: list[str]) -> None:
             f"reports_sync_loss={caps['reports_sync_loss']}, "
             f"preserves_token_advantages={caps['preserves_token_advantages']}, "
             f"supports_checkpoint_resume={caps['supports_checkpoint_resume']}, "
-            f"resume_runtime_dependent={caps['resume_runtime_dependent']}"
+            f"resume_runtime_dependent={caps['resume_runtime_dependent']}, "
+            f"supports_echo_shared_forward={caps['supports_echo_shared_forward']}"
         )
         option_schema = backend_item["option_schema"]
         if option_schema:

@@ -288,6 +288,22 @@ class TestTrace:
         errors = [i for i in result.issues if i.severity == "error"]
         assert errors == []
 
+    def test_echo_passes_for_unsloth_backend(self):
+        cfg = TrainConfig(
+            backend="unsloth",
+            advantage_mode="grpo",
+            transform_mode="none",
+            environment_provider="verifiers",
+            environment_id="fake/env",
+            echo_enabled=True,
+            backend_options={"max_seq_length": 32768},
+        )
+        flow = build_flow(cfg, gpu=False)
+        result = flow.trace()
+        errors = [i for i in result.issues if i.severity == "error"]
+        assert errors == []
+        assert flow.backend_capabilities.supports_echo_shared_forward is True
+
     def test_echo_allows_plugin_backend_declaring_shared_forward(
         self,
         tmp_path,

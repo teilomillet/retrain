@@ -8,6 +8,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from retrain import local_train_helper as local_mod
 from retrain.gemma4_text import (
     DEFAULT_LORA_TARGET_MODULES,
     eos_token_ids,
@@ -88,6 +89,98 @@ class _FailingEngine:
         raise RuntimeError("sample failed")
 
 
+class _CheckpointToggleModel:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(use_cache=False)
+        self.checkpointing_enabled = True
+        self.disable_calls = 0
+        self.enable_calls = 0
+
+    def gradient_checkpointing_disable(self) -> None:
+        self.checkpointing_enabled = False
+        self.disable_calls += 1
+
+    def gradient_checkpointing_enable(self) -> None:
+        self.checkpointing_enabled = True
+        self.enable_calls += 1
+
+
+class _ConstructorFakeModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.zeros(()))
+        self.config = SimpleNamespace(use_cache=False)
+        self.gradient_checkpointing_enable_calls = 0
+
+    def print_trainable_parameters(self) -> None:
+        pass
+
+    def gradient_checkpointing_enable(self) -> None:
+        self.gradient_checkpointing_enable_calls += 1
+
+
+class _AssertingCacheEngine:
+    def __init__(self, model: _CheckpointToggleModel) -> None:
+        self.model = model
+        self.saw_cache_enabled = False
+
+    def generate(self, *_args, **_kwargs):
+        self.saw_cache_enabled = (
+            self.model.checkpointing_enabled is False
+            and self.model.config.use_cache is True
+        )
+        return [[SimpleNamespace(token_ids=[1, 2], logprobs=[0.0, 0.0])]]
+
+
+class _FakeGenericCausalModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = SimpleNamespace(eos_token_id=7)
+        self.generation_config = SimpleNamespace(eos_token_id=7)
+        self.calls: list[dict] = []
+
+    def forward(self, input_ids, attention_mask=None, use_cache=False, past_key_values=None):
+        self.calls.append(
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "use_cache": use_cache,
+                "past_key_values": past_key_values,
+            }
+        )
+        logits = torch.full((*input_ids.shape, 8), -100.0, device=input_ids.device)
+        logits[..., 3] = 100.0
+        cache = ("cache",) if use_cache else None
+        return SimpleNamespace(logits=logits, past_key_values=cache)
+
+
+class _PrefixCacheCausalModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = SimpleNamespace(eos_token_id=7)
+        self.generation_config = SimpleNamespace(eos_token_id=7)
+        self.calls: list[dict] = []
+
+    def forward(self, input_ids, attention_mask=None, use_cache=False, past_key_values=None):
+        _ = attention_mask
+        prefix_len = (
+            int(past_key_values[0])
+            if isinstance(past_key_values, tuple) and past_key_values
+            else 0
+        )
+        self.calls.append(
+            {
+                "input_len": input_ids.shape[1],
+                "prefix_len": prefix_len,
+                "use_cache": use_cache,
+            }
+        )
+        logits = torch.full((*input_ids.shape, 8), -100.0, device=input_ids.device)
+        logits[..., 3] = 100.0
+        next_len = prefix_len + int(input_ids.shape[1])
+        return SimpleNamespace(logits=logits, past_key_values=(next_len,))
+
+
 def test_gemma4_lora_targets_are_language_tower_exact_names():
     model = _FakeGemma4TextModel()
 
@@ -133,7 +226,7 @@ def test_gemma4_eos_ids_prefer_generation_config():
     assert eos_token_ids(model) == {9}
 
 
-def test_pytorch_engine_moves_existing_model_to_requested_device():
+def test_pytorch_engine_reuses_existing_model_without_moving_it():
     model = _ExistingModel()
 
     engine = PyTorchEngine(
@@ -145,7 +238,7 @@ def test_pytorch_engine_moves_existing_model_to_requested_device():
     )
 
     assert engine.model is model
-    assert model.to_calls == ["cuda:7"]
+    assert model.to_calls == []
 
 
 def test_pytorch_engine_rejects_peft_config_with_existing_model():
@@ -187,16 +280,177 @@ def test_gemma4_text_sampler_can_disable_kv_cache():
     assert [call["kwargs"] for call in model.language_model.calls] == [{}, {}]
 
 
+def test_local_helper_enables_cache_during_shared_model_sampling():
+    model = _CheckpointToggleModel()
+    engine = _AssertingCacheEngine(model)
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.gradient_checkpointing = True
+    helper.sample_use_cache = True
+    helper._external_engine = False
+    helper.split_mode = False
+    helper.train_model = model
+    helper.engine = engine
+    helper.cuda_empty_cache = False
+    helper.infer_device = "cpu"
+    helper.train_device = "cpu"
+    helper._last_sample_metrics = {}
+
+    result = helper.sample([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+
+    assert result == [[([1, 2], [0.0, 0.0])]]
+    assert engine.saw_cache_enabled is True
+    assert model.disable_calls == 1
+    assert model.enable_calls == 1
+    assert model.checkpointing_enabled is True
+    assert model.config.use_cache is False
+    assert helper._last_sample_metrics["local_sample_gc_disabled_for_cache"] == 1
+
+
+def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
+    train_model = _ConstructorFakeModel()
+    from_pretrained_calls = []
+    create_engine_calls = []
+    fake_engine = object()
+
+    def fake_from_pretrained(model_name, torch_dtype=None, **kwargs):  # noqa: ANN001
+        from_pretrained_calls.append(
+            {
+                "model_name": model_name,
+                "torch_dtype": torch_dtype,
+                "kwargs": kwargs,
+            }
+        )
+        return _ConstructorFakeModel()
+
+    def fake_get_peft_model(_model, _peft_config):  # noqa: ANN001
+        return train_model
+
+    def fake_create_engine(**kwargs):  # noqa: ANN001
+        create_engine_calls.append(kwargs)
+        return fake_engine
+
+    monkeypatch.setattr(
+        local_mod.AutoModelForCausalLM,
+        "from_pretrained",
+        staticmethod(fake_from_pretrained),
+    )
+    monkeypatch.setattr(local_mod, "get_peft_model", fake_get_peft_model)
+    monkeypatch.setattr(
+        local_mod,
+        "resolve_lora_target_modules",
+        lambda _model, _defaults: ["q_proj"],
+    )
+    monkeypatch.setattr(local_mod, "create_engine", fake_create_engine)
+
+    helper = LocalTrainHelper(
+        model_name="Qwen/Qwen3.5-2B",
+        adapter_path=str(tmp_path / "adapter"),
+        devices="cpu",
+        engine_type="trtllm",
+        inference_url="http://localhost:31000",
+        lora_rank=8,
+        gradient_checkpointing=True,
+        liger_kernel=False,
+    )
+
+    assert helper._server_engine is True
+    assert helper._external_engine is True
+    assert helper.engine is fake_engine
+    assert len(from_pretrained_calls) == 1
+    assert create_engine_calls[0]["engine_type"] == "trtllm"
+    assert create_engine_calls[0]["model_name"] == "Qwen/Qwen3.5-2B"
+    assert create_engine_calls[0]["inference_url"] == "http://localhost:31000"
+    assert "existing_model" not in create_engine_calls[0]
+    assert train_model.gradient_checkpointing_enable_calls == 1
+
+
+def test_pytorch_engine_reports_prefill_decode_metrics_for_generic_model():
+    torch.manual_seed(123)
+    model = _FakeGenericCausalModel()
+    engine = PyTorchEngine(
+        model_name="unused",
+        device="cpu",
+        peft_config=None,
+        dtype=None,
+        existing_model=model,
+        sample_use_cache=True,
+        prefix_caching=False,
+    )
+
+    results = engine.generate([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+    counters = engine.performance_counters()
+
+    assert [sample.token_ids for sample in results[0]] == [[3, 3]]
+    assert [call["input_ids"].shape[1] for call in model.calls] == [2, 1]
+    assert counters["engine_prompt_tokens"] == 2
+    assert counters["engine_generated_tokens"] == 2
+    assert counters["engine_prompt_prefill_s"] >= 0.0
+    assert counters["engine_decode_s"] >= 0.0
+    assert counters["engine_generation_tokens_per_s"] > 0.0
+
+
+def test_pytorch_engine_reuses_exact_prefix_kv_for_generic_model():
+    torch.manual_seed(123)
+    model = _PrefixCacheCausalModel()
+    engine = PyTorchEngine(
+        model_name="unused",
+        device="cpu",
+        peft_config=None,
+        dtype=None,
+        existing_model=model,
+        sample_use_cache=True,
+        prefix_caching=True,
+    )
+
+    first = engine.generate([[1, 2]], 1, 1, temperature=1.0, top_p=1.0)
+    second = engine.generate([[1, 2, 3, 4]], 1, 1, temperature=1.0, top_p=1.0)
+    counters = engine.performance_counters()
+
+    assert first[0][0].token_ids == [3]
+    assert second[0][0].token_ids == [3]
+    assert model.calls[0]["input_len"] == 2
+    assert model.calls[0]["prefix_len"] == 0
+    assert model.calls[1]["input_len"] == 1
+    assert model.calls[1]["prefix_len"] == 2
+    assert model.calls[2]["input_len"] == 1
+    assert model.calls[2]["prefix_len"] == 3
+    assert counters["engine_prefix_cache_hits"] == 1
+    assert counters["engine_prefix_cache_misses"] == 1
+    assert counters["engine_prefix_cache_reused_tokens"] == 3
+    assert counters["engine_prefix_cache_entries"] > 0
+
+    engine.clear_prefix_cache()
+    assert engine.performance_counters()["engine_prefix_cache_entries"] == 0
+
+
 def test_top_p_sampling_entropy_uses_full_distribution():
     logits = torch.tensor([[3.0, 2.0, 1.0, 0.0]])
     probs = F.softmax(logits, dim=-1)
     expected_entropy = -(probs * probs.clamp_min(1e-12).log()).sum(dim=-1)
 
-    token, logprob, entropy = _sample_next_token(logits, temperature=1.0, top_p=0.4)
+    token, logprob, entropy = _sample_next_token(
+        logits,
+        temperature=1.0,
+        top_p=0.4,
+        compute_entropy=True,
+    )
 
     assert token.tolist() == [[0]]
     assert logprob.tolist() == pytest.approx([0.0])
     assert entropy.tolist() == pytest.approx(expected_entropy.tolist())
+
+
+def test_sampling_skips_entropy_when_not_requested():
+    logits = torch.tensor([[3.0, 2.0, 1.0, 0.0]])
+
+    _token, _logprob, entropy = _sample_next_token(
+        logits,
+        temperature=1.0,
+        top_p=1.0,
+        compute_entropy=False,
+    )
+
+    assert entropy is None
 
 
 def test_entropy_helper_treats_zero_probability_as_zero_contribution():
@@ -280,5 +534,10 @@ def test_local_train_step_microbatch_matches_full_batch_update():
 
     assert micro_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
     assert micro._clip_fraction == pytest.approx(full._clip_fraction)
+    metrics = micro.runtime_metrics()
+    assert metrics["local_train_microbatches"] == 3
+    assert metrics["local_train_forward_s"] >= 0.0
+    assert metrics["local_train_backward_s"] >= 0.0
+    assert metrics["local_train_optimizer_s"] >= 0.0
     for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
         assert torch.allclose(full_param, micro_param, atol=1e-6)

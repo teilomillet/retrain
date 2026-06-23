@@ -86,12 +86,12 @@ delay_steps = 50           # steps before SEPA ramp begins
 correct_rate_gate = 0.1    # min correct rate to enable SEPA
 
 [inference]
-engine = "pytorch"         # pytorch | max | vllm | sglang | mlx | openai
-url = ""                   # server URL for max/vllm/sglang/mlx/openai
+engine = "pytorch"         # pytorch | max | vllm | sglang | trtllm | mlx | openai
+url = ""                   # server URL for max/vllm/sglang/trtllm/mlx/openai
 attention_kernel = "default"  # default | flash | triton | tk | cutlass
 dtype = "auto"             # auto | bf16 | fp8 | fp4
 kv_cache_dtype = "auto"    # auto | bf16 | fp8 | int8
-prefix_caching = true      # share prompt KV across group completions
+prefix_caching = true      # exact-prefix KV reuse for local PyTorch rollouts
 
 [data]
 source = "math"            # built-in data source (ignored when [environment] is set)
@@ -102,6 +102,8 @@ id = ""                    # verifiers env id (e.g. primeintellect/gsm8k)
 args = {}                  # env kwargs as TOML object (or JSON string)
 max_turns = -1             # cap turns for multi-turn envs; -1 = no override
 auto_install = false       # install Prime Hub env automatically if missing
+rollout_env_workers = 1    # async env worker cap for multi-turn rollouts
+rollout_buffer_size = 0    # 0 = buffer up to group_size active rollouts
 
 [reward]
 type = "match"             # match | math | judge | custom
@@ -147,10 +149,10 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
+| `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -164,16 +166,38 @@ backend = "local"
 [backend.options]
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
 cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
-sample_use_cache = false   # slower PyTorch sampling, lower KV-cache memory
+sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
+gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
+train_selective_suffix_logits = false  # optional: compute logits only for weighted suffix tokens
+train_save_on_cpu = false  # optional: offload autograd saved tensors to CPU; much slower
+train_save_on_cpu_pin_memory = true  # transfer mode for saved-tensor CPU offload
+train_save_on_cpu_min_numel = 0  # 0 = offload all saved tensors; positive = exact selective offload
+train_supervised_context_tokens = 0  # 0 = full train row; positive = approximate suffix-window train
 ```
 
 `train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
 forward/backward chunks while preserving the token-weighted loss. This trades
 extra compute time for lower peak VRAM during `train_step`.
-`cuda_empty_cache` is allocator hygiene and does not change model outputs.
-`sample_use_cache = false` asks the PyTorch engine to avoid generation KV-cache
-reuse; use it only when rollout sampling OOMs and slower generation is
-acceptable.
+`cuda_empty_cache` is allocator hygiene and does not change model outputs. It
+defaults to `true` for the local backend because multi-step cache-on runs can
+fragment the CUDA allocator even when one-step probes fit. `sample_use_cache =
+true` keeps the PyTorch engine on the faster generation KV-cache path; disable
+it only when rollout sampling OOMs and slower generation is acceptable.
+`gradient_checkpointing` defaults to `true` for compatibility with previous
+local backend behavior; set it to `false` during throughput sweeps when the full
+train step fits in memory.
+`train_selective_suffix_logits` is useful for RL rows where only completion or
+ECHO tokens carry weight. `train_save_on_cpu` is the last-resort exact-autograd
+memory path for very long rows on small GPUs; expect substantially slower
+backward passes. `train_save_on_cpu_pin_memory` controls the transfer mode for
+that exact path; on the measured 4070 Ti Qwen3.5 run, setting it to `false` was
+slower. `train_save_on_cpu_min_numel` is also exact: positive values keep small
+autograd-saved tensors on GPU and offload only larger tensors. This can recover
+some throughput when there is spare VRAM, but it may OOM if set too high.
+`train_supervised_context_tokens` is an approximate speed knob: when selective
+suffix training is enabled, retrain crops each training row to this many context
+tokens before the earliest weighted RL/ECHO token. Inference still sees the full
+prompt, but the train gradient no longer represents the full context.
 
 ### Migrate legacy backend config
 
@@ -276,7 +300,9 @@ observation body, the bridge must expose a separate full-body denominator before
 that variant can be exact.
 
 The local PyTorch backend gathers RL and ECHO losses from the same actor
-forward pass for each training microbatch. Tinker's public remote loss API
+forward pass for each training microbatch. The Unsloth backend uses the same
+lower-level retrain train step after loading the actor through Unsloth, so it
+also declares strict shared-forward support. Tinker's public remote loss API
 currently exposes separate RL and ECHO `forward_backward` calls rather than one
 shared actor pass, so `retrain explain` rejects ECHO on `backend = "tinker"`
 until that backend can declare strict shared-forward support.
@@ -297,10 +323,10 @@ advantages and nonzero ECHO masks. If both RL advantages and ECHO masks are
 zero after caps and guards, the step is skipped as uninformative.
 
 ECHO requires a token-preserving backend with strict shared-forward support.
-Today that means `backend = "local"`. `prime_rl` is rejected because it cannot
-carry prompt-side token masks without silently collapsing them to scalar
-advantages; `tinker` is rejected because it cannot currently compute the RL and
-ECHO losses from one shared actor pass.
+Today that means `backend = "local"` or `backend = "unsloth"`. `prime_rl` is
+rejected because it cannot carry prompt-side token masks without silently
+collapsing them to scalar advantages; `tinker` is rejected because it cannot
+currently compute the RL and ECHO losses from one shared actor pass.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -342,6 +368,8 @@ ECHO losses from one shared actor pass.
 | `args` | table / str | `{}` | Environment kwargs. Prefer TOML table (`args = { split = "train" }`); JSON string is also accepted |
 | `max_turns` | int | `-1` | Multi-turn safety cap. `-1` means use environment defaults |
 | `auto_install` | bool | `false` | If true, auto-install missing Prime Hub environments before loading |
+| `rollout_env_workers` | int | `1` | Max concurrent async environment jobs for multi-turn setup/render/step stages |
+| `rollout_buffer_size` | int | `0` | Max in-flight rollout env jobs; `0` uses the current group size |
 
 !!! note
     Not every Hub environment is trainable. Some are evaluation-only and do not expose a training dataset.
@@ -380,12 +408,12 @@ ECHO losses from one shared actor pass.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `engine` | str | `"pytorch"` | Inference engine: `pytorch`, `max`, `vllm`, `sglang`, `mlx`, `openai` |
+| `engine` | str | `"pytorch"` | Inference engine: `pytorch`, `max`, `vllm`, `sglang`, `trtllm`, `mlx`, `openai` |
 | `url` | str | `""` | Server URL for non-PyTorch engines |
 | `attention_kernel` | str | `"default"` | Attention implementation: `default`, `flash`, `triton`, `tk`, `cutlass` |
 | `dtype` | str | `"auto"` | Inference dtype: `auto`, `bf16`, `fp8`, `fp4` |
 | `kv_cache_dtype` | str | `"auto"` | KV cache dtype: `auto`, `bf16`, `fp8`, `int8` |
-| `prefix_caching` | bool | `true` | Share prompt KV cache across group completions |
+| `prefix_caching` | bool | `true` | Reuse exact-prefix KV cache entries during local PyTorch rollout sampling; cache is cleared at checkpoint/weight-sync boundaries |
 
 ### `[reward]`
 

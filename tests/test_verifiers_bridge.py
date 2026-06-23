@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 
 import pytest
@@ -161,6 +162,25 @@ class _FailingScoreCleanupTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
     def __init__(self) -> None:
         super().__init__()
         self.rubric = _FailingRubric()
+
+
+class _ConcurrentInitTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_init = 0
+        self.max_active_init = 0
+
+    async def init_state(self, *, input, client, model, sampling_args):  # noqa: A002, ARG002
+        self.active_init += 1
+        self.max_active_init = max(self.max_active_init, self.active_init)
+        await asyncio.sleep(0)
+        self.active_init -= 1
+        return await super().init_state(
+            input=input,
+            client=client,
+            model=model,
+            sampling_args=sampling_args,
+        )
 
 
 class _FakeTrajectoryStep:
@@ -420,6 +440,39 @@ class TestRunMultiturnGroup:
             )
 
         assert env.cleaned == [0, 1]
+
+    def test_rollout_scheduler_bounds_async_env_workers(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _ConcurrentInitTrackingMultiTurnEnv()
+
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=_helper(),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=4,
+            max_tokens=4,
+            temperature=1.0,
+            top_p=1.0,
+            rollout_env_workers=2,
+            rollout_buffer_size=2,
+        )
+
+        assert rewards == [1.0, 1.0, 1.0, 1.0]
+        assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1, 1]
+        assert env.max_active_init == 2
+        assert env.cleaned == [0, 1, 2, 3]
+        assert timing.env_workers == 2
+        assert timing.buffer_size == 2
+        assert timing.scheduler_worker_s >= 0.0
 
 
 def test_collect_observation_timing_from_trajectory_extras():

@@ -199,6 +199,8 @@ class TrainConfig:
     environment_args: str = ""
     environment_max_turns: int = -1
     environment_auto_install: bool = False
+    environment_rollout_env_workers: int = 1
+    environment_rollout_buffer_size: int = 0
 
     # Reward / verifier
     reward_type: str = "match"
@@ -451,6 +453,10 @@ class TrainConfig:
                         "environment_args must decode to a JSON object "
                         "when environment_provider is set."
                     )
+        if self.environment_rollout_env_workers < 1:
+            errors.append("environment_rollout_env_workers must be >= 1.")
+        if self.environment_rollout_buffer_size < 0:
+            errors.append("environment_rollout_buffer_size must be >= 0.")
 
         if self.tl_grpo and self.tl_grpo_branch_mode not in ("action_space", "llm"):
             errors.append(
@@ -500,6 +506,17 @@ class TrainConfig:
                 "to prevent silent token-advantage aggregation. "
                 "Use strict_advantages=true."
             )
+
+        if self.backend == "unsloth" and isinstance(self.backend_options, dict):
+            active_unsloth_modes = sum(
+                int(bool(self.backend_options.get(key, False)))
+                for key in ("load_in_4bit", "load_in_8bit", "load_in_16bit")
+            )
+            if active_unsloth_modes > 1:
+                errors.append(
+                    "backend='unsloth' accepts only one precision mode. "
+                    "Set only one of load_in_4bit, load_in_8bit, or load_in_16bit."
+                )
 
         if (
             self.uncertainty_kind == "shannon_entropy"
@@ -722,6 +739,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "args": "environment_args",
         "max_turns": "environment_max_turns",
         "auto_install": "environment_auto_install",
+        "rollout_env_workers": "environment_rollout_env_workers",
+        "rollout_buffer_size": "environment_rollout_buffer_size",
     },
     "reward": {
         "type": "reward_type",

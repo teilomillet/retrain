@@ -87,6 +87,14 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
+class _FakeUnslothTrainHelper(_BaseFakeHelper):
+    init_calls: list[dict] = []
+
+    def __init__(self, *args, **kwargs):
+        self.init_calls.append({"args": args, "kwargs": kwargs})
+        super().__init__()
+
+
 def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
     helper.checkpoint(step_name)
     out = helper.sample(
@@ -141,8 +149,10 @@ def test_local_backend_contract(monkeypatch):
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 0
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is False
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
 
 
@@ -157,19 +167,113 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_microbatch_size": 2,
             "cuda_empty_cache": True,
             "sample_use_cache": False,
+            "gradient_checkpointing": False,
+            "train_save_on_cpu_pin_memory": False,
+            "train_save_on_cpu_min_numel": 65536,
+            "train_supervised_context_tokens": 512,
         },
         policy_loss_mode="kl_cov",
         kl_cov_percent=0.4,
         kl_cov_coef=0.5,
+        prefix_caching=False,
     )
     backend.create("local", cfg)
 
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 2
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is False
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_save_on_cpu_pin_memory"
+        ]
+        is False
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_supervised_context_tokens"
+        ]
+        == 512
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_save_on_cpu_min_numel"
+        ]
+        == 65536
+    )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_coef"] == 0.5
+
+
+def test_unsloth_backend_contract(monkeypatch):
+    _FakeUnslothTrainHelper.init_calls.clear()
+    fake_mod = SimpleNamespace(UnslothTrainHelper=_FakeUnslothTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_mod)
+
+    cfg = TrainConfig(
+        backend="unsloth",
+        backend_options={
+            "max_seq_length": 32768,
+            "load_in_4bit": True,
+            "gpu_memory_utilization": 0.9,
+            "train_microbatch_size": 1,
+            "offload_embedding": True,
+            "unsloth_tiled_mlp": True,
+            "unsloth_tiled_mlp_mode": "target:0.25",
+            "train_selective_suffix_logits": True,
+            "train_save_on_cpu": True,
+            "train_save_on_cpu_pin_memory": True,
+            "train_save_on_cpu_min_numel": 65536,
+            "train_supervised_context_tokens": 4096,
+        },
+        model="Qwen/Qwen3.5-2B",
+    )
+    helper = backend.create("unsloth", cfg)
+    assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, _BaseFakeHelper)
+    _exercise_lifecycle_step(helper, "step_0")
+    _exercise_lifecycle_step(helper, "step_1")
+    _assert_lifecycle_calls(helper)
+
+    kwargs = _FakeUnslothTrainHelper.init_calls[-1]["kwargs"]
+    assert kwargs["max_seq_length"] == 32768
+    assert kwargs["load_in_4bit"] is True
+    assert kwargs["load_in_8bit"] is False
+    assert kwargs["load_in_16bit"] is False
+    assert kwargs["gpu_memory_utilization"] == 0.9
+    assert kwargs["device_map"] == "retrain"
+    assert kwargs["offload_embedding"] is True
+    assert kwargs["unsloth_tiled_mlp"] is True
+    assert kwargs["unsloth_tiled_mlp_mode"] == "target:0.25"
+    assert kwargs["train_selective_suffix_logits"] is True
+    assert kwargs["train_save_on_cpu"] is True
+    assert kwargs["train_save_on_cpu_pin_memory"] is True
+    assert kwargs["train_save_on_cpu_min_numel"] == 65536
+    assert kwargs["train_supervised_context_tokens"] == 4096
+    assert kwargs["train_microbatch_size"] == 1
+    assert kwargs["liger_kernel"] is False
+    assert kwargs["liger_fused_linear_ce"] is True
+    assert kwargs["sample_use_cache"] is True
+    assert kwargs["gradient_checkpointing"] is True
+    assert kwargs["qwen35_gated_delta_chunk_size"] == "auto"
+
+
+def test_unsloth_backend_defaults_max_seq_length_from_max_tokens(monkeypatch):
+    _FakeUnslothTrainHelper.init_calls.clear()
+    fake_mod = SimpleNamespace(UnslothTrainHelper=_FakeUnslothTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_mod)
+
+    cfg = TrainConfig(
+        backend="unsloth",
+        max_tokens=4096,
+        backend_options={"max_seq_length": 0},
+    )
+    backend.create("unsloth", cfg)
+
+    kwargs = _FakeUnslothTrainHelper.init_calls[-1]["kwargs"]
+    assert kwargs["max_seq_length"] == 4096
 
 
 def test_tinker_backend_contract(monkeypatch):

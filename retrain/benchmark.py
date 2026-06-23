@@ -55,6 +55,39 @@ class RunBenchmarkSummary:
     engine_prompt_decode_calls: int | None
     engine_prompt_cache_hits: int | None
     engine_prompt_cache_size: int | None
+    engine_token_prompt_calls: int | None
+    engine_token_prompt_fallbacks: int | None
+    engine_token_native_prompt_enabled: int | None
+    engine_adapter_reload_calls: int | None
+    engine_adapter_reload_failures: int | None
+    engine_adapter_reload_skips: int | None
+    engine_prefix_cache_hits: int | None
+    engine_prefix_cache_misses: int | None
+    engine_prefix_cache_fallbacks: int | None
+    engine_prefix_cache_reused_tokens: int | None
+    engine_prefix_cache_entries: int | None
+    mean_engine_generation_wall_s: float | None = None
+    mean_engine_prompt_prefill_s: float | None = None
+    mean_engine_decode_s: float | None = None
+    mean_engine_generation_tokens_per_s: float | None = None
+    mean_local_sample_wall_s: float | None = None
+    mean_local_sample_generation_tokens_per_s: float | None = None
+    mean_local_train_forward_s: float | None = None
+    mean_local_train_backward_s: float | None = None
+    mean_local_train_optimizer_s: float | None = None
+    mean_local_adapter_sync_s: float | None = None
+    mean_rollout_total_s: float | None = None
+    mean_rollout_generation_s: float | None = None
+    mean_rollout_trajectory_step_s: float | None = None
+    mean_rollout_score_s: float | None = None
+    mean_rollout_scheduler_worker_s: float | None = None
+    mean_rollout_scheduler_wait_s: float | None = None
+    mean_rollout_scheduler_buffer_wait_s: float | None = None
+    mean_rollout_env_dbt_total_s: float | None = None
+    peak_local_sample_gpu_peak_memory_allocated_mb: float | None = None
+    peak_local_sample_gpu_peak_memory_reserved_mb: float | None = None
+    peak_local_train_gpu_peak_memory_allocated_mb: float | None = None
+    peak_local_train_gpu_peak_memory_reserved_mb: float | None = None
 
 
 @dataclass
@@ -95,8 +128,32 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
             "train_share",
             "tokens_per_step",
             "tokens_per_second",
+            "engine_generation_wall_s",
+            "engine_prompt_prefill_s",
+            "engine_decode_s",
+            "engine_generation_tokens_per_s",
+            "local_sample_wall_s",
+            "local_sample_generation_tokens_per_s",
+            "local_train_forward_s",
+            "local_train_backward_s",
+            "local_train_optimizer_s",
+            "local_adapter_sync_s",
+            "rollout/total_s",
+            "rollout/generation_s",
+            "rollout/trajectory_step_s",
+            "rollout/score_s",
+            "rollout/scheduler_worker_s",
+            "rollout/scheduler_wait_s",
+            "rollout/scheduler_buffer_wait_s",
+            "rollout/env/dbt_total_s",
         ),
-        max_fields=("process_max_rss_mb",),
+        max_fields=(
+            "process_max_rss_mb",
+            "local_sample_gpu_peak_memory_allocated_mb",
+            "local_sample_gpu_peak_memory_reserved_mb",
+            "local_train_gpu_peak_memory_allocated_mb",
+            "local_train_gpu_peak_memory_reserved_mb",
+        ),
         collect_step_times=True,
     )
     if metrics_summary.rows <= 0 or metrics_summary.last is None:
@@ -138,6 +195,73 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
         engine_prompt_decode_calls=int_or_none(last.get("engine_prompt_decode_calls")),
         engine_prompt_cache_hits=int_or_none(last.get("engine_prompt_cache_hits")),
         engine_prompt_cache_size=int_or_none(last.get("engine_prompt_cache_size")),
+        engine_token_prompt_calls=int_or_none(last.get("engine_token_prompt_calls")),
+        engine_token_prompt_fallbacks=int_or_none(
+            last.get("engine_token_prompt_fallbacks")
+        ),
+        engine_token_native_prompt_enabled=int_or_none(
+            last.get("engine_token_native_prompt_enabled")
+        ),
+        engine_adapter_reload_calls=int_or_none(
+            last.get("engine_adapter_reload_calls")
+        ),
+        engine_adapter_reload_failures=int_or_none(
+            last.get("engine_adapter_reload_failures")
+        ),
+        engine_adapter_reload_skips=int_or_none(
+            last.get("engine_adapter_reload_skips")
+        ),
+        engine_prefix_cache_hits=int_or_none(last.get("engine_prefix_cache_hits")),
+        engine_prefix_cache_misses=int_or_none(last.get("engine_prefix_cache_misses")),
+        engine_prefix_cache_fallbacks=int_or_none(
+            last.get("engine_prefix_cache_fallbacks")
+        ),
+        engine_prefix_cache_reused_tokens=int_or_none(
+            last.get("engine_prefix_cache_reused_tokens")
+        ),
+        engine_prefix_cache_entries=int_or_none(last.get("engine_prefix_cache_entries")),
+        mean_engine_generation_wall_s=metrics_summary.mean("engine_generation_wall_s"),
+        mean_engine_prompt_prefill_s=metrics_summary.mean("engine_prompt_prefill_s"),
+        mean_engine_decode_s=metrics_summary.mean("engine_decode_s"),
+        mean_engine_generation_tokens_per_s=metrics_summary.mean(
+            "engine_generation_tokens_per_s"
+        ),
+        mean_local_sample_wall_s=metrics_summary.mean("local_sample_wall_s"),
+        mean_local_sample_generation_tokens_per_s=metrics_summary.mean(
+            "local_sample_generation_tokens_per_s"
+        ),
+        mean_local_train_forward_s=metrics_summary.mean("local_train_forward_s"),
+        mean_local_train_backward_s=metrics_summary.mean("local_train_backward_s"),
+        mean_local_train_optimizer_s=metrics_summary.mean("local_train_optimizer_s"),
+        mean_local_adapter_sync_s=metrics_summary.mean("local_adapter_sync_s"),
+        mean_rollout_total_s=metrics_summary.mean("rollout/total_s"),
+        mean_rollout_generation_s=metrics_summary.mean("rollout/generation_s"),
+        mean_rollout_trajectory_step_s=metrics_summary.mean(
+            "rollout/trajectory_step_s"
+        ),
+        mean_rollout_score_s=metrics_summary.mean("rollout/score_s"),
+        mean_rollout_scheduler_worker_s=metrics_summary.mean(
+            "rollout/scheduler_worker_s"
+        ),
+        mean_rollout_scheduler_wait_s=metrics_summary.mean(
+            "rollout/scheduler_wait_s"
+        ),
+        mean_rollout_scheduler_buffer_wait_s=metrics_summary.mean(
+            "rollout/scheduler_buffer_wait_s"
+        ),
+        mean_rollout_env_dbt_total_s=metrics_summary.mean("rollout/env/dbt_total_s"),
+        peak_local_sample_gpu_peak_memory_allocated_mb=metrics_summary.maximum(
+            "local_sample_gpu_peak_memory_allocated_mb"
+        ),
+        peak_local_sample_gpu_peak_memory_reserved_mb=metrics_summary.maximum(
+            "local_sample_gpu_peak_memory_reserved_mb"
+        ),
+        peak_local_train_gpu_peak_memory_allocated_mb=metrics_summary.maximum(
+            "local_train_gpu_peak_memory_allocated_mb"
+        ),
+        peak_local_train_gpu_peak_memory_reserved_mb=metrics_summary.maximum(
+            "local_train_gpu_peak_memory_reserved_mb"
+        ),
     )
 
 
@@ -165,8 +289,30 @@ def summarize_suite(root: Path) -> BenchmarkSuiteSummary:
         "mean_tokens_per_step",
         "mean_tokens_per_second",
         "generations_bytes",
+        "mean_engine_generation_wall_s",
+        "mean_engine_prompt_prefill_s",
+        "mean_engine_decode_s",
+        "mean_engine_generation_tokens_per_s",
+        "mean_local_sample_wall_s",
+        "mean_local_sample_generation_tokens_per_s",
+        "mean_local_train_forward_s",
+        "mean_local_train_backward_s",
+        "mean_local_train_optimizer_s",
+        "mean_local_adapter_sync_s",
+        "mean_rollout_total_s",
+        "mean_rollout_generation_s",
+        "mean_rollout_trajectory_step_s",
+        "mean_rollout_score_s",
+        "mean_rollout_scheduler_worker_s",
+        "mean_rollout_scheduler_wait_s",
+        "mean_rollout_scheduler_buffer_wait_s",
+        "mean_rollout_env_dbt_total_s",
     ):
-        values = [float(getattr(run, field_name)) for run in runs]
+        values = [
+            float(value)
+            for value in (getattr(run, field_name) for run in runs)
+            if value is not None
+        ]
         stat = _summary_stat(values)
         if stat is not None:
             aggregates[field_name] = stat
@@ -183,6 +329,21 @@ def summarize_suite(root: Path) -> BenchmarkSuiteSummary:
         "engine_prompt_decode_calls",
         "engine_prompt_cache_hits",
         "engine_prompt_cache_size",
+        "engine_token_prompt_calls",
+        "engine_token_prompt_fallbacks",
+        "engine_token_native_prompt_enabled",
+        "engine_adapter_reload_calls",
+        "engine_adapter_reload_failures",
+        "engine_adapter_reload_skips",
+        "engine_prefix_cache_hits",
+        "engine_prefix_cache_misses",
+        "engine_prefix_cache_fallbacks",
+        "engine_prefix_cache_reused_tokens",
+        "engine_prefix_cache_entries",
+        "peak_local_sample_gpu_peak_memory_allocated_mb",
+        "peak_local_sample_gpu_peak_memory_reserved_mb",
+        "peak_local_train_gpu_peak_memory_allocated_mb",
+        "peak_local_train_gpu_peak_memory_reserved_mb",
     ):
         values = [
             float(value)
@@ -310,6 +471,33 @@ def format_run_summary(summary: RunBenchmarkSummary) -> str:
         f"generations_bytes: {summary.generations_bytes}",
     ]
     for key in (
+        "mean_engine_generation_wall_s",
+        "mean_engine_prompt_prefill_s",
+        "mean_engine_decode_s",
+        "mean_engine_generation_tokens_per_s",
+        "mean_local_sample_wall_s",
+        "mean_local_sample_generation_tokens_per_s",
+        "mean_local_train_forward_s",
+        "mean_local_train_backward_s",
+        "mean_local_train_optimizer_s",
+        "mean_local_adapter_sync_s",
+        "mean_rollout_total_s",
+        "mean_rollout_generation_s",
+        "mean_rollout_trajectory_step_s",
+        "mean_rollout_score_s",
+        "mean_rollout_scheduler_worker_s",
+        "mean_rollout_scheduler_wait_s",
+        "mean_rollout_scheduler_buffer_wait_s",
+        "mean_rollout_env_dbt_total_s",
+        "peak_local_sample_gpu_peak_memory_allocated_mb",
+        "peak_local_sample_gpu_peak_memory_reserved_mb",
+        "peak_local_train_gpu_peak_memory_allocated_mb",
+        "peak_local_train_gpu_peak_memory_reserved_mb",
+    ):
+        value = getattr(summary, key)
+        if value is not None:
+            lines.append(f"{key}: {value:.3f}")
+    for key in (
         "prompt_encode_calls",
         "prompt_preview_calls",
         "token_lookup_requests",
@@ -320,6 +508,17 @@ def format_run_summary(summary: RunBenchmarkSummary) -> str:
         "engine_prompt_decode_calls",
         "engine_prompt_cache_hits",
         "engine_prompt_cache_size",
+        "engine_token_prompt_calls",
+        "engine_token_prompt_fallbacks",
+        "engine_token_native_prompt_enabled",
+        "engine_adapter_reload_calls",
+        "engine_adapter_reload_failures",
+        "engine_adapter_reload_skips",
+        "engine_prefix_cache_hits",
+        "engine_prefix_cache_misses",
+        "engine_prefix_cache_fallbacks",
+        "engine_prefix_cache_reused_tokens",
+        "engine_prefix_cache_entries",
     ):
         value = getattr(summary, key)
         if value is not None:

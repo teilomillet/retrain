@@ -116,6 +116,7 @@ class TestGetRegistry:
 class TestBuiltinNames:
     def test_backend_names(self):
         assert "local" in backend.builtin_names
+        assert "unsloth" in backend.builtin_names
         assert "tinker" in backend.builtin_names
         assert "prime_rl" in backend.builtin_names
 
@@ -137,6 +138,7 @@ class TestBuiltinNames:
             "max",
             "vllm",
             "sglang",
+            "trtllm",
             "mlx",
             "openai",
         }
@@ -256,6 +258,24 @@ class TestBuiltinCreation:
         assert mock_cls.call_args.kwargs["sync_wait_s"] == 5
         assert mock_cls.call_args.kwargs["sync_poll_s"] == pytest.approx(0.5)
 
+    def test_unsloth_uses_backend_options(self):
+        mock_cls = MagicMock(return_value=SimpleNamespace())
+        fake_mod = SimpleNamespace(UnslothTrainHelper=mock_cls)
+        config = TrainConfig(
+            backend="unsloth",
+            backend_options={
+                "max_seq_length": 65536,
+                "load_in_4bit": True,
+                "gpu_memory_utilization": 0.85,
+            },
+        )
+        with patch.dict(sys.modules, {"retrain.unsloth_backend": fake_mod}):
+            backend.create("unsloth", config)
+        mock_cls.assert_called_once()
+        assert mock_cls.call_args.kwargs["max_seq_length"] == 65536
+        assert mock_cls.call_args.kwargs["load_in_4bit"] is True
+        assert mock_cls.call_args.kwargs["gpu_memory_utilization"] == 0.85
+
 
 # ---------------------------------------------------------------------------
 # check_environment
@@ -311,6 +331,120 @@ class TestRuntimeProbes:
         for probe in probes:
             assert probe.status in {"ok", "fail", "skip"}
             assert isinstance(probe.detail, str)
+
+    def test_probe_backend_runtime_validates_unsloth_api(self, monkeypatch):
+        class _FastLanguageModel:
+            @staticmethod
+            def from_pretrained(
+                model_name,
+                max_seq_length,
+                dtype,
+                load_in_4bit,
+                load_in_8bit,
+                load_in_16bit,
+                full_finetuning,
+                device_map,
+                fast_inference,
+                gpu_memory_utilization,
+                float8_kv_cache,
+                max_lora_rank,
+                use_gradient_checkpointing,
+                trust_remote_code,
+                use_exact_model_name,
+                offload_embedding,
+                random_state,
+                unsloth_tiled_mlp,
+                text_only,
+            ):
+                _ = (
+                    model_name,
+                    max_seq_length,
+                    dtype,
+                    load_in_4bit,
+                    load_in_8bit,
+                    load_in_16bit,
+                    full_finetuning,
+                    device_map,
+                    fast_inference,
+                    gpu_memory_utilization,
+                    float8_kv_cache,
+                    max_lora_rank,
+                    use_gradient_checkpointing,
+                    trust_remote_code,
+                    use_exact_model_name,
+                    offload_embedding,
+                    random_state,
+                    unsloth_tiled_mlp,
+                    text_only,
+                )
+
+            @staticmethod
+            def get_peft_model(
+                model,
+                r,
+                target_modules,
+                lora_alpha,
+                lora_dropout,
+                bias,
+                use_gradient_checkpointing,
+                random_state,
+                max_seq_length,
+                use_rslora,
+            ):
+                _ = (
+                    model,
+                    r,
+                    target_modules,
+                    lora_alpha,
+                    lora_dropout,
+                    bias,
+                    use_gradient_checkpointing,
+                    random_state,
+                    max_seq_length,
+                    use_rslora,
+                )
+
+            @staticmethod
+            def for_inference(model):
+                _ = model
+
+            @staticmethod
+            def for_training(model):
+                _ = model
+
+        fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(
+            sys.modules,
+            "unsloth",
+            SimpleNamespace(FastLanguageModel=_FastLanguageModel),
+        )
+
+        probe = next(p for p in probe_backend_runtime(config=None) if p.backend == "unsloth")
+
+        assert probe.status == "ok"
+        assert "FastLanguageModel API ok" in probe.detail
+
+    def test_probe_backend_runtime_fails_on_unsloth_api_drift(self, monkeypatch):
+        class _DriftedFastLanguageModel:
+            @staticmethod
+            def from_pretrained(model_name):
+                _ = model_name
+
+            @staticmethod
+            def get_peft_model(model):
+                _ = model
+
+        monkeypatch.setitem(
+            sys.modules,
+            "unsloth",
+            SimpleNamespace(FastLanguageModel=_DriftedFastLanguageModel),
+        )
+
+        probe = next(p for p in probe_backend_runtime(config=None) if p.backend == "unsloth")
+
+        assert probe.status == "fail"
+        assert "FastLanguageModel API is incompatible" in probe.detail
 
 
 # ---------------------------------------------------------------------------

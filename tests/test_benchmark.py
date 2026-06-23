@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pytest
+
 from retrain.benchmark import run_benchmark_suite, summarize_run, summarize_suite
 from retrain.config import TrainConfig
 
@@ -53,6 +55,23 @@ class _FakeRunner:
                     "token_lookup_cache_misses": 4,
                     "batch_decode_calls": 1,
                     "batch_decoded_sequences": 2,
+                    "engine_adapter_reload_calls": 1,
+                    "engine_adapter_reload_failures": 0,
+                    "engine_adapter_reload_skips": 0,
+                    "engine_generation_wall_s": 0.8,
+                    "engine_prompt_prefill_s": 0.2,
+                    "engine_decode_s": 0.6,
+                    "engine_generation_tokens_per_s": 50.0,
+                    "local_sample_wall_s": 0.9,
+                    "local_sample_generation_tokens_per_s": 44.0,
+                    "local_train_forward_s": 0.3,
+                    "local_train_backward_s": 0.2,
+                    "local_train_optimizer_s": 0.05,
+                    "local_adapter_sync_s": 0.01,
+                    "rollout/total_s": 1.0,
+                    "rollout/trajectory_step_s": 0.3,
+                    "rollout/scheduler_worker_s": 0.4,
+                    "rollout/env/dbt_total_s": 0.25,
                 }
             )
             + "\n",
@@ -86,6 +105,22 @@ def test_summarize_run_reads_perf_fields(tmp_path) -> None:
                 "tokens_per_second": 25.0,
                 "process_max_rss_mb": 512.0,
                 "engine_prompt_decode_calls": 3,
+                "engine_adapter_reload_calls": 2,
+                "engine_adapter_reload_failures": 0,
+                "engine_adapter_reload_skips": 0,
+                "engine_generation_wall_s": 2.5,
+                "engine_prompt_prefill_s": 0.5,
+                "engine_decode_s": 2.0,
+                "engine_generation_tokens_per_s": 32.0,
+                "local_train_forward_s": 0.2,
+                "local_train_backward_s": 0.25,
+                "local_train_optimizer_s": 0.05,
+                "local_adapter_sync_s": 0.01,
+                "local_train_gpu_peak_memory_allocated_mb": 1024.0,
+                "rollout/total_s": 3.0,
+                "rollout/trajectory_step_s": 1.25,
+                "rollout/scheduler_worker_s": 1.5,
+                "rollout/env/dbt_total_s": 0.75,
             }
         )
         + "\n",
@@ -101,6 +136,16 @@ def test_summarize_run_reads_perf_fields(tmp_path) -> None:
     assert summary.mean_tokens_per_second == 25.0
     assert summary.peak_process_max_rss_mb == 512.0
     assert summary.engine_prompt_decode_calls == 3
+    assert summary.engine_adapter_reload_calls == 2
+    assert summary.engine_adapter_reload_failures == 0
+    assert summary.engine_adapter_reload_skips == 0
+    assert summary.mean_engine_prompt_prefill_s == 0.5
+    assert summary.mean_engine_decode_s == 2.0
+    assert summary.mean_local_train_forward_s == 0.2
+    assert summary.peak_local_train_gpu_peak_memory_allocated_mb == 1024.0
+    assert summary.mean_rollout_total_s == 3.0
+    assert summary.mean_rollout_trajectory_step_s == 1.25
+    assert summary.mean_rollout_env_dbt_total_s == 0.75
 
 
 def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
@@ -123,6 +168,12 @@ def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
                     "tokens_per_step": 100,
                     "tokens_per_second": 50.0,
                     "process_max_rss_mb": 256.0,
+                    "engine_prompt_prefill_s": 0.2,
+                    "engine_decode_s": 0.8,
+                    "local_train_forward_s": 0.3,
+                    "local_train_backward_s": 0.2,
+                    "rollout/total_s": 2.0,
+                    "rollout/env/dbt_total_s": 0.4,
                 }
             )
             + "\n"
@@ -144,6 +195,12 @@ def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
                     "tokens_per_second": 70.0,
                     "process_max_rss_mb": 768.0,
                     "prompt_encode_calls": 8,
+                    "engine_prompt_prefill_s": 0.4,
+                    "engine_decode_s": 1.6,
+                    "local_train_forward_s": 0.6,
+                    "local_train_backward_s": 0.4,
+                    "rollout/total_s": 4.0,
+                    "rollout/env/dbt_total_s": 0.8,
                 }
             )
             + "\n"
@@ -166,6 +223,12 @@ def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
     assert summary.final_loss == 0.4
     assert summary.final_correct_rate == 0.8
     assert summary.prompt_encode_calls == 8
+    assert summary.mean_engine_prompt_prefill_s == pytest.approx(0.3)
+    assert summary.mean_engine_decode_s == pytest.approx(1.2)
+    assert summary.mean_local_train_forward_s == pytest.approx(0.45)
+    assert summary.mean_local_train_backward_s == pytest.approx(0.3)
+    assert summary.mean_rollout_total_s == pytest.approx(3.0)
+    assert summary.mean_rollout_env_dbt_total_s == pytest.approx(0.6)
 
 
 def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
@@ -189,6 +252,10 @@ def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
     assert (tmp_path / "bench" / "benchmark_summary.json").is_file()
     assert (tmp_path / "bench" / "repeat_01" / "metrics.jsonl").is_file()
     assert suite.aggregates["mean_step_time_s"].mean == 2.0
+    assert suite.aggregates["engine_adapter_reload_calls"].mean == 1.0
+    assert suite.aggregates["engine_adapter_reload_failures"].mean == 0.0
+    assert suite.aggregates["mean_engine_prompt_prefill_s"].mean == 0.2
+    assert suite.aggregates["mean_rollout_env_dbt_total_s"].mean == 0.25
 
 
 def test_summarize_suite_reads_repeat_directories(tmp_path) -> None:
