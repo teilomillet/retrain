@@ -174,6 +174,8 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_unsloth_fused_ce": "require",
             "train_unsloth_fused_ce_target_gb": 1.25,
             "train_unsloth_fused_ce_torch_compile": False,
+            "train_compile_selective_ce": "auto",
+            "train_compile_selective_ce_min_tokens": 256,
         },
         policy_loss_mode="kl_cov",
         kl_cov_percent=0.4,
@@ -220,6 +222,18 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         ]
         is False
     )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_compile_selective_ce"
+        ]
+        == "auto"
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_compile_selective_ce_min_tokens"
+        ]
+        == 256
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
@@ -249,6 +263,8 @@ def test_unsloth_backend_contract(monkeypatch):
             "train_unsloth_fused_ce": "require",
             "train_unsloth_fused_ce_target_gb": 1.5,
             "train_unsloth_fused_ce_torch_compile": False,
+            "train_compile_selective_ce": "require",
+            "train_compile_selective_ce_min_tokens": 512,
         },
         model="Qwen/Qwen3.5-2B",
     )
@@ -278,6 +294,8 @@ def test_unsloth_backend_contract(monkeypatch):
     assert kwargs["train_unsloth_fused_ce"] == "require"
     assert kwargs["train_unsloth_fused_ce_target_gb"] == 1.5
     assert kwargs["train_unsloth_fused_ce_torch_compile"] is False
+    assert kwargs["train_compile_selective_ce"] == "require"
+    assert kwargs["train_compile_selective_ce_min_tokens"] == 512
     assert kwargs["liger_kernel"] is False
     assert kwargs["liger_fused_linear_ce"] is True
     assert kwargs["sample_use_cache"] is True

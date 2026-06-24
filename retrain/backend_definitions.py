@@ -170,6 +170,14 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         train_unsloth_fused_ce_torch_compile=bool(
             config.backend_options.get("train_unsloth_fused_ce_torch_compile", True)
         ),
+        train_compile_selective_ce=str(
+            config.backend_options.get("train_compile_selective_ce", "off")
+        ),
+        train_compile_selective_ce_min_tokens=_backend_option_int(
+            config.backend_options,
+            "train_compile_selective_ce_min_tokens",
+            128,
+        ),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
@@ -241,6 +249,14 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
         ),
         train_unsloth_fused_ce_torch_compile=bool(
             options.get("train_unsloth_fused_ce_torch_compile", True)
+        ),
+        train_compile_selective_ce=str(
+            options.get("train_compile_selective_ce", "off")
+        ),
+        train_compile_selective_ce_min_tokens=_backend_option_int(
+            options,
+            "train_compile_selective_ce_min_tokens",
+            128,
         ),
         liger_kernel=bool(options.get("liger_kernel", False)),
         liger_fused_linear_ce=bool(options.get("liger_fused_linear_ce", True)),
@@ -449,6 +465,16 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=bool,
                 default=True,
             ),
+            "train_compile_selective_ce": BackendOptionSpec(
+                value_type=str,
+                default="off",
+                choices=("off", "auto", "require"),
+            ),
+            "train_compile_selective_ce_min_tokens": BackendOptionSpec(
+                value_type=int,
+                default=128,
+                validator=_validate_non_negative_int,
+            ),
         },
     ),
     "unsloth": BackendDefinition(
@@ -543,6 +569,16 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             "train_unsloth_fused_ce_torch_compile": BackendOptionSpec(
                 value_type=bool,
                 default=True,
+            ),
+            "train_compile_selective_ce": BackendOptionSpec(
+                value_type=str,
+                default="off",
+                choices=("off", "auto", "require"),
+            ),
+            "train_compile_selective_ce_min_tokens": BackendOptionSpec(
+                value_type=int,
+                default=128,
+                validator=_validate_non_negative_int,
             ),
             "liger_kernel": BackendOptionSpec(value_type=bool, default=False),
             "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),

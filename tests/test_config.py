@@ -289,6 +289,8 @@ min_prompt_overlap = 0.75
             "train_unsloth_fused_ce": "off",
             "train_unsloth_fused_ce_target_gb": 0.0,
             "train_unsloth_fused_ce_torch_compile": True,
+            "train_compile_selective_ce": "off",
+            "train_compile_selective_ce_min_tokens": 128,
         }
         assert c.environment_provider == ""
         assert c.environment_id == ""

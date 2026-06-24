@@ -452,6 +452,15 @@ CONFIGURATION
             the earliest weighted RL/ECHO token. Rollout/inference can still
             use the full prompt, but the train gradient is no longer the exact
             full-context objective.
+        train_compile_selective_ce = "off"
+            off, auto, or require. For CUDA ECHO/RL rows with many selected
+            target tokens, compile the selected LM-head/cross-entropy region
+            while preserving the exact class-index CE objective. auto falls
+            back to eager CE; require fails if the compiled path cannot run.
+        train_compile_selective_ce_min_tokens = 128
+            Minimum selected target-token count before auto mode tries the
+            compiled selected-CE path. This avoids compiler overhead for tiny
+            target sets.
         train_unsloth_fused_ce = "off"
             off, auto, or require. For ordinary SFT rows with one constant
             supervised token weight, route the loss through Unsloth's dynamic

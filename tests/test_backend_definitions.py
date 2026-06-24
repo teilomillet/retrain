@@ -2,6 +2,7 @@
 
 import sys
 from types import SimpleNamespace
+from typing import cast
 
 from retrain.backend_definitions import (
     BackendOptionSpec,
@@ -73,6 +74,8 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "train_unsloth_fused_ce": "off",
         "train_unsloth_fused_ce_target_gb": 0.0,
         "train_unsloth_fused_ce_torch_compile": True,
+        "train_compile_selective_ce": "off",
+        "train_compile_selective_ce_min_tokens": 128,
     }
 
 
@@ -97,6 +100,8 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
             "train_unsloth_fused_ce": "require",
             "train_unsloth_fused_ce_target_gb": "1.5",
             "train_unsloth_fused_ce_torch_compile": "false",
+            "train_compile_selective_ce": "auto",
+            "train_compile_selective_ce_min_tokens": "256",
         },
     )
     assert normalized["max_seq_length"] == 262144
@@ -118,6 +123,8 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
     assert normalized["train_unsloth_fused_ce"] == "require"
     assert normalized["train_unsloth_fused_ce_target_gb"] == 1.5
     assert normalized["train_unsloth_fused_ce_torch_compile"] is False
+    assert normalized["train_compile_selective_ce"] == "auto"
+    assert normalized["train_compile_selective_ce_min_tokens"] == 256
     assert normalized["liger_kernel"] is False
     assert normalized["liger_fused_linear_ce"] is True
     assert normalized["qwen35_gated_delta_chunk_size"] == "auto"
@@ -166,8 +173,11 @@ def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
 
 def test_backends_catalog_payload_shape() -> None:
     payload = describe_backends_catalog()
-    names = {item["name"] for item in payload["builtins"]}
+    builtins = cast(list[dict[str, object]], payload["builtins"])
+    plugin = cast(dict[str, object], payload["plugin"])
+    names = {item["name"] for item in builtins}
     assert {"local", "unsloth", "tinker", "prime_rl"} <= names
-    assert "capability_hooks" in payload["plugin"]
-    unsloth = next(item for item in payload["builtins"] if item["name"] == "unsloth")
-    assert unsloth["capabilities"]["supports_echo_shared_forward"] is True
+    assert "capability_hooks" in plugin
+    unsloth = next(item for item in builtins if item["name"] == "unsloth")
+    capabilities = cast(dict[str, object], unsloth["capabilities"])
+    assert capabilities["supports_echo_shared_forward"] is True

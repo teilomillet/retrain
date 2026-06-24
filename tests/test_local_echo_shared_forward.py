@@ -195,6 +195,103 @@ def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> No
     assert helper._selective_logprob_path_counts == {"hidden": 1}
 
 
+def test_selective_compile_auto_falls_back_on_cpu() -> None:
+    torch.manual_seed(123)
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper.train_compile_selective_ce = "auto"
+    helper.train_compile_selective_ce_min_tokens = 1
+    helper._train_logits_to_keep_supported = False
+    helper._selective_logprob_path_counts = {}
+    helper._compiled_selective_ce_fallback_reason = ""
+    helper._compiled_selective_ce_available = None
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    assert actual.shape == target_mask.shape
+    assert helper._selective_logprob_path_counts == {"hidden": 1}
+    assert helper._compiled_selective_ce_fallback_reason == "non_cuda"
+
+
+def test_selective_compile_require_raises_on_cpu() -> None:
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper.train_compile_selective_ce = "require"
+    helper.train_compile_selective_ce_min_tokens = 1
+    helper._train_logits_to_keep_supported = False
+    helper._selective_logprob_path_counts = {}
+    helper._compiled_selective_ce_fallback_reason = ""
+    helper._compiled_selective_ce_available = None
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    with pytest.raises(RuntimeError, match="non_cuda"):
+        helper._shifted_token_logprobs(
+            input_ids,
+            attention_mask,
+            target_mask=target_mask,
+        )
+
+
+def test_selective_compiled_path_scatter_and_metrics(monkeypatch) -> None:
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper.train_compile_selective_ce = "auto"
+    helper.train_compile_selective_ce_min_tokens = 1
+    helper._train_logits_to_keep_supported = False
+    helper._selective_logprob_path_counts = {}
+    helper._compiled_selective_ce_fallback_reason = ""
+    helper._compiled_selective_ce_available = None
+
+    def fake_compiled(self, selected_hidden, lm_head, target_ids):  # noqa: ANN001
+        _ = selected_hidden, lm_head, target_ids
+        return torch.tensor([-1.0, -2.0], dtype=torch.float32)
+
+    monkeypatch.setattr(
+        LocalTrainHelper,
+        "_compiled_selective_ce_logprobs",
+        fake_compiled,
+    )
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    assert torch.equal(
+        actual,
+        torch.tensor([[0.0, 0.0, -1.0, -2.0]], dtype=torch.float32),
+    )
+    assert helper._selective_logprob_path_counts == {
+        "hidden": 1,
+        "compiled_ce": 1,
+    }
+
+
 def test_positive_logprob_chunk_size_skips_logits_to_keep_suffix_path() -> None:
     torch.manual_seed(321)
     model = _TinyHiddenLM()
@@ -297,6 +394,7 @@ def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch
             ignore_index=-100,
             reduction="sum",
         )
+        assert n_items is not None
         return loss / n_items.to(loss.device)
 
     monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: fake_fused_ce)
@@ -330,6 +428,208 @@ def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch
     assert isinstance(mask, torch.Tensor)
     assert labels.tolist() == [[-100, -100, -100, 4, 5]]
     assert mask.tolist() == [[False, False, False, True, True]]
+
+
+def test_unsloth_fused_sft_loss_auto_falls_back_on_runtime_failure(monkeypatch) -> None:
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "auto"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+    helper.train_unsloth_fused_ce_torch_compile = False
+    helper._loss_path_counts = {}
+
+    def failing_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        raise RuntimeError("Hard failure due to fullgraph=True")
+
+    monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: failing_fused_ce)
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
+
+    helper._shifted_token_logprobs = shifted_logprobs
+    loss, token_count = helper._compute_sft_loss(
+        input_ids,
+        advantages,
+        attention_mask,
+    )
+
+    assert float(loss.item()) == pytest.approx(0.25)
+    assert float(token_count.item()) == 2.0
+    assert helper._unsloth_fused_ce_available is False
+    assert helper._unsloth_fused_ce_unavailable_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_fallback_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_runtime_disabled is True
+
+
+def test_unsloth_fused_sft_loss_auto_falls_back_on_hidden_runtime_failure(monkeypatch) -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = _TinyHiddenLM()
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "auto"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+    helper.train_unsloth_fused_ce_torch_compile = False
+    helper._loss_path_counts = {}
+
+    def failing_hidden(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        raise RuntimeError("Hard failure due to fullgraph=True")
+
+    monkeypatch.setattr(local_mod, "forward_hidden_states_and_lm_head", failing_hidden)
+    monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: object())
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
+
+    helper._shifted_token_logprobs = shifted_logprobs
+    loss, token_count = helper._compute_sft_loss(
+        input_ids,
+        advantages,
+        attention_mask,
+    )
+
+    assert float(loss.item()) == pytest.approx(0.25)
+    assert float(token_count.item()) == 2.0
+    assert helper._unsloth_fused_ce_unavailable_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_fallback_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_runtime_disabled is True
+
+
+def test_unsloth_fused_sft_loss_require_raises_on_runtime_failure(monkeypatch) -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = _TinyHiddenLM()
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "require"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+    helper.train_unsloth_fused_ce_torch_compile = False
+    helper._loss_path_counts = {}
+
+    def failing_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        raise RuntimeError("Hard failure due to fullgraph=True")
+
+    monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: failing_fused_ce)
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="runtime_RuntimeError"):
+        helper._compute_sft_loss(
+            input_ids,
+            advantages,
+            attention_mask,
+        )
+
+
+def test_unsloth_fused_sft_loss_auto_reraises_cuda_oom(monkeypatch) -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = _TinyHiddenLM()
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "auto"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+    helper.train_unsloth_fused_ce_torch_compile = False
+    helper._loss_path_counts = {}
+
+    def oom_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        raise RuntimeError("CUDA out of memory. Tried to allocate 1.00 GiB")
+
+    monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: oom_fused_ce)
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="CUDA out of memory"):
+        helper._compute_sft_loss(
+            input_ids,
+            advantages,
+            attention_mask,
+        )
+
+
+def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch) -> None:
+    helper = _helper(_ScalarLM())
+    helper.train_unsloth_fused_ce = "auto"
+    helper._unsloth_fused_ce_fallback_reason = ""
+    helper._unsloth_fused_ce_unavailable_reason = ""
+    helper._unsloth_fused_ce_available = None
+    helper._unsloth_fused_ce_runtime_disabled = False
+    calls = 0
+
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+        _ = input_ids, advantages, attention_mask
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            helper._unsloth_fused_ce_attempts = 1
+            helper._record_loss_path("unsloth_fused_ce")
+            raise RuntimeError("Hard failure due to fullgraph=True")
+        return helper.train_model.bias * 0.0 + torch.tensor(0.5), torch.tensor(1.0)
+
+    monkeypatch.setattr(helper, "_compute_sft_loss", fake_compute_sft_loss)
+
+    loss = helper._do_sft_impl(
+        torch.tensor([[1, 2, 3]], dtype=torch.long),
+        torch.tensor([[0.0, 1.0, 1.0]], dtype=torch.float32),
+        torch.ones((1, 3), dtype=torch.bool),
+    )
+
+    assert calls == 2
+    assert loss == pytest.approx(0.25)
+    assert helper._unsloth_fused_ce_available is False
+    assert helper._unsloth_fused_ce_unavailable_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_fallback_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_runtime_disabled is True
+    metrics = helper.runtime_metrics()
+    assert metrics["local_train_unsloth_fused_ce_attempts"] == 1
+    assert metrics["local_train_unsloth_fused_ce_batches"] == 0
+
+
+def test_sft_train_step_auto_does_not_retry_unrelated_runtime_failure(monkeypatch) -> None:
+    helper = _helper(_ScalarLM())
+    helper.train_unsloth_fused_ce = "auto"
+    helper._unsloth_fused_ce_runtime_disabled = False
+    calls = 0
+
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+        _ = input_ids, advantages, attention_mask
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("unrelated train-step failure")
+
+    monkeypatch.setattr(helper, "_compute_sft_loss", fake_compute_sft_loss)
+
+    with pytest.raises(RuntimeError, match="unrelated train-step failure"):
+        helper._do_sft_impl(
+            torch.tensor([[1, 2, 3]], dtype=torch.long),
+            torch.tensor([[0.0, 1.0, 1.0]], dtype=torch.float32),
+            torch.ones((1, 3), dtype=torch.bool),
+        )
+
+    assert calls == 1
+    assert helper._unsloth_fused_ce_runtime_disabled is False
 
 
 def test_unsloth_fused_sft_loss_falls_back_for_nonconstant_weights() -> None:

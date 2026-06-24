@@ -18,6 +18,7 @@ import os
 import time
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import torch
 import torch.nn.functional as F
@@ -43,6 +44,16 @@ from retrain.inference_engine import create_engine
 def _masked_mean(values, mask):
     denom = mask.float().sum().clamp(min=1)
     return (values * mask.float()).sum() / denom
+
+
+def _selected_linear_ce_logprobs_no_bias(hidden, weight, target_ids):
+    logits = hidden @ weight.T
+    return -F.cross_entropy(logits.float(), target_ids, reduction="none")
+
+
+def _selected_linear_ce_logprobs_with_bias(hidden, weight, bias, target_ids):
+    logits = (hidden @ weight.T) + bias
+    return -F.cross_entropy(logits.float(), target_ids, reduction="none")
 
 
 def _compute_policy_loss(
@@ -262,7 +273,9 @@ class LocalTrainHelper:
                  train_supervised_context_tokens=0,
                  train_unsloth_fused_ce="off",
                  train_unsloth_fused_ce_target_gb=0.0,
-                 train_unsloth_fused_ce_torch_compile=True):
+                 train_unsloth_fused_ce_torch_compile=True,
+                 train_compile_selective_ce="off",
+                 train_compile_selective_ce_min_tokens=128):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
@@ -304,8 +317,16 @@ class LocalTrainHelper:
         self.train_unsloth_fused_ce_torch_compile = bool(
             train_unsloth_fused_ce_torch_compile
         )
+        self.train_compile_selective_ce = self._normalize_compile_mode(
+            train_compile_selective_ce,
+            option_name="train_compile_selective_ce",
+        )
+        self.train_compile_selective_ce_min_tokens = max(
+            0,
+            int(train_compile_selective_ce_min_tokens),
+        )
         self._last_sample_metrics: dict[str, float | int] = {}
-        self._last_train_metrics: dict[str, float | int] = {}
+        self._last_train_metrics: dict[str, float | int | str] = {}
         self._last_sync_metrics: dict[str, float | int] = {}
         self._last_context_crop_metrics: dict[str, float | int] = {}
         self._train_logits_to_keep_supported: bool | None = None
@@ -315,6 +336,8 @@ class LocalTrainHelper:
         self._unsloth_fused_ce_unavailable_reason = ""
         self._unsloth_fused_ce_fallback_reason = ""
         self._last_unsloth_fused_ce_effective_target_gb = 0.0
+        self._compiled_selective_ce_fallback_reason = ""
+        self._compiled_selective_ce_available: bool | None = None
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -366,7 +389,10 @@ class LocalTrainHelper:
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
 
-        self._accelerator_metrics: dict[str, object] = accelerator_status()
+        self._accelerator_metrics = cast(
+            dict[str, object],
+            dict(accelerator_status()),
+        )
         self._accelerator_metrics.update(
             apply_liger_kernel_if_available(
                 model_name,
@@ -509,7 +535,9 @@ class LocalTrainHelper:
         if loss is not None:
             return loss
         try:
-            from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
+            from liger_kernel.transformers import (  # type: ignore[unresolved-import]
+                LigerFusedLinearCrossEntropyLoss,
+            )
 
             loss = LigerFusedLinearCrossEntropyLoss(reduction="none")
         except Exception:  # noqa: BLE001 - optional accelerator path.
@@ -737,6 +765,18 @@ class LocalTrainHelper:
             "local_train_unsloth_fused_ce_torch_compile": int(
                 getattr(self, "train_unsloth_fused_ce_torch_compile", True)
             ),
+            "local_train_compile_selective_ce_mode": str(
+                getattr(self, "train_compile_selective_ce", "off")
+            ),
+            "local_train_compile_selective_ce_min_tokens": int(
+                getattr(self, "train_compile_selective_ce_min_tokens", 0)
+            ),
+            "local_train_compile_selective_ce_available": (
+                self._compiled_selective_ce_available_metric()
+            ),
+            "local_train_compile_selective_ce_fallback_reason": str(
+                getattr(self, "_compiled_selective_ce_fallback_reason", "")
+            ),
             "local_train_unsloth_fused_ce_available": (
                 self._unsloth_fused_ce_available_metric()
             ),
@@ -745,6 +785,9 @@ class LocalTrainHelper:
             ),
             "local_train_unsloth_fused_ce_fallback_reason": str(
                 getattr(self, "_unsloth_fused_ce_fallback_reason", "")
+            ),
+            "local_train_unsloth_fused_ce_attempts": int(
+                getattr(self, "_unsloth_fused_ce_attempts", 0)
             ),
             "local_train_unsloth_fused_ce_batches": int(
                 getattr(self, "_loss_path_counts", {}).get(
@@ -779,6 +822,12 @@ class LocalTrainHelper:
             "local_train_selective_hidden_logprob_batches": int(
                 getattr(self, "_selective_logprob_path_counts", {}).get(
                     "hidden",
+                    0,
+                )
+            ),
+            "local_train_selective_compiled_ce_batches": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "compiled_ce",
                     0,
                 )
             ),
@@ -861,7 +910,7 @@ class LocalTrainHelper:
         batch_size: int,
     ) -> None:
         wall_s = time.perf_counter() - wall_start_s
-        metrics: dict[str, float | int] = {
+        metrics: dict[str, float | int | str] = {
             "local_train_kind": kind,
             "local_train_wall_s": wall_s,
             "local_train_forward_s": forward_s,
@@ -949,6 +998,28 @@ class LocalTrainHelper:
         self._loss_path_counts = counts
 
     @staticmethod
+    def _normalize_compile_mode(raw, *, option_name: str) -> str:
+        if isinstance(raw, bool):
+            return "auto" if raw else "off"
+        text = str(raw or "off").strip().lower()
+        aliases = {
+            "0": "off",
+            "false": "off",
+            "no": "off",
+            "none": "off",
+            "disabled": "off",
+            "1": "auto",
+            "true": "auto",
+            "yes": "auto",
+            "on": "auto",
+            "required": "require",
+        }
+        text = aliases.get(text, text)
+        if text not in {"off", "auto", "require"}:
+            raise ValueError(f"{option_name} must be 'off', 'auto', or 'require'.")
+        return text
+
+    @staticmethod
     def _normalize_unsloth_fused_ce_mode(raw) -> str:
         if isinstance(raw, bool):
             return "require" if raw else "off"
@@ -984,7 +1055,87 @@ class LocalTrainHelper:
             return -1
         return int(bool(available))
 
+    def _compiled_selective_ce_available_metric(self) -> int:
+        available = getattr(self, "_compiled_selective_ce_available", None)
+        if available is None:
+            return -1
+        return int(bool(available))
+
+    def _reject_compiled_selective_ce(self, reason: str):
+        self._compiled_selective_ce_fallback_reason = reason
+        if getattr(self, "train_compile_selective_ce", "off") == "require":
+            raise RuntimeError(
+                "train_compile_selective_ce=require but the compiled selected "
+                f"CE path cannot be used: {reason}"
+            )
+        return None
+
+    def _compiled_selective_ce_logprobs(self, selected_hidden, lm_head, target_ids):
+        mode = getattr(self, "train_compile_selective_ce", "off")
+        if mode == "off":
+            return None
+        if int(selected_hidden.shape[0]) < int(
+            getattr(self, "train_compile_selective_ce_min_tokens", 0)
+        ):
+            return self._reject_compiled_selective_ce("below_min_tokens")
+        if selected_hidden.device.type != "cuda":
+            return self._reject_compiled_selective_ce("non_cuda")
+        if not hasattr(torch, "compile"):
+            self._compiled_selective_ce_available = False
+            return self._reject_compiled_selective_ce("torch_compile_unavailable")
+
+        if type(lm_head) is not torch.nn.Linear:
+            return self._reject_compiled_selective_ce("lm_head_not_plain_linear")
+        weight = getattr(lm_head, "weight", None)
+        if weight is None:
+            return self._reject_compiled_selective_ce("lm_head_weight_unavailable")
+        bias = getattr(lm_head, "bias", None)
+
+        try:
+            if bias is None:
+                compiled = getattr(
+                    self,
+                    "_compiled_selective_ce_no_bias",
+                    None,
+                )
+                if compiled is None:
+                    compiled = torch.compile(
+                        _selected_linear_ce_logprobs_no_bias,
+                        mode="reduce-overhead",
+                        fullgraph=True,
+                    )
+                    self._compiled_selective_ce_no_bias = compiled
+                selected_logprobs = compiled(selected_hidden, weight, target_ids)
+            else:
+                compiled = getattr(
+                    self,
+                    "_compiled_selective_ce_with_bias",
+                    None,
+                )
+                if compiled is None:
+                    compiled = torch.compile(
+                        _selected_linear_ce_logprobs_with_bias,
+                        mode="reduce-overhead",
+                        fullgraph=True,
+                    )
+                    self._compiled_selective_ce_with_bias = compiled
+                selected_logprobs = compiled(
+                    selected_hidden,
+                    weight,
+                    bias,
+                    target_ids,
+                )
+        except Exception as exc:  # noqa: BLE001 - optional compiler path.
+            self._compiled_selective_ce_available = False
+            return self._reject_compiled_selective_ce(type(exc).__name__)
+
+        self._compiled_selective_ce_available = True
+        self._compiled_selective_ce_fallback_reason = ""
+        return selected_logprobs
+
     def _unsloth_fused_ce_loss(self):
+        if bool(getattr(self, "_unsloth_fused_ce_runtime_disabled", False)):
+            return None
         cached = getattr(self, "_unsloth_fused_ce_loss_fn", None)
         if cached is not None:
             return cached
@@ -1030,6 +1181,26 @@ class LocalTrainHelper:
         if total_gb <= 24:
             return 0.5
         return 0.0
+
+    @staticmethod
+    def _is_cuda_oom_exception(exc: BaseException) -> bool:
+        message = str(exc).lower()
+        return "cuda" in message and "out of memory" in message
+
+    def _disable_unsloth_fused_ce_after_runtime_failure(
+        self,
+        exc: BaseException,
+    ) -> str:
+        reason = f"runtime_{type(exc).__name__}"
+        self._unsloth_fused_ce_available = False
+        self._unsloth_fused_ce_unavailable_reason = reason
+        self._unsloth_fused_ce_fallback_reason = reason
+        self._unsloth_fused_ce_runtime_disabled = True
+        try:
+            torch._dynamo.reset()
+        except Exception:  # noqa: BLE001 - best-effort compiler cleanup.
+            pass
+        return reason
 
     @staticmethod
     def _constant_positive_weight(weights, target_mask):
@@ -1087,12 +1258,21 @@ class LocalTrainHelper:
                 "unavailable",
             )
             return reject(reason)
-
-        hidden_and_head = forward_hidden_states_and_lm_head(
-            self.train_model,
-            input_ids,
-            attention_mask,
+        self._unsloth_fused_ce_attempts = (
+            int(getattr(self, "_unsloth_fused_ce_attempts", 0)) + 1
         )
+
+        try:
+            hidden_and_head = forward_hidden_states_and_lm_head(
+                self.train_model,
+                input_ids,
+                attention_mask,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+            if self._is_cuda_oom_exception(exc):
+                raise
+            reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
+            return reject(reason)
         if hidden_and_head is None:
             return reject("hidden_states_unavailable")
 
@@ -1114,21 +1294,27 @@ class LocalTrainHelper:
         label_mask[:, 1:] = target_mask
         target_gb = self._effective_unsloth_fused_ce_target_gb()
         self._last_unsloth_fused_ce_effective_target_gb = target_gb
-        loss = loss_fn(
-            None,
-            hidden_states,
-            weight,
-            bias,
-            labels,
-            mask=label_mask,
-            n_items=token_count,
-            target_gb=target_gb if target_gb > 0 else None,
-            torch_compile=bool(
-                getattr(self, "train_unsloth_fused_ce_torch_compile", True)
-            ),
-            shift_labels=True,
-            ignore_index=ignore_index,
-        )
+        try:
+            loss = loss_fn(
+                None,
+                hidden_states,
+                weight,
+                bias,
+                labels,
+                mask=label_mask,
+                n_items=token_count,
+                target_gb=target_gb if target_gb > 0 else None,
+                torch_compile=bool(
+                    getattr(self, "train_unsloth_fused_ce_torch_compile", True)
+                ),
+                shift_labels=True,
+                ignore_index=ignore_index,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+            if self._is_cuda_oom_exception(exc):
+                raise
+            reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
+            return reject(reason)
         self._unsloth_fused_ce_fallback_reason = ""
         self._record_loss_path("unsloth_fused_ce")
         return loss * weight_scale.to(loss.device)
@@ -1267,24 +1453,37 @@ class LocalTrainHelper:
         if chunk_size <= 0:
             chunk_size = 256
 
-        chunks = []
-        for start in range(0, selected_hidden.shape[0], chunk_size):
-            stop = min(start + chunk_size, selected_hidden.shape[0])
-            logits = lm_head(selected_hidden[start:stop])
-            logprobs = F.log_softmax(logits.float(), dim=-1)
-            chunks.append(
-                logprobs.gather(
-                    1,
-                    target_ids[start:stop].unsqueeze(1),
-                ).squeeze(1)
-            )
-        if not chunks:
+        selected_logprobs = self._compiled_selective_ce_logprobs(
+            selected_hidden,
+            lm_head,
+            target_ids,
+        )
+        used_compiled_ce = selected_logprobs is not None
+        if selected_logprobs is None:
+            chunks = []
+            for start in range(0, selected_hidden.shape[0], chunk_size):
+                stop = min(start + chunk_size, selected_hidden.shape[0])
+                logits = lm_head(selected_hidden[start:stop])
+                # cross_entropy is exactly LogSoftmax + NLLLoss for class-index
+                # targets, and avoids materializing the full selected-token
+                # log-probability matrix before gathering one class per row.
+                chunks.append(
+                    -F.cross_entropy(
+                        logits.float(),
+                        target_ids[start:stop],
+                        reduction="none",
+                    )
+                )
+            if not chunks:
+                return None
+            selected_logprobs = torch.cat(chunks, dim=0)
+        if selected_logprobs.numel() == 0:
             return None
-
-        selected_logprobs = torch.cat(chunks, dim=0)
         full = selected_logprobs.new_zeros((input_ids.shape[0], shifted_len))
         full[selected[:, 0], selected[:, 1]] = selected_logprobs
         self._record_selective_logprob_path("hidden")
+        if used_compiled_ce:
+            self._record_selective_logprob_path("compiled_ce")
         return full
 
     def _shifted_token_logprobs(self, input_ids, attention_mask, target_mask=None):
@@ -1592,19 +1791,52 @@ class LocalTrainHelper:
             for start in range(0, batch_size, microbatch_size):
                 stop = min(start + microbatch_size, batch_size)
                 microbatches += 1
-                timer = _timer_start(self.train_device)
-                with self._saved_tensors_context():
-                    masked_loss, token_count = self._compute_sft_loss(
-                        input_ids[start:stop],
-                        advantages[start:stop],
-                        attention_mask[start:stop],
+                retried_fused_ce_runtime_failure = False
+                while True:
+                    fused_ce_attempts_before = int(
+                        getattr(self, "_unsloth_fused_ce_attempts", 0)
                     )
-                    forward_s += _timer_stop(timer)
-                    token_count_value = float(token_count.item())
-                    scaled_loss = masked_loss * (token_count / total_tokens)
+                    loss_counts = getattr(self, "_loss_path_counts", {})
+                    fused_ce_batches_before = int(
+                        loss_counts.get("unsloth_fused_ce", 0)
+                    )
                     timer = _timer_start(self.train_device)
-                    self.scaler.scale(scaled_loss).backward()
-                    backward_s += _timer_stop(timer)
+                    try:
+                        with self._saved_tensors_context():
+                            masked_loss, token_count = self._compute_sft_loss(
+                                input_ids[start:stop],
+                                advantages[start:stop],
+                                attention_mask[start:stop],
+                            )
+                            forward_s += _timer_stop(timer)
+                            token_count_value = float(token_count.item())
+                            scaled_loss = masked_loss * (token_count / total_tokens)
+                            timer = _timer_start(self.train_device)
+                            self.scaler.scale(scaled_loss).backward()
+                            backward_s += _timer_stop(timer)
+                    except Exception as exc:
+                        fused_ce_attempted = (
+                            int(getattr(self, "_unsloth_fused_ce_attempts", 0))
+                            > fused_ce_attempts_before
+                        )
+                        if (
+                            self._is_cuda_oom_exception(exc)
+                            or not fused_ce_attempted
+                            or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
+                            or retried_fused_ce_runtime_failure
+                        ):
+                            raise
+                        loss_counts = getattr(self, "_loss_path_counts", {})
+                        if (
+                            int(loss_counts.get("unsloth_fused_ce", 0))
+                            > fused_ce_batches_before
+                        ):
+                            loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
+                        self._disable_unsloth_fused_ce_after_runtime_failure(exc)
+                        self.optimizer.zero_grad()
+                        retried_fused_ce_runtime_failure = True
+                        continue
+                    break
                 loss_sum += float(masked_loss.detach().item()) * token_count_value
 
             timer = _timer_start(self.train_device)
@@ -1837,10 +2069,13 @@ class LocalTrainHelper:
                 tokens_removed += start
             cropped_tokens.append(tokens[start:])
             if cropped_logprobs is not None:
+                assert logprobs is not None
                 cropped_logprobs.append(logprobs[start:])
             if cropped_advantages is not None:
+                assert advantages is not None
                 cropped_advantages.append(advantages[start:])
             if cropped_echo is not None:
+                assert echo is not None
                 cropped_echo.append(echo[start:])
 
         cropped_lengths = [len(row) for row in cropped_tokens]

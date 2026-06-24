@@ -158,7 +158,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -175,6 +175,8 @@ cuda_empty_cache = true    # release cached CUDA blocks after local sample/train
 sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 train_selective_suffix_logits = false  # optional: compute logits only for weighted suffix tokens
+train_compile_selective_ce = "off"  # off | auto | require; compile selected CE on CUDA
+train_compile_selective_ce_min_tokens = 128  # avoid compile overhead for tiny target sets
 train_save_on_cpu = false  # optional: offload autograd saved tensors to CPU; much slower
 train_save_on_cpu_pin_memory = true  # transfer mode for saved-tensor CPU offload
 train_save_on_cpu_min_numel = 0  # 0 = offload all saved tensors; positive = exact selective offload
@@ -206,6 +208,11 @@ log-softmax only to selected RL/ECHO target positions instead of materializing
 `local_train_selective_sparse_suffix_skips`,
 `local_train_selective_hidden_logprob_batches`, and
 `local_train_selective_suffix_logprob_batches` show which branch ran.
+Set `train_compile_selective_ce = "auto"` only after a CUDA smoke shows many
+selected targets per row. It compiles the selected LM-head/cross-entropy region
+and falls back to eager CE below `train_compile_selective_ce_min_tokens`.
+`"require"` is intended for proof smokes and fails if the compiled path cannot
+run.
 `train_save_on_cpu` is the last-resort exact-autograd
 memory path for very long rows on small GPUs; expect substantially slower
 backward passes. `train_save_on_cpu_pin_memory` controls the transfer mode for
@@ -225,10 +232,15 @@ dynamic fused/chunked CE was used. If the row has fractional or mixed token
 weights, retrain falls back because using a plain CE mask would change the
 objective. For long rows with sparse supervised targets, `auto` also falls back
 because selective hidden/chunked logprobs use less memory than CE over every
-position. The runtime metrics
+position. If the installed Unsloth helper raises a non-OOM runtime/compiler
+failure, `auto` records that runtime reason and falls back to retrain's exact
+loss path; CUDA OOM is still propagated as a capacity failure. The runtime metrics
+`local_train_unsloth_fused_ce_attempts`,
 `local_train_unsloth_fused_ce_batches`,
 `local_train_unsloth_fused_ce_available`, and
 `local_train_unsloth_fused_ce_fallback_reason` report which branch ran.
+`attempts` counts actual fused-helper tries; `batches` counts only fused-CE
+attempts that actually survived backward and contributed to the optimizer step.
 When `train_unsloth_fused_ce_target_gb = 0`, retrain uses a conservative
 small-GPU default before calling Unsloth: `0.25` GB on <=16 GB CUDA cards,
 `0.5` GB on <=24 GB CUDA cards, and Unsloth's own target selection above that.
@@ -510,7 +522,9 @@ Memory policy should stay evidence-first:
   add `train_unsloth_fused_ce = "require"` to the smoke so the run fails if it
   cannot use Unsloth's dynamic fused/chunked CE helper. Dense-label rows on
   small GPUs should leave `train_unsloth_fused_ce_target_gb = 0` so retrain can
-  choose its conservative small-card target.
+  choose its conservative small-card target. If `require` fails with a runtime
+  compiler reason but `off` passes, keep `auto` for training only after checking
+  that the metrics report a fallback; do not count that run as a fused-CE proof.
 - If long rows OOM and fused CE did not run, use exact saved-tensor CPU offload
   with `train_save_on_cpu = true`. Do not stack saved-tensor CPU offload with
   required fused CE; PyTorch `torch.func` rejects saved-tensor hooks.

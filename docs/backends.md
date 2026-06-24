@@ -269,6 +269,8 @@ gradient_checkpointing = true
 liger_fused_linear_ce = true
 qwen35_gated_delta_chunk_size = "auto"  # 4070 Ti-safe Qwen3.5 fallback
 train_selective_suffix_logits = true    # only backprop weighted RL/ECHO tokens
+train_compile_selective_ce = "off"      # off | auto | require; opt-in compiled sparse CE
+train_compile_selective_ce_min_tokens = 128
 train_unsloth_fused_ce = "auto"         # exact SFT fused/chunked CE when eligible
 train_unsloth_fused_ce_target_gb = 0.0  # 0 = retrain auto target for the GPU
 train_save_on_cpu = true                # exact saved-tensor offload fallback
@@ -280,10 +282,15 @@ Use `train_unsloth_fused_ce = "require"` in a smoke when you need proof that
 this exact path was used. `auto` falls back and records
 `local_train_unsloth_fused_ce_fallback_reason` if the installed Unsloth package
 does not expose the helper, if the row uses mixed/fractional token weights, or
-if a long row has a sparse supervised-token mask. Dense long supervised
+if a long row has a sparse supervised-token mask. `auto` also falls back if the
+installed helper raises a non-OOM runtime/compiler failure; CUDA OOM is still
+treated as a real capacity failure and is not hidden. Dense long supervised
 completion/text rows are the intended fused-CE case; long prompts with only a
 few supervised completion tokens are usually better served by selective
 hidden/chunked logprobs.
+Use `local_train_unsloth_fused_ce_attempts` to see whether retrain tried the
+path, and `local_train_unsloth_fused_ce_batches` to see whether fused CE
+actually survived backward and contributed to the optimizer step.
 RL and ECHO rows with arbitrary token weights still use retrain's weighted
 log-probability path because reducing them to a plain CE mask would change the
 objective.
@@ -307,6 +314,8 @@ train_save_on_cpu = true
 train_save_on_cpu_pin_memory = true
 train_save_on_cpu_min_numel = 1048576  # 0 = offload every saved tensor
 train_logprob_chunk_size = 256         # force hidden/chunked logprob fallback
+train_compile_selective_ce = "auto"    # optional: compile selected CE when large enough
+train_compile_selective_ce_min_tokens = 128
 ```
 
 For ECHO/tool traces with sparse weighted positions inside long rows, this
@@ -331,12 +340,33 @@ PYTHONPATH=. python scripts/bench_echo_sparse_logprobs.py \
 ```
 
 On the 12 GB RTX 4070 Ti smoke host, that shape measured the old suffix-style
-LM-head/log-softmax region at `467.3 MB` median peak allocated and `0.00441 s`
-median, versus `20.8 MB` and `0.00043 s` for selected hidden logits. The
-actual `train_step_with_echo_masks` smoke in the same script reported
+LM-head/log-softmax region at `467.3 MB` median peak allocated and `0.00517 s`
+median, versus `20.8 MB` and `0.00041 s` for the previous selected
+log-softmax+gather path, and `20.5 MB` and `0.00025 s` for the current selected
+cross-entropy path. The current path is exact for class-index targets because
+cross-entropy is the same loss as `LogSoftmax` followed by `NLLLoss`, while
+avoiding the selected-token log-probability matrix. The actual
+`train_step_with_echo_masks` smoke in the same script reported
 `local_train_selective_sparse_suffix_skips = 3`,
 `local_train_selective_hidden_logprob_batches = 3`, and zero suffix-logprob
 batches, which proves the ECHO train helper took the sparse exact path.
+
+The chunk size remains an explicit operator knob. A GPU sweep kept `256` on the
+fastest frontier for large selected-target batches, while smaller chunks traded
+speed for memory. Lower it only when a target run is memory-bound after the
+selective path and saved-tensor offload choices are already set.
+
+For rows with many selected RL/ECHO targets, set
+`train_compile_selective_ce = "auto"` to remove more selected-logit allocation
+by compiling the selected
+LM-head/cross-entropy region. It is not a default because the first compiled
+shape pays compiler overhead and shape churn can erase the win. On the 12 GB
+RTX 4070 Ti, the benchmark shape `selected_tokens=256`, `vocab_size=32768`,
+`hidden_size=256` measured eager selected CE at `162.4 MB` and `0.00130 s`,
+versus compiled selected CE at `50.3 MB` and `0.00063 s`. Use
+`train_compile_selective_ce = "require"` only for smoke tests that must prove
+`local_train_selective_compiled_ce_batches > 0`. Wrapped or custom LM heads
+fall back unless the head is a plain `torch.nn.Linear`.
 
 For the fastest one-GPU iteration on very long prompts, use a supervised context
 window. This keeps rollout/inference on the full prompt but trains only on a
@@ -356,6 +386,12 @@ Install Unsloth Core in the training environment:
 ```bash
 uv pip install unsloth --torch-backend=auto
 ```
+
+In an existing Quaero/retrain CUDA environment, inspect the resolver plan before
+installing. If the plan replaces a validated Torch/CUDA stack, use a separate
+training env or a constrained install and treat the installed-package smoke
+below as the source of truth. Do not infer compatibility from `pip install`
+success alone.
 
 Then run a real backend smoke before any long Quaero run:
 

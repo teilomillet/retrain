@@ -2,8 +2,10 @@
 """Benchmark the sparse ECHO logprob path.
 
 This script has two checks:
-- a direct LM-head/log-softmax comparison for an old suffix-style computation
-  versus selected-token hidden logits on the same sparse targets;
+- a direct comparison of an old suffix-style LM-head/log-softmax computation,
+  the previous selected-token log-softmax+gather path, and the current
+  selected-token cross-entropy path on the same sparse targets, optionally
+  including the torch.compile selected-CE path;
 - a real LocalTrainHelper.train_step_with_echo_masks smoke that verifies sparse
   ECHO targets route through the hidden logprob path.
 
@@ -24,6 +26,11 @@ import torch
 import torch.nn.functional as F
 
 from retrain.local_train_helper import LocalTrainHelper
+
+
+def _selected_linear_ce_logprobs(hidden, weight, target_ids):  # noqa: ANN001
+    logits = hidden @ weight.T
+    return -F.cross_entropy(logits.float(), target_ids, reduction="none")
 
 
 class _BenchBackbone(torch.nn.Module):
@@ -115,6 +122,13 @@ def _measure(fn, device: torch.device, repeats: int) -> dict[str, object]:  # no
     return payload
 
 
+def _median_seconds(result: dict[str, object]) -> float:
+    value = result["median_s"]
+    if not isinstance(value, int | float):
+        raise TypeError(f"median_s must be numeric, got {type(value).__name__}")
+    return float(value)
+
+
 def _region_benchmark(args: argparse.Namespace, device: torch.device, dtype: torch.dtype):
     torch.manual_seed(args.seed)
     suffix_slots = args.seq_len - 1 - args.early_target_pos
@@ -155,7 +169,7 @@ def _region_benchmark(args: argparse.Namespace, device: torch.device, dtype: tor
         loss.backward()
         return loss.detach()
 
-    def selected_path() -> torch.Tensor:
+    def selected_logsoftmax_path() -> torch.Tensor:
         hidden = (
             base_suffix_hidden[selected_offsets]
             .detach()
@@ -172,11 +186,81 @@ def _region_benchmark(args: argparse.Namespace, device: torch.device, dtype: tor
         loss.backward()
         return loss.detach()
 
+    def selected_cross_entropy_path() -> torch.Tensor:
+        hidden = (
+            base_suffix_hidden[selected_offsets]
+            .detach()
+            .clone()
+            .requires_grad_(True)
+        )
+        weight = base_weight.detach().clone().requires_grad_(True)
+        logits = hidden @ weight.T
+        loss = F.cross_entropy(logits.float(), selected_targets, reduction="mean")
+        loss.backward()
+        return loss.detach()
+
+    compiled_selected_ce = None
+    compiled_selected_error = ""
+    if args.compile_selective_ce != "off":
+        if device.type != "cuda" or not torch.cuda.is_available():
+            compiled_selected_error = "non_cuda"
+            if args.compile_selective_ce == "require":
+                raise RuntimeError(
+                    "--compile-selective-ce=require requires a CUDA device"
+                )
+        elif not hasattr(torch, "compile"):
+            compiled_selected_error = "torch_compile_unavailable"
+            if args.compile_selective_ce == "require":
+                raise RuntimeError("torch.compile is unavailable")
+        else:
+            try:
+                compiled_selected_ce = torch.compile(
+                    _selected_linear_ce_logprobs,
+                    mode="reduce-overhead",
+                    fullgraph=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - optional benchmark path.
+                compiled_selected_error = type(exc).__name__
+                if args.compile_selective_ce == "require":
+                    raise
+
+    def selected_compiled_cross_entropy_path() -> torch.Tensor:
+        if compiled_selected_ce is None:
+            raise RuntimeError(compiled_selected_error or "compiled path unavailable")
+        hidden = (
+            base_suffix_hidden[selected_offsets]
+            .detach()
+            .clone()
+            .requires_grad_(True)
+        )
+        weight = base_weight.detach().clone().requires_grad_(True)
+        logprobs = compiled_selected_ce(hidden, weight, selected_targets)
+        loss = -logprobs.mean()
+        loss.backward()
+        return loss.detach()
+
     suffix_result = _measure(suffix_path, device, args.repeats)
-    selected_result = _measure(selected_path, device, args.repeats)
+    selected_logsoftmax_result = _measure(
+        selected_logsoftmax_path,
+        device,
+        args.repeats,
+    )
+    selected_cross_entropy_result = _measure(
+        selected_cross_entropy_path,
+        device,
+        args.repeats,
+    )
+    selected_compiled_result = None
+    if compiled_selected_ce is not None:
+        selected_compiled_result = _measure(
+            selected_compiled_cross_entropy_path,
+            device,
+            args.repeats,
+        )
     suffix_elements = suffix_slots * args.vocab_size
     selected_elements = args.selected_tokens * args.vocab_size
-    return {
+    selected_ce_median_s = _median_seconds(selected_cross_entropy_result)
+    payload: dict[str, object] = {
         "suffix_slots": int(suffix_slots),
         "selected_positions_first_last": [
             int(selected_positions[0].item()),
@@ -188,12 +272,30 @@ def _region_benchmark(args: argparse.Namespace, device: torch.device, dtype: tor
         "suffix_logits_approx_mib_fp32": float(suffix_elements * 4 / 1024**2),
         "selected_logits_approx_mib_fp32": float(selected_elements * 4 / 1024**2),
         "suffix_path": suffix_result,
-        "selected_path": selected_result,
-        "speedup": float(suffix_result["median_s"] / selected_result["median_s"]),
+        "selected_logsoftmax_path": selected_logsoftmax_result,
+        "selected_cross_entropy_path": selected_cross_entropy_result,
+        "selected_ce_speedup_vs_logsoftmax": float(
+            _median_seconds(selected_logsoftmax_result) / selected_ce_median_s
+        ),
+        "selected_ce_speedup_vs_suffix": float(
+            _median_seconds(suffix_result) / selected_ce_median_s
+        ),
     }
+    if selected_compiled_result is not None:
+        payload["selected_compiled_cross_entropy_path"] = selected_compiled_result
+        payload["selected_compiled_ce_speedup_vs_eager_ce"] = float(
+            selected_ce_median_s / _median_seconds(selected_compiled_result)
+        )
+    elif args.compile_selective_ce != "off":
+        payload["selected_compiled_ce_error"] = compiled_selected_error
+    return payload
 
 
-def _make_helper(model: torch.nn.Module, device: torch.device) -> LocalTrainHelper:
+def _make_helper(
+    model: torch.nn.Module,
+    device: torch.device,
+    args: argparse.Namespace,
+) -> LocalTrainHelper:
     helper = object.__new__(LocalTrainHelper)
     helper.train_model = model
     helper.optimizer = torch.optim.SGD(model.parameters(), lr=1e-6)
@@ -225,6 +327,8 @@ def _make_helper(model: torch.nn.Module, device: torch.device) -> LocalTrainHelp
     helper.train_unsloth_fused_ce = "off"
     helper.train_unsloth_fused_ce_target_gb = 0.0
     helper.train_unsloth_fused_ce_torch_compile = False
+    helper.train_compile_selective_ce = args.compile_selective_ce
+    helper.train_compile_selective_ce_min_tokens = args.compile_selective_ce_min_tokens
     helper._last_sample_metrics = {}
     helper._last_train_metrics = {}
     helper._last_sync_metrics = {}
@@ -236,13 +340,15 @@ def _make_helper(model: torch.nn.Module, device: torch.device) -> LocalTrainHelp
     helper._unsloth_fused_ce_available = None
     helper._unsloth_fused_ce_unavailable_reason = ""
     helper._unsloth_fused_ce_fallback_reason = ""
+    helper._compiled_selective_ce_available = None
+    helper._compiled_selective_ce_fallback_reason = ""
     return helper
 
 
 def _echo_train_smoke(args: argparse.Namespace, device: torch.device, dtype: torch.dtype):
     torch.manual_seed(args.seed + 1)
     model = _BenchLM(args.vocab_size, args.hidden_size).to(device=device, dtype=dtype)
-    helper = _make_helper(model, device)
+    helper = _make_helper(model, device, args)
     input_ids = (
         torch.arange(args.seq_len, dtype=torch.long, device=device)
         .unsqueeze(0)
@@ -287,6 +393,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden-size", type=int, default=64)
     parser.add_argument("--repeats", type=int, default=7)
     parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument(
+        "--compile-selective-ce",
+        default="off",
+        choices=("off", "auto", "require"),
+        help="Benchmark/request the optional torch.compile selected-CE path.",
+    )
+    parser.add_argument(
+        "--compile-selective-ce-min-tokens",
+        type=int,
+        default=128,
+        help="Minimum selected targets before the helper uses compiled CE.",
+    )
     parser.add_argument("--output", default="")
     return parser.parse_args()
 
@@ -301,6 +419,8 @@ def main() -> int:
         raise SystemExit("--selected-tokens must be positive")
     if args.selected_tokens > args.seq_len - 1 - args.early_target_pos:
         raise SystemExit("--selected-tokens cannot exceed suffix slots")
+    if args.compile_selective_ce_min_tokens < 0:
+        raise SystemExit("--compile-selective-ce-min-tokens must be non-negative")
 
     payload = {
         "device": str(device),
@@ -319,6 +439,8 @@ def main() -> int:
             "vocab_size": args.vocab_size,
             "hidden_size": args.hidden_size,
             "repeats": args.repeats,
+            "compile_selective_ce": args.compile_selective_ce,
+            "compile_selective_ce_min_tokens": args.compile_selective_ce_min_tokens,
         },
         "region_benchmark": _region_benchmark(args, device, dtype),
         "echo_train_smoke": _echo_train_smoke(args, device, dtype),

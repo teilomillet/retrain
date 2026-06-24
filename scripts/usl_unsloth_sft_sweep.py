@@ -446,6 +446,11 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
             "backend/local_train_unsloth_fused_ce_batches",
             "local_train_unsloth_fused_ce_batches",
         ),
+        "unsloth_fused_ce_attempts": _metric_number(
+            metrics,
+            "backend/local_train_unsloth_fused_ce_attempts",
+            "local_train_unsloth_fused_ce_attempts",
+        ),
         "unsloth_fused_ce_available": _metric_number(
             metrics,
             "backend/local_train_unsloth_fused_ce_available",
