@@ -295,6 +295,8 @@ class LocalTrainHelper:
         self._last_train_metrics: dict[str, float | int] = {}
         self._last_sync_metrics: dict[str, float | int] = {}
         self._last_context_crop_metrics: dict[str, float | int] = {}
+        self._train_logits_to_keep_supported: bool | None = None
+        self._selective_logprob_path_counts: dict[str, int] = {}
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -705,6 +707,27 @@ class LocalTrainHelper:
             "local_train_logprob_chunk_size": int(
                 getattr(self, "train_logprob_chunk_size", 0)
             ),
+            "local_train_logits_to_keep_supported": (
+                self._logits_to_keep_supported_metric()
+            ),
+            "local_train_selective_suffix_logprob_batches": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "suffix",
+                    0,
+                )
+            ),
+            "local_train_selective_hidden_logprob_batches": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "hidden",
+                    0,
+                )
+            ),
+            "local_train_selective_fallback_logprob_batches": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "fallback",
+                    0,
+                )
+            ),
             "local_liger_kernel_enabled": int(
                 getattr(self, "liger_kernel", False)
             ),
@@ -851,6 +874,62 @@ class LocalTrainHelper:
             except Exception:  # noqa: BLE001 - cleanup must not raise.
                 pass
 
+    def _record_selective_logprob_path(self, path: str) -> None:
+        counts = getattr(self, "_selective_logprob_path_counts", None)
+        if not isinstance(counts, dict):
+            counts = {}
+        counts[path] = int(counts.get(path, 0)) + 1
+        self._selective_logprob_path_counts = counts
+
+    def _logits_to_keep_supported_metric(self) -> int:
+        supported = getattr(self, "_train_logits_to_keep_supported", None)
+        if supported is None:
+            return -1
+        return int(bool(supported))
+
+    def _supports_train_logits_to_keep(self, input_ids, attention_mask) -> bool:
+        cached = getattr(self, "_train_logits_to_keep_supported", None)
+        if cached is not None:
+            return bool(cached)
+
+        seq_len = int(input_ids.shape[1])
+        probe_len = min(seq_len, 4)
+        if probe_len < 2:
+            self._train_logits_to_keep_supported = False
+            return False
+
+        logits_to_keep = min(2, probe_len - 1)
+        probe_ids = input_ids[:1, -probe_len:]
+        probe_mask = (
+            attention_mask[:1, -probe_len:] if attention_mask is not None else None
+        )
+        was_training = bool(getattr(self.train_model, "training", False))
+        try:
+            self.train_model.eval()
+            with torch.no_grad():
+                outputs = self.train_model(
+                    input_ids=probe_ids,
+                    attention_mask=probe_mask,
+                    use_cache=False,
+                    logits_to_keep=logits_to_keep,
+                )
+        except TypeError:
+            supported = False
+        except Exception:  # noqa: BLE001 - fall back to the hidden-state path.
+            supported = False
+        else:
+            logits = getattr(outputs, "logits", None)
+            supported = (
+                logits is not None
+                and len(getattr(logits, "shape", ())) >= 2
+                and int(logits.shape[1]) == logits_to_keep
+            )
+        finally:
+            self.train_model.train(was_training)
+
+        self._train_logits_to_keep_supported = supported
+        return supported
+
     def _selective_suffix_token_logprobs(self, input_ids, attention_mask, target_mask):
         if not getattr(self, "train_selective_suffix_logits", False):
             return None
@@ -866,6 +945,8 @@ class LocalTrainHelper:
         logits_to_keep = seq_len - min_target_pos
         if logits_to_keep <= 1 or logits_to_keep >= seq_len:
             return None
+        if not self._supports_train_logits_to_keep(input_ids, attention_mask):
+            return None
 
         try:
             outputs = self.train_model(
@@ -880,6 +961,9 @@ class LocalTrainHelper:
         logits = getattr(outputs, "logits", None)
         if logits is None:
             return None
+        if int(logits.shape[1]) != logits_to_keep:
+            self._train_logits_to_keep_supported = False
+            return None
 
         logits_start = seq_len - logits_to_keep
         target_suffix = input_ids[:, logits_start + 1 :]
@@ -893,6 +977,54 @@ class LocalTrainHelper:
         full[:, logits_start : logits_start + suffix_logprobs.shape[1]] = (
             suffix_logprobs
         )
+        self._record_selective_logprob_path("suffix")
+        return full
+
+    def _selective_hidden_token_logprobs(self, input_ids, attention_mask, target_mask):
+        if target_mask is None or not bool(target_mask.any().item()):
+            return None
+
+        selected = torch.nonzero(target_mask, as_tuple=False)
+        if selected.numel() == 0:
+            return None
+
+        hidden_and_head = forward_hidden_states_and_lm_head(
+            self.train_model,
+            input_ids,
+            attention_mask,
+        )
+        if hidden_and_head is None:
+            return None
+
+        hidden_states, lm_head = hidden_and_head
+        shifted_len = int(input_ids.shape[1]) - 1
+        if int(hidden_states.shape[1]) < shifted_len:
+            return None
+
+        target_ids = input_ids[selected[:, 0], selected[:, 1] + 1]
+        selected_hidden = hidden_states[selected[:, 0], selected[:, 1], :]
+        chunk_size = int(getattr(self, "train_logprob_chunk_size", 0))
+        if chunk_size <= 0:
+            chunk_size = 256
+
+        chunks = []
+        for start in range(0, selected_hidden.shape[0], chunk_size):
+            stop = min(start + chunk_size, selected_hidden.shape[0])
+            logits = lm_head(selected_hidden[start:stop])
+            logprobs = F.log_softmax(logits.float(), dim=-1)
+            chunks.append(
+                logprobs.gather(
+                    1,
+                    target_ids[start:stop].unsqueeze(1),
+                ).squeeze(1)
+            )
+        if not chunks:
+            return None
+
+        selected_logprobs = torch.cat(chunks, dim=0)
+        full = selected_logprobs.new_zeros((input_ids.shape[0], shifted_len))
+        full[selected[:, 0], selected[:, 1]] = selected_logprobs
+        self._record_selective_logprob_path("hidden")
         return full
 
     def _shifted_token_logprobs(self, input_ids, attention_mask, target_mask=None):
@@ -904,6 +1036,19 @@ class LocalTrainHelper:
         )
         if selective is not None:
             return selective
+
+        if (
+            getattr(self, "train_selective_suffix_logits", False)
+            and target_mask is not None
+        ):
+            selective = self._selective_hidden_token_logprobs(
+                input_ids,
+                attention_mask,
+                target_mask,
+            )
+            if selective is not None:
+                return selective
+            self._record_selective_logprob_path("fallback")
 
         liger_loss = self._liger_fused_linear_ce_loss()
         if liger_loss is not None:

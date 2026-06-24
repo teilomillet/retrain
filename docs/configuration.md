@@ -406,6 +406,20 @@ python scripts/usl_unsloth_sft_sweep.py \
   --output-root logs/qwen35-sft-usl
 ```
 
+For long examples, sweep the same controls with the long-row memory knobs rather
+than extrapolating from short rows:
+
+```bash
+python scripts/usl_unsloth_sft_sweep.py \
+  --batch-sizes 1,2,4 \
+  --microbatch-sizes 1,0 \
+  --steps 1 \
+  --synthetic-prompt-tokens 30000 \
+  --max-tokens 32768 \
+  --train-supervised-context-tokens 4096 \
+  --output-root logs/qwen35-sft-usl-30k-window4096
+```
+
 The sweep fits the Universal Scalability Law over `batch_size` for each
 microbatch strategy and writes `summary.json` with `sigma`, `kappa`, `p_star`,
 stage shares, peak VRAM, and improvement deltas against
@@ -415,11 +429,27 @@ serial microbatch or launch overhead. If the full-batch condition
 the real SFT run; keep `train_microbatch_size = 1` for conservative memory
 smokes and very long rows.
 
-On the measured 12 GB RTX 4070 Ti smoke for `Qwen/Qwen3.5-2B`, 128-token
-synthetic SFT rows and `batch_size = 8` improved from `2.77` datums/s with
-serial microbatching to `16.24` datums/s with full-batch microbatching
-(`+486.7%`), while peak reserved VRAM rose from `3054 MB` to `3152 MB`. Treat
-that as hardware/workload evidence, not a universal default.
+On the measured 12 GB RTX 4070 Ti smoke for `Qwen/Qwen3.5-2B`, short
+128-token synthetic SFT rows benefit from full-batch microbatching. At
+`batch_size = 8`, throughput improved from `2.77` datums/s with serial
+microbatching to `16.24` datums/s with full-batch microbatching (`+486.7%`),
+while peak reserved VRAM rose from `3054 MB` to `3152 MB`. A follow-up
+`batch_size = 8,12,16` sweep found the raw peak at `batch_size = 12`
+(`17.41` datums/s) with a USL `p_star` around `13.4`; `batch_size = 16`
+still fit but was slightly slower (`17.32` datums/s). Treat these as
+hardware/workload evidence, not universal defaults.
+
+The same GPU did not fit exact full-context SFT for a 30,001-token synthetic
+row, even with `train_save_on_cpu = true`: the train step OOMed on a
+`13.41 GiB` CUDA allocation. After measuring that rejection, the approximate
+suffix-window path with `train_supervised_context_tokens = 4096` succeeded on
+the same 30,001-token row without CPU offload, trained on a cropped 4,097-token
+window, saved the adapter, and peaked at `3656 MB` reserved VRAM.
+A small long-row sweep over `batch_size = 1,2` showed the opposite microbatch
+rule from short rows: serial microbatching stayed best. `batch_size = 2` with
+`train_microbatch_size = 1` reached `0.181` datums/s at `4036 MB` peak reserved,
+while `batch_size = 2` with full-batch microbatching fell to `0.116` datums/s
+and `5304 MB`.
 
 To compare the standalone SFT footprint against the existing full RL+ECHO smoke,
 first run `scripts/smoke_unsloth_backend.py --output /tmp/rl-smoke.json`, then
@@ -438,6 +468,10 @@ Memory policy should stay evidence-first:
   `train_save_on_cpu = true`.
 - Use `train_supervised_context_tokens` only as an explicit approximation after
   exact full-context SFT has been measured and rejected for the target hardware.
+  Record `backend/local_train_context_original_max_tokens`,
+  `backend/local_train_context_cropped_max_tokens`, and
+  `backend/local_train_context_tokens_removed` with the result so the run is not
+  mistaken for exact full-context training.
 
 ### `[echo]`
 

@@ -281,6 +281,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--load-in-4bit", type=_bool_arg, default=True)
     parser.add_argument("--gradient-checkpointing", type=_bool_arg, default=True)
     parser.add_argument("--train-selective-suffix-logits", type=_bool_arg, default=True)
+    parser.add_argument("--train-save-on-cpu", type=_bool_arg, default=False)
+    parser.add_argument("--train-save-on-cpu-pin-memory", type=_bool_arg, default=True)
+    parser.add_argument("--train-save-on-cpu-min-numel", type=int, default=0)
+    parser.add_argument("--train-supervised-context-tokens", type=int, default=0)
     parser.add_argument("--liger-fused-linear-ce", type=_bool_arg, default=True)
     parser.add_argument("--continue-on-error", type=_bool_arg, default=True)
     parser.add_argument("--dry-run", action="store_true")
@@ -321,6 +325,14 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
         str(args.gradient_checkpointing).lower(),
         "--train-selective-suffix-logits",
         str(args.train_selective_suffix_logits).lower(),
+        "--train-save-on-cpu",
+        str(args.train_save_on_cpu).lower(),
+        "--train-save-on-cpu-pin-memory",
+        str(args.train_save_on_cpu_pin_memory).lower(),
+        "--train-save-on-cpu-min-numel",
+        str(args.train_save_on_cpu_min_numel),
+        "--train-supervised-context-tokens",
+        str(args.train_supervised_context_tokens),
         "--liger-fused-linear-ce",
         str(args.liger_fused_linear_ce).lower(),
         "--adapter-path",
@@ -375,6 +387,41 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
         "datums": _metric_number(metrics, "datums"),
         "tokens": _metric_number(metrics, "tokens"),
         "supervised_tokens": _metric_number(metrics, "supervised_tokens"),
+        "context_rows_cropped": _metric_number(
+            metrics,
+            "backend/local_train_context_rows_cropped",
+            "local_train_context_rows_cropped",
+        ),
+        "context_tokens_removed": _metric_number(
+            metrics,
+            "backend/local_train_context_tokens_removed",
+            "local_train_context_tokens_removed",
+        ),
+        "context_cropped_max_tokens": _metric_number(
+            metrics,
+            "backend/local_train_context_cropped_max_tokens",
+            "local_train_context_cropped_max_tokens",
+        ),
+        "logits_to_keep_supported": _metric_number(
+            metrics,
+            "backend/local_train_logits_to_keep_supported",
+            "local_train_logits_to_keep_supported",
+        ),
+        "selective_suffix_batches": _metric_number(
+            metrics,
+            "backend/local_train_selective_suffix_logprob_batches",
+            "local_train_selective_suffix_logprob_batches",
+        ),
+        "selective_hidden_batches": _metric_number(
+            metrics,
+            "backend/local_train_selective_hidden_logprob_batches",
+            "local_train_selective_hidden_logprob_batches",
+        ),
+        "selective_fallback_batches": _metric_number(
+            metrics,
+            "backend/local_train_selective_fallback_logprob_batches",
+            "local_train_selective_fallback_logprob_batches",
+        ),
         "microbatches": _metric_number(
             metrics,
             "backend/local_train_microbatches",
@@ -459,6 +506,10 @@ def main() -> int:
         raise SystemExit("--max-tokens must be > 0")
     if args.synthetic_prompt_tokens < 0:
         raise SystemExit("--synthetic-prompt-tokens must be >= 0")
+    if args.train_save_on_cpu_min_numel < 0:
+        raise SystemExit("--train-save-on-cpu-min-numel must be >= 0")
+    if args.train_supervised_context_tokens < 0:
+        raise SystemExit("--train-supervised-context-tokens must be >= 0")
 
     output_root = Path(args.output_root) if args.output_root else _default_output_root()
     conditions = [
@@ -479,6 +530,10 @@ def main() -> int:
         "max_seq_length": args.max_seq_length,
         "max_tokens": args.max_tokens,
         "synthetic_prompt_tokens": args.synthetic_prompt_tokens,
+        "train_save_on_cpu": args.train_save_on_cpu,
+        "train_save_on_cpu_pin_memory": args.train_save_on_cpu_pin_memory,
+        "train_save_on_cpu_min_numel": args.train_save_on_cpu_min_numel,
+        "train_supervised_context_tokens": args.train_supervised_context_tokens,
         "conditions": conditions,
     }
     if args.dry_run:

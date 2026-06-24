@@ -30,12 +30,19 @@ train_save_on_cpu_min_numel = 0
 
 # Approximate fallback: crops train-time supervised context before target tokens.
 # Leave 0 for exact full-context SFT; set only after an exact smoke cannot fit.
+# On the measured 12 GB RTX 4070 Ti, a 30,001-token exact SFT row OOMed even
+# with train_save_on_cpu = true, while a 4096-token supervised context window
+# fit and saved an adapter at about 3.7 GB peak reserved VRAM.
 train_supervised_context_tokens = 0
 
 # Throughput tuning: after the SFT smoke fits in VRAM, run
 # scripts/usl_unsloth_sft_sweep.py. If batch_size > 1 still fits, setting
 # train_microbatch_size = 0 lets retrain train the whole SFT batch in one
-# microbatch and can remove serial microbatch overhead.
+# microbatch and can remove serial microbatch overhead. On 128-token synthetic
+# rows, batch 12 was slightly faster than batch 16 on the measured 12 GB GPU.
+# On 30k rows with a 4096-token supervised context window, batch 2 was faster
+# with train_microbatch_size = 1; full-batch microbatching was slower and used
+# more VRAM.
 
 [model]
 model = "Qwen/Qwen3.5-2B"

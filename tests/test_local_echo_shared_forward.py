@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from retrain import local_train_helper as local_mod
 from retrain.local_train_helper import LocalTrainHelper
@@ -19,6 +20,29 @@ class _TinyLM(torch.nn.Module):
     def forward(self, input_ids, attention_mask=None):  # noqa: ANN001
         _ = attention_mask
         return SimpleNamespace(logits=self.lm_head(self.embed(input_ids)))
+
+
+class _TinyBackbone(torch.nn.Module):
+    def __init__(self, embed: torch.nn.Embedding) -> None:
+        super().__init__()
+        self.embed = embed
+
+    def forward(self, input_ids, attention_mask=None, use_cache=False):  # noqa: ANN001
+        _ = attention_mask, use_cache
+        return SimpleNamespace(last_hidden_state=self.embed(input_ids))
+
+
+class _TinyHiddenLM(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed = torch.nn.Embedding(16, 8)
+        self.model = _TinyBackbone(self.embed)
+        self.lm_head = torch.nn.Linear(8, 16)
+
+    def forward(self, input_ids, attention_mask=None, **kwargs):  # noqa: ANN001
+        _ = kwargs
+        hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state
+        return SimpleNamespace(logits=self.lm_head(hidden))
 
 
 class _ScalarLM(torch.nn.Module):
@@ -136,6 +160,39 @@ def test_local_echo_mask_train_step_updates_model_with_real_logits(monkeypatch) 
     assert math.isfinite(float(echo_loss))
     assert float(echo_loss) > 0.0
     assert changed
+
+
+def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> None:
+    torch.manual_seed(123)
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper._train_logits_to_keep_supported = False
+    helper._selective_logprob_path_counts = {}
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
+    dense_logits = model.lm_head(hidden[:, :-1, :])
+    target_ids = input_ids[:, 1:]
+    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
+        2,
+        target_ids.unsqueeze(2),
+    ).squeeze(2)
+
+    assert torch.allclose(actual[target_mask], expected[target_mask])
+    assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
+    assert helper._selective_logprob_path_counts == {"hidden": 1}
 
 
 def test_local_echo_train_step_clears_inference_prefix_cache() -> None:
