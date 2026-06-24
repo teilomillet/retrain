@@ -20,19 +20,24 @@ cuda_empty_cache = true
 sample_use_cache = true
 gradient_checkpointing = true
 liger_fused_linear_ce = true
+train_unsloth_fused_ce = "auto"
+# 0 lets retrain pick a conservative CE chunk target for the detected GPU.
+train_unsloth_fused_ce_target_gb = 0.0
+train_unsloth_fused_ce_torch_compile = true
 qwen35_gated_delta_chunk_size = "auto"
 
-# Exact fallback for very long rows on 12 GB GPUs. Keep false for shorter rows
-# unless the SFT smoke proves the full-context train step OOMs.
+# Exact fallback for very long rows on small GPUs. Keep false for shorter rows
+# unless the SFT smoke proves the fused-CE full-context train step OOMs.
 train_save_on_cpu = false
 train_save_on_cpu_pin_memory = true
 train_save_on_cpu_min_numel = 0
 
 # Approximate fallback: crops train-time supervised context before target tokens.
 # Leave 0 for exact full-context SFT; set only after an exact smoke cannot fit.
-# On the measured 12 GB RTX 4070 Ti, a 30,001-token exact SFT row OOMed even
-# with train_save_on_cpu = true, while a 4096-token supervised context window
-# fit and saved an adapter at about 3.7 GB peak reserved VRAM.
+# Dense supervised rows use fused CE when eligible; sparse long-prompt rows
+# automatically fall back to selective hidden logprobs. On the measured 12 GB
+# 4070 Ti, dense 24k fit and dense 30k did not; sparse 30k fit with a 4096-token
+# supervised context window after exact full-context rejection.
 train_supervised_context_tokens = 0
 
 # Throughput tuning: after the SFT smoke fits in VRAM, run

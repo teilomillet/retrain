@@ -158,7 +158,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -179,6 +179,9 @@ train_save_on_cpu = false  # optional: offload autograd saved tensors to CPU; mu
 train_save_on_cpu_pin_memory = true  # transfer mode for saved-tensor CPU offload
 train_save_on_cpu_min_numel = 0  # 0 = offload all saved tensors; positive = exact selective offload
 train_supervised_context_tokens = 0  # 0 = full train row; positive = approximate suffix-window train
+train_unsloth_fused_ce = "off"  # off | auto | require; exact SFT-only fused/chunked CE when available
+train_unsloth_fused_ce_target_gb = 0.0  # 0 = retrain auto target; explicit GB overrides
+train_unsloth_fused_ce_torch_compile = true  # pass through to Unsloth's fused CE helper
 ```
 
 `train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
@@ -193,7 +196,17 @@ it only when rollout sampling OOMs and slower generation is acceptable.
 local backend behavior; set it to `false` during throughput sweeps when the full
 train step fits in memory.
 `train_selective_suffix_logits` is useful for RL rows where only completion or
-ECHO tokens carry weight. `train_save_on_cpu` is the last-resort exact-autograd
+ECHO tokens carry weight. Set `train_logprob_chunk_size` to a positive value
+such as `256` when you want to force the safer hidden-state/chunked logprob
+path instead of the `logits_to_keep` suffix shortcut. When the selected tokens
+are sparse inside a long suffix, retrain now automatically skips the suffix
+shortcut and uses the exact hidden-state path, so it applies the LM head and
+log-softmax only to selected RL/ECHO target positions instead of materializing
+`[long_suffix, vocab]` logits. The runtime metrics
+`local_train_selective_sparse_suffix_skips`,
+`local_train_selective_hidden_logprob_batches`, and
+`local_train_selective_suffix_logprob_batches` show which branch ran.
+`train_save_on_cpu` is the last-resort exact-autograd
 memory path for very long rows on small GPUs; expect substantially slower
 backward passes. `train_save_on_cpu_pin_memory` controls the transfer mode for
 that exact path; on the measured 4070 Ti Qwen3.5 run, setting it to `false` was
@@ -204,6 +217,27 @@ some throughput when there is spare VRAM, but it may OOM if set too high.
 suffix training is enabled, retrain crops each training row to this many context
 tokens before the earliest weighted RL/ECHO token. Inference still sees the full
 prompt, but the train gradient no longer represents the full context.
+`train_unsloth_fused_ce` is an exact SFT loss path for rows whose supervised
+token weights are all the same positive value. The Unsloth backend defaults it
+to `auto`; local defaults it to `off` because most local environments do not
+install Unsloth. Use `require` in a smoke when you need proof that Unsloth's
+dynamic fused/chunked CE was used. If the row has fractional or mixed token
+weights, retrain falls back because using a plain CE mask would change the
+objective. For long rows with sparse supervised targets, `auto` also falls back
+because selective hidden/chunked logprobs use less memory than CE over every
+position. The runtime metrics
+`local_train_unsloth_fused_ce_batches`,
+`local_train_unsloth_fused_ce_available`, and
+`local_train_unsloth_fused_ce_fallback_reason` report which branch ran.
+When `train_unsloth_fused_ce_target_gb = 0`, retrain uses a conservative
+small-GPU default before calling Unsloth: `0.25` GB on <=16 GB CUDA cards,
+`0.5` GB on <=24 GB CUDA cards, and Unsloth's own target selection above that.
+The metric `local_train_unsloth_fused_ce_effective_target_gb` records the value
+used for the batch.
+The fused CE path is not combined with `train_save_on_cpu` because Unsloth's
+helper uses `torch.func`, and PyTorch saved-tensor hooks are incompatible with
+that API. In `auto` mode retrain falls back with
+`saved_tensor_hooks_incompatible`; in `require` mode it fails early.
 
 ### Migrate legacy backend config
 
@@ -390,6 +424,8 @@ python scripts/smoke_unsloth_sft.py \
   --max-tokens 2048 \
   --batch-size 1 \
   --steps 1 \
+  --train-unsloth-fused-ce require \
+  --train-unsloth-fused-ce-target-gb 0 \
   --output /tmp/qwen35-sft-smoke.json
 ```
 
@@ -407,7 +443,9 @@ python scripts/usl_unsloth_sft_sweep.py \
 ```
 
 For long examples, sweep the same controls with the long-row memory knobs rather
-than extrapolating from short rows:
+than extrapolating from short rows. Use `--synthetic-prompt-tokens` to probe
+long-context activation pressure, and `--synthetic-completion-tokens` to probe
+long supervised-label CE/logit pressure:
 
 ```bash
 python scripts/usl_unsloth_sft_sweep.py \
@@ -415,6 +453,7 @@ python scripts/usl_unsloth_sft_sweep.py \
   --microbatch-sizes 1,0 \
   --steps 1 \
   --synthetic-prompt-tokens 30000 \
+  --synthetic-completion-tokens 0 \
   --max-tokens 32768 \
   --train-supervised-context-tokens 4096 \
   --output-root logs/qwen35-sft-usl-30k-window4096
@@ -439,12 +478,16 @@ while peak reserved VRAM rose from `3054 MB` to `3152 MB`. A follow-up
 still fit but was slightly slower (`17.32` datums/s). Treat these as
 hardware/workload evidence, not universal defaults.
 
-The same GPU did not fit exact full-context SFT for a 30,001-token synthetic
-row, even with `train_save_on_cpu = true`: the train step OOMed on a
-`13.41 GiB` CUDA allocation. After measuring that rejection, the approximate
-suffix-window path with `train_supervised_context_tokens = 4096` succeeded on
-the same 30,001-token row without CPU offload, trained on a cropped 4,097-token
-window, saved the adapter, and peaked at `3656 MB` reserved VRAM.
+On the same GPU, exact dense-label SFT now uses Unsloth fused CE when eligible.
+With QLoRA rank 8, Tiled MLP, `train_unsloth_fused_ce = "require"`, and
+auto CE target (`0.25` GB on this card), dense 8k, 16k, and 24k supervised-token
+rows saved adapters at `4678 MB`, `7374 MB`, and `10216 MB` peak reserved VRAM.
+The dense 30k row still OOMed, failing on a 236 MB allocation with only about
+219 MB free. For sparse long-prompt rows, `auto` falls back from fused CE:
+a 30,002-token row with only 2 supervised completion tokens and
+`train_supervised_context_tokens = 4096` saved an adapter, trained on a cropped
+4,098-token window, peaked at `3416 MB`, and reported
+`local_train_unsloth_fused_ce_fallback_reason = "sparse_supervised_tokens"`.
 A small long-row sweep over `batch_size = 1,2` showed the opposite microbatch
 rule from short rows: serial microbatching stayed best. `batch_size = 2` with
 `train_microbatch_size = 1` reached `0.181` datums/s at `4036 MB` peak reserved,
@@ -463,9 +506,14 @@ metrics before drawing a product conclusion.
 Memory policy should stay evidence-first:
 
 - Exact first: `train_microbatch_size = 1`, `train_selective_suffix_logits = true`,
-  `gradient_checkpointing = true`, `liger_fused_linear_ce = true`.
-- If long rows OOM, use exact saved-tensor CPU offload with
-  `train_save_on_cpu = true`.
+  `gradient_checkpointing = true`, `liger_fused_linear_ce = true`. For SFT,
+  add `train_unsloth_fused_ce = "require"` to the smoke so the run fails if it
+  cannot use Unsloth's dynamic fused/chunked CE helper. Dense-label rows on
+  small GPUs should leave `train_unsloth_fused_ce_target_gb = 0` so retrain can
+  choose its conservative small-card target.
+- If long rows OOM and fused CE did not run, use exact saved-tensor CPU offload
+  with `train_save_on_cpu = true`. Do not stack saved-tensor CPU offload with
+  required fused CE; PyTorch `torch.func` rejects saved-tensor hooks.
 - Use `train_supervised_context_tokens` only as an explicit approximation after
   exact full-context SFT has been measured and rejected for the target hardware.
   Record `backend/local_train_context_original_max_tokens`,
@@ -503,6 +551,16 @@ also declares strict shared-forward support. Tinker's public remote loss API
 currently exposes separate RL and ECHO `forward_backward` calls rather than one
 shared actor pass, so `retrain explain` rejects ECHO on `backend = "tinker"`
 until that backend can declare strict shared-forward support.
+
+For agent/tool workloads, rollout sampling should use KV cache and prefix cache
+where available, but ECHO training should not replay a no-grad rollout KV cache
+as the train prefix. That would remove the cached prefix from the autograd graph
+and change the full-context training objective. The exact memory optimization
+for ECHO is `train_selective_suffix_logits = true`: retrain still runs one
+actor forward/backward over the train row, but it computes token logprobs only
+for weighted RL/ECHO positions. For long sparse tool traces, the sparse-suffix
+guard routes to the hidden-state path and avoids full-vocab logits for the
+intervening unweighted positions.
 
 The explicit-mask path is the intended ECHO path. Check
 `echo/observation_mask_datums` in metrics to confirm a run is using it; a value

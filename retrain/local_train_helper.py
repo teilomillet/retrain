@@ -259,7 +259,10 @@ class LocalTrainHelper:
                  train_save_on_cpu=False,
                  train_save_on_cpu_pin_memory=True,
                  train_save_on_cpu_min_numel=0,
-                 train_supervised_context_tokens=0):
+                 train_supervised_context_tokens=0,
+                 train_unsloth_fused_ce="off",
+                 train_unsloth_fused_ce_target_gb=0.0,
+                 train_unsloth_fused_ce_torch_compile=True):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
@@ -291,12 +294,27 @@ class LocalTrainHelper:
             0,
             int(train_supervised_context_tokens),
         )
+        self.train_unsloth_fused_ce = self._normalize_unsloth_fused_ce_mode(
+            train_unsloth_fused_ce
+        )
+        self.train_unsloth_fused_ce_target_gb = max(
+            0.0,
+            float(train_unsloth_fused_ce_target_gb),
+        )
+        self.train_unsloth_fused_ce_torch_compile = bool(
+            train_unsloth_fused_ce_torch_compile
+        )
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int] = {}
         self._last_sync_metrics: dict[str, float | int] = {}
         self._last_context_crop_metrics: dict[str, float | int] = {}
         self._train_logits_to_keep_supported: bool | None = None
         self._selective_logprob_path_counts: dict[str, int] = {}
+        self._loss_path_counts: dict[str, int] = {}
+        self._unsloth_fused_ce_available: bool | None = None
+        self._unsloth_fused_ce_unavailable_reason = ""
+        self._unsloth_fused_ce_fallback_reason = ""
+        self._last_unsloth_fused_ce_effective_target_gb = 0.0
 
         # Parse all devices from comma-separated spec
         raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
@@ -707,12 +725,54 @@ class LocalTrainHelper:
             "local_train_logprob_chunk_size": int(
                 getattr(self, "train_logprob_chunk_size", 0)
             ),
+            "local_train_unsloth_fused_ce_mode": str(
+                getattr(self, "train_unsloth_fused_ce", "off")
+            ),
+            "local_train_unsloth_fused_ce_target_gb": float(
+                getattr(self, "train_unsloth_fused_ce_target_gb", 0.0)
+            ),
+            "local_train_unsloth_fused_ce_effective_target_gb": float(
+                getattr(self, "_last_unsloth_fused_ce_effective_target_gb", 0.0)
+            ),
+            "local_train_unsloth_fused_ce_torch_compile": int(
+                getattr(self, "train_unsloth_fused_ce_torch_compile", True)
+            ),
+            "local_train_unsloth_fused_ce_available": (
+                self._unsloth_fused_ce_available_metric()
+            ),
+            "local_train_unsloth_fused_ce_unavailable_reason": str(
+                getattr(self, "_unsloth_fused_ce_unavailable_reason", "")
+            ),
+            "local_train_unsloth_fused_ce_fallback_reason": str(
+                getattr(self, "_unsloth_fused_ce_fallback_reason", "")
+            ),
+            "local_train_unsloth_fused_ce_batches": int(
+                getattr(self, "_loss_path_counts", {}).get(
+                    "unsloth_fused_ce",
+                    0,
+                )
+            ),
+            "local_train_liger_fused_ce_batches": int(
+                getattr(self, "_loss_path_counts", {}).get("liger_fused_ce", 0)
+            ),
+            "local_train_dense_logprob_batches": int(
+                getattr(self, "_loss_path_counts", {}).get("dense_logprob", 0)
+            ),
+            "local_train_chunked_logprob_batches": int(
+                getattr(self, "_loss_path_counts", {}).get("chunked_logprob", 0)
+            ),
             "local_train_logits_to_keep_supported": (
                 self._logits_to_keep_supported_metric()
             ),
             "local_train_selective_suffix_logprob_batches": int(
                 getattr(self, "_selective_logprob_path_counts", {}).get(
                     "suffix",
+                    0,
+                )
+            ),
+            "local_train_selective_sparse_suffix_skips": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "sparse_suffix_skip",
                     0,
                 )
             ),
@@ -881,11 +941,197 @@ class LocalTrainHelper:
         counts[path] = int(counts.get(path, 0)) + 1
         self._selective_logprob_path_counts = counts
 
+    def _record_loss_path(self, path: str) -> None:
+        counts = getattr(self, "_loss_path_counts", None)
+        if not isinstance(counts, dict):
+            counts = {}
+        counts[path] = int(counts.get(path, 0)) + 1
+        self._loss_path_counts = counts
+
+    @staticmethod
+    def _normalize_unsloth_fused_ce_mode(raw) -> str:
+        if isinstance(raw, bool):
+            return "require" if raw else "off"
+        text = str(raw or "off").strip().lower()
+        aliases = {
+            "0": "off",
+            "false": "off",
+            "no": "off",
+            "none": "off",
+            "disabled": "off",
+            "1": "require",
+            "true": "require",
+            "yes": "require",
+            "on": "require",
+            "required": "require",
+        }
+        text = aliases.get(text, text)
+        if text not in {"off", "auto", "require"}:
+            raise ValueError(
+                "train_unsloth_fused_ce must be 'off', 'auto', or 'require'."
+            )
+        return text
+
     def _logits_to_keep_supported_metric(self) -> int:
         supported = getattr(self, "_train_logits_to_keep_supported", None)
         if supported is None:
             return -1
         return int(bool(supported))
+
+    def _unsloth_fused_ce_available_metric(self) -> int:
+        available = getattr(self, "_unsloth_fused_ce_available", None)
+        if available is None:
+            return -1
+        return int(bool(available))
+
+    def _unsloth_fused_ce_loss(self):
+        cached = getattr(self, "_unsloth_fused_ce_loss_fn", None)
+        if cached is not None:
+            return cached
+        try:
+            try:
+                import unsloth  # type: ignore[import-not-found]  # noqa: F401
+            except Exception:
+                pass
+            from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
+                HAS_CUT_CROSS_ENTROPY,
+            )
+            from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
+                unsloth_fused_ce_loss,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+            self._unsloth_fused_ce_available = False
+            self._unsloth_fused_ce_unavailable_reason = type(exc).__name__
+            return None
+        if not HAS_CUT_CROSS_ENTROPY:
+            self._unsloth_fused_ce_available = False
+            self._unsloth_fused_ce_unavailable_reason = "cut_cross_entropy_unavailable"
+            return None
+        self._unsloth_fused_ce_available = True
+        self._unsloth_fused_ce_unavailable_reason = ""
+        self._unsloth_fused_ce_loss_fn = unsloth_fused_ce_loss
+        return unsloth_fused_ce_loss
+
+    def _effective_unsloth_fused_ce_target_gb(self) -> float:
+        configured = float(getattr(self, "train_unsloth_fused_ce_target_gb", 0.0))
+        if configured > 0:
+            return configured
+        device = str(getattr(self, "train_device", ""))
+        if not device.startswith("cuda") or not torch.cuda.is_available():
+            return 0.0
+        try:
+            total_gb = torch.cuda.get_device_properties(device).total_memory / (
+                1024**3
+            )
+        except Exception:  # noqa: BLE001 - diagnostic/tuning fallback only.
+            return 0.0
+        if total_gb <= 16:
+            return 0.25
+        if total_gb <= 24:
+            return 0.5
+        return 0.0
+
+    @staticmethod
+    def _constant_positive_weight(weights, target_mask):
+        selected = weights[target_mask]
+        if selected.numel() == 0:
+            return None
+        first = selected[:1]
+        if torch.allclose(selected, first.expand_as(selected)):
+            return first.squeeze()
+        return None
+
+    def _maybe_compute_unsloth_fused_sft_loss(
+        self,
+        input_ids,
+        attention_mask,
+        weights,
+        target_mask,
+        token_count,
+    ):
+        mode = getattr(self, "train_unsloth_fused_ce", "off")
+        if mode == "off":
+            return None
+
+        def reject(reason: str):
+            self._unsloth_fused_ce_fallback_reason = reason
+            if mode == "require":
+                raise RuntimeError(
+                    "train_unsloth_fused_ce=require but the fused CE path "
+                    f"cannot be used: {reason}"
+                )
+            return None
+
+        if target_mask is None or not bool(target_mask.any().item()):
+            return reject("no_supervised_tokens")
+
+        supervised_tokens = target_mask.float().sum()
+        shifted_tokens = attention_mask[:, 1:].float().sum().clamp(min=1)
+        if (
+            int(target_mask.shape[1]) > 2048
+            and float((supervised_tokens / shifted_tokens).detach().item()) < 0.25
+        ):
+            return reject("sparse_supervised_tokens")
+
+        weight_scale = self._constant_positive_weight(weights, target_mask)
+        if weight_scale is None:
+            return reject("non_constant_token_weights")
+        if bool(getattr(self, "train_save_on_cpu", False)):
+            return reject("saved_tensor_hooks_incompatible")
+
+        loss_fn = self._unsloth_fused_ce_loss()
+        if loss_fn is None:
+            reason = getattr(
+                self,
+                "_unsloth_fused_ce_unavailable_reason",
+                "unavailable",
+            )
+            return reject(reason)
+
+        hidden_and_head = forward_hidden_states_and_lm_head(
+            self.train_model,
+            input_ids,
+            attention_mask,
+        )
+        if hidden_and_head is None:
+            return reject("hidden_states_unavailable")
+
+        hidden_states, lm_head = hidden_and_head
+        weight = getattr(lm_head, "weight", None)
+        if weight is None:
+            return reject("lm_head_weight_unavailable")
+        bias = getattr(lm_head, "bias", None)
+
+        labels = input_ids.clone()
+        ignore_index = -100
+        labels[:, 0] = ignore_index
+        labels[:, 1:] = torch.where(
+            target_mask,
+            labels[:, 1:],
+            torch.full_like(labels[:, 1:], ignore_index),
+        )
+        label_mask = torch.zeros_like(attention_mask, dtype=torch.bool)
+        label_mask[:, 1:] = target_mask
+        target_gb = self._effective_unsloth_fused_ce_target_gb()
+        self._last_unsloth_fused_ce_effective_target_gb = target_gb
+        loss = loss_fn(
+            None,
+            hidden_states,
+            weight,
+            bias,
+            labels,
+            mask=label_mask,
+            n_items=token_count,
+            target_gb=target_gb if target_gb > 0 else None,
+            torch_compile=bool(
+                getattr(self, "train_unsloth_fused_ce_torch_compile", True)
+            ),
+            shift_labels=True,
+            ignore_index=ignore_index,
+        )
+        self._unsloth_fused_ce_fallback_reason = ""
+        self._record_loss_path("unsloth_fused_ce")
+        return loss * weight_scale.to(loss.device)
 
     def _supports_train_logits_to_keep(self, input_ids, attention_mask) -> bool:
         cached = getattr(self, "_train_logits_to_keep_supported", None)
@@ -935,6 +1181,8 @@ class LocalTrainHelper:
             return None
         if target_mask is None or not bool(target_mask.any().item()):
             return None
+        if int(getattr(self, "train_logprob_chunk_size", 0)) > 0:
+            return None
 
         selected = torch.nonzero(target_mask, as_tuple=False)
         if selected.numel() == 0:
@@ -944,6 +1192,18 @@ class LocalTrainHelper:
         min_target_pos = int(selected[:, 1].min().item())
         logits_to_keep = seq_len - min_target_pos
         if logits_to_keep <= 1 or logits_to_keep >= seq_len:
+            return None
+        selected_tokens = int(selected.shape[0])
+        suffix_target_slots = max(1, logits_to_keep - 1)
+        # Long ECHO/tool traces often supervise a small number of tokens inside
+        # a large suffix. In that shape, logits_to_keep would still materialize
+        # [long_suffix, vocab]; the hidden path keeps the same transformer
+        # forward and computes the LM head only for selected target positions.
+        if (
+            suffix_target_slots > 2048
+            and selected_tokens / suffix_target_slots < 0.25
+        ):
+            self._record_selective_logprob_path("sparse_suffix_skip")
             return None
         if not self._supports_train_logits_to_keep(input_ids, attention_mask):
             return None
@@ -1068,6 +1328,7 @@ class LocalTrainHelper:
                     nll = liger_loss(weight, flat_hidden, flat_target_ids)
                 except TypeError:
                     nll = liger_loss(flat_hidden, weight, flat_target_ids)
+                self._record_loss_path("liger_fused_ce")
                 return -nll.reshape_as(target_ids)
 
         chunk_size = int(getattr(self, "train_logprob_chunk_size", 0))
@@ -1075,6 +1336,7 @@ class LocalTrainHelper:
             logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
             target_ids = input_ids[:, 1:]
+            self._record_loss_path("dense_logprob")
             return new_logprobs.gather(2, target_ids.unsqueeze(2)).squeeze(2)
 
         hidden_and_head = forward_hidden_states_and_lm_head(
@@ -1086,6 +1348,7 @@ class LocalTrainHelper:
             logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
             target_ids = input_ids[:, 1:]
+            self._record_loss_path("dense_logprob")
             return new_logprobs.gather(2, target_ids.unsqueeze(2)).squeeze(2)
 
         hidden_states, lm_head = hidden_and_head
@@ -1104,6 +1367,7 @@ class LocalTrainHelper:
             )
         if not chunks:
             return shifted_hidden.new_empty((shifted_hidden.shape[0], 0))
+        self._record_loss_path("chunked_logprob")
         return torch.cat(chunks, dim=1)
 
     @contextmanager
@@ -1188,9 +1452,21 @@ class LocalTrainHelper:
         with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
             weights = torch.clamp(advantages[:, 1:], min=0.0)
             weights = weights * attention_mask[:, 1:].float()
+            sft_target_mask = weights > 0
             target_mask = None
             if getattr(self, "train_selective_suffix_logits", False):
-                target_mask = weights > 0
+                target_mask = sft_target_mask
+
+            fused_loss = self._maybe_compute_unsloth_fused_sft_loss(
+                input_ids,
+                attention_mask,
+                weights,
+                sft_target_mask,
+                sft_target_mask.float().sum().clamp(min=1),
+            )
+            if fused_loss is not None:
+                token_count = sft_target_mask.float().sum().clamp(min=1)
+                return fused_loss, token_count
 
             new_logprobs = self._shifted_token_logprobs(
                 input_ids,

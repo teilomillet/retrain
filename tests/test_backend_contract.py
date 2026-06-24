@@ -171,6 +171,9 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_save_on_cpu_pin_memory": False,
             "train_save_on_cpu_min_numel": 65536,
             "train_supervised_context_tokens": 512,
+            "train_unsloth_fused_ce": "require",
+            "train_unsloth_fused_ce_target_gb": 1.25,
+            "train_unsloth_fused_ce_torch_compile": False,
         },
         policy_loss_mode="kl_cov",
         kl_cov_percent=0.4,
@@ -201,6 +204,22 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         ]
         == 65536
     )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_unsloth_fused_ce"]
+        == "require"
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_unsloth_fused_ce_target_gb"
+        ]
+        == 1.25
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_unsloth_fused_ce_torch_compile"
+        ]
+        is False
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
@@ -227,6 +246,9 @@ def test_unsloth_backend_contract(monkeypatch):
             "train_save_on_cpu_pin_memory": True,
             "train_save_on_cpu_min_numel": 65536,
             "train_supervised_context_tokens": 4096,
+            "train_unsloth_fused_ce": "require",
+            "train_unsloth_fused_ce_target_gb": 1.5,
+            "train_unsloth_fused_ce_torch_compile": False,
         },
         model="Qwen/Qwen3.5-2B",
     )
@@ -253,6 +275,9 @@ def test_unsloth_backend_contract(monkeypatch):
     assert kwargs["train_save_on_cpu_min_numel"] == 65536
     assert kwargs["train_supervised_context_tokens"] == 4096
     assert kwargs["train_microbatch_size"] == 1
+    assert kwargs["train_unsloth_fused_ce"] == "require"
+    assert kwargs["train_unsloth_fused_ce_target_gb"] == 1.5
+    assert kwargs["train_unsloth_fused_ce_torch_compile"] is False
     assert kwargs["liger_kernel"] is False
     assert kwargs["liger_fused_linear_ce"] is True
     assert kwargs["sample_use_cache"] is True

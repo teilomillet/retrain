@@ -70,6 +70,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument(
+        "--echo-token-index",
+        type=int,
+        default=-1,
+        help=(
+            "0-based token index to mark as the synthetic ECHO target. "
+            "The default -1 preserves the legacy near-prompt-end target. "
+            "Use a small positive value to smoke sparse early ECHO targets in "
+            "long rows."
+        ),
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--train-logprob-chunk-size", type=int, default=0)
     parser.add_argument("--train-selective-suffix-logits", type=_bool_arg, default=True)
@@ -145,6 +156,7 @@ def _build_train_rows(
     prompt_ids: list[int],
     completion_ids: list[int],
     completion_logprobs: list[float],
+    echo_token_index: int = -1,
 ) -> tuple[list[int], list[float], list[float], list[float]]:
     if not completion_ids:
         raise RuntimeError("sample produced no completion tokens; cannot train smoke row")
@@ -152,7 +164,10 @@ def _build_train_rows(
     logprobs = [0.0] * len(prompt_ids) + [float(lp) for lp in completion_logprobs]
     advantages = [0.0] * len(prompt_ids) + [1.0] * len(completion_ids)
     echo_advantages = [0.0] * len(tokens)
-    echo_index = min(max(1, len(prompt_ids) - 1), len(tokens) - 1)
+    if echo_token_index >= 0:
+        echo_index = min(max(1, int(echo_token_index)), len(tokens) - 1)
+    else:
+        echo_index = min(max(1, len(prompt_ids) - 1), len(tokens) - 1)
     echo_advantages[echo_index] = 0.2
     return tokens, logprobs, advantages, echo_advantages
 
@@ -256,6 +271,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             prompt_ids,
             completion_ids,
             completion_logprobs,
+            args.echo_token_index,
         )
 
         stage = "train"
@@ -289,6 +305,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             "unsloth": api,
             "prompt_tokens": len(prompt_ids),
             "synthetic_prompt_tokens": int(args.synthetic_prompt_tokens),
+            "echo_token_index": int(args.echo_token_index),
             "generated_tokens": len(completion_ids),
             "total_train_tokens": len(tokens),
             "sample_s": sample_s,

@@ -244,9 +244,11 @@ OPTIONS
         --sepa-delay-steps
         --sepa-schedule
         --sepa-steps
+        --sft-batch-size
         --sft-data-path
         --sft-loss-fn
         --sft-lr
+        --sft-max-tokens
         --sft-warmup-steps
         --strategic-grams
         --surprisal-mask-rho
@@ -423,7 +425,12 @@ CONFIGURATION
         train_selective_suffix_logits = false
             Compute training logits only for suffix tokens that carry RL or
             ECHO weight when possible. This is useful for long-context rows
-            whose prompt tokens have placeholder zero advantages.
+            whose prompt tokens have placeholder zero advantages. For sparse
+            RL/ECHO targets inside a long suffix, retrain skips the suffix
+            logits shortcut and uses the exact hidden-state path to avoid
+            materializing full-vocab logits for unweighted positions. Confirm
+            that path with local_train_selective_sparse_suffix_skips and
+            local_train_selective_hidden_logprob_batches in runtime metrics.
         train_save_on_cpu = false
             Offload autograd saved tensors to CPU during train forward/backward.
             This preserves exact autograd behavior and can make very long rows
@@ -445,6 +452,25 @@ CONFIGURATION
             the earliest weighted RL/ECHO token. Rollout/inference can still
             use the full prompt, but the train gradient is no longer the exact
             full-context objective.
+        train_unsloth_fused_ce = "off"
+            off, auto, or require. For ordinary SFT rows with one constant
+            supervised token weight, route the loss through Unsloth's dynamic
+            fused/chunked cross-entropy helper when available. The unsloth
+            backend defaults this to auto; local defaults it to off. Use
+            require in smokes when the run should fail unless that exact path
+            is used. Mixed/fractional token weights fall back because reducing
+            them to a CE mask would change the objective. Long sparse target
+            masks also fall back because selective hidden/chunked logprobs are
+            cheaper than CE over every position. This path is also not combined
+            with train_save_on_cpu because Unsloth's helper uses torch.func,
+            which PyTorch does not support under saved-tensor hooks.
+        train_unsloth_fused_ce_target_gb = 0.0
+            Optional Unsloth fused-CE memory target. 0 lets retrain pick a
+            conservative small-GPU target before calling Unsloth: 0.25 GB on
+            <=16 GB CUDA cards, 0.5 GB on <=24 GB CUDA cards, and Unsloth's
+            own dynamic target above that.
+        train_unsloth_fused_ce_torch_compile = true
+            Pass torch_compile through to Unsloth's fused-CE helper.
 
     For backend = "prime_rl":
         transport = "filesystem"   # or "zmq"

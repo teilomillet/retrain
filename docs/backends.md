@@ -269,8 +269,31 @@ gradient_checkpointing = true
 liger_fused_linear_ce = true
 qwen35_gated_delta_chunk_size = "auto"  # 4070 Ti-safe Qwen3.5 fallback
 train_selective_suffix_logits = true    # only backprop weighted RL/ECHO tokens
-train_save_on_cpu = true                # needed for 30k-token rows on 12 GB
+train_unsloth_fused_ce = "auto"         # exact SFT fused/chunked CE when eligible
+train_unsloth_fused_ce_target_gb = 0.0  # 0 = retrain auto target for the GPU
+train_save_on_cpu = true                # exact saved-tensor offload fallback
 ```
+
+For SFT rows with one constant supervised token weight, `train_unsloth_fused_ce`
+routes the loss through Unsloth's dynamic fused/chunked cross-entropy helper.
+Use `train_unsloth_fused_ce = "require"` in a smoke when you need proof that
+this exact path was used. `auto` falls back and records
+`local_train_unsloth_fused_ce_fallback_reason` if the installed Unsloth package
+does not expose the helper, if the row uses mixed/fractional token weights, or
+if a long row has a sparse supervised-token mask. Dense long supervised
+completion/text rows are the intended fused-CE case; long prompts with only a
+few supervised completion tokens are usually better served by selective
+hidden/chunked logprobs.
+RL and ECHO rows with arbitrary token weights still use retrain's weighted
+log-probability path because reducing them to a plain CE mask would change the
+objective.
+When `train_unsloth_fused_ce_target_gb = 0`, retrain picks a conservative CE
+chunk target on small GPUs before calling Unsloth: `0.25` GB on <=16 GB cards,
+`0.5` GB on <=24 GB cards, and Unsloth's own dynamic target above that.
+Do not combine `train_unsloth_fused_ce = "require"` with
+`train_save_on_cpu = true`: the installed Unsloth helper uses `torch.func`, and
+PyTorch does not support `torch.func` under saved-tensor hooks. In `auto` mode,
+retrain falls back and reports `saved_tensor_hooks_incompatible`.
 
 For exact full-context long-row training on small GPUs, selective saved-tensor
 offload can keep small autograd-saved tensors on GPU while offloading larger
@@ -279,10 +302,41 @@ tensors to CPU. This preserves the same train context and gradient objective as
 
 ```toml
 [backend.options]
+train_selective_suffix_logits = true
 train_save_on_cpu = true
 train_save_on_cpu_pin_memory = true
 train_save_on_cpu_min_numel = 1048576  # 0 = offload every saved tensor
+train_logprob_chunk_size = 256         # force hidden/chunked logprob fallback
 ```
+
+For ECHO/tool traces with sparse weighted positions inside long rows, this
+keeps the full actor forward/backward objective but avoids full-vocab logits for
+unweighted suffix positions. Check
+`local_train_selective_sparse_suffix_skips` and
+`local_train_selective_hidden_logprob_batches` in runtime metrics to confirm the
+guard routed the batch to the exact sparse hidden-state path.
+
+You can reproduce the isolated ECHO logprob benchmark without downloading a
+model:
+
+```bash
+PYTHONPATH=. python scripts/bench_echo_sparse_logprobs.py \
+  --device cuda:0 \
+  --seq-len 4096 \
+  --early-target-pos 16 \
+  --selected-tokens 16 \
+  --vocab-size 8192 \
+  --hidden-size 64 \
+  --repeats 7
+```
+
+On the 12 GB RTX 4070 Ti smoke host, that shape measured the old suffix-style
+LM-head/log-softmax region at `467.3 MB` median peak allocated and `0.00441 s`
+median, versus `20.8 MB` and `0.00043 s` for selected hidden logits. The
+actual `train_step_with_echo_masks` smoke in the same script reported
+`local_train_selective_sparse_suffix_skips = 3`,
+`local_train_selective_hidden_logprob_batches = 3`, and zero suffix-logprob
+batches, which proves the ECHO train helper took the sparse exact path.
 
 For the fastest one-GPU iteration on very long prompts, use a supervised context
 window. This keeps rollout/inference on the full prompt but trains only on a
@@ -323,10 +377,22 @@ Measured on the remote 11.6 GB RTX 4070 Ti with `Qwen/Qwen3.5-2B`,
 `max_seq_length = 32768`, QLoRA rank 8, one 30k-token synthetic prompt, one
 sampled token, and one RL+ECHO update: `train_save_on_cpu = true` passed with
 about 7.48 GB peak CUDA reserved and 116 s train wall time. The same 30k train
-step OOMed without saved-tensor CPU offload even with Unsloth gradient
-checkpointing, Liger fused CE, selective suffix logits, and Tiled MLP. For
-shorter rows, keep `train_save_on_cpu = false` unless a smoke proves it is
-needed; 16k-token rows fit without it and are much faster.
+step OOMed without saved-tensor CPU offload in the older weighted-logprob path
+even with Unsloth gradient checkpointing, Liger fused CE, selective suffix
+logits, and Tiled MLP.
+
+Measured standalone SFT on the same host with the new fused-CE path:
+dense 8k, 16k, and 24k supervised-token rows saved adapters with
+`train_unsloth_fused_ce = "require"`, `train_unsloth_fused_ce_target_gb = 0`
+(effective `0.25` GB), and no CPU offload. Peak reserved VRAM was `4678 MB`,
+`7374 MB`, and `10216 MB`. Dense 30k still OOMed on this 11.6 GB card, failing
+on a 236 MB allocation with about 219 MB free. Sparse 30k prompt rows are a
+different workload: with only two supervised completion tokens, `auto` falls
+back from fused CE to selective hidden logprobs; a 4096-token supervised context
+window saved an adapter at `3416 MB` peak reserved VRAM.
+
+For shorter rows, keep `train_save_on_cpu = false` unless a smoke proves it is
+needed; 16k dense-label SFT fits without it and is much faster than CPU offload.
 
 Measured exact selective-offload results on the same host and prompt:
 `train_save_on_cpu_min_numel = 65536` ran in 115.56 s, `1048576` ran in

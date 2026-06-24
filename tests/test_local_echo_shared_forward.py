@@ -195,6 +195,240 @@ def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> No
     assert helper._selective_logprob_path_counts == {"hidden": 1}
 
 
+def test_positive_logprob_chunk_size_skips_logits_to_keep_suffix_path() -> None:
+    torch.manual_seed(321)
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper._train_logits_to_keep_supported = True
+    helper._selective_logprob_path_counts = {}
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    assert actual.shape == target_mask.shape
+    assert helper._train_logits_to_keep_supported is True
+    assert helper._selective_logprob_path_counts == {"hidden": 1}
+
+
+def test_sparse_long_target_mask_skips_suffix_logits_for_hidden_path() -> None:
+    torch.manual_seed(654)
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 0
+    helper._train_logits_to_keep_supported = True
+    helper._selective_logprob_path_counts = {}
+
+    input_ids = (torch.arange(3008, dtype=torch.long).unsqueeze(0) % 16)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.zeros((1, input_ids.shape[1] - 1), dtype=torch.bool)
+    target_mask[:, 10] = True
+    target_mask[:, 20] = True
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
+    dense_logits = model.lm_head(hidden[:, :-1, :])
+    target_ids = input_ids[:, 1:]
+    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
+        2,
+        target_ids.unsqueeze(2),
+    ).squeeze(2)
+
+    assert actual.shape == target_mask.shape
+    assert torch.allclose(actual[target_mask], expected[target_mask])
+    assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
+    assert helper._train_logits_to_keep_supported is True
+    assert helper._selective_logprob_path_counts == {
+        "sparse_suffix_skip": 1,
+        "hidden": 1,
+    }
+
+
+def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch) -> None:
+    torch.manual_seed(456)
+    model = _TinyHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = True
+    helper.train_unsloth_fused_ce = "require"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+    helper.train_unsloth_fused_ce_torch_compile = False
+    helper._loss_path_counts = {}
+    captured: dict[str, torch.Tensor | object] = {}
+
+    def fake_fused_ce(
+        trainer,  # noqa: ANN001
+        hidden_states: torch.Tensor,
+        lm_head_weight: torch.Tensor,
+        lm_head_bias: torch.Tensor | None,
+        labels: torch.Tensor,
+        *,
+        mask: torch.Tensor | None = None,
+        n_items: torch.Tensor | None = None,
+        shift_labels: bool = True,
+        **kwargs,  # noqa: ANN003
+    ) -> torch.Tensor:
+        _ = trainer, kwargs
+        assert shift_labels is True
+        captured["labels"] = labels.detach().clone()
+        captured["mask"] = None if mask is None else mask.detach().clone()
+        logits = F.linear(hidden_states[:, :-1, :], lm_head_weight, lm_head_bias)
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]).float(),
+            labels[:, 1:].reshape(-1),
+            ignore_index=-100,
+            reduction="sum",
+        )
+        return loss / n_items.to(loss.device)
+
+    monkeypatch.setattr(helper, "_unsloth_fused_ce_loss", lambda: fake_fused_ce)
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    actual, token_count = helper._compute_sft_loss(
+        input_ids,
+        advantages,
+        attention_mask,
+    )
+
+    hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
+    dense_logits = model.lm_head(hidden[:, :-1, :])
+    target_ids = input_ids[:, 1:]
+    expected_logprobs = F.log_softmax(dense_logits.float(), dim=-1).gather(
+        2,
+        target_ids.unsqueeze(2),
+    ).squeeze(2)
+    weights = advantages[:, 1:]
+    expected = (-expected_logprobs * weights).sum() / (weights > 0).sum()
+
+    assert torch.allclose(actual, expected)
+    assert float(token_count.item()) == 2.0
+    assert helper._loss_path_counts == {"unsloth_fused_ce": 1}
+    labels = captured["labels"]
+    mask = captured["mask"]
+    assert isinstance(labels, torch.Tensor)
+    assert isinstance(mask, torch.Tensor)
+    assert labels.tolist() == [[-100, -100, -100, 4, 5]]
+    assert mask.tolist() == [[False, False, False, True, True]]
+
+
+def test_unsloth_fused_sft_loss_falls_back_for_nonconstant_weights() -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "auto"
+    helper._loss_path_counts = {}
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 0.5, 1.0]], dtype=torch.float32)
+
+    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
+
+    helper._shifted_token_logprobs = shifted_logprobs
+    loss, token_count = helper._compute_sft_loss(
+        input_ids,
+        advantages,
+        attention_mask,
+    )
+
+    expected = (0.2 * 0.5 + 0.3 * 1.0) / 2.0
+    assert float(loss.item()) == pytest.approx(expected)
+    assert float(token_count.item()) == 2.0
+    assert helper._unsloth_fused_ce_fallback_reason == "non_constant_token_weights"
+
+
+def test_unsloth_fused_sft_loss_falls_back_for_long_sparse_targets() -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = False
+    helper.train_unsloth_fused_ce = "auto"
+    helper._loss_path_counts = {}
+
+    input_ids = torch.arange(2052, dtype=torch.long).unsqueeze(0) % 16
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.zeros_like(input_ids, dtype=torch.float32)
+    advantages[:, -2:] = 1.0
+
+    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+        _ = args, kwargs
+        return torch.full((1, input_ids.shape[1] - 1), -0.25, dtype=torch.float32)
+
+    helper._shifted_token_logprobs = shifted_logprobs
+    loss, token_count = helper._compute_sft_loss(
+        input_ids,
+        advantages,
+        attention_mask,
+    )
+
+    assert float(loss.item()) == pytest.approx(0.25)
+    assert float(token_count.item()) == 2.0
+    assert helper._unsloth_fused_ce_fallback_reason == "sparse_supervised_tokens"
+
+
+def test_unsloth_fused_sft_loss_rejects_saved_tensor_offload() -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_device = "cpu"
+    helper.use_amp = False
+    helper.train_selective_suffix_logits = True
+    helper.train_save_on_cpu = True
+    helper.train_unsloth_fused_ce = "require"
+    helper._loss_path_counts = {}
+
+    input_ids = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
+
+    with pytest.raises(RuntimeError, match="saved_tensor_hooks_incompatible"):
+        helper._compute_sft_loss(
+            input_ids,
+            advantages,
+            attention_mask,
+        )
+
+
+def test_unsloth_fused_ce_auto_target_uses_small_gpu_heuristic(monkeypatch) -> None:
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_device = "cuda:0"
+    helper.train_unsloth_fused_ce_target_gb = 0.0
+
+    monkeypatch.setattr(local_mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        local_mod.torch.cuda,
+        "get_device_properties",
+        lambda device: SimpleNamespace(total_memory=12 * 1024**3),
+    )
+
+    assert helper._effective_unsloth_fused_ce_target_gb() == pytest.approx(0.25)
+
+    helper.train_unsloth_fused_ce_target_gb = 0.75
+    assert helper._effective_unsloth_fused_ce_target_gb() == pytest.approx(0.75)
+
+
 def test_local_echo_train_step_clears_inference_prefix_cache() -> None:
     helper = _helper(_TinyLM())
     engine = _ClearCacheEngine()

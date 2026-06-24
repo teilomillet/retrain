@@ -49,6 +49,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--completion", default=" 2")
     parser.add_argument("--synthetic-prompt-tokens", type=int, default=0)
     parser.add_argument("--synthetic-token-text", default=" x")
+    parser.add_argument("--synthetic-completion-tokens", type=int, default=0)
+    parser.add_argument("--synthetic-completion-token-text", default=" y")
     parser.add_argument("--max-seq-length", type=int, default=32768)
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--batch-size", type=int, default=1)
@@ -74,6 +76,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--train-save-on-cpu-pin-memory", type=_bool_arg, default=True)
     parser.add_argument("--train-save-on-cpu-min-numel", type=int, default=0)
     parser.add_argument("--train-supervised-context-tokens", type=int, default=0)
+    parser.add_argument(
+        "--train-unsloth-fused-ce",
+        choices=("off", "auto", "require"),
+        default="auto",
+    )
+    parser.add_argument("--train-unsloth-fused-ce-target-gb", type=float, default=0.0)
+    parser.add_argument("--train-unsloth-fused-ce-torch-compile", type=_bool_arg, default=True)
     parser.add_argument("--liger-fused-linear-ce", type=_bool_arg, default=True)
     parser.add_argument("--gradient-checkpointing", type=_bool_arg, default=True)
     parser.add_argument("--sample-use-cache", type=_bool_arg, default=True)
@@ -116,6 +125,15 @@ def _synthetic_prompt(args: argparse.Namespace) -> str:
     return args.synthetic_token_text * max(1, args.synthetic_prompt_tokens)
 
 
+def _synthetic_completion(args: argparse.Namespace) -> str:
+    if args.synthetic_completion_tokens <= 0:
+        return args.completion
+    return args.synthetic_completion_token_text * max(
+        1,
+        args.synthetic_completion_tokens,
+    )
+
+
 def _ensure_dataset(args: argparse.Namespace) -> Path:
     if args.data_path:
         path = Path(args.data_path)
@@ -129,7 +147,7 @@ def _ensure_dataset(args: argparse.Namespace) -> Path:
     rows = [
         {
             "prompt": _synthetic_prompt(args),
-            "completion": args.completion,
+            "completion": _synthetic_completion(args),
         }
         for _ in range(max(1, args.batch_size))
     ]
@@ -271,6 +289,11 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             "train_save_on_cpu_pin_memory": args.train_save_on_cpu_pin_memory,
             "train_save_on_cpu_min_numel": args.train_save_on_cpu_min_numel,
             "train_supervised_context_tokens": args.train_supervised_context_tokens,
+            "train_unsloth_fused_ce": args.train_unsloth_fused_ce,
+            "train_unsloth_fused_ce_target_gb": args.train_unsloth_fused_ce_target_gb,
+            "train_unsloth_fused_ce_torch_compile": (
+                args.train_unsloth_fused_ce_torch_compile
+            ),
             "liger_kernel": False,
             "liger_fused_linear_ce": args.liger_fused_linear_ce,
             "cuda_empty_cache": True,

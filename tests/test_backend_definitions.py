@@ -57,20 +57,23 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "sample_use_cache": "false",
             "gradient_checkpointing": "false",
         },
-        ) == {
-            "train_microbatch_size": 2,
-            "train_logprob_chunk_size": 0,
-            "liger_kernel": True,
-            "liger_fused_linear_ce": True,
-            "cuda_empty_cache": True,
-            "sample_use_cache": False,
-            "gradient_checkpointing": False,
-            "train_selective_suffix_logits": False,
-            "train_save_on_cpu": False,
-            "train_save_on_cpu_pin_memory": True,
-            "train_save_on_cpu_min_numel": 0,
-            "train_supervised_context_tokens": 0,
-        }
+    ) == {
+        "train_microbatch_size": 2,
+        "train_logprob_chunk_size": 0,
+        "liger_kernel": True,
+        "liger_fused_linear_ce": True,
+        "cuda_empty_cache": True,
+        "sample_use_cache": False,
+        "gradient_checkpointing": False,
+        "train_selective_suffix_logits": False,
+        "train_save_on_cpu": False,
+        "train_save_on_cpu_pin_memory": True,
+        "train_save_on_cpu_min_numel": 0,
+        "train_supervised_context_tokens": 0,
+        "train_unsloth_fused_ce": "off",
+        "train_unsloth_fused_ce_target_gb": 0.0,
+        "train_unsloth_fused_ce_torch_compile": True,
+    }
 
 
 def test_unsloth_backend_options_accept_long_context_controls() -> None:
@@ -91,6 +94,9 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
             "train_save_on_cpu_min_numel": "65536",
             "train_supervised_context_tokens": "4096",
             "train_microbatch_size": "1",
+            "train_unsloth_fused_ce": "require",
+            "train_unsloth_fused_ce_target_gb": "1.5",
+            "train_unsloth_fused_ce_torch_compile": "false",
         },
     )
     assert normalized["max_seq_length"] == 262144
@@ -109,6 +115,9 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
     assert normalized["train_save_on_cpu_min_numel"] == 65536
     assert normalized["train_supervised_context_tokens"] == 4096
     assert normalized["train_microbatch_size"] == 1
+    assert normalized["train_unsloth_fused_ce"] == "require"
+    assert normalized["train_unsloth_fused_ce_target_gb"] == 1.5
+    assert normalized["train_unsloth_fused_ce_torch_compile"] is False
     assert normalized["liger_kernel"] is False
     assert normalized["liger_fused_linear_ce"] is True
     assert normalized["qwen35_gated_delta_chunk_size"] == "auto"

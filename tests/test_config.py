@@ -286,6 +286,9 @@ min_prompt_overlap = 0.75
             "train_save_on_cpu_pin_memory": True,
             "train_save_on_cpu_min_numel": 0,
             "train_supervised_context_tokens": 0,
+            "train_unsloth_fused_ce": "off",
+            "train_unsloth_fused_ce_target_gb": 0.0,
+            "train_unsloth_fused_ce_torch_compile": True,
         }
         assert c.environment_provider == ""
         assert c.environment_id == ""

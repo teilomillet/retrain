@@ -276,6 +276,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--synthetic-prompt-tokens", type=int, default=128)
     parser.add_argument("--synthetic-token-text", default=" x")
+    parser.add_argument("--synthetic-completion-tokens", type=int, default=0)
+    parser.add_argument("--synthetic-completion-token-text", default=" y")
     parser.add_argument("--completion", default="2")
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--load-in-4bit", type=_bool_arg, default=True)
@@ -285,6 +287,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-save-on-cpu-pin-memory", type=_bool_arg, default=True)
     parser.add_argument("--train-save-on-cpu-min-numel", type=int, default=0)
     parser.add_argument("--train-supervised-context-tokens", type=int, default=0)
+    parser.add_argument(
+        "--train-unsloth-fused-ce",
+        choices=("off", "auto", "require"),
+        default="auto",
+    )
+    parser.add_argument("--train-unsloth-fused-ce-target-gb", type=float, default=0.0)
+    parser.add_argument("--train-unsloth-fused-ce-torch-compile", type=_bool_arg, default=True)
     parser.add_argument("--liger-fused-linear-ce", type=_bool_arg, default=True)
     parser.add_argument("--continue-on-error", type=_bool_arg, default=True)
     parser.add_argument("--dry-run", action="store_true")
@@ -315,6 +324,10 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
         str(args.synthetic_prompt_tokens),
         "--synthetic-token-text",
         args.synthetic_token_text,
+        "--synthetic-completion-tokens",
+        str(args.synthetic_completion_tokens),
+        "--synthetic-completion-token-text",
+        args.synthetic_completion_token_text,
         "--completion",
         args.completion,
         "--train-microbatch-size",
@@ -333,6 +346,12 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
         str(args.train_save_on_cpu_min_numel),
         "--train-supervised-context-tokens",
         str(args.train_supervised_context_tokens),
+        "--train-unsloth-fused-ce",
+        args.train_unsloth_fused_ce,
+        "--train-unsloth-fused-ce-target-gb",
+        str(args.train_unsloth_fused_ce_target_gb),
+        "--train-unsloth-fused-ce-torch-compile",
+        str(args.train_unsloth_fused_ce_torch_compile).lower(),
         "--liger-fused-linear-ce",
         str(args.liger_fused_linear_ce).lower(),
         "--adapter-path",
@@ -422,6 +441,27 @@ def _run_condition(args: argparse.Namespace, output_root: Path, batch_size: int,
             "backend/local_train_selective_fallback_logprob_batches",
             "local_train_selective_fallback_logprob_batches",
         ),
+        "unsloth_fused_ce_batches": _metric_number(
+            metrics,
+            "backend/local_train_unsloth_fused_ce_batches",
+            "local_train_unsloth_fused_ce_batches",
+        ),
+        "unsloth_fused_ce_available": _metric_number(
+            metrics,
+            "backend/local_train_unsloth_fused_ce_available",
+            "local_train_unsloth_fused_ce_available",
+        ),
+        "unsloth_fused_ce_effective_target_gb": _metric_number(
+            metrics,
+            "backend/local_train_unsloth_fused_ce_effective_target_gb",
+            "local_train_unsloth_fused_ce_effective_target_gb",
+        ),
+        "unsloth_fused_ce_fallback_reason": str(
+            metrics.get(
+                "backend/local_train_unsloth_fused_ce_fallback_reason",
+                metrics.get("local_train_unsloth_fused_ce_fallback_reason", ""),
+            )
+        ),
         "microbatches": _metric_number(
             metrics,
             "backend/local_train_microbatches",
@@ -506,10 +546,14 @@ def main() -> int:
         raise SystemExit("--max-tokens must be > 0")
     if args.synthetic_prompt_tokens < 0:
         raise SystemExit("--synthetic-prompt-tokens must be >= 0")
+    if args.synthetic_completion_tokens < 0:
+        raise SystemExit("--synthetic-completion-tokens must be >= 0")
     if args.train_save_on_cpu_min_numel < 0:
         raise SystemExit("--train-save-on-cpu-min-numel must be >= 0")
     if args.train_supervised_context_tokens < 0:
         raise SystemExit("--train-supervised-context-tokens must be >= 0")
+    if args.train_unsloth_fused_ce_target_gb < 0:
+        raise SystemExit("--train-unsloth-fused-ce-target-gb must be >= 0")
 
     output_root = Path(args.output_root) if args.output_root else _default_output_root()
     conditions = [
@@ -530,10 +574,16 @@ def main() -> int:
         "max_seq_length": args.max_seq_length,
         "max_tokens": args.max_tokens,
         "synthetic_prompt_tokens": args.synthetic_prompt_tokens,
+        "synthetic_token_text": args.synthetic_token_text,
+        "synthetic_completion_tokens": args.synthetic_completion_tokens,
+        "synthetic_completion_token_text": args.synthetic_completion_token_text,
         "train_save_on_cpu": args.train_save_on_cpu,
         "train_save_on_cpu_pin_memory": args.train_save_on_cpu_pin_memory,
         "train_save_on_cpu_min_numel": args.train_save_on_cpu_min_numel,
         "train_supervised_context_tokens": args.train_supervised_context_tokens,
+        "train_unsloth_fused_ce": args.train_unsloth_fused_ce,
+        "train_unsloth_fused_ce_target_gb": args.train_unsloth_fused_ce_target_gb,
+        "train_unsloth_fused_ce_torch_compile": args.train_unsloth_fused_ce_torch_compile,
         "conditions": conditions,
     }
     if args.dry_run:

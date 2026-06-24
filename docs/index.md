@@ -62,6 +62,7 @@ retrain
 - [SEPA](sepa.md) -- selective entropy pooling schedules
 - [Reward Functions](rewards.md) -- match, math, judge, custom
 - [Inference Engines](inference-engines.md) -- engine selection and multi-GPU setup
+- [ECHO Training Optimization](echo-training.md) -- exact sparse ECHO loss path and verification
 - [Back Pressure](backpressure.md) -- adaptive batch sizing
 - [Capacity Planning](capacity-planning.md) -- estimate memory, wall time, and worker parallelism
 - [Campaigns](campaigns.md) -- sweep orchestrator with auto-squeeze

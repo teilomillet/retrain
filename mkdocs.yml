@@ -54,6 +54,7 @@ nav:
   - Components:
     - Reward Functions: rewards.md
     - Inference Engines: inference-engines.md
+    - ECHO Training Optimization: echo-training.md
     - Back Pressure: backpressure.md
   - Operations:
     - Capacity Planning: capacity-planning.md

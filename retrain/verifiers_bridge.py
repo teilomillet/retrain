@@ -18,7 +18,7 @@ import inspect
 import json
 import math
 import sys
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 import time
 from dataclasses import dataclass
 import types
@@ -789,7 +789,7 @@ class RolloutScheduler:
 
     async def map_ordered(
         self,
-        items: list[object],
+        items: Sequence[object],
         worker: Callable[[object], Awaitable[object]],
         timing: VerifiersRolloutTiming,
     ) -> list[object]:

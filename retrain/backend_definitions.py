@@ -159,6 +159,17 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             config.backend_options,
             "train_supervised_context_tokens",
         ),
+        train_unsloth_fused_ce=str(
+            config.backend_options.get("train_unsloth_fused_ce", "off")
+        ),
+        train_unsloth_fused_ce_target_gb=_backend_option_float(
+            config.backend_options,
+            "train_unsloth_fused_ce_target_gb",
+            0.0,
+        ),
+        train_unsloth_fused_ce_torch_compile=bool(
+            config.backend_options.get("train_unsloth_fused_ce_torch_compile", True)
+        ),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
@@ -219,6 +230,17 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
         train_supervised_context_tokens=_backend_option_int(
             options,
             "train_supervised_context_tokens",
+        ),
+        train_unsloth_fused_ce=str(
+            options.get("train_unsloth_fused_ce", "auto")
+        ),
+        train_unsloth_fused_ce_target_gb=_backend_option_float(
+            options,
+            "train_unsloth_fused_ce_target_gb",
+            0.0,
+        ),
+        train_unsloth_fused_ce_torch_compile=bool(
+            options.get("train_unsloth_fused_ce_torch_compile", True)
         ),
         liger_kernel=bool(options.get("liger_kernel", False)),
         liger_fused_linear_ce=bool(options.get("liger_fused_linear_ce", True)),
@@ -352,6 +374,12 @@ def _validate_positive_float(value: object) -> str | None:
     return None
 
 
+def _validate_non_negative_float(value: object) -> str | None:
+    if cast(float, value) < 0:
+        return "must be >= 0"
+    return None
+
+
 def _validate_utilization_fraction(value: object) -> str | None:
     v = cast(float, value)
     if v <= 0 or v > 1:
@@ -406,6 +434,20 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=int,
                 default=0,
                 validator=_validate_non_negative_int,
+            ),
+            "train_unsloth_fused_ce": BackendOptionSpec(
+                value_type=str,
+                default="off",
+                choices=("off", "auto", "require"),
+            ),
+            "train_unsloth_fused_ce_target_gb": BackendOptionSpec(
+                value_type=float,
+                default=0.0,
+                validator=_validate_non_negative_float,
+            ),
+            "train_unsloth_fused_ce_torch_compile": BackendOptionSpec(
+                value_type=bool,
+                default=True,
             ),
         },
     ),
@@ -487,6 +529,20 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=int,
                 default=0,
                 validator=_validate_non_negative_int,
+            ),
+            "train_unsloth_fused_ce": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+                choices=("off", "auto", "require"),
+            ),
+            "train_unsloth_fused_ce_target_gb": BackendOptionSpec(
+                value_type=float,
+                default=0.0,
+                validator=_validate_non_negative_float,
+            ),
+            "train_unsloth_fused_ce_torch_compile": BackendOptionSpec(
+                value_type=bool,
+                default=True,
             ),
             "liger_kernel": BackendOptionSpec(value_type=bool, default=False),
             "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),

@@ -7,7 +7,7 @@ retrain separates inference (sampling completions) from training (gradient updat
 
 ## Architecture
 
-```
+```text
 retrain
   └── LocalTrainHelper
         ├── InferenceEngine (ABC)
@@ -51,7 +51,7 @@ With LoRA training, only the adapter weights change -- the base model is frozen.
 
 Every other engine loads a separate copy of the base model -- either in a different framework (MAX) or a different process (vLLM, SGLang, TensorRT-LLM, MLX-LM). On 1 GPU, that means 2x base model VRAM. Whether a server engine is faster enough to justify that cost is workload-dependent and should be decided by the benchmark sweep.
 
-```
+```text
 PyTorch (1 GPU):     [base model + LoRA]  ← shared, 1x VRAM
 MAX (1 GPU):         [base model + LoRA]  +  [base model (MAX)]  ← 2x base VRAM
 vLLM (1 GPU):        [base model + LoRA]  +  [base model (vLLM)] ← 2x base VRAM
@@ -62,7 +62,7 @@ TensorRT-LLM (1 GPU): [base model + LoRA] +  [base model (trtllm)] ← 2x base V
 
 With multiple GPUs, inference and training run on separate devices. Base model duplication is expected and desirable -- each device has its own copy.
 
-```
+```text
 8x H100 example:
   GPUs 0-6:  max serve (tensor parallel inference, continuous batching)
   GPU 7:     PyTorch/PEFT training
@@ -263,18 +263,11 @@ new sampling phase so stale KV from old adapter weights is not reused.
 
 All engines implement three methods:
 
-```python
-class InferenceEngine(ABC):
-    def generate(self, prompt_ids_list, num_samples, max_tokens,
-                 temperature, top_p) -> list[list[SampleResult]]:
-        """Return [num_prompts][num_samples] of (token_ids, logprobs)."""
-
-    def reload_weights(self, adapter_path: str) -> None:
-        """Reload LoRA adapter from disk."""
-
-    def shutdown(self) -> None:
-        """Release resources."""
-```
+| Method | Purpose |
+| --- | --- |
+| `generate(prompt_ids_list, num_samples, max_tokens, temperature, top_p)` | Return `[num_prompts][num_samples]` of token IDs and logprobs |
+| `reload_weights(adapter_path)` | Reload a LoRA adapter from disk |
+| `shutdown()` | Release resources |
 
 `SampleResult` is a dataclass with `token_ids: list[int]` and `logprobs: list[float]`.
 
