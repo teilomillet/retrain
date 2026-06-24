@@ -393,6 +393,34 @@ python scripts/smoke_unsloth_sft.py \
   --output /tmp/qwen35-sft-smoke.json
 ```
 
+Use the USL sweep to find the batch/microbatch bottleneck before increasing
+the dataset or run length:
+
+```bash
+python scripts/usl_unsloth_sft_sweep.py \
+  --batch-sizes 1,2,3,4,6,8 \
+  --microbatch-sizes 1,0 \
+  --steps 2 \
+  --synthetic-prompt-tokens 128 \
+  --max-tokens 512 \
+  --output-root logs/qwen35-sft-usl
+```
+
+The sweep fits the Universal Scalability Law over `batch_size` for each
+microbatch strategy and writes `summary.json` with `sigma`, `kappa`, `p_star`,
+stage shares, peak VRAM, and improvement deltas against
+`train_microbatch_size = 1`. Interpret high `sigma` plus flat throughput as
+serial microbatch or launch overhead. If the full-batch condition
+(`train_microbatch_size = 0`) fits in VRAM and improves datums/s, use it for
+the real SFT run; keep `train_microbatch_size = 1` for conservative memory
+smokes and very long rows.
+
+On the measured 12 GB RTX 4070 Ti smoke for `Qwen/Qwen3.5-2B`, 128-token
+synthetic SFT rows and `batch_size = 8` improved from `2.77` datums/s with
+serial microbatching to `16.24` datums/s with full-batch microbatching
+(`+486.7%`), while peak reserved VRAM rose from `3054 MB` to `3152 MB`. Treat
+that as hardware/workload evidence, not a universal default.
+
 To compare the standalone SFT footprint against the existing full RL+ECHO smoke,
 first run `scripts/smoke_unsloth_backend.py --output /tmp/rl-smoke.json`, then
 rerun SFT with `--compare-to /tmp/rl-smoke.json`. Treat the result as a measured

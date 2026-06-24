@@ -32,6 +32,11 @@ train_save_on_cpu_min_numel = 0
 # Leave 0 for exact full-context SFT; set only after an exact smoke cannot fit.
 train_supervised_context_tokens = 0
 
+# Throughput tuning: after the SFT smoke fits in VRAM, run
+# scripts/usl_unsloth_sft_sweep.py. If batch_size > 1 still fits, setting
+# train_microbatch_size = 0 lets retrain train the whole SFT batch in one
+# microbatch and can remove serial microbatch overhead.
+
 [model]
 model = "Qwen/Qwen3.5-2B"
 lora_rank = 32

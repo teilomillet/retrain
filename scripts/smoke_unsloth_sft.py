@@ -59,6 +59,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.8)
+    parser.add_argument(
+        "--train-microbatch-size",
+        type=int,
+        default=1,
+        help=(
+            "Rows per train microbatch. Use 0 to train the full SFT batch in "
+            "one microbatch when VRAM permits."
+        ),
+    )
     parser.add_argument("--train-logprob-chunk-size", type=int, default=0)
     parser.add_argument("--train-selective-suffix-logits", type=_bool_arg, default=True)
     parser.add_argument("--train-save-on-cpu", type=_bool_arg, default=False)
@@ -236,6 +245,8 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("CUDA is required for this Unsloth SFT smoke, but unavailable")
     if sum(bool(v) for v in (args.load_in_4bit, args.load_in_8bit, args.load_in_16bit)) > 1:
         raise RuntimeError("set only one of --load-in-4bit, --load-in-8bit, --load-in-16bit")
+    if args.train_microbatch_size < 0:
+        raise RuntimeError("--train-microbatch-size must be >= 0")
 
     data_path = _ensure_dataset(args)
     if torch.cuda.is_available():
@@ -253,7 +264,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             "load_in_16bit": args.load_in_16bit,
             "fast_inference": args.fast_inference,
             "gpu_memory_utilization": args.gpu_memory_utilization,
-            "train_microbatch_size": 1,
+            "train_microbatch_size": args.train_microbatch_size,
             "train_logprob_chunk_size": args.train_logprob_chunk_size,
             "train_selective_suffix_logits": args.train_selective_suffix_logits,
             "train_save_on_cpu": args.train_save_on_cpu,
