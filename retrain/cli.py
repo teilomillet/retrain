@@ -1420,17 +1420,26 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         warnings.simplefilter("always")
         config = load_config(config_path)
 
-    condition = (
-        config.algorithm_mode
-        if config.algorithm_mode
-        else f"{config.advantage_mode}+{config.transform_mode}"
-    )
-    datums_per_step = config.batch_size * config.group_size
+    if config.trainer == "sft":
+        condition = "sft"
+        datums_per_step = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
+    else:
+        condition = (
+            config.algorithm_mode
+            if config.algorithm_mode
+            else f"{config.advantage_mode}+{config.transform_mode}"
+        )
+        datums_per_step = config.batch_size * config.group_size
     total_datums = datums_per_step * config.max_steps
+    sft_loss_fn = config.sft_loss_fn
+    if sft_loss_fn == "auto":
+        sft_loss_fn = "cross_entropy" if config.trainer == "sft" else "importance_sampling"
     lora_alpha = config.lora_alpha if config.lora_alpha else config.lora_rank * 2
     data_info = config.data_source
     if config.environment_provider:
         data_info = f"{config.environment_provider}:{config.environment_id}"
+    if config.trainer == "sft":
+        data_info = config.sft_data_path
     backend_capabilities = _resolve_backend_capability_payload(
         config.backend,
         config.backend_options,
@@ -1453,6 +1462,11 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         "group_size": config.group_size,
         "datums_per_step": datums_per_step,
         "total_datums": total_datums,
+        "sft_warmup_steps": config.sft_warmup_steps,
+        "sft_data_path": config.sft_data_path,
+        "sft_batch_size": config.sft_batch_size,
+        "sft_max_tokens": config.sft_max_tokens,
+        "sft_loss_fn": sft_loss_fn,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
         "lr": config.lr,
@@ -1491,12 +1505,24 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
     print(f"  condition     : {condition}")
     print(f"  steps         : {config.max_steps}")
     print(f"  batch_size    : {config.batch_size}")
-    print(f"  group_size    : {config.group_size}")
+    if config.trainer == "sft":
+        print(f"  sft_batch     : {datums_per_step}")
+    else:
+        print(f"  group_size    : {config.group_size}")
     print(f"  datums/step   : {datums_per_step}")
     print(f"  total datums  : {total_datums}")
     print(f"  max_tokens    : {config.max_tokens}")
     print(f"  temperature   : {config.temperature}")
     print(f"  lr            : {config.lr}")
+    if config.trainer == "sft" or config.sft_warmup_steps > 0:
+        print(
+            "  sft           : "
+            f"steps={config.max_steps if config.trainer == 'sft' else config.sft_warmup_steps} "
+            f"batch={config.sft_batch_size or '(default)'} "
+            f"loss={sft_loss_fn}"
+        )
+        if config.sft_data_path:
+            print(f"  sft_data      : {config.sft_data_path}")
     print(f"  seed          : {config.seed}")
     print(f"  lora          : rank={config.lora_rank} alpha={lora_alpha}")
     print(f"  data          : {data_info}")

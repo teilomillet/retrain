@@ -323,6 +323,12 @@ def _trainer_retrain(config: TrainConfig) -> TrainingRunner:
     return RetainRunner()
 
 
+@trainer.register("sft")
+def _trainer_sft(config: TrainConfig) -> TrainingRunner:
+    from retrain.training_runner import SftRunner
+    return SftRunner()
+
+
 @trainer.register("command")
 def _trainer_command(config: TrainConfig) -> TrainingRunner:
     from retrain.training_runner import CommandRunner

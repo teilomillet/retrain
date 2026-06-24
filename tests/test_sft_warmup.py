@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from retrain.config import TrainConfig, load_config
+from retrain.sft import load_sft_jsonl, tokenize_sft_batch
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,9 @@ model = "test-model"
 max_steps = 20
 sft_warmup_steps = 5
 sft_data_path = "/tmp/test_sft.jsonl"
+sft_batch_size = 3
+sft_max_tokens = 256
+sft_loss_fn = "cross_entropy"
 tl_grpo = true
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
@@ -56,6 +60,9 @@ tl_grpo = true
         os.unlink(f.name)
         assert config.sft_warmup_steps == 5
         assert config.sft_data_path == "/tmp/test_sft.jsonl"
+        assert config.sft_batch_size == 3
+        assert config.sft_max_tokens == 256
+        assert config.sft_loss_fn == "cross_entropy"
         assert config.tl_grpo is True
 
     def test_sft_steps_cannot_exceed_max_steps(self):
@@ -69,6 +76,62 @@ tl_grpo = true
         config = TrainConfig(sft_warmup_steps=5, sft_data_path="")
         assert config.sft_warmup_steps == 5
         assert config.sft_data_path == ""
+
+    def test_standalone_sft_requires_data_path(self):
+        """Standalone SFT cannot start without a user dataset."""
+        with pytest.raises(ValueError, match="sft_data_path"):
+            TrainConfig(trainer="sft")
+
+
+class _TinyTokenizer:
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        text = "".join(f"<{m['role']}>{m['content']}" for m in messages)
+        if add_generation_prompt:
+            text += "<assistant>"
+        return text
+
+    def encode(self, text, add_special_tokens=False):
+        return [ord(ch) for ch in text]
+
+
+class TestGenericSftJsonl:
+    """User-supplied SFT JSONL formats."""
+
+    def test_loads_messages_prompt_completion_and_text_rows(self, tmp_path):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "messages": [
+                                {"role": "system", "content": "sys"},
+                                {"role": "user", "content": "question"},
+                                {"role": "assistant", "content": "answer"},
+                            ]
+                        }
+                    ),
+                    json.dumps({"prompt": "Question: ", "completion": "Answer"}),
+                    json.dumps({"text": "plain next-token text"}),
+                ]
+            )
+            + "\n"
+        )
+
+        examples = load_sft_jsonl(data_path)
+        batch = tokenize_sft_batch(_TinyTokenizer(), examples, max_tokens=0)
+
+        assert len(examples) == 3
+        assert len(batch.tokens) == 3
+        assert batch.supervised_tokens > 0
+        assert batch.total_tokens >= batch.supervised_tokens
+
+    def test_invalid_jsonl_reports_line_number(self, tmp_path):
+        data_path = tmp_path / "bad.jsonl"
+        data_path.write_text(json.dumps({"text": "ok"}) + "\nnot json\n")
+
+        with pytest.raises(ValueError, match=r"bad\.jsonl:2"):
+            load_sft_jsonl(data_path)
 
 
 # ---------------------------------------------------------------------------

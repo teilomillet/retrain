@@ -11,6 +11,7 @@ from retrain.ttt_discover import TTTDiscoverRunner
 from retrain.training_runner import (
     CommandRunner,
     RetainRunner,
+    SftRunner,
     TrainingRunResult,
     TrainingRunner,
 )
@@ -43,6 +44,9 @@ class TestProtocol:
 
     def test_ttt_discover_runner_is_training_runner(self):
         assert isinstance(TTTDiscoverRunner(), TrainingRunner)
+
+    def test_sft_runner_is_training_runner(self):
+        assert isinstance(SftRunner(), TrainingRunner)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +172,158 @@ class TestCommandRunnerConfigExport:
 
 
 # ---------------------------------------------------------------------------
+# SftRunner
+# ---------------------------------------------------------------------------
+
+
+class _FakeTokenizer:
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+        rendered = "".join(f"{m['role']}:{m['content']}\n" for m in messages)
+        if add_generation_prompt:
+            rendered += "assistant:"
+        return rendered
+
+    def encode(self, text, add_special_tokens=False):
+        return [ord(ch) for ch in text]
+
+
+class _FakeSftHelper:
+    def __init__(self):
+        self.sft_loss_fn = ""
+        self.calls = []
+        self.saved = []
+        self.shutdown_called = False
+
+    def sft_train_step(self, all_tokens, all_advantages, lr, weight_decay):
+        self.calls.append(
+            {
+                "tokens": all_tokens,
+                "advantages": all_advantages,
+                "lr": lr,
+                "weight_decay": weight_decay,
+                "loss_fn": self.sft_loss_fn,
+            }
+        )
+        return 0.25
+
+    def save_adapter(self, path, name):
+        from pathlib import Path
+
+        save_dir = Path(path) / name
+        save_dir.mkdir(parents=True, exist_ok=True)
+        (save_dir / "adapter_model.safetensors").write_text("fake")
+        self.saved.append((path, name))
+        return str(save_dir)
+
+    def runtime_metrics(self):
+        return {"fake_metric": 1}
+
+    def shutdown(self):
+        self.shutdown_called = True
+
+
+class _FakeBackendRegistry:
+    def __init__(self, helper):
+        self.helper = helper
+
+    def create(self, name, config):
+        assert name == "unsloth"
+        return self.helper
+
+
+class TestSftRunner:
+    def test_runs_sft_without_rl_dataset_or_environment(self, tmp_path, monkeypatch):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": "sys"},
+                        {"role": "user", "content": "prompt"},
+                        {"role": "assistant", "content": "answer"},
+                    ]
+                }
+            )
+            + "\n"
+        )
+        adapter_path = tmp_path / "adapter"
+        log_dir = tmp_path / "logs"
+        helper = _FakeSftHelper()
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            sft_max_tokens=0,
+            max_steps=2,
+            save_every=1,
+            batch_size=8,
+            lr=1e-4,
+            sft_lr=2e-4,
+            model="fake-model",
+            adapter_path=str(adapter_path),
+            log_dir=str(log_dir),
+        )
+
+        result = SftRunner().run(config)
+
+        assert result.ok
+        assert result.policy_ref == str(adapter_path / "final")
+        assert len(helper.calls) == 2
+        assert helper.calls[0]["loss_fn"] == "cross_entropy"
+        assert helper.calls[0]["lr"] == pytest.approx(2e-4)
+        assert helper.shutdown_called is True
+
+        metrics = [
+            json.loads(line)
+            for line in (log_dir / "metrics.jsonl").read_text().splitlines()
+        ]
+        assert metrics[-1]["phase"] == "sft"
+        assert metrics[-1]["backend"] == "unsloth"
+        assert metrics[-1]["sft_loss_fn"] == "cross_entropy"
+        assert metrics[-1]["backend/fake_metric"] == 1
+
+        state = json.loads((log_dir / "trainer_state.json").read_text())
+        assert state["checkpoint_name"] == "final"
+        assert state["checkpoint_path"] == str(adapter_path / "final")
+        assert (log_dir / "latest_sampler_path.txt").read_text().strip() == str(
+            adapter_path / "final"
+        )
+        manifest = json.loads((log_dir / "sft_manifest.json").read_text())
+        assert manifest["kind"] == "retrain_sft_adapter"
+        assert manifest["base_model"] == "fake-model"
+        assert manifest["adapter_path"] == str(adapter_path / "final")
+        assert manifest["huggingface"]["format"] == "peft_lora_adapter"
+        assert manifest["ergonomics"]["no_rl_rollouts"] is True
+        adapter_manifest = json.loads(
+            (adapter_path / "final" / "retrain_sft_manifest.json").read_text()
+        )
+        assert adapter_manifest["resume"]["from"] == str(log_dir)
+        assert result.artifacts["sft_manifest.json"] == str(log_dir / "sft_manifest.json")
+
+    def test_missing_dataset_returns_failed_result(self, tmp_path):
+        config = _bare_config(
+            trainer="sft",
+            sft_data_path=str(tmp_path / "missing.jsonl"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        result = SftRunner().run(config)
+        assert not result.ok
+        assert result.failure_status == "exception:FileNotFoundError"
+
+
+# ---------------------------------------------------------------------------
 # Registry integration
 # ---------------------------------------------------------------------------
 
@@ -188,6 +344,11 @@ class TestTrainerRegistry:
         reg = get_registry("trainer")
         assert "ttt_discover" in reg.builtin_names
 
+    def test_sft_resolves(self):
+        from retrain.registry import get_registry
+        reg = get_registry("trainer")
+        assert "sft" in reg.builtin_names
+
     def test_create_retrain_runner(self):
         from retrain.registry import get_registry
         config = TrainConfig()
@@ -205,6 +366,12 @@ class TestTrainerRegistry:
         config = _bare_config()
         runner = get_registry("trainer").create("ttt_discover", config)
         assert isinstance(runner, TTTDiscoverRunner)
+
+    def test_create_sft_runner(self):
+        from retrain.registry import get_registry
+        config = _bare_config()
+        runner = get_registry("trainer").create("sft", config)
+        assert isinstance(runner, SftRunner)
 
     def test_command_without_trainer_command_raises(self):
         from retrain.registry import get_registry
@@ -243,6 +410,14 @@ class TestTrainerValidation:
         config = TrainConfig(trainer="ttt_discover")
         assert config.trainer == "ttt_discover"
 
+    def test_sft_requires_dataset_path(self):
+        with pytest.raises(ValueError, match="sft_data_path"):
+            TrainConfig(trainer="sft")
+
+    def test_sft_with_dataset_path_ok(self):
+        config = TrainConfig(trainer="sft", sft_data_path="/tmp/data.jsonl")
+        assert config.trainer == "sft"
+
 
 # ---------------------------------------------------------------------------
 # Explain output
@@ -280,3 +455,31 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
         _explain_single(str(config_file), "text")
         output = capsys.readouterr().out
         assert "trainer" in output
+
+    def test_explain_sft_json_uses_sft_datums(self, tmp_path, capsys):
+        toml_content = f"""\
+[backend]
+backend = "local"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+
+[training]
+trainer = "sft"
+max_steps = 3
+batch_size = 8
+group_size = 16
+sft_batch_size = 2
+sft_data_path = "{tmp_path / 'sft.jsonl'}"
+"""
+        config_file = tmp_path / "sft.toml"
+        config_file.write_text(toml_content)
+
+        from retrain.cli import _explain_single
+        _explain_single(str(config_file), "json")
+        output = capsys.readouterr().out
+        data = json.loads(output)
+        assert data["trainer"] == "sft"
+        assert data["condition"] == "sft"
+        assert data["datums_per_step"] == 2
+        assert data["total_datums"] == 6

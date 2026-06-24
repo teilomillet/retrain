@@ -75,6 +75,28 @@ def _backend_option_int(
     return default
 
 
+def _backend_option_float(
+    options: Mapping[str, object],
+    key: str,
+    default: float = 0.0,
+) -> float:
+    raw = options.get(key, default)
+    if isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, int | float | str):
+        return float(raw)
+    return default
+
+
+def _effective_sft_loss_fn(config: "TrainConfig") -> str:
+    """Resolve SFT loss without changing legacy warmup defaults."""
+    if config.sft_loss_fn != "auto":
+        return config.sft_loss_fn
+    if config.trainer == "sft":
+        return "cross_entropy"
+    return "importance_sampling"
+
+
 def _create_local(config: "TrainConfig") -> "TrainHelper":
     try:
         from retrain.local_train_helper import LocalTrainHelper
@@ -138,7 +160,7 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "train_supervised_context_tokens",
         ),
     )
-    setattr(helper, "sft_loss_fn", config.sft_loss_fn)
+    setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
 
 
@@ -210,7 +232,11 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
         load_in_8bit=bool(options.get("load_in_8bit", False)),
         load_in_16bit=bool(options.get("load_in_16bit", False)),
         fast_inference=bool(options.get("fast_inference", False)),
-        gpu_memory_utilization=float(options.get("gpu_memory_utilization", 0.5)),
+        gpu_memory_utilization=_backend_option_float(
+            options,
+            "gpu_memory_utilization",
+            0.5,
+        ),
         float8_kv_cache=bool(options.get("float8_kv_cache", False)),
         max_lora_rank=_backend_option_int(options, "max_lora_rank", 64),
         use_gradient_checkpointing=str(
@@ -229,7 +255,7 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
             options.get("qwen35_gated_delta_chunk_size", "auto")
         ),
     )
-    setattr(helper, "sft_loss_fn", config.sft_loss_fn)
+    setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
 
 
@@ -258,7 +284,7 @@ def _create_tinker(config: "TrainConfig") -> "TrainHelper":
         clip_ratio_c=config.clip_ratio_c,
         sample_log_dir=str(Path(config.log_dir).resolve()),
     )
-    setattr(helper, "sft_loss_fn", config.sft_loss_fn)
+    setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
 
 

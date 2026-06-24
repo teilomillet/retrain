@@ -11,7 +11,7 @@ retrain path/to/config.toml
 
 ```toml
 [backend]
-backend = "local"          # local | tinker | prime_rl
+backend = "local"          # local | unsloth | tinker | prime_rl
 devices = "gpu:0"          # e.g. gpu:0,gpu:1 for split mode
 adapter_path = "/tmp/retrain_adapter"
 
@@ -53,6 +53,7 @@ search_paths = ["plugins"] # module prefixes searched before normal dotted impor
 strict = true              # fail fast on plugin load/shape errors
 
 [training]
+trainer = "retrain"        # retrain | sft | command | dotted plugin path
 seed = -1                  # -1 = no seed
 max_steps = 500
 batch_size = 8
@@ -63,6 +64,11 @@ lr = 4e-5
 weight_decay = 0.0
 max_examples = 0           # 0 = use all examples
 save_every = 20
+sft_data_path = ""         # JSONL: messages, prompt/completion, or text rows
+sft_batch_size = 0         # 0 = trainer default
+sft_max_tokens = 0         # 0 = trainer default
+sft_lr = 0.0               # 0 = use lr
+sft_loss_fn = "auto"       # auto | importance_sampling | cross_entropy
 
 [echo]
 enabled = false             # train same-rollout environment/tool tokens in multi-turn envs
@@ -261,6 +267,7 @@ Nested plugin params tables under `[algorithm]`:
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `seed` | int | `-1` | RNG seed. `-1` disables seeding |
+| `trainer` | str | `"retrain"` | Training loop: `"retrain"` for RL/RLVR, `"sft"` for standalone supervised fine-tuning, `"command"` for an external command, or a dotted plugin path |
 | `max_steps` | int | `500` | Total training steps |
 | `batch_size` | int | `8` | Number of prompts per step |
 | `group_size` | int | `16` | Completions sampled per prompt |
@@ -270,11 +277,139 @@ Nested plugin params tables under `[algorithm]`:
 | `weight_decay` | float | `0.0` | AdamW weight decay |
 | `max_examples` | int | `0` | Limit dataset size. `0` = use all |
 | `save_every` | int | `20` | Checkpoint frequency (steps) |
+| `sft_warmup_steps` | int | `0` | Optional supervised warmup steps inside `trainer = "retrain"` before RL starts |
+| `sft_data_path` | str | `""` | SFT JSONL path. Required for `trainer = "sft"`; optional for warmup |
+| `sft_batch_size` | int | `0` | SFT datums per optimizer step. `0` keeps the trainer default |
+| `sft_max_tokens` | int | `0` | SFT row token cap. `0` uses `max_tokens` for standalone SFT and `max_tokens + 512` for warmup compatibility |
+| `sft_lr` | float | `0.0` | SFT learning rate. `0` uses `lr` |
+| `sft_loss_fn` | str | `"auto"` | SFT loss. `"auto"` resolves to `cross_entropy` for `trainer = "sft"` and preserves historical `importance_sampling` warmup behavior for `trainer = "retrain"` |
 
 !!! note
     The quickstart template intentionally uses `max_tokens = 1024` for low-cost smoke tests.
     Treat `10240` as the default for standard training and campaign planning.
     See [Capacity Planning](capacity-planning.md) for sizing guidance.
+
+### Standalone Unsloth SFT then RL
+
+Use `trainer = "sft"` when the user already has supervised examples and does
+not want to construct an RL dataset, reward, or environment for the first
+phase. The SFT trainer accepts JSONL rows in any of these forms:
+
+```json
+{"messages":[{"role":"system","content":"..."},{"role":"user","content":"..."},{"role":"assistant","content":"..."}]}
+{"prompt":"Question: ...\nAnswer:","completion":" ..."}
+{"text":"plain next-token text"}
+```
+
+Example SFT config:
+
+```toml
+[backend]
+backend = "unsloth"
+adapter_path = "logs/my-model-adapter"
+
+[backend.options]
+load_in_4bit = true
+train_microbatch_size = 1
+cuda_empty_cache = true
+gradient_checkpointing = true
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[training]
+trainer = "sft"
+max_steps = 100
+batch_size = 4
+max_tokens = 2048
+lr = 2e-5
+sft_data_path = "data/sft.jsonl"
+sft_batch_size = 4
+sft_loss_fn = "auto"  # cross_entropy for standalone SFT
+save_every = 20
+
+[logging]
+log_dir = "logs/my-model-sft"
+```
+
+The SFT run writes `trainer_state.json` in `log_dir`, including the final
+adapter checkpoint path. A later RL run can continue training the same LoRA by
+pointing `[resume].from` at that SFT log directory:
+
+```toml
+[backend]
+backend = "unsloth"
+adapter_path = "logs/my-model-adapter"
+
+[model]
+model = "Qwen/Qwen3-4B-Instruct-2507"
+lora_rank = 32
+
+[training]
+trainer = "retrain"
+sft_warmup_steps = 0
+max_steps = 200
+batch_size = 2
+group_size = 4
+lr = 1e-5
+
+[resume]
+from = "logs/my-model-sft"
+```
+
+The same run also writes:
+
+- `log_dir/sft_manifest.json`
+- `adapter_path/final/retrain_sft_manifest.json`
+
+Those manifests record the base model, LoRA rank/alpha, dataset path, final
+adapter checkpoint, latest resource metrics, and a PEFT loading snippet. The
+adapter directory is the Hugging Face/PEFT artifact: it can be loaded with
+`PeftModel.from_pretrained(base_model, adapter_path)` or uploaded with
+`huggingface-cli upload`.
+
+### Qwen3.5 Unsloth SFT Ergonomics
+
+For a general low-cost Unsloth SFT starting point, use
+`campaigns/qwen35-2b-unsloth-sft.toml` and change only `sft_data_path`,
+`max_steps`, and `max_tokens` first. The intended user journey is:
+
+1. Export/choose an SFT JSONL dataset.
+2. Run the SFT smoke on the target GPU to measure peak VRAM and artifact shape.
+3. Run `retrain campaigns/qwen35-2b-unsloth-sft.toml`.
+4. Evaluate the saved adapter from `logs/qwen35-2b-unsloth-sft/sft_manifest.json`.
+5. Continue RL with `[resume].from = "logs/qwen35-2b-unsloth-sft"`.
+
+Use the SFT smoke before expensive training:
+
+```bash
+python scripts/smoke_unsloth_sft.py \
+  --model Qwen/Qwen3.5-2B \
+  --max-seq-length 32768 \
+  --max-tokens 2048 \
+  --batch-size 1 \
+  --steps 1 \
+  --output /tmp/qwen35-sft-smoke.json
+```
+
+To compare the standalone SFT footprint against the existing full RL+ECHO smoke,
+first run `scripts/smoke_unsloth_backend.py --output /tmp/rl-smoke.json`, then
+rerun SFT with `--compare-to /tmp/rl-smoke.json`. Treat the result as a measured
+claim, not a default guarantee: lower SFT peak VRAM is evidence that the SFT path
+avoids rollout/sampling/ECHO memory, while equal peaks can happen on tiny or
+model-dominated cases. In both cases, inspect `comparison`,
+`backend/local_train_gpu_peak_memory_reserved_mb`, train-token counts, and sample
+metrics before drawing a product conclusion.
+
+Memory policy should stay evidence-first:
+
+- Exact first: `train_microbatch_size = 1`, `train_selective_suffix_logits = true`,
+  `gradient_checkpointing = true`, `liger_fused_linear_ce = true`.
+- If long rows OOM, use exact saved-tensor CPU offload with
+  `train_save_on_cpu = true`.
+- Use `train_supervised_context_tokens` only as an explicit approximation after
+  exact full-context SFT has been measured and rejected for the target hardware.
 
 ### `[echo]`
 

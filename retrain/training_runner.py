@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -84,6 +86,21 @@ def _artifact_map(log_dir: Path, policy_ref: str = "") -> dict[str, str]:
     return artifacts
 
 
+def _process_max_rss_mb() -> float | None:
+    """Best-effort process peak RSS in MiB."""
+    try:
+        import resource
+    except ImportError:
+        return None
+
+    raw_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if raw_rss <= 0:
+        return 0.0
+    if sys.platform == "darwin":
+        return raw_rss / (1024.0 * 1024.0)
+    return raw_rss / 1024.0
+
+
 def build_run_result(
     config: TrainConfig,
     *,
@@ -149,6 +166,248 @@ class RetainRunner:
                 failure_status="missing_policy_ref",
                 error_message="Training completed without returning a policy reference.",
             )
+        return build_run_result(config, policy_ref=policy_ref)
+
+
+class SftRunner:
+    """Standalone supervised fine-tuning runner using retrain backends."""
+
+    def run(self, config: TrainConfig) -> TrainingRunResult:
+        try:
+            return self._run(config)
+        except Exception as exc:
+            return failed_run_result(
+                config,
+                failure_status=f"exception:{type(exc).__name__}",
+                error_message=str(exc),
+            )
+
+    def _run(self, config: TrainConfig) -> TrainingRunResult:
+        from transformers import AutoTokenizer
+
+        from retrain.backend_definitions import (
+            _effective_sft_loss_fn,
+            backend_capability_source,
+            resolve_backend_capabilities,
+        )
+        from retrain.logging_utils import JsonlLogger
+        from retrain.registry import get_registry
+        from retrain.sft import (
+            build_sft_artifact_manifest,
+            build_sft_example_order,
+            load_sft_jsonl,
+            select_sft_batch_indices,
+            tokenize_sft_batch,
+            write_sft_artifact_manifest,
+        )
+        from retrain.trainer import _save_trainer_state
+
+        if not config.sft_data_path:
+            raise ValueError(
+                "trainer='sft' requires [training] sft_data_path to point at a JSONL dataset."
+            )
+
+        log_dir = Path(config.log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        emergence_dir = log_dir / "emergence"
+        emergence_dir.mkdir(parents=True, exist_ok=True)
+        metrics_logger = JsonlLogger(str(log_dir / "metrics.jsonl"))
+        steps_logger = JsonlLogger(str(emergence_dir / "steps.jsonl"))
+
+        examples = load_sft_jsonl(config.sft_data_path)
+        if not examples:
+            raise RuntimeError("SFT dataset is empty — cannot fine-tune with zero examples.")
+
+        if config.seed >= 0:
+            import random
+
+            random.seed(config.seed)
+            try:
+                import numpy as np
+
+                np.random.seed(config.seed)
+            except ImportError:
+                pass
+            try:
+                import torch
+
+                torch.manual_seed(config.seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(config.seed)
+            except ImportError:
+                pass
+
+        print("retrain SFT")
+        print(f"  model         : {config.model}")
+        print(f"  backend       : {config.backend}")
+        print(f"  examples      : {len(examples)}")
+        print(f"  max_steps     : {config.max_steps}")
+        print(f"  adapter_path  : {config.adapter_path}")
+
+        helper = get_registry("backend").create(config.backend, config)
+        loss_fn = _effective_sft_loss_fn(config)
+        setattr(helper, "sft_loss_fn", loss_fn)
+
+        backend_caps = resolve_backend_capabilities(
+            config.backend,
+            config.backend_options,
+        )
+        print(
+            "Backend capabilities: "
+            f"backend={config.backend}, "
+            f"source={backend_capability_source(config.backend, config.backend_options)}, "
+            f"reports_sync_loss={backend_caps.reports_sync_loss}, "
+            f"preserves_token_advantages={backend_caps.preserves_token_advantages}, "
+            f"supports_checkpoint_resume={backend_caps.supports_checkpoint_resume}, "
+            f"resume_runtime_dependent={backend_caps.resume_runtime_dependent}"
+        )
+        print(f"SFT loss: {loss_fn}")
+
+        print(f"Loading tokenizer for {config.model} ...")
+        tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
+
+        order = build_sft_example_order(len(examples), config.seed)
+        batch_size = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
+        batch_size = min(max(1, batch_size), len(examples))
+        max_tokens = config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens
+        lr = config.sft_lr if config.sft_lr > 0 else config.lr
+
+        policy_ref = ""
+        last_metrics: dict[str, int | float | str] = {}
+        try:
+            for step in range(config.max_steps):
+                step_start = time.perf_counter()
+                indices = select_sft_batch_indices(
+                    order,
+                    batch_size=batch_size,
+                    step=step,
+                )
+                batch = [examples[idx] for idx in indices]
+                tokenized = tokenize_sft_batch(
+                    tokenizer,
+                    batch,
+                    max_tokens=max_tokens,
+                )
+
+                if hasattr(helper, "sft_train_step"):
+                    loss = float(
+                        helper.sft_train_step(  # type: ignore[call-non-callable]
+                            tokenized.tokens,
+                            tokenized.advantages,
+                            lr,
+                            config.weight_decay,
+                        )
+                    )
+                else:
+                    all_logprobs = [[0.0] * len(tokens) for tokens in tokenized.tokens]
+                    loss = float(
+                        helper.train_step(
+                            tokenized.tokens,
+                            all_logprobs,
+                            tokenized.advantages,
+                            lr,
+                            config.weight_decay,
+                        )
+                    )
+
+                elapsed = time.perf_counter() - step_start
+                metrics: dict[str, int | float | str] = {
+                    "step": step,
+                    "phase": "sft",
+                    "trainer": "sft",
+                    "backend": config.backend,
+                    "loss": loss,
+                    "sft_loss_fn": loss_fn,
+                    "lr": lr,
+                    "datums": len(batch),
+                    "tokens": tokenized.total_tokens,
+                    "supervised_tokens": tokenized.supervised_tokens,
+                    "sft_unique_examples_seen": min(
+                        len(examples),
+                        (step + 1) * batch_size,
+                    ),
+                    "sft_dataset_coverage": min(
+                        1.0,
+                        ((step + 1) * batch_size) / max(len(examples), 1),
+                    ),
+                    "time_s": round(elapsed, 2),
+                }
+                rss_mb = _process_max_rss_mb()
+                if rss_mb is not None:
+                    metrics["process_max_rss_mb"] = round(rss_mb, 3)
+                runtime_metrics = getattr(helper, "runtime_metrics", None)
+                if callable(runtime_metrics):
+                    for key, value in runtime_metrics().items():
+                        if isinstance(value, (int, float, str)):
+                            metrics[f"backend/{key}"] = value
+
+                metrics_logger.log(metrics)
+                steps_logger.log(metrics)
+                last_metrics = dict(metrics)
+                print(
+                    f"Step {step} [SFT] | loss={loss:.4f} | "
+                    f"datums={len(batch)} | tokens={tokenized.total_tokens} | "
+                    f"supervised={tokenized.supervised_tokens} | time={elapsed:.1f}s",
+                    flush=True,
+                )
+
+                if config.save_every > 0 and (step + 1) % config.save_every == 0:
+                    checkpoint_name = f"checkpoint_step_{step + 1}"
+                    policy_ref = helper.save_adapter(
+                        config.adapter_path,
+                        checkpoint_name,
+                    )
+                    _save_trainer_state(
+                        log_dir,
+                        step=step,
+                        example_idx=(step + 1) * batch_size,
+                        total_correct=0,
+                        total_completions=0,
+                        current_batch_size=batch_size,
+                        current_group_size=1,
+                        checkpoint_name=checkpoint_name,
+                        checkpoint_path=policy_ref,
+                        sepa_state={},
+                    )
+                    print(f"Saved checkpoint: {checkpoint_name}")
+
+            policy_ref = helper.save_adapter(
+                config.adapter_path,
+                "final",
+            )
+            _save_trainer_state(
+                log_dir,
+                step=config.max_steps - 1,
+                example_idx=config.max_steps * batch_size,
+                total_correct=0,
+                total_completions=0,
+                current_batch_size=batch_size,
+                current_group_size=1,
+                checkpoint_name="final",
+                checkpoint_path=policy_ref,
+                sepa_state={},
+            )
+            manifest = build_sft_artifact_manifest(
+                config,
+                policy_ref=policy_ref,
+                examples_count=len(examples),
+                batch_size=batch_size,
+                max_tokens=max_tokens,
+                loss_fn=loss_fn,
+                latest_metrics=last_metrics,
+            )
+            manifest_paths = write_sft_artifact_manifest(
+                log_dir,
+                policy_ref,
+                manifest,
+            )
+            print(f"SFT manifest: {manifest_paths['log_manifest']}")
+        finally:
+            shutdown = getattr(helper, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+
+        print(f"SFT complete. Adapter: {policy_ref}")
         return build_run_result(config, policy_ref=policy_ref)
 
 

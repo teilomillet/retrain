@@ -48,6 +48,7 @@ from retrain.runtime_support import (
     top_surprisal_entries,
 )
 from retrain.sepa import SEPAStateDict
+from retrain.sft import load_sft_jsonl, tokenize_sft_batch
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
     VerifiersRolloutTiming,
@@ -946,16 +947,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # SFT warmup data (load once if configured)
         # -----------------------------------------------------------------------
-        sft_examples: list[list[dict[str, str]]] = []
+        sft_examples = []
         sft_example_order: list[int] = []
         if config.sft_warmup_steps > 0 and config.sft_data_path:
             sft_path = Path(config.sft_data_path)
             if sft_path.exists():
-                import json as _json
-                with open(sft_path) as _f:
-                    for _line in _f:
-                        row = _json.loads(_line)
-                        sft_examples.append(row["messages"])
+                sft_examples = load_sft_jsonl(sft_path)
                 sft_example_order = _build_sft_example_order(
                     len(sft_examples),
                     config.seed,
@@ -974,7 +971,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
 
                 # Sample a batch of SFT examples
-                sft_batch_size = min(16, len(sft_examples))
+                sft_batch_size = (
+                    config.sft_batch_size
+                    if config.sft_batch_size > 0
+                    else min(16, len(sft_examples))
+                )
                 sft_batch_indices = _select_sft_batch_indices(
                     sft_example_order,
                     batch_size=sft_batch_size,
@@ -982,27 +983,19 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 )
                 sft_batch = [sft_examples[idx] for idx in sft_batch_indices]
 
-                # Tokenize: full conversation (system + user + assistant)
-                sft_tokens_list: list[list[int]] = []
-                sft_logprobs_list: list[list[float]] = []
-                sft_advantages_list: list[list[float]] = []
-
-                for msgs in sft_batch:
-                    # Tokenize prompt (system + user) and response (assistant) separately
-                    # to create a mask: advantages=0 for prompt, advantages=1 for response
-                    prompt_msgs = msgs[:2]  # system + user
-                    full_text = tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)  # type: ignore[unresolved-attribute]
-                    prompt_text = tokenizer.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)  # type: ignore[unresolved-attribute]
-                    prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
-                    full_tokens = tokenizer.encode(full_text, add_special_tokens=False)  # type: ignore[unresolved-attribute]
-                    if len(full_tokens) > config.max_tokens + 512:
-                        full_tokens = full_tokens[: config.max_tokens + 512]
-                    # Mask: 0 for prompt tokens, 1 for response tokens
-                    n_prompt = min(len(prompt_tokens), len(full_tokens))
-                    advantages = [0.0] * n_prompt + [1.0] * (len(full_tokens) - n_prompt)
-                    sft_tokens_list.append(full_tokens)
-                    sft_logprobs_list.append([0.0] * len(full_tokens))
-                    sft_advantages_list.append(advantages)
+                sft_token_limit = (
+                    config.sft_max_tokens
+                    if config.sft_max_tokens > 0
+                    else config.max_tokens + 512
+                )
+                sft_tokenized = tokenize_sft_batch(
+                    tokenizer,
+                    sft_batch,
+                    max_tokens=sft_token_limit,
+                )
+                sft_tokens_list = sft_tokenized.tokens
+                sft_advantages_list = sft_tokenized.advantages
+                sft_logprobs_list = [[0.0] * len(tokens) for tokens in sft_tokens_list]
 
                 # Train with cross-entropy loss (actual SFT, not importance sampling)
                 # Use sft_lr if set, otherwise fall back to main lr
@@ -1049,6 +1042,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "sft_signal": sft_signal,
                     "phase": "sft",
                     "datums": len(sft_batch),
+                    "tokens": sft_tokenized.total_tokens,
+                    "supervised_tokens": sft_tokenized.supervised_tokens,
                     "sft_unique_examples_seen": min(
                         len(sft_examples),
                         (batch_idx + 1) * sft_batch_size,

@@ -214,9 +214,11 @@ class TrainConfig:
 
     # SFT warmup (supervised fine-tuning before RL)
     sft_warmup_steps: int = 0
-    sft_data_path: str = ""  # JSONL with {"messages": [...]} per line
+    sft_data_path: str = ""  # JSONL messages, prompt/completion, or text rows
+    sft_batch_size: int = 0  # 0 = trainer default
+    sft_max_tokens: int = 0  # 0 = trainer default
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
-    sft_loss_fn: str = "importance_sampling"  # "importance_sampling" or "cross_entropy"
+    sft_loss_fn: str = "auto"  # "auto", "importance_sampling", or "cross_entropy"
 
     # ECHO: same-rollout supervised world-modeling on environment/tool tokens.
     echo_enabled: bool = False
@@ -341,6 +343,26 @@ class TrainConfig:
         if self.adv_clip_max < 0:
             errors.append(
                 "adv_clip_max must be >= 0. Try: adv_clip_max = 5.0"
+            )
+        if self.sft_batch_size < 0:
+            errors.append(
+                "sft_batch_size must be >= 0. Try: sft_batch_size = 4"
+            )
+        if self.sft_max_tokens < 0:
+            errors.append(
+                "sft_max_tokens must be >= 0. Try: sft_max_tokens = 2048"
+            )
+        if self.sft_lr < 0:
+            errors.append(
+                "sft_lr must be >= 0. Try: sft_lr = 2e-5"
+            )
+        if self.sft_loss_fn not in ("auto", "importance_sampling", "cross_entropy"):
+            errors.append(
+                "sft_loss_fn must be 'auto', 'importance_sampling', or 'cross_entropy'."
+            )
+        if self.trainer == "sft" and not self.sft_data_path:
+            errors.append(
+                "trainer='sft' requires [training] sft_data_path to point at a JSONL dataset."
             )
         if self.echo_weight < 0.0 or self.echo_weight > 1.0:
             errors.append(
@@ -676,6 +698,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "tl_grpo_ema_init": "tl_grpo_ema_init",
         "sft_warmup_steps": "sft_warmup_steps",
         "sft_data_path": "sft_data_path",
+        "sft_batch_size": "sft_batch_size",
+        "sft_max_tokens": "sft_max_tokens",
         "sft_lr": "sft_lr",
         "sft_loss_fn": "sft_loss_fn",
     },
