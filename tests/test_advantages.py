@@ -23,6 +23,9 @@ from retrain.advantages import (
     get_uncertainty_spec,
     identify_planning_tokens,
     is_valid_uncertainty_kind_name,
+    register_advantage_mode,
+    register_algorithm_mode,
+    register_transform_mode,
     register_uncertainty_kind,
     _BUILTIN_UNCERTAINTY_SPECS,
     _UNCERTAINTY_SPEC_CACHE,
@@ -726,7 +729,13 @@ class TestUncertaintyRegistry:
             _BUILTIN_UNCERTAINTY_SPECS.pop("test_custom_unc", None)
             _UNCERTAINTY_SPEC_CACHE.pop("test_custom_unc", None)
 
-    def test_register_dotted_name_rejected(self):
+    def test_register_dotted_name_rejected_for_short_name_registries(self):
+        with pytest.raises(ValueError, match="cannot contain '\\.'"):
+            register_advantage_mode("my.dotted.name", lambda rewards: [])
+        with pytest.raises(ValueError, match="cannot contain '\\.'"):
+            register_algorithm_mode("my.dotted.name", lambda ctx: [])
+        with pytest.raises(ValueError, match="cannot contain '\\.'"):
+            register_transform_mode("my.dotted.name", lambda ctx: [])
         with pytest.raises(ValueError, match="cannot contain '\\.'"):
             register_uncertainty_kind("my.dotted.name", lambda ctx: [])
 

@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 from functools import lru_cache
-from typing import Callable, cast
+from typing import Callable, TypeVar, cast
 
 from retrain.plugin_resolver import get_plugin_runtime, resolve_dotted_attribute
 
@@ -41,6 +41,51 @@ _UNCERTAINTY_KIND_PARAM_KEYS = (
     "uncertainty_metric",
     "token_uncertainty",
 )
+
+SpecT = TypeVar("SpecT")
+
+
+def _is_dotted_plugin_path(name: str) -> bool:
+    module_path, _, attr_name = name.rpartition(".")
+    return bool(module_path and attr_name)
+
+
+def _validate_short_registry_name(name: str, *, label: str) -> None:
+    if not name or "." in name:
+        raise ValueError(
+            f"{label} name must be non-empty and cannot contain '.'. "
+            "Use dotted paths directly in TOML for external plugins."
+        )
+
+
+def _resolve_registry_spec(
+    name: str,
+    *,
+    builtins: Mapping[str, SpecT],
+    cache: dict[str, SpecT],
+    load_custom: Callable[[str], SpecT],
+    builtin_names: Callable[[], list[str]],
+    config_key: str,
+    custom_label: str,
+    example: str,
+) -> SpecT:
+    cached = cache.get(name)
+    if cached is not None:
+        return cached
+
+    spec = builtins.get(name)
+    if spec is None:
+        if _is_dotted_plugin_path(name):
+            spec = load_custom(name)
+        else:
+            raise ValueError(
+                f"Unknown {config_key} '{name}'. "
+                f"Built-in options: {builtin_names()}. "
+                f"For custom {custom_label} use dotted path format "
+                f"(e.g. '{example}')."
+            )
+    cache[name] = spec
+    return spec
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +658,7 @@ def register_advantage_mode(
     name: str, compute: EpisodeAdvantageComputeFn
 ) -> None:
     """Register or replace a short-name episode advantage mode at runtime."""
-    if not name or "." in name:
-        raise ValueError(
-            "Advantage mode name must be non-empty and cannot contain '.'. "
-            "Use dotted paths directly in TOML for external plugins."
-        )
+    _validate_short_registry_name(name, label="Advantage mode")
     _BUILTIN_ADVANTAGE_SPECS[name] = _as_advantage_spec(name, compute)
     _ADVANTAGE_SPEC_CACHE.pop(name, None)
 
@@ -631,8 +672,7 @@ def is_valid_advantage_mode_name(advantage_mode: str) -> bool:
     """True for built-ins or dotted plugin paths (`module.attr`)."""
     if advantage_mode in _BUILTIN_ADVANTAGE_SPECS:
         return True
-    module_path, _, attr_name = advantage_mode.rpartition(".")
-    return bool(module_path and attr_name)
+    return _is_dotted_plugin_path(advantage_mode)
 
 
 def _load_custom_advantage_spec(dotted_path: str) -> AdvantageSpec:
@@ -666,23 +706,16 @@ def _load_custom_advantage_spec(dotted_path: str) -> AdvantageSpec:
 
 def get_advantage_spec(advantage_mode: str) -> AdvantageSpec:
     """Resolve an advantage mode to a behavior spec."""
-    cached = _ADVANTAGE_SPEC_CACHE.get(advantage_mode)
-    if cached is not None:
-        return cached
-
-    spec = _BUILTIN_ADVANTAGE_SPECS.get(advantage_mode)
-    if spec is None:
-        if "." in advantage_mode:
-            spec = _load_custom_advantage_spec(advantage_mode)
-        else:
-            raise ValueError(
-                f"Unknown advantage_mode '{advantage_mode}'. "
-                f"Built-in options: {get_builtin_advantage_modes()}. "
-                "For custom advantages use dotted path format "
-                "(e.g. 'my_module.my_advantage')."
-            )
-    _ADVANTAGE_SPEC_CACHE[advantage_mode] = spec
-    return spec
+    return _resolve_registry_spec(
+        advantage_mode,
+        builtins=_BUILTIN_ADVANTAGE_SPECS,
+        cache=_ADVANTAGE_SPEC_CACHE,
+        load_custom=_load_custom_advantage_spec,
+        builtin_names=get_builtin_advantage_modes,
+        config_key="advantage_mode",
+        custom_label="advantages",
+        example="my_module.my_advantage",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -928,11 +961,7 @@ _ALGORITHM_SPEC_CACHE: dict[str, AlgorithmSpec] = {}
 
 def register_algorithm_mode(name: str, spec_or_fn: AlgorithmSpec | AlgorithmContextFn) -> None:
     """Register or replace a short-name algorithm mode at runtime."""
-    if not name or "." in name:
-        raise ValueError(
-            "Algorithm mode name must be non-empty and cannot contain '.'. "
-            "Use dotted paths directly in TOML for external plugins."
-        )
+    _validate_short_registry_name(name, label="Algorithm mode")
     if isinstance(spec_or_fn, AlgorithmSpec):
         spec = spec_or_fn
     elif callable(spec_or_fn):
@@ -955,8 +984,7 @@ def is_valid_algorithm_mode_name(algorithm_mode: str) -> bool:
     """True for built-ins or dotted plugin paths (`module.attr`)."""
     if algorithm_mode in _BUILTIN_ALGORITHM_SPECS:
         return True
-    module_path, _, attr_name = algorithm_mode.rpartition(".")
-    return bool(module_path and attr_name)
+    return _is_dotted_plugin_path(algorithm_mode)
 
 
 def _load_custom_algorithm_spec(dotted_path: str) -> AlgorithmSpec:
@@ -1002,23 +1030,16 @@ def _load_custom_algorithm_spec(dotted_path: str) -> AlgorithmSpec:
 
 def get_algorithm_spec(algorithm_mode: str) -> AlgorithmSpec:
     """Resolve an algorithm mode to a behavior spec."""
-    cached = _ALGORITHM_SPEC_CACHE.get(algorithm_mode)
-    if cached is not None:
-        return cached
-
-    spec = _BUILTIN_ALGORITHM_SPECS.get(algorithm_mode)
-    if spec is None:
-        if "." in algorithm_mode:
-            spec = _load_custom_algorithm_spec(algorithm_mode)
-        else:
-            raise ValueError(
-                f"Unknown algorithm_mode '{algorithm_mode}'. "
-                f"Built-in options: {get_builtin_algorithm_modes()}. "
-                "For custom algorithms use dotted path format "
-                "(e.g. 'my_module.my_algorithm')."
-            )
-    _ALGORITHM_SPEC_CACHE[algorithm_mode] = spec
-    return spec
+    return _resolve_registry_spec(
+        algorithm_mode,
+        builtins=_BUILTIN_ALGORITHM_SPECS,
+        cache=_ALGORITHM_SPEC_CACHE,
+        load_custom=_load_custom_algorithm_spec,
+        builtin_names=get_builtin_algorithm_modes,
+        config_key="algorithm_mode",
+        custom_label="algorithms",
+        example="my_module.my_algorithm",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2040,11 +2061,7 @@ _TRANSFORM_SPEC_CACHE: dict[str, TransformSpec] = {}
 
 def register_transform_mode(name: str, spec_or_fn: TransformSpec | TransformContextFn) -> None:
     """Register or replace a short-name transform mode at runtime."""
-    if not name or "." in name:
-        raise ValueError(
-            "Transform mode name must be non-empty and cannot contain '.'. "
-            "Use dotted paths directly in TOML for external plugins."
-        )
+    _validate_short_registry_name(name, label="Transform mode")
     if isinstance(spec_or_fn, TransformSpec):
         spec = spec_or_fn
     elif callable(spec_or_fn):
@@ -2067,8 +2084,7 @@ def is_valid_transform_mode_name(transform_mode: str) -> bool:
     """True for built-ins or dotted plugin paths (`module.attr`)."""
     if transform_mode in _BUILTIN_TRANSFORM_SPECS:
         return True
-    module_path, _, attr_name = transform_mode.rpartition(".")
-    return bool(module_path and attr_name)
+    return _is_dotted_plugin_path(transform_mode)
 
 
 def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
@@ -2116,23 +2132,16 @@ def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
 
 def get_transform_spec(transform_mode: str) -> TransformSpec:
     """Resolve a transform mode to a behavior spec."""
-    cached = _TRANSFORM_SPEC_CACHE.get(transform_mode)
-    if cached is not None:
-        return cached
-
-    spec = _BUILTIN_TRANSFORM_SPECS.get(transform_mode)
-    if spec is None:
-        if "." in transform_mode:
-            spec = _load_custom_transform_spec(transform_mode)
-        else:
-            raise ValueError(
-                f"Unknown transform_mode '{transform_mode}'. "
-                f"Built-in options: {get_builtin_transform_modes()}. "
-                "For custom transforms use dotted path format "
-                "(e.g. 'my_module.make_transform_spec')."
-            )
-    _TRANSFORM_SPEC_CACHE[transform_mode] = spec
-    return spec
+    return _resolve_registry_spec(
+        transform_mode,
+        builtins=_BUILTIN_TRANSFORM_SPECS,
+        cache=_TRANSFORM_SPEC_CACHE,
+        load_custom=_load_custom_transform_spec,
+        builtin_names=get_builtin_transform_modes,
+        config_key="transform_mode",
+        custom_label="transforms",
+        example="my_module.make_transform_spec",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2201,11 +2210,7 @@ def register_uncertainty_kind(
     name: str, spec_or_fn: UncertaintySpec | UncertaintyComputeFn
 ) -> None:
     """Register or replace a short-name uncertainty kind at runtime."""
-    if not name or "." in name:
-        raise ValueError(
-            "Uncertainty kind name must be non-empty and cannot contain '.'. "
-            "Use dotted paths directly in TOML for external plugins."
-        )
+    _validate_short_registry_name(name, label="Uncertainty kind")
     if isinstance(spec_or_fn, UncertaintySpec):
         spec = spec_or_fn
     elif callable(spec_or_fn):
@@ -2230,8 +2235,7 @@ def is_valid_uncertainty_kind_name(kind: str) -> bool:
         return True
     if kind in _BUILTIN_UNCERTAINTY_SPECS:
         return True
-    module_path, _, attr_name = kind.rpartition(".")
-    return bool(module_path and attr_name)
+    return _is_dotted_plugin_path(kind)
 
 
 def _load_custom_uncertainty_spec(dotted_path: str) -> UncertaintySpec:
@@ -2265,23 +2269,16 @@ def _load_custom_uncertainty_spec(dotted_path: str) -> UncertaintySpec:
 
 def get_uncertainty_spec(kind: str) -> UncertaintySpec:
     """Resolve an uncertainty kind to a behavior spec."""
-    cached = _UNCERTAINTY_SPEC_CACHE.get(kind)
-    if cached is not None:
-        return cached
-
-    spec = _BUILTIN_UNCERTAINTY_SPECS.get(kind)
-    if spec is None:
-        if "." in kind:
-            spec = _load_custom_uncertainty_spec(kind)
-        else:
-            raise ValueError(
-                f"Unknown uncertainty_kind '{kind}'. "
-                f"Built-in options: {get_builtin_uncertainty_kinds()}. "
-                "For custom uncertainty signals use dotted path format "
-                "(e.g. 'my_module.my_uncertainty')."
-            )
-    _UNCERTAINTY_SPEC_CACHE[kind] = spec
-    return spec
+    return _resolve_registry_spec(
+        kind,
+        builtins=_BUILTIN_UNCERTAINTY_SPECS,
+        cache=_UNCERTAINTY_SPEC_CACHE,
+        load_custom=_load_custom_uncertainty_spec,
+        builtin_names=get_builtin_uncertainty_kinds,
+        config_key="uncertainty_kind",
+        custom_label="uncertainty signals",
+        example="my_module.my_uncertainty",
+    )
 
 
 def _resolve_uncertainty_kind(params: Mapping[str, object]) -> str:
