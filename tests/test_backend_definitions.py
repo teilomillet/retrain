@@ -65,6 +65,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "lora_layers_to_transform": "last:8",
             "lora_layers_pattern": "layers",
             "lora_detach_input": "true",
+            "lora_fast_linear": "true",
             "trust_remote_code": "true",
         },
     ) == {
@@ -93,6 +94,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "lora_layers_to_transform": "last:8",
         "lora_layers_pattern": "layers",
         "lora_detach_input": True,
+        "lora_fast_linear": True,
         "trust_remote_code": True,
     }
 

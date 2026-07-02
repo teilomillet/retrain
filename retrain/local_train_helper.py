@@ -18,6 +18,7 @@ import os
 import time
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from types import MethodType
 from typing import cast
 
 import torch
@@ -75,6 +76,108 @@ def _infer_transformer_layer_count(model):
             if count > 0:
                 return count
     return 0
+
+
+class _FastLoRALinearFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, weight, bias, lora_a, lora_b, scaling):
+        original_shape = x.shape
+        x_flat = x.reshape(-1, original_shape[-1])
+        compute_dtype = x_flat.dtype
+        lora_a_compute = lora_a.to(compute_dtype)
+        lora_b_compute = lora_b.to(compute_dtype)
+
+        output = torch.matmul(x_flat, weight.to(compute_dtype).T)
+        if bias is not None:
+            output = output + bias.to(output.dtype)
+        lora_hidden = torch.matmul(x_flat, lora_a_compute.T)
+        output.addmm_(lora_hidden, lora_b_compute.T, alpha=float(scaling))
+
+        ctx.save_for_backward(x, weight, lora_a, lora_b)
+        ctx.scaling = float(scaling)
+        return output.reshape(*original_shape[:-1], weight.shape[0])
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, weight, lora_a, lora_b = ctx.saved_tensors
+        grad_flat = grad_output.reshape(-1, grad_output.shape[-1])
+        x_flat = x.reshape(-1, x.shape[-1])
+        compute_dtype = x_flat.dtype
+        lora_a_compute = lora_a.to(compute_dtype)
+        lora_b_compute = lora_b.to(compute_dtype)
+        scaling = ctx.scaling
+
+        grad_x = None
+        grad_lora_a = None
+        grad_lora_b = None
+        grad_lora_hidden = grad_flat.matmul(lora_b_compute)
+
+        if ctx.needs_input_grad[0]:
+            grad_x = grad_flat.matmul(weight.to(compute_dtype))
+            grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
+            grad_x = grad_x.reshape_as(x)
+        if ctx.needs_input_grad[3]:
+            grad_lora_a = grad_lora_hidden.T.matmul(x_flat)
+            grad_lora_a = (grad_lora_a * scaling).to(lora_a.dtype)
+        if ctx.needs_input_grad[4]:
+            lora_hidden = x_flat.matmul(lora_a_compute.T)
+            grad_lora_b = grad_flat.T.matmul(lora_hidden)
+            grad_lora_b = (grad_lora_b * scaling).to(lora_b.dtype)
+
+        return grad_x, None, None, grad_lora_a, grad_lora_b, None
+
+
+def _mapping_value(container, key, default=None):
+    if container is None:
+        return default
+    try:
+        if key in container:
+            return container[key]
+    except TypeError:
+        pass
+    getter = getattr(container, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    return default
+
+
+def _fast_lora_linear_forward(module, x, *args, **kwargs):
+    original_forward = getattr(module, "_retrain_fast_lora_original_forward")
+    if args or kwargs:
+        return original_forward(x, *args, **kwargs)
+    check_args = getattr(module, "_check_forward_args", None)
+    if callable(check_args):
+        check_args(x, *args, **kwargs)
+    if getattr(module, "disable_adapters", False) or getattr(module, "merged", False):
+        return original_forward(x, *args, **kwargs)
+    active_adapters = list(getattr(module, "active_adapters", []) or [])
+    if len(active_adapters) != 1:
+        return original_forward(x, *args, **kwargs)
+    adapter = active_adapters[0]
+    lora_a_layers = getattr(module, "lora_A", {})
+    lora_b_layers = getattr(module, "lora_B", {})
+    if adapter not in lora_a_layers or adapter not in lora_b_layers:
+        return original_forward(x, *args, **kwargs)
+    use_dora = getattr(module, "use_dora", {})
+    if bool(_mapping_value(use_dora, adapter, False)):
+        return original_forward(x, *args, **kwargs)
+    dropout = _mapping_value(getattr(module, "lora_dropout", {}), adapter)
+    if dropout is None:
+        return original_forward(x, *args, **kwargs)
+    dropout_p = float(getattr(dropout, "p", 0.0))
+    if dropout_p != 0.0:
+        return original_forward(x, *args, **kwargs)
+    base_layer = getattr(module, "base_layer", None)
+    weight = getattr(base_layer, "weight", None)
+    if not torch.is_tensor(weight):
+        return original_forward(x, *args, **kwargs)
+    bias = getattr(base_layer, "bias", None)
+    lora_a = lora_a_layers[adapter].weight
+    lora_b = lora_b_layers[adapter].weight
+    scaling = _mapping_value(getattr(module, "scaling", {}), adapter)
+    if scaling is None:
+        return original_forward(x, *args, **kwargs)
+    return _FastLoRALinearFunction.apply(x, weight, bias, lora_a, lora_b, scaling)
 
 
 def _parse_lora_layers_to_transform(spec, layer_count=0):
@@ -517,6 +620,7 @@ class LocalTrainHelper:
                  lora_layers_to_transform="",
                  lora_layers_pattern="layers",
                  lora_detach_input=False,
+                 lora_fast_linear=False,
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -591,9 +695,11 @@ class LocalTrainHelper:
         self.lora_layers_to_transform_spec = str(lora_layers_to_transform or "")
         self.lora_layers_pattern = str(lora_layers_pattern or "layers")
         self.lora_detach_input = bool(lora_detach_input)
+        self.lora_fast_linear = bool(lora_fast_linear)
         self._lora_layers_to_transform: list[int] | None = None
         self._lora_detach_input_hook_handles = []
         self._lora_detach_input_hook_count = 0
+        self._lora_fast_linear_patch_count = 0
         self._lora_model_metrics: dict[str, float | int | str] = {}
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int | str] = {}
@@ -689,6 +795,7 @@ class LocalTrainHelper:
             lora_dropout,
         )
         self._configure_lora_detached_input()
+        self._configure_lora_fast_linear()
         self._move_train_model_to_device()
         self._record_lora_model_metrics()
         if hasattr(self.train_model, "print_trainable_parameters"):
@@ -844,6 +951,8 @@ class LocalTrainHelper:
             "local_lora_trainable_parameter_count": trainable_param_count,
             "local_lora_detach_input_enabled": int(self.lora_detach_input),
             "local_lora_detach_input_hook_count": self._lora_detach_input_hook_count,
+            "local_lora_fast_linear_enabled": int(self.lora_fast_linear),
+            "local_lora_fast_linear_patch_count": self._lora_fast_linear_patch_count,
         }
 
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
@@ -890,6 +999,27 @@ class LocalTrainHelper:
             handle = register(self._detach_first_tensor_input)
             self._lora_detach_input_hook_handles.append(handle)
         self._lora_detach_input_hook_count = len(self._lora_detach_input_hook_handles)
+
+    def _configure_lora_fast_linear(self):
+        self._lora_fast_linear_patch_count = 0
+        if not self.lora_fast_linear:
+            return
+        if self.lora_detach_input:
+            print("lora_fast_linear disabled because lora_detach_input is enabled")
+            return
+        named_modules = getattr(self.train_model, "named_modules", None)
+        if not callable(named_modules):
+            return
+        for _name, module in named_modules():
+            if not hasattr(module, "base_layer"):
+                continue
+            if not hasattr(module, "lora_A") or not hasattr(module, "lora_B"):
+                continue
+            if hasattr(module, "_retrain_fast_lora_original_forward"):
+                continue
+            module._retrain_fast_lora_original_forward = module.forward
+            module.forward = MethodType(_fast_lora_linear_forward, module)
+            self._lora_fast_linear_patch_count += 1
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
