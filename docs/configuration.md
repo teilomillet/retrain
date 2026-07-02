@@ -158,7 +158,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `sample_use_cache`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`, `lora_detach_input`, `lora_fast_linear`, `lora_freeze_a`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -185,6 +185,9 @@ train_supervised_context_tokens = 0  # 0 = full train row; positive = approximat
 train_unsloth_fused_ce = "off"  # off | auto | require; exact SFT-only fused/chunked CE when available
 train_unsloth_fused_ce_target_gb = 0.0  # 0 = retrain auto target; explicit GB overrides
 train_unsloth_fused_ce_torch_compile = true  # pass through to Unsloth's fused CE helper
+lora_fast_linear = false  # opt-in fused PyTorch autograd path for dense LoRA linear modules
+lora_detach_input = false  # research gate: stop LoRA branch activation gradients
+lora_freeze_a = false  # LoRA-FA-style gate: freeze lora_A and train lora_B only
 ```
 
 `train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
@@ -198,6 +201,10 @@ it only when rollout sampling OOMs and slower generation is acceptable.
 `gradient_checkpointing` defaults to `true` for compatibility with previous
 local backend behavior; set it to `false` during throughput sweeps when the full
 train step fits in memory.
+`lora_fast_linear` is an opt-in local LoRA runtime path. `lora_freeze_a` applies
+a LoRA-FA-style recipe by freezing `lora_A` tensors before optimizer creation,
+which changes the adapter optimization surface and must be validated with a
+matched quality gate before becoming a training default.
 `cudnn_causal_conv1d_shim` is an opt-in Qwen3.5 CUDA fast-path workaround for
 hosts where NVIDIA's cuDNN frontend exposes `cudnn.ops.causal_conv1d` but the
 standard `causal_conv1d` package is unavailable or cannot build. It does not

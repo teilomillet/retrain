@@ -80,7 +80,17 @@ def _infer_transformer_layer_count(model):
 
 class _FastLoRALinearFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, weight, bias, lora_a, lora_b, scaling, detach_lora_input):
+    def forward(
+        ctx,
+        x,
+        weight,
+        bias,
+        lora_a,
+        lora_b,
+        scaling,
+        detach_lora_input,
+        freeze_lora_a,
+    ):
         original_shape = x.shape
         x_flat = x.reshape(-1, original_shape[-1])
         compute_dtype = x_flat.dtype
@@ -93,17 +103,29 @@ class _FastLoRALinearFunction(torch.autograd.Function):
         lora_hidden = torch.matmul(x_flat, lora_a_compute.T)
         output.addmm_(lora_hidden, lora_b_compute.T, alpha=float(scaling))
 
-        ctx.save_for_backward(x, weight, lora_a, lora_b)
+        if freeze_lora_a:
+            ctx.save_for_backward(weight, lora_a, lora_b, lora_hidden)
+            ctx.x_shape = original_shape
+        else:
+            ctx.save_for_backward(x, weight, lora_a, lora_b)
+            ctx.x_shape = None
         ctx.scaling = float(scaling)
         ctx.detach_lora_input = bool(detach_lora_input)
+        ctx.freeze_lora_a = bool(freeze_lora_a)
         return output.reshape(*original_shape[:-1], weight.shape[0])
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, weight, lora_a, lora_b = ctx.saved_tensors
+        if ctx.freeze_lora_a:
+            weight, lora_a, lora_b, lora_hidden = ctx.saved_tensors
+            x = None
+            x_shape = ctx.x_shape
+        else:
+            x, weight, lora_a, lora_b = ctx.saved_tensors
+            lora_hidden = None
+            x_shape = x.shape
         grad_flat = grad_output.reshape(-1, grad_output.shape[-1])
-        x_flat = x.reshape(-1, x.shape[-1])
-        compute_dtype = x_flat.dtype
+        compute_dtype = grad_flat.dtype
         lora_a_compute = lora_a.to(compute_dtype)
         lora_b_compute = lora_b.to(compute_dtype)
         scaling = ctx.scaling
@@ -117,16 +139,19 @@ class _FastLoRALinearFunction(torch.autograd.Function):
             grad_x = grad_flat.matmul(weight.to(compute_dtype))
             if not ctx.detach_lora_input:
                 grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
-            grad_x = grad_x.reshape_as(x)
-        if ctx.needs_input_grad[3]:
+            grad_x = grad_x.reshape(x_shape)
+        if ctx.needs_input_grad[3] and not ctx.freeze_lora_a:
+            x_flat = x.reshape(-1, x.shape[-1])
             grad_lora_a = grad_lora_hidden.T.matmul(x_flat)
             grad_lora_a = (grad_lora_a * scaling).to(lora_a.dtype)
         if ctx.needs_input_grad[4]:
-            lora_hidden = x_flat.matmul(lora_a_compute.T)
+            if lora_hidden is None:
+                x_flat = x.reshape(-1, x.shape[-1])
+                lora_hidden = x_flat.matmul(lora_a_compute.T)
             grad_lora_b = grad_flat.T.matmul(lora_hidden)
             grad_lora_b = (grad_lora_b * scaling).to(lora_b.dtype)
 
-        return grad_x, None, None, grad_lora_a, grad_lora_b, None, None
+        return grad_x, None, None, grad_lora_a, grad_lora_b, None, None, None
 
 
 def _mapping_value(container, key, default=None):
@@ -180,6 +205,7 @@ def _fast_lora_linear_forward(module, x, *args, **kwargs):
     if scaling is None:
         return original_forward(x, *args, **kwargs)
     detach_lora_input = bool(getattr(module, "_retrain_fast_lora_detach_input", False))
+    freeze_lora_a = bool(getattr(module, "_retrain_fast_lora_freeze_a", False))
     return _FastLoRALinearFunction.apply(
         x,
         weight,
@@ -188,6 +214,7 @@ def _fast_lora_linear_forward(module, x, *args, **kwargs):
         lora_b,
         scaling,
         detach_lora_input,
+        freeze_lora_a,
     )
 
 
@@ -632,6 +659,7 @@ class LocalTrainHelper:
                  lora_layers_pattern="layers",
                  lora_detach_input=False,
                  lora_fast_linear=False,
+                 lora_freeze_a=False,
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -707,10 +735,12 @@ class LocalTrainHelper:
         self.lora_layers_pattern = str(lora_layers_pattern or "layers")
         self.lora_detach_input = bool(lora_detach_input)
         self.lora_fast_linear = bool(lora_fast_linear)
+        self.lora_freeze_a = bool(lora_freeze_a)
         self._lora_layers_to_transform: list[int] | None = None
         self._lora_detach_input_hook_handles = []
         self._lora_detach_input_hook_count = 0
         self._lora_fast_linear_patch_count = 0
+        self._lora_frozen_a_tensor_count = 0
         self._lora_model_metrics: dict[str, float | int | str] = {}
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int | str] = {}
@@ -805,6 +835,7 @@ class LocalTrainHelper:
             lora_alpha,
             lora_dropout,
         )
+        self._configure_lora_frozen_a()
         self._configure_lora_detached_input()
         self._configure_lora_fast_linear()
         self._move_train_model_to_device()
@@ -960,6 +991,8 @@ class LocalTrainHelper:
             "local_lora_parameter_count": lora_param_count,
             "local_lora_parameter_tensor_count": lora_tensor_count,
             "local_lora_trainable_parameter_count": trainable_param_count,
+            "local_lora_freeze_a_enabled": int(self.lora_freeze_a),
+            "local_lora_frozen_a_tensor_count": self._lora_frozen_a_tensor_count,
             "local_lora_detach_input_enabled": int(self.lora_detach_input),
             "local_lora_detach_input_hook_count": self._lora_detach_input_hook_count,
             "local_lora_fast_linear_enabled": int(self.lora_fast_linear),
@@ -984,6 +1017,19 @@ class LocalTrainHelper:
             lora_dropout,
         )
         return get_peft_model(base_train, peft_config), peft_config
+
+    def _configure_lora_frozen_a(self):
+        self._lora_frozen_a_tensor_count = 0
+        if not self.lora_freeze_a:
+            return
+        named_parameters = getattr(self.train_model, "named_parameters", None)
+        if not callable(named_parameters):
+            return
+        for name, param in named_parameters():
+            if ".lora_A." not in f".{name}.":
+                continue
+            param.requires_grad_(False)
+            self._lora_frozen_a_tensor_count += 1
 
     @staticmethod
     def _detach_first_tensor_input(_module, inputs):
@@ -1029,6 +1075,7 @@ class LocalTrainHelper:
             if hasattr(module, "_retrain_fast_lora_original_forward"):
                 continue
             module._retrain_fast_lora_detach_input = bool(self.lora_detach_input)
+            module._retrain_fast_lora_freeze_a = bool(self.lora_freeze_a)
             module._retrain_fast_lora_original_forward = module.forward
             module.forward = MethodType(_fast_lora_linear_forward, module)
             self._lora_fast_linear_patch_count += 1

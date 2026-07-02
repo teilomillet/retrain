@@ -367,6 +367,7 @@ def test_fast_lora_linear_matches_dense_lora_forward_and_grad():
         lora_b,
         scaling,
         False,
+        False,
     )
     actual.backward(grad)
 
@@ -404,12 +405,50 @@ def test_fast_lora_linear_detach_input_matches_dense_detached_lora_grad():
         lora_b,
         scaling,
         True,
+        False,
     )
     actual.backward(grad)
 
     assert torch.allclose(actual, baseline)
     assert torch.allclose(x.grad, expected_x_grad)
     assert torch.allclose(lora_a.grad, expected_a_grad)
+    assert torch.allclose(lora_b.grad, expected_b_grad)
+
+
+def test_fast_lora_linear_freeze_a_matches_dense_lora_frozen_a_grad():
+    torch.manual_seed(123)
+    x = torch.randn(2, 3, 4, requires_grad=True)
+    weight = torch.randn(5, 4)
+    bias = torch.randn(5)
+    lora_a = torch.randn(2, 4, requires_grad=True)
+    lora_b = torch.randn(5, 2, requires_grad=True)
+    grad = torch.randn(2, 3, 5)
+    scaling = 0.75
+
+    baseline = x @ weight.T + bias + (x @ lora_a.T @ lora_b.T) * scaling
+    baseline.backward(grad)
+    expected_x_grad = x.grad.clone()
+    expected_b_grad = lora_b.grad.clone()
+
+    x.grad = None
+    lora_a.grad = None
+    lora_b.grad = None
+
+    actual = _FastLoRALinearFunction.apply(
+        x,
+        weight,
+        bias,
+        lora_a,
+        lora_b,
+        scaling,
+        False,
+        True,
+    )
+    actual.backward(grad)
+
+    assert torch.allclose(actual, baseline)
+    assert torch.allclose(x.grad, expected_x_grad)
+    assert lora_a.grad is None
     assert torch.allclose(lora_b.grad, expected_b_grad)
 
 
@@ -445,6 +484,7 @@ def test_fast_lora_linear_patch_wraps_eligible_peft_module():
     helper.train_model = root
     helper.lora_fast_linear = True
     helper.lora_detach_input = False
+    helper.lora_freeze_a = False
 
     x = torch.randn(2, 3, 4)
     expected = root.proj(x)
@@ -453,6 +493,27 @@ def test_fast_lora_linear_patch_wraps_eligible_peft_module():
 
     assert helper._lora_fast_linear_patch_count == 1
     assert torch.allclose(root.proj(x), expected)
+
+
+def test_lora_freeze_a_marks_only_lora_a_not_trainable():
+    root = torch.nn.Module()
+    root.branch = torch.nn.Module()
+    root.branch.lora_A = torch.nn.ModuleDict(
+        {"default": torch.nn.Linear(4, 2, bias=False)}
+    )
+    root.branch.lora_B = torch.nn.ModuleDict(
+        {"default": torch.nn.Linear(2, 5, bias=False)}
+    )
+
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = root
+    helper.lora_freeze_a = True
+
+    helper._configure_lora_frozen_a()
+
+    assert helper._lora_frozen_a_tensor_count == 1
+    assert root.branch.lora_A["default"].weight.requires_grad is False
+    assert root.branch.lora_B["default"].weight.requires_grad is True
 
 
 def test_fast_lora_linear_patch_keeps_detached_lora_input_grad_boundary():
@@ -487,6 +548,7 @@ def test_fast_lora_linear_patch_keeps_detached_lora_input_grad_boundary():
     helper.train_model = root
     helper.lora_fast_linear = True
     helper.lora_detach_input = True
+    helper.lora_freeze_a = False
 
     x = torch.randn(2, 3, 4, requires_grad=True)
     expected = root.proj.base_layer(x) + (
@@ -506,6 +568,56 @@ def test_fast_lora_linear_patch_keeps_detached_lora_input_grad_boundary():
     assert torch.allclose(actual, expected.detach())
     assert torch.allclose(x.grad, expected_x_grad)
     assert root.proj.lora_A["default"].weight.grad is not None
+    assert root.proj.lora_B["default"].weight.grad is not None
+
+
+def test_fast_lora_linear_patch_keeps_frozen_a_grad_boundary():
+    class FakeLoraLinear(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.base_layer = torch.nn.Linear(4, 5)
+            self.lora_A = torch.nn.ModuleDict(
+                {"default": torch.nn.Linear(4, 2, bias=False)}
+            )
+            self.lora_B = torch.nn.ModuleDict(
+                {"default": torch.nn.Linear(2, 5, bias=False)}
+            )
+            self.lora_dropout = {"default": torch.nn.Identity()}
+            self.scaling = {"default": 0.5}
+            self.use_dora = {"default": False}
+            self.active_adapters = ["default"]
+            self.disable_adapters = False
+            self.merged = False
+
+        def _check_forward_args(self, *_args, **_kwargs):
+            return None
+
+        def forward(self, x):
+            return self.base_layer(x) + (
+                self.lora_B["default"](self.lora_A["default"](x)) * 0.5
+            )
+
+    root = torch.nn.Module()
+    root.proj = FakeLoraLinear()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = root
+    helper.lora_freeze_a = True
+    helper.lora_fast_linear = True
+    helper.lora_detach_input = False
+
+    helper._configure_lora_frozen_a()
+    x = torch.randn(2, 3, 4, requires_grad=True)
+    expected = root.proj(x)
+
+    helper._configure_lora_fast_linear()
+    actual = root.proj(x)
+    actual.sum().backward()
+
+    assert helper._lora_frozen_a_tensor_count == 1
+    assert helper._lora_fast_linear_patch_count == 1
+    assert root.proj._retrain_fast_lora_freeze_a is True
+    assert torch.allclose(actual, expected)
+    assert root.proj.lora_A["default"].weight.grad is None
     assert root.proj.lora_B["default"].weight.grad is not None
 
 

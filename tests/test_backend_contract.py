@@ -208,6 +208,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "lora_layers_pattern": "layers",
             "lora_detach_input": True,
             "lora_fast_linear": True,
+            "lora_freeze_a": True,
             "trust_remote_code": True,
         },
         policy_loss_mode="kl_cov",
@@ -294,6 +295,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_detach_input"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_fast_linear"] is True
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_freeze_a"] is True
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "train_compile_selective_ce_min_tokens"

@@ -300,6 +300,7 @@ min_prompt_overlap = 0.75
             "lora_layers_pattern": "layers",
             "lora_detach_input": False,
             "lora_fast_linear": False,
+            "lora_freeze_a": False,
             "trust_remote_code": False,
         }
         assert c.environment_provider == ""

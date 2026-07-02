@@ -207,6 +207,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         lora_fast_linear=bool(
             config.backend_options.get("lora_fast_linear", False)
         ),
+        lora_freeze_a=bool(
+            config.backend_options.get("lora_freeze_a", False)
+        ),
         trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
@@ -542,6 +545,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=False,
             ),
             "lora_fast_linear": BackendOptionSpec(
+                value_type=bool,
+                default=False,
+            ),
+            "lora_freeze_a": BackendOptionSpec(
                 value_type=bool,
                 default=False,
             ),
