@@ -22,20 +22,7 @@ jobs:
       - name: Run ruff
         run: .venv/bin/ruff check retrain tests
       - name: Run staged ty checks
-        run: |
-          .venv/bin/ty check \
-            retrain/type_defs.py \
-            retrain/data.py \
-            retrain/sepa.py \
-            retrain/advantages.py \
-            retrain/backend_definitions.py \
-            retrain/registry.py \
-            retrain/backends.py \
-            retrain/trainer.py \
-            retrain/prime_rl_backend.py \
-            retrain/verifiers_bridge.py \
-            --no-progress \
-            --output-format concise
+        run: make typecheck TY=.venv/bin/ty
       - name: Manual blocks are synced
         run: .venv/bin/retrain man --check
       - name: Build docs (strict)

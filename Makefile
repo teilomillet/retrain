@@ -8,11 +8,16 @@ TYPECHECK_PATHS = \
 	retrain/backend_definitions.py \
 	retrain/registry.py \
 	retrain/backends.py \
+	retrain/fast_lora.py \
+	retrain/selective_logprobs.py \
+	retrain/policy_loss.py \
+	retrain/local_train_helper.py \
 	retrain/trainer.py \
 	retrain/prime_rl_backend.py \
 	retrain/verifiers_bridge.py
 
 VENV_PYTHON = .venv/bin/python
+TY ?= uv run ty
 
 all: setup build
 
@@ -45,7 +50,7 @@ lint:
 	uv run ruff check retrain tests
 
 typecheck:
-	uv run ty check $(TYPECHECK_PATHS) --no-progress --output-format concise
+	$(TY) check $(TYPECHECK_PATHS) --no-progress --output-format concise
 
 chaos-backend-workflow:
 	UV_CACHE_DIR=$(CURDIR)/.uv-cache $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),uv run python) scripts/run_backend_workflow_chaos.py
