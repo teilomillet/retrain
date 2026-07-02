@@ -146,6 +146,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         gradient_checkpointing=bool(
             config.backend_options.get("gradient_checkpointing", True)
         ),
+        gradient_checkpointing_use_reentrant=str(
+            config.backend_options.get("gradient_checkpointing_use_reentrant", "auto")
+        ),
         attention_kernel=config.attention_kernel,
         prefix_caching=config.prefix_caching,
         train_selective_suffix_logits=bool(
@@ -442,6 +445,11 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=True),
             "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
             "gradient_checkpointing": BackendOptionSpec(value_type=bool, default=True),
+            "gradient_checkpointing_use_reentrant": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+                choices=("auto", "true", "false"),
+            ),
             "train_selective_suffix_logits": BackendOptionSpec(
                 value_type=bool,
                 default=False,

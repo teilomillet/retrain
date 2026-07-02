@@ -95,14 +95,16 @@ class _CheckpointToggleModel:
         self.checkpointing_enabled = True
         self.disable_calls = 0
         self.enable_calls = 0
+        self.enable_kwargs: list[dict] = []
 
     def gradient_checkpointing_disable(self) -> None:
         self.checkpointing_enabled = False
         self.disable_calls += 1
 
-    def gradient_checkpointing_enable(self) -> None:
+    def gradient_checkpointing_enable(self, **kwargs) -> None:
         self.checkpointing_enabled = True
         self.enable_calls += 1
+        self.enable_kwargs.append(dict(kwargs))
 
 
 class _ConstructorFakeModel(torch.nn.Module):
@@ -111,12 +113,14 @@ class _ConstructorFakeModel(torch.nn.Module):
         self.weight = torch.nn.Parameter(torch.zeros(()))
         self.config = SimpleNamespace(use_cache=False)
         self.gradient_checkpointing_enable_calls = 0
+        self.gradient_checkpointing_enable_kwargs: list[dict] = []
 
     def print_trainable_parameters(self) -> None:
         pass
 
-    def gradient_checkpointing_enable(self) -> None:
+    def gradient_checkpointing_enable(self, **kwargs) -> None:
         self.gradient_checkpointing_enable_calls += 1
+        self.gradient_checkpointing_enable_kwargs.append(dict(kwargs))
 
 
 class _AssertingCacheEngine:
@@ -280,6 +284,34 @@ def test_gemma4_text_sampler_can_disable_kv_cache():
     assert [call["kwargs"] for call in model.language_model.calls] == [{}, {}]
 
 
+def test_local_helper_gradient_checkpointing_can_use_non_reentrant_mode():
+    model = _CheckpointToggleModel()
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.gradient_checkpointing = True
+    helper.gradient_checkpointing_use_reentrant = "false"
+
+    helper._configure_gradient_checkpointing()
+
+    assert model.checkpointing_enabled is True
+    assert model.enable_calls == 1
+    assert model.enable_kwargs == [
+        {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
+    ]
+
+
+def test_local_helper_gradient_checkpointing_auto_preserves_legacy_call():
+    model = _CheckpointToggleModel()
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.gradient_checkpointing = True
+    helper.gradient_checkpointing_use_reentrant = "auto"
+
+    helper._configure_gradient_checkpointing()
+
+    assert model.enable_kwargs == [{}]
+
+
 def test_local_helper_enables_cache_during_shared_model_sampling():
     model = _CheckpointToggleModel()
     engine = _AssertingCacheEngine(model)
@@ -301,9 +333,33 @@ def test_local_helper_enables_cache_during_shared_model_sampling():
     assert engine.saw_cache_enabled is True
     assert model.disable_calls == 1
     assert model.enable_calls == 1
+    assert model.enable_kwargs == [{}]
     assert model.checkpointing_enabled is True
     assert model.config.use_cache is False
     assert helper._last_sample_metrics["local_sample_gc_disabled_for_cache"] == 1
+
+
+def test_shared_model_sampling_restores_checkpointing_mode_kwargs():
+    model = _CheckpointToggleModel()
+    engine = _AssertingCacheEngine(model)
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.gradient_checkpointing = True
+    helper.gradient_checkpointing_use_reentrant = "false"
+    helper.sample_use_cache = True
+    helper._external_engine = False
+    helper.split_mode = False
+    helper.train_model = model
+    helper.engine = engine
+    helper.cuda_empty_cache = False
+    helper.infer_device = "cpu"
+    helper.train_device = "cpu"
+    helper._last_sample_metrics = {}
+
+    helper.sample([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+
+    assert model.enable_kwargs == [
+        {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
+    ]
 
 
 def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):

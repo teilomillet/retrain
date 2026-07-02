@@ -389,6 +389,7 @@ class LocalTrainHelper:
                  cuda_empty_cache=False,
                  sample_use_cache=True,
                  gradient_checkpointing=True,
+                 gradient_checkpointing_use_reentrant="auto",
                  attention_kernel="default",
                  prefix_caching=True,
                  train_selective_suffix_logits=False,
@@ -429,6 +430,9 @@ class LocalTrainHelper:
         self.cuda_empty_cache = bool(cuda_empty_cache)
         self.sample_use_cache = bool(sample_use_cache)
         self.gradient_checkpointing = bool(gradient_checkpointing)
+        self.gradient_checkpointing_use_reentrant = str(
+            gradient_checkpointing_use_reentrant or "auto"
+        ).lower()
         self.prefix_caching = bool(prefix_caching)
         self.train_selective_suffix_logits = bool(train_selective_suffix_logits)
         self.train_save_on_cpu = bool(train_save_on_cpu)
@@ -658,6 +662,15 @@ class LocalTrainHelper:
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
 
+    def _enable_gradient_checkpointing(self, model):
+        mode = getattr(self, "gradient_checkpointing_use_reentrant", "auto")
+        if mode in ("true", "false"):
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": mode == "true"}
+            )
+        else:
+            model.gradient_checkpointing_enable()
+
     def _configure_gradient_checkpointing(self):
         # Gradient checkpointing trades compute for VRAM; benchmarks must be
         # able to toggle it because it changes both memory fit and throughput.
@@ -665,7 +678,7 @@ class LocalTrainHelper:
             self.train_model,
             "gradient_checkpointing_enable",
         ):
-            self.train_model.gradient_checkpointing_enable()
+            self._enable_gradient_checkpointing(self.train_model)
         elif hasattr(self.train_model, "gradient_checkpointing_disable"):
             self.train_model.gradient_checkpointing_disable()
 
@@ -791,7 +804,7 @@ class LocalTrainHelper:
             if toggled:
                 model = self.train_model
                 if hasattr(model, "gradient_checkpointing_enable"):
-                    model.gradient_checkpointing_enable()
+                    self._enable_gradient_checkpointing(model)
                 if config is not None and previous_use_cache is not None:
                     config.use_cache = previous_use_cache
 
@@ -874,6 +887,9 @@ class LocalTrainHelper:
         metrics = {
             "local_gradient_checkpointing_enabled": int(
                 getattr(self, "gradient_checkpointing", False)
+            ),
+            "local_gradient_checkpointing_use_reentrant": str(
+                getattr(self, "gradient_checkpointing_use_reentrant", "auto")
             ),
             "local_train_amp_dtype": str(
                 getattr(self, "amp_dtype", "")
