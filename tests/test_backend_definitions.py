@@ -59,6 +59,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "sample_use_cache": "false",
             "gradient_checkpointing": "false",
             "gradient_checkpointing_use_reentrant": "false",
+            "cudnn_causal_conv1d_shim": "true",
             "trust_remote_code": "true",
         },
     ) == {
@@ -71,6 +72,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "sample_use_cache": False,
         "gradient_checkpointing": False,
         "gradient_checkpointing_use_reentrant": "false",
+        "cudnn_causal_conv1d_shim": True,
         "train_selective_suffix_logits": False,
         "train_save_on_cpu": False,
         "train_save_on_cpu_pin_memory": True,

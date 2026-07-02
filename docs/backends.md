@@ -74,6 +74,7 @@ train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
 cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
 sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
+cudnn_causal_conv1d_shim = false  # opt-in Qwen3.5 GatedDelta fast path via cuDNN frontend
 ```
 
 This splits local train-step datums into smaller forward/backward chunks while
@@ -86,6 +87,10 @@ true` keeps PyTorch generation on the fast KV-cache path; disable it only for
 low-memory fallback sweeps. `gradient_checkpointing` is enabled by default to
 preserve the historical local backend behavior; set it to `false` in throughput
 sweeps when VRAM headroom is available.
+`cudnn_causal_conv1d_shim` is default-off. Enable it only after a smoke run
+confirms the installed `cudnn` frontend exports `ops.causal_conv1d`; it is meant
+for CUDA hosts where Qwen3.5 would otherwise fall back because the normal
+`causal_conv1d` package is missing.
 
 On the shared-model one-GPU path, retrain temporarily disables gradient
 checkpointing during PyTorch sampling when `sample_use_cache = true`, then

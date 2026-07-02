@@ -164,6 +164,10 @@ def test_local_backend_contract(monkeypatch):
         ]
         == "auto"
     )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cudnn_causal_conv1d_shim"]
+        is False
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
 
@@ -182,6 +186,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "sample_use_cache": False,
             "gradient_checkpointing": False,
             "gradient_checkpointing_use_reentrant": "false",
+            "cudnn_causal_conv1d_shim": True,
             "train_save_on_cpu_pin_memory": False,
             "train_save_on_cpu_min_numel": 65536,
             "train_supervised_context_tokens": 512,
@@ -214,6 +219,10 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "gradient_checkpointing_use_reentrant"
         ]
         == "false"
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cudnn_causal_conv1d_shim"]
+        is True
     )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][

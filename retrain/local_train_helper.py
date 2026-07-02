@@ -30,6 +30,7 @@ from retrain.accelerators import (
     accelerator_status,
     apply_liger_kernel_if_available,
     from_pretrained_attention_kwargs,
+    install_cudnn_causal_conv1d_shim,
     module_available,
 )
 from retrain.gemma4_text import (
@@ -390,6 +391,7 @@ class LocalTrainHelper:
                  sample_use_cache=True,
                  gradient_checkpointing=True,
                  gradient_checkpointing_use_reentrant="auto",
+                 cudnn_causal_conv1d_shim=False,
                  attention_kernel="default",
                  prefix_caching=True,
                  train_selective_suffix_logits=False,
@@ -433,6 +435,7 @@ class LocalTrainHelper:
         self.gradient_checkpointing_use_reentrant = str(
             gradient_checkpointing_use_reentrant or "auto"
         ).lower()
+        self.cudnn_causal_conv1d_shim = bool(cudnn_causal_conv1d_shim)
         self.prefix_caching = bool(prefix_caching)
         self.train_selective_suffix_logits = bool(train_selective_suffix_logits)
         self.train_save_on_cpu = bool(train_save_on_cpu)
@@ -527,7 +530,15 @@ class LocalTrainHelper:
 
         self._accelerator_metrics = cast(
             dict[str, object],
-            dict(accelerator_status()),
+            install_cudnn_causal_conv1d_shim(
+                enabled=self.cudnn_causal_conv1d_shim,
+            ),
+        )
+        self._accelerator_metrics.update(
+            cast(
+                dict[str, object],
+                dict(accelerator_status()),
+            )
         )
         self._accelerator_metrics.update(
             apply_liger_kernel_if_available(
