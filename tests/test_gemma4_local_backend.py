@@ -16,6 +16,7 @@ from retrain.gemma4_text import (
     eos_token_ids,
     forward_logits,
     is_gemma4_text_model,
+    parse_lora_target_module_suffixes,
     resolve_lora_target_modules,
 )
 from retrain.inference_engine.pytorch_engine import (
@@ -280,6 +281,38 @@ def test_local_peft_config_can_select_qwen_layer_subset():
     assert all(".layers.0." not in name and ".layers.1." not in name for name in lora_names)
     assert any(".layers.2." in name for name in lora_names)
     assert any(".layers.3." in name for name in lora_names)
+
+
+def test_local_peft_config_can_select_target_modules():
+    model = Qwen2ForCausalLM(
+        Qwen2Config(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+        )
+    )
+    helper = object.__new__(LocalTrainHelper)
+    helper.lora_target_module_suffixes = parse_lora_target_module_suffixes("o_proj")
+    helper.lora_layers_to_transform_spec = ""
+    helper.lora_layers_pattern = "layers"
+
+    peft_config = helper._build_peft_config(
+        model,
+        lora_rank=2,
+        lora_alpha=0,
+        lora_dropout=0.0,
+    )
+    wrapped = get_peft_model(model, peft_config)
+    lora_names = [name for name, _ in wrapped.named_parameters() if "lora_" in name]
+
+    assert peft_config.target_modules == {"o_proj"}
+    assert lora_names
+    assert all(".o_proj." in name for name in lora_names)
+    assert not any(".q_proj." in name for name in lora_names)
+    assert not any(".up_proj." in name for name in lora_names)
 
 
 def test_gemma4_forward_logits_bypasses_multimodal_wrapper():

@@ -192,6 +192,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "train_compile_selective_ce_min_tokens",
             128,
         ),
+        lora_target_modules=str(
+            config.backend_options.get("lora_target_modules", "")
+        ),
         lora_layers_to_transform=str(
             config.backend_options.get("lora_layers_to_transform", "")
         ),
@@ -279,6 +282,7 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
             "train_compile_selective_ce_min_tokens",
             128,
         ),
+        lora_target_modules=str(options.get("lora_target_modules", "")),
         liger_kernel=bool(options.get("liger_kernel", False)),
         liger_fused_linear_ce=bool(options.get("liger_fused_linear_ce", True)),
         cuda_empty_cache=bool(options.get("cuda_empty_cache", True)),
@@ -515,6 +519,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=128,
                 validator=_validate_non_negative_int,
             ),
+            "lora_target_modules": BackendOptionSpec(
+                value_type=str,
+                default="",
+            ),
             "lora_layers_to_transform": BackendOptionSpec(
                 value_type=str,
                 default="",
@@ -628,6 +636,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=int,
                 default=128,
                 validator=_validate_non_negative_int,
+            ),
+            "lora_target_modules": BackendOptionSpec(
+                value_type=str,
+                default="",
             ),
             "liger_kernel": BackendOptionSpec(value_type=bool, default=False),
             "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),

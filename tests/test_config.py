@@ -295,6 +295,7 @@ min_prompt_overlap = 0.75
             "train_unsloth_fused_ce_torch_compile": True,
             "train_compile_selective_ce": "off",
             "train_compile_selective_ce_min_tokens": 128,
+            "lora_target_modules": "",
             "lora_layers_to_transform": "",
             "lora_layers_pattern": "layers",
             "trust_remote_code": False,

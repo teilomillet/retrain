@@ -61,6 +61,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "gradient_checkpointing_use_reentrant": "false",
             "gradient_checkpointing_skip_last_n": "2",
             "cudnn_causal_conv1d_shim": "true",
+            "lora_target_modules": "o_proj",
             "lora_layers_to_transform": "last:8",
             "lora_layers_pattern": "layers",
             "trust_remote_code": "true",
@@ -87,6 +88,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "train_unsloth_fused_ce_torch_compile": True,
         "train_compile_selective_ce": "off",
         "train_compile_selective_ce_min_tokens": 128,
+        "lora_target_modules": "o_proj",
         "lora_layers_to_transform": "last:8",
         "lora_layers_pattern": "layers",
         "trust_remote_code": True,
@@ -116,6 +118,7 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
             "train_unsloth_fused_ce_torch_compile": "false",
             "train_compile_selective_ce": "auto",
             "train_compile_selective_ce_min_tokens": "256",
+            "lora_target_modules": "q_proj,o_proj",
         },
     )
     assert normalized["max_seq_length"] == 262144
@@ -139,6 +142,7 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
     assert normalized["train_unsloth_fused_ce_torch_compile"] is False
     assert normalized["train_compile_selective_ce"] == "auto"
     assert normalized["train_compile_selective_ce_min_tokens"] == 256
+    assert normalized["lora_target_modules"] == "q_proj,o_proj"
     assert normalized["liger_kernel"] is False
     assert normalized["liger_fused_linear_ce"] is True
     assert normalized["qwen35_gated_delta_chunk_size"] == "auto"

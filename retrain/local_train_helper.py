@@ -34,9 +34,9 @@ from retrain.accelerators import (
     module_available,
 )
 from retrain.gemma4_text import (
-    DEFAULT_LORA_TARGET_MODULES,
     forward_hidden_states_and_lm_head,
     forward_logits,
+    parse_lora_target_module_suffixes,
     resolve_lora_target_modules,
 )
 from retrain.inference_engine import create_engine
@@ -513,6 +513,7 @@ class LocalTrainHelper:
                  train_unsloth_fused_ce_torch_compile=True,
                  train_compile_selective_ce="off",
                  train_compile_selective_ce_min_tokens=128,
+                 lora_target_modules="",
                  lora_layers_to_transform="",
                  lora_layers_pattern="layers",
                  trust_remote_code=False):
@@ -582,6 +583,9 @@ class LocalTrainHelper:
         self.train_compile_selective_ce_min_tokens = max(
             0,
             int(train_compile_selective_ce_min_tokens),
+        )
+        self.lora_target_module_suffixes = parse_lora_target_module_suffixes(
+            lora_target_modules
         )
         self.lora_layers_to_transform_spec = str(lora_layers_to_transform or "")
         self.lora_layers_pattern = str(lora_layers_pattern or "layers")
@@ -780,6 +784,11 @@ class LocalTrainHelper:
                 "layers_to_transform": selected_layers,
                 "layers_pattern": self.lora_layers_pattern,
             }
+        target_module_suffixes = getattr(
+            self,
+            "lora_target_module_suffixes",
+            parse_lora_target_module_suffixes(""),
+        )
         return LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
@@ -787,7 +796,7 @@ class LocalTrainHelper:
             lora_dropout=lora_dropout,
             target_modules=resolve_lora_target_modules(
                 base_model,
-                DEFAULT_LORA_TARGET_MODULES,
+                target_module_suffixes,
             ),
             **layer_kwargs,
         )
@@ -809,6 +818,11 @@ class LocalTrainHelper:
                 lora_param_count += numel
                 lora_tensor_count += 1
         selected_layers = self._lora_layers_to_transform
+        target_module_suffixes = getattr(
+            self,
+            "lora_target_module_suffixes",
+            parse_lora_target_module_suffixes(""),
+        )
         self._lora_model_metrics = {
             "local_lora_layer_selection_enabled": int(selected_layers is not None),
             "local_lora_selected_layer_count": (
@@ -818,6 +832,8 @@ class LocalTrainHelper:
                 "" if selected_layers is None else ",".join(map(str, selected_layers))
             ),
             "local_lora_layers_pattern": self.lora_layers_pattern,
+            "local_lora_target_modules": ",".join(target_module_suffixes),
+            "local_lora_target_module_count": len(target_module_suffixes),
             "local_lora_parameter_count": lora_param_count,
             "local_lora_parameter_tensor_count": lora_tensor_count,
             "local_lora_trainable_parameter_count": trainable_param_count,

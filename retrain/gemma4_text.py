@@ -11,6 +11,24 @@ DEFAULT_LORA_TARGET_MODULES = (
 )
 
 
+def parse_lora_target_module_suffixes(spec: str | None) -> tuple[str, ...]:
+    """Return target module suffixes from a comma-separated backend option."""
+    text = str(spec or "").strip()
+    if not text or text.lower() in {"default", "defaults"}:
+        return DEFAULT_LORA_TARGET_MODULES
+    suffixes: list[str] = []
+    seen: set[str] = set()
+    for raw in text.split(","):
+        suffix = raw.strip()
+        if not suffix or suffix in seen:
+            continue
+        suffixes.append(suffix)
+        seen.add(suffix)
+    if not suffixes:
+        return DEFAULT_LORA_TARGET_MODULES
+    return tuple(suffixes)
+
+
 def unwrap_peft_model(model):
     """Return the underlying Transformers model when wrapped by PEFT."""
     base_model = getattr(model, "base_model", None)
