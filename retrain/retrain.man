@@ -244,8 +244,10 @@ OPTIONS
         --sepa-delay-steps
         --sepa-schedule
         --sepa-steps
+        --sft-batch-order
         --sft-batch-size
         --sft-data-path
+        --sft-length-bucket-size
         --sft-loss-fn
         --sft-lr
         --sft-max-tokens
