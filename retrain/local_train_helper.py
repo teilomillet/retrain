@@ -33,6 +33,7 @@ from retrain.accelerators import (
     from_pretrained_attention_kwargs,
     install_cudnn_causal_conv1d_shim,
     module_available,
+    patch_qwen35_gated_delta_kernel,
 )
 from retrain.gemma4_text import (
     forward_hidden_states_and_lm_head,
@@ -661,6 +662,7 @@ class LocalTrainHelper:
                  lora_detach_input=False,
                  lora_fast_linear=False,
                  lora_freeze_a=False,
+                 qwen35_gated_delta_kernel="auto",
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -745,6 +747,7 @@ class LocalTrainHelper:
         self.lora_detach_input = bool(lora_detach_input)
         self.lora_fast_linear = bool(lora_fast_linear)
         self.lora_freeze_a = bool(lora_freeze_a)
+        self.qwen35_gated_delta_kernel = str(qwen35_gated_delta_kernel or "auto")
         self._lora_layers_to_transform: list[int] | None = None
         self._lora_detach_input_hook_handles = []
         self._lora_detach_input_hook_count = 0
@@ -847,6 +850,13 @@ class LocalTrainHelper:
             lora_rank,
             lora_alpha,
             lora_dropout,
+        )
+        self._accelerator_metrics.update(
+            patch_qwen35_gated_delta_kernel(
+                self.train_model,
+                mode=self.qwen35_gated_delta_kernel,
+                device=self.train_device,
+            )
         )
         self._configure_lora_frozen_a()
         self._configure_lora_detached_input()

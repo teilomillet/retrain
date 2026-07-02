@@ -178,6 +178,10 @@ def test_local_backend_contract(monkeypatch):
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cudnn_causal_conv1d_shim"]
         is False
     )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["qwen35_gated_delta_kernel"]
+        == "auto"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_to_transform"] == ""
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_pattern"] == "layers"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is True
@@ -214,6 +218,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "lora_detach_input": True,
             "lora_fast_linear": True,
             "lora_freeze_a": True,
+            "qwen35_gated_delta_kernel": "torch",
             "trust_remote_code": True,
         },
         policy_loss_mode="kl_cov",
@@ -306,6 +311,10 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_fast_linear"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_freeze_a"] is True
     assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["qwen35_gated_delta_kernel"]
+        == "torch"
+    )
+    assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "train_compile_selective_ce_min_tokens"
         ]
@@ -342,6 +351,7 @@ def test_unsloth_backend_contract(monkeypatch):
             "train_unsloth_fused_ce_torch_compile": False,
             "train_compile_selective_ce": "require",
             "train_compile_selective_ce_min_tokens": 512,
+            "qwen35_gated_delta_kernel": "flash_qla",
         },
         model="Qwen/Qwen3.5-2B",
     )
@@ -378,6 +388,7 @@ def test_unsloth_backend_contract(monkeypatch):
     assert kwargs["sample_use_cache"] is True
     assert kwargs["gradient_checkpointing"] is True
     assert kwargs["qwen35_gated_delta_chunk_size"] == "auto"
+    assert kwargs["qwen35_gated_delta_kernel"] == "flash_qla"
 
 
 def test_unsloth_backend_defaults_max_seq_length_from_max_tokens(monkeypatch):

@@ -76,6 +76,7 @@ cuda_expandable_segments = "auto"  # "auto" enables expandable CUDA segments whe
 sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 cudnn_causal_conv1d_shim = false  # opt-in Qwen3.5 GatedDelta fast path via cuDNN frontend
+qwen35_gated_delta_kernel = "auto"  # auto | off | torch | flash_qla; explicit supported-GPU experiment
 ```
 
 This splits local train-step datums into smaller forward/backward chunks while
@@ -102,6 +103,12 @@ runtime metrics.
 confirms the installed `cudnn` frontend exports `ops.causal_conv1d`; it is meant
 for CUDA hosts where Qwen3.5 would otherwise fall back because the normal
 `causal_conv1d` package is missing.
+`qwen35_gated_delta_kernel = "flash_qla"` is default-off and explicit-only.
+`"auto"` keeps the model's installed FLA or torch implementation, so the config
+remains portable across CUDA GPUs. Use `flash_qla` only after `flash-qla` is
+installed on an upstream-supported device (SM90/SM100 as of FlashQLA v0.1.1)
+and a matched equivalence/performance probe passes; unsupported devices fail
+closed instead of silently becoming a different experiment.
 
 On the shared-model one-GPU path, retrain temporarily disables gradient
 checkpointing during PyTorch sampling when `sample_use_cache = true`, then
@@ -284,6 +291,7 @@ sample_use_cache = true
 gradient_checkpointing = true
 liger_fused_linear_ce = true
 qwen35_gated_delta_chunk_size = "auto"  # use installed Qwen3.5 GatedDelta path; set "torch" as a fallback
+qwen35_gated_delta_kernel = "auto"      # set "flash_qla" only after a supported-GPU equivalence gate
 train_selective_suffix_logits = true    # only backprop weighted RL/ECHO tokens
 train_compile_selective_ce = "off"      # off | auto | require; opt-in compiled sparse CE
 train_compile_selective_ce_min_tokens = 128

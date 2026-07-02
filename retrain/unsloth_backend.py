@@ -19,6 +19,7 @@ except ImportError:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = None
 
 from retrain.local_train_helper import LocalTrainHelper
+from retrain.accelerators import patch_qwen35_gated_delta_kernel
 
 REQUIRED_FROM_PRETRAINED_PARAMS = frozenset(
     {
@@ -167,6 +168,7 @@ class UnslothTrainHelper(LocalTrainHelper):
         use_rslora=False,
         random_state=3407,
         qwen35_gated_delta_chunk_size="auto",
+        qwen35_gated_delta_kernel="auto",
         **kwargs,
     ):
         _validate_load_mode(
@@ -194,7 +196,17 @@ class UnslothTrainHelper(LocalTrainHelper):
         self.unsloth_text_only = bool(text_only)
         self.unsloth_use_rslora = bool(use_rslora)
         self.unsloth_random_state = int(random_state)
+        chunk_text = str(qwen35_gated_delta_chunk_size or "auto").strip().lower()
+        kernel_text = str(qwen35_gated_delta_kernel or "auto").strip().lower()
+        if kernel_text not in {"", "auto", "off", "default", "none", "false", "0"}:
+            if chunk_text not in {"", "auto", "off", "none", "false", "0"}:
+                raise ValueError(
+                    "qwen35_gated_delta_kernel cannot be combined with "
+                    "qwen35_gated_delta_chunk_size; choose one Qwen3.5 "
+                    "GatedDelta override."
+                )
         self.unsloth_qwen35_gated_delta_chunk_size = qwen35_gated_delta_chunk_size
+        self.unsloth_qwen35_gated_delta_kernel = kernel_text
         self._unsloth_qwen35_gated_delta_patch = {
             "mode": "off",
             "chunk_size": 0,
@@ -277,6 +289,13 @@ class UnslothTrainHelper(LocalTrainHelper):
             use_rslora=self.unsloth_use_rslora,
         )
         self._patch_qwen35_gated_delta_rule_if_needed(model)
+        self._accelerator_metrics.update(
+            patch_qwen35_gated_delta_kernel(
+                model,
+                mode=self.unsloth_qwen35_gated_delta_kernel,
+                device=self.train_device,
+            )
+        )
         return model, peft_config
 
     def _count_tiled_mlp_modules(self) -> int:

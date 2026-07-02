@@ -4,6 +4,7 @@ import math
 import sys
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from retrain.unsloth_backend import UnslothTrainHelper
@@ -468,6 +469,21 @@ def test_unsloth_qwen35_auto_keeps_installed_gated_delta_path(monkeypatch, tmp_p
         assert metrics["unsloth_qwen35_gated_delta_shared_memory_limit"] == 101376
     finally:
         helper.shutdown()
+
+
+def test_unsloth_rejects_mixed_qwen35_gated_delta_overrides(tmp_path):
+    with pytest.raises(ValueError, match="cannot be combined"):
+        UnslothTrainHelper(
+            "Qwen/Qwen3.5-2B",
+            str(tmp_path),
+            "cpu",
+            load_in_4bit=True,
+            train_microbatch_size=1,
+            liger_kernel=False,
+            liger_fused_linear_ce=False,
+            qwen35_gated_delta_chunk_size=32,
+            qwen35_gated_delta_kernel="flash_qla",
+        )
 
 
 def test_unsloth_helper_moves_non_quantized_models(monkeypatch, tmp_path):

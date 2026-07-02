@@ -68,6 +68,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "lora_detach_input": "true",
             "lora_fast_linear": "true",
             "lora_freeze_a": "true",
+            "qwen35_gated_delta_kernel": "torch",
             "trust_remote_code": "true",
         },
     ) == {
@@ -99,6 +100,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "lora_detach_input": True,
         "lora_fast_linear": True,
         "lora_freeze_a": True,
+        "qwen35_gated_delta_kernel": "torch",
         "trust_remote_code": True,
     }
 
@@ -127,6 +129,7 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
             "train_compile_selective_ce": "auto",
             "train_compile_selective_ce_min_tokens": "256",
             "lora_target_modules": "q_proj,o_proj",
+            "qwen35_gated_delta_kernel": "flash_qla",
         },
     )
     assert normalized["max_seq_length"] == 262144
@@ -154,6 +157,7 @@ def test_unsloth_backend_options_accept_long_context_controls() -> None:
     assert normalized["liger_kernel"] is False
     assert normalized["liger_fused_linear_ce"] is True
     assert normalized["qwen35_gated_delta_chunk_size"] == "auto"
+    assert normalized["qwen35_gated_delta_kernel"] == "flash_qla"
 
 
 def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:

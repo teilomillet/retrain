@@ -213,6 +213,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         lora_freeze_a=bool(
             config.backend_options.get("lora_freeze_a", False)
         ),
+        qwen35_gated_delta_kernel=str(
+            config.backend_options.get("qwen35_gated_delta_kernel", "auto")
+        ),
         trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
@@ -328,6 +331,9 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
         random_state=_backend_option_int(options, "random_state", 3407),
         qwen35_gated_delta_chunk_size=str(
             options.get("qwen35_gated_delta_chunk_size", "auto")
+        ),
+        qwen35_gated_delta_kernel=str(
+            options.get("qwen35_gated_delta_kernel", "auto")
         ),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
@@ -492,6 +498,11 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=bool,
                 default=False,
             ),
+            "qwen35_gated_delta_kernel": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+                choices=("auto", "off", "torch", "flash_qla"),
+            ),
             "train_selective_suffix_logits": BackendOptionSpec(
                 value_type=bool,
                 default=False,
@@ -611,6 +622,11 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             "qwen35_gated_delta_chunk_size": BackendOptionSpec(
                 value_type=str,
                 default="auto",
+            ),
+            "qwen35_gated_delta_kernel": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+                choices=("auto", "off", "torch", "flash_qla"),
             ),
             "train_microbatch_size": BackendOptionSpec(
                 value_type=int,

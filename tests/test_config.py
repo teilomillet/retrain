@@ -286,6 +286,7 @@ min_prompt_overlap = 0.75
             "gradient_checkpointing_use_reentrant": "auto",
             "gradient_checkpointing_skip_last_n": 0,
             "cudnn_causal_conv1d_shim": False,
+            "qwen35_gated_delta_kernel": "auto",
             "train_selective_suffix_logits": False,
             "train_save_on_cpu": False,
             "train_save_on_cpu_pin_memory": True,
