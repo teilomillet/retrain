@@ -80,7 +80,7 @@ def _infer_transformer_layer_count(model):
 
 class _FastLoRALinearFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, weight, bias, lora_a, lora_b, scaling):
+    def forward(ctx, x, weight, bias, lora_a, lora_b, scaling, detach_lora_input):
         original_shape = x.shape
         x_flat = x.reshape(-1, original_shape[-1])
         compute_dtype = x_flat.dtype
@@ -95,6 +95,7 @@ class _FastLoRALinearFunction(torch.autograd.Function):
 
         ctx.save_for_backward(x, weight, lora_a, lora_b)
         ctx.scaling = float(scaling)
+        ctx.detach_lora_input = bool(detach_lora_input)
         return output.reshape(*original_shape[:-1], weight.shape[0])
 
     @staticmethod
@@ -114,7 +115,8 @@ class _FastLoRALinearFunction(torch.autograd.Function):
 
         if ctx.needs_input_grad[0]:
             grad_x = grad_flat.matmul(weight.to(compute_dtype))
-            grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
+            if not ctx.detach_lora_input:
+                grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
             grad_x = grad_x.reshape_as(x)
         if ctx.needs_input_grad[3]:
             grad_lora_a = grad_lora_hidden.T.matmul(x_flat)
@@ -124,7 +126,7 @@ class _FastLoRALinearFunction(torch.autograd.Function):
             grad_lora_b = grad_flat.T.matmul(lora_hidden)
             grad_lora_b = (grad_lora_b * scaling).to(lora_b.dtype)
 
-        return grad_x, None, None, grad_lora_a, grad_lora_b, None
+        return grad_x, None, None, grad_lora_a, grad_lora_b, None, None
 
 
 def _mapping_value(container, key, default=None):
@@ -177,7 +179,16 @@ def _fast_lora_linear_forward(module, x, *args, **kwargs):
     scaling = _mapping_value(getattr(module, "scaling", {}), adapter)
     if scaling is None:
         return original_forward(x, *args, **kwargs)
-    return _FastLoRALinearFunction.apply(x, weight, bias, lora_a, lora_b, scaling)
+    detach_lora_input = bool(getattr(module, "_retrain_fast_lora_detach_input", False))
+    return _FastLoRALinearFunction.apply(
+        x,
+        weight,
+        bias,
+        lora_a,
+        lora_b,
+        scaling,
+        detach_lora_input,
+    )
 
 
 def _parse_lora_layers_to_transform(spec, layer_count=0):
@@ -953,6 +964,9 @@ class LocalTrainHelper:
             "local_lora_detach_input_hook_count": self._lora_detach_input_hook_count,
             "local_lora_fast_linear_enabled": int(self.lora_fast_linear),
             "local_lora_fast_linear_patch_count": self._lora_fast_linear_patch_count,
+            "local_lora_fast_linear_detach_input_enabled": int(
+                self.lora_fast_linear and self.lora_detach_input
+            ),
         }
 
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
@@ -1004,9 +1018,6 @@ class LocalTrainHelper:
         self._lora_fast_linear_patch_count = 0
         if not self.lora_fast_linear:
             return
-        if self.lora_detach_input:
-            print("lora_fast_linear disabled because lora_detach_input is enabled")
-            return
         named_modules = getattr(self.train_model, "named_modules", None)
         if not callable(named_modules):
             return
@@ -1017,6 +1028,7 @@ class LocalTrainHelper:
                 continue
             if hasattr(module, "_retrain_fast_lora_original_forward"):
                 continue
+            module._retrain_fast_lora_detach_input = bool(self.lora_detach_input)
             module._retrain_fast_lora_original_forward = module.forward
             module.forward = MethodType(_fast_lora_linear_forward, module)
             self._lora_fast_linear_patch_count += 1
