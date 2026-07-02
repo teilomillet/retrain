@@ -193,11 +193,12 @@ class SftRunner:
         from retrain.logging_utils import JsonlLogger
         from retrain.registry import get_registry
         from retrain.sft import (
+            build_sft_tokenized_batch,
             build_sft_artifact_manifest,
             build_sft_example_order,
             load_sft_jsonl,
             select_sft_batch_indices,
-            tokenize_sft_batch,
+            tokenize_sft_dataset,
             write_sft_artifact_manifest,
         )
         from retrain.trainer import _save_trainer_state
@@ -263,14 +264,40 @@ class SftRunner:
         )
         print(f"SFT loss: {loss_fn}")
 
+        if config.resume_from:
+            if not hasattr(helper, "load_state"):
+                raise RuntimeError(
+                    "trainer='sft' resume_from requires a backend with load_state()."
+                )
+            print(f"Loading SFT initial adapter from {config.resume_from} ...")
+            helper.load_state(config.resume_from)  # type: ignore[call-arg]
+
         print(f"Loading tokenizer for {config.model} ...")
         tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
 
-        order = build_sft_example_order(len(examples), config.seed)
         batch_size = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
         batch_size = min(max(1, batch_size), len(examples))
         max_tokens = config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens
         lr = config.sft_lr if config.sft_lr > 0 else config.lr
+        print("Tokenizing SFT dataset ...")
+        tokenized_examples = tokenize_sft_dataset(
+            tokenizer,
+            examples,
+            max_tokens=max_tokens,
+        )
+        token_lengths = [example.total_tokens for example in tokenized_examples]
+        order = build_sft_example_order(
+            len(tokenized_examples),
+            config.seed,
+            lengths=token_lengths,
+            batch_order=config.sft_batch_order,
+            length_bucket_size=config.sft_length_bucket_size,
+        )
+        print(
+            "SFT batching: "
+            f"order={config.sft_batch_order}, "
+            f"length_bucket_size={config.sft_length_bucket_size or len(tokenized_examples)}"
+        )
 
         policy_ref = ""
         last_metrics: dict[str, int | float | str] = {}
@@ -282,12 +309,8 @@ class SftRunner:
                     batch_size=batch_size,
                     step=step,
                 )
-                batch = [examples[idx] for idx in indices]
-                tokenized = tokenize_sft_batch(
-                    tokenizer,
-                    batch,
-                    max_tokens=max_tokens,
-                )
+                batch = [tokenized_examples[idx] for idx in indices]
+                tokenized = build_sft_tokenized_batch(batch)
 
                 if hasattr(helper, "sft_train_step"):
                     loss = float(
@@ -318,6 +341,8 @@ class SftRunner:
                     "backend": config.backend,
                     "loss": loss,
                     "sft_loss_fn": loss_fn,
+                    "sft_batch_order": config.sft_batch_order,
+                    "sft_length_bucket_size": int(config.sft_length_bucket_size),
                     "lr": lr,
                     "datums": len(batch),
                     "tokens": tokenized.total_tokens,

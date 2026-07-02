@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import random
 from dataclasses import dataclass
@@ -36,6 +37,22 @@ class SftTokenizedBatch:
     advantages: list[list[float]]
     total_tokens: int
     supervised_tokens: int
+
+
+@dataclass(frozen=True)
+class SftTokenizedExample:
+    """One already-tokenized SFT datum."""
+
+    tokens: list[int]
+    advantages: list[float]
+
+    @property
+    def total_tokens(self) -> int:
+        return len(self.tokens)
+
+    @property
+    def supervised_tokens(self) -> int:
+        return sum(1 for value in self.advantages if value > 0.0)
 
 
 def _row_error(path: Path, line_no: int, message: str) -> ValueError:
@@ -123,14 +140,44 @@ def load_sft_jsonl(path: str | Path) -> list[SftExample]:
     return examples
 
 
-def build_sft_example_order(example_count: int, seed: int) -> list[int]:
-    """Return a deterministic shuffled traversal for SFT examples."""
+def build_sft_example_order(
+    example_count: int,
+    seed: int,
+    *,
+    lengths: list[int] | None = None,
+    batch_order: str = "shuffle",
+    length_bucket_size: int = 0,
+) -> list[int]:
+    """Return a deterministic SFT traversal.
+
+    ``shuffle`` preserves the historical behavior. Length-aware modes operate
+    after tokenization, matching the cost signal that controls padding and VRAM.
+    """
     if example_count <= 0:
         return []
     order = list(range(example_count))
     rng = random.Random(seed)
     rng.shuffle(order)
-    return order
+    if batch_order == "shuffle":
+        return order
+    if lengths is None or len(lengths) != example_count:
+        raise ValueError("length-aware SFT ordering requires one token length per example.")
+    if batch_order in ("length", "length_asc"):
+        return sorted(order, key=lambda idx: (lengths[idx], idx))
+    if batch_order == "length_desc":
+        return sorted(order, key=lambda idx: (-lengths[idx], idx))
+    if batch_order == "length_bucket":
+        bucket_size = int(length_bucket_size or example_count)
+        bucket_size = max(1, bucket_size)
+        bucketed: list[int] = []
+        for start in range(0, example_count, bucket_size):
+            bucket = order[start : start + bucket_size]
+            bucketed.extend(sorted(bucket, key=lambda idx: (lengths[idx], idx)))
+        return bucketed
+    raise ValueError(
+        "batch_order must be 'shuffle', 'length', 'length_asc', "
+        "'length_desc', or 'length_bucket'."
+    )
 
 
 def select_sft_batch_indices(
@@ -154,6 +201,22 @@ def _last_assistant_index(messages: list[dict[str, str]]) -> int:
     raise ValueError("SFT messages must include an assistant target.")
 
 
+def _chat_template_kwargs(tokenizer: object) -> dict[str, object]:
+    apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        return {}
+    try:
+        sig = inspect.signature(apply_chat_template)
+    except (TypeError, ValueError):
+        return {}
+    if "enable_thinking" in sig.parameters or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in sig.parameters.values()
+    ):
+        return {"enable_thinking": False}
+    return {}
+
+
 def _render_sft_text(tokenizer: object, example: SftExample) -> tuple[str, str]:
     """Return (full_text, prompt_text) for one SFT example."""
     if example.messages is not None:
@@ -169,11 +232,13 @@ def _render_sft_text(tokenizer: object, example: SftExample) -> tuple[str, str]:
             full_messages,
             tokenize=False,
             add_generation_prompt=False,
+            **_chat_template_kwargs(tokenizer),
         )
         prompt_text = apply_chat_template(
             prompt_messages,
             tokenize=False,
             add_generation_prompt=True,
+            **_chat_template_kwargs(tokenizer),
         )
         return str(full_text), str(prompt_text)
 
@@ -238,6 +303,40 @@ def tokenize_sft_batch(
     )
 
 
+def tokenize_sft_dataset(
+    tokenizer: object,
+    examples: list[SftExample],
+    *,
+    max_tokens: int,
+) -> list[SftTokenizedExample]:
+    """Tokenize an SFT dataset once so batching can use true lengths."""
+    tokenized: list[SftTokenizedExample] = []
+    for example in examples:
+        row_tokens, row_advantages = tokenize_sft_example(
+            tokenizer,
+            example,
+            max_tokens=max_tokens,
+        )
+        tokenized.append(
+            SftTokenizedExample(tokens=row_tokens, advantages=row_advantages)
+        )
+    return tokenized
+
+
+def build_sft_tokenized_batch(
+    examples: list[SftTokenizedExample],
+) -> SftTokenizedBatch:
+    """Build a batch view from pre-tokenized examples."""
+    tokens = [example.tokens for example in examples]
+    advantages = [example.advantages for example in examples]
+    return SftTokenizedBatch(
+        tokens=tokens,
+        advantages=advantages,
+        total_tokens=sum(example.total_tokens for example in examples),
+        supervised_tokens=sum(example.supervised_tokens for example in examples),
+    )
+
+
 def build_sft_artifact_manifest(
     config: "TrainConfig",
     *,
@@ -275,6 +374,8 @@ def build_sft_artifact_manifest(
             "max_steps": int(config.max_steps),
             "lr": float(config.sft_lr if config.sft_lr > 0 else config.lr),
             "loss_fn": loss_fn,
+            "batch_order": config.sft_batch_order,
+            "length_bucket_size": int(config.sft_length_bucket_size),
         },
         "lora": {
             "rank": int(config.lora_rank),

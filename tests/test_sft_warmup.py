@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from retrain.config import TrainConfig, load_config
-from retrain.sft import load_sft_jsonl, tokenize_sft_batch
+from retrain.sft import SftExample, load_sft_jsonl, tokenize_sft_batch
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +50,8 @@ sft_data_path = "/tmp/test_sft.jsonl"
 sft_batch_size = 3
 sft_max_tokens = 256
 sft_loss_fn = "cross_entropy"
+sft_batch_order = "length_bucket"
+sft_length_bucket_size = 64
 tl_grpo = true
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
@@ -63,6 +65,8 @@ tl_grpo = true
         assert config.sft_batch_size == 3
         assert config.sft_max_tokens == 256
         assert config.sft_loss_fn == "cross_entropy"
+        assert config.sft_batch_order == "length_bucket"
+        assert config.sft_length_bucket_size == 64
         assert config.tl_grpo is True
 
     def test_sft_steps_cannot_exceed_max_steps(self):
@@ -92,6 +96,44 @@ class _TinyTokenizer:
 
     def encode(self, text, add_special_tokens=False):
         return [ord(ch) for ch in text]
+
+
+class _ThinkingTokenizer(_TinyTokenizer):
+    def __init__(self):
+        self.enable_thinking_values = []
+
+    def apply_chat_template(
+        self,
+        messages,
+        tokenize=False,
+        add_generation_prompt=False,
+        enable_thinking=True,
+    ):
+        self.enable_thinking_values.append(enable_thinking)
+        return super().apply_chat_template(
+            messages,
+            tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+        )
+
+
+class _KwargsThinkingTokenizer(_TinyTokenizer):
+    def __init__(self):
+        self.kwargs_values = []
+
+    def apply_chat_template(
+        self,
+        messages,
+        tokenize=False,
+        add_generation_prompt=False,
+        **kwargs,
+    ):
+        self.kwargs_values.append(dict(kwargs))
+        return super().apply_chat_template(
+            messages,
+            tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+        )
 
 
 class TestGenericSftJsonl:
@@ -125,6 +167,39 @@ class TestGenericSftJsonl:
         assert len(batch.tokens) == 3
         assert batch.supervised_tokens > 0
         assert batch.total_tokens >= batch.supervised_tokens
+
+    def test_message_sft_disables_thinking_when_supported(self):
+        tokenizer = _ThinkingTokenizer()
+        examples = [
+            SftExample(
+                messages=[
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "answer"},
+                ]
+            )
+        ]
+
+        tokenize_sft_batch(tokenizer, examples, max_tokens=0)
+
+        assert tokenizer.enable_thinking_values == [False, False]
+
+    def test_message_sft_disables_thinking_for_kwargs_tokenizers(self):
+        tokenizer = _KwargsThinkingTokenizer()
+        examples = [
+            SftExample(
+                messages=[
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "answer"},
+                ]
+            )
+        ]
+
+        tokenize_sft_batch(tokenizer, examples, max_tokens=0)
+
+        assert tokenizer.kwargs_values == [
+            {"enable_thinking": False},
+            {"enable_thinking": False},
+        ]
 
     def test_invalid_jsonl_reports_line_number(self, tmp_path):
         data_path = tmp_path / "bad.jsonl"

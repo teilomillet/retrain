@@ -503,6 +503,7 @@ def _helper_for_model(model: torch.nn.Module, *, train_microbatch_size: int):
     helper._external_engine = False
     helper._train_future = None
     helper.train_microbatch_size = train_microbatch_size
+    helper.train_sft_microbatch_token_budget = 0
     helper.cuda_empty_cache = False
     return helper
 
@@ -582,7 +583,51 @@ def test_sft_train_step_microbatch_local_padding_matches_full_batch_update():
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 
 
+def test_sft_train_step_token_budget_matches_full_batch_update():
+    torch.manual_seed(432)
+    base = _TinyCausalModel()
+    full_model = _TinyCausalModel()
+    budget_model = _TinyCausalModel()
+    full_model.load_state_dict(base.state_dict())
+    budget_model.load_state_dict(base.state_dict())
+
+    tokens = [
+        [1, 2, 3, 4, 5, 6],
+        [1, 3, 4],
+        [2, 4, 5, 6, 7],
+        [1, 2],
+    ]
+    advantages = [
+        [0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0, 1.0],
+        [0.0, 1.0],
+    ]
+
+    full = _helper_for_model(full_model, train_microbatch_size=0)
+    budgeted = _helper_for_model(budget_model, train_microbatch_size=0)
+    budgeted.train_sft_microbatch_token_budget = 8
+    full.sft_loss_fn = "cross_entropy"
+    budgeted.sft_loss_fn = "cross_entropy"
+
+    full_loss = full.sft_train_step(tokens, advantages, lr=0.05, weight_decay=0.0)
+    budget_loss = budgeted.sft_train_step(tokens, advantages, lr=0.05, weight_decay=0.0)
+
+    assert budget_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
+    metrics = budgeted.runtime_metrics()
+    assert metrics["local_train_microbatches"] == 4
+    assert metrics["local_train_global_padded_tokens"] == 24
+    assert metrics["local_train_microbatch_padded_tokens"] == 16
+    assert metrics["local_train_sft_microbatch_token_budget"] == 8
+    for full_param, budget_param in zip(full_model.parameters(), budget_model.parameters()):
+        assert torch.allclose(full_param, budget_param, atol=1e-6)
+
+
 def test_microbatch_padding_stats_preserve_full_batch_when_unsplit():
     assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 0) == (18, 18)
     assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 8) == (18, 18)
     assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 1) == (18, 14)
+    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5, 2], 0, 8) == (
+        24,
+        16,
+    )

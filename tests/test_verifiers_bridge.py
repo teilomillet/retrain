@@ -37,6 +37,25 @@ class _DummyTokenizer:
         return [f"completion-{idx}" for idx, _ids in enumerate(token_ids)]
 
 
+class _KwargsThinkingTokenizer(_DummyTokenizer):
+    def __init__(self):
+        self.kwargs_values = []
+
+    def apply_chat_template(
+        self,
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        **kwargs,
+    ):
+        self.kwargs_values.append(dict(kwargs))
+        return super().apply_chat_template(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+            tokenize=tokenize,
+        )
+
+
 class _RoleTemplateTokenizer:
     role_ids = {
         "system": 1,
@@ -261,6 +280,13 @@ class TestPromptHelpers:
             [{"role": "user", "content": "test prompt"}],
         )
         assert ids == [11, 21]
+
+    def test_encode_prompt_disables_thinking_for_kwargs_tokenizers(self):
+        tok = _KwargsThinkingTokenizer()
+        ids = encode_prompt_for_sampling(tok, [{"role": "user", "content": "task"}])
+
+        assert ids == [11, 21]
+        assert tok.kwargs_values == [{"enable_thinking": False}]
 
     def test_observation_mask_for_prompt_marks_tool_content_span(self):
         tok = _RoleTemplateTokenizer()

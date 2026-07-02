@@ -54,12 +54,15 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "local",
         {
             "train_microbatch_size": "2",
+            "train_sft_microbatch_token_budget": "9500",
             "cuda_empty_cache": "true",
             "sample_use_cache": "false",
             "gradient_checkpointing": "false",
+            "trust_remote_code": "true",
         },
     ) == {
         "train_microbatch_size": 2,
+        "train_sft_microbatch_token_budget": 9500,
         "train_logprob_chunk_size": 0,
         "liger_kernel": True,
         "liger_fused_linear_ce": True,
@@ -76,6 +79,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "train_unsloth_fused_ce_torch_compile": True,
         "train_compile_selective_ce": "off",
         "train_compile_selective_ce_min_tokens": 128,
+        "trust_remote_code": True,
     }
 
 

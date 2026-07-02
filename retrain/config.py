@@ -219,6 +219,8 @@ class TrainConfig:
     sft_max_tokens: int = 0  # 0 = trainer default
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
     sft_loss_fn: str = "auto"  # "auto", "importance_sampling", or "cross_entropy"
+    sft_batch_order: str = "shuffle"  # "shuffle", "length", "length_desc", "length_bucket"
+    sft_length_bucket_size: int = 0  # 0 = full tokenized traversal for length_bucket
 
     # ECHO: same-rollout supervised world-modeling on environment/tool tokens.
     echo_enabled: bool = False
@@ -359,6 +361,21 @@ class TrainConfig:
         if self.sft_loss_fn not in ("auto", "importance_sampling", "cross_entropy"):
             errors.append(
                 "sft_loss_fn must be 'auto', 'importance_sampling', or 'cross_entropy'."
+            )
+        if self.sft_batch_order not in (
+            "shuffle",
+            "length",
+            "length_asc",
+            "length_desc",
+            "length_bucket",
+        ):
+            errors.append(
+                "sft_batch_order must be 'shuffle', 'length', 'length_asc', "
+                "'length_desc', or 'length_bucket'."
+            )
+        if self.sft_length_bucket_size < 0:
+            errors.append(
+                "sft_length_bucket_size must be >= 0. Try: sft_length_bucket_size = 64"
             )
         if self.trainer == "sft" and not self.sft_data_path:
             errors.append(
@@ -702,6 +719,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_max_tokens": "sft_max_tokens",
         "sft_lr": "sft_lr",
         "sft_loss_fn": "sft_loss_fn",
+        "sft_batch_order": "sft_batch_order",
+        "sft_length_bucket_size": "sft_length_bucket_size",
     },
     "echo": {
         "enabled": "echo_enabled",

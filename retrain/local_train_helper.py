@@ -56,6 +56,130 @@ def _selected_linear_ce_logprobs_with_bias(hidden, weight, bias, target_ids):
     return -F.cross_entropy(logits.float(), target_ids, reduction="none")
 
 
+def _apply_static_range_quantization(x, scale, bits=8):
+    scale = scale.to(x.dtype)
+    max_value = 2 ** (bits - 1) - 1
+    min_value = -max_value - 1
+    calibrated = scale != 0
+    safe_scale = torch.where(calibrated, scale, torch.ones_like(scale))
+    x_q = (
+        torch.clamp(
+            torch.round(x / safe_scale),
+            float(min_value),
+            float(max_value),
+        )
+        * safe_scale
+    )
+    return torch.where(calibrated, x_q, x)
+
+
+def _unpack_quantized_weight(weight, num_bits, original_width):
+    if num_bits == 2:
+        packed = weight.to(torch.uint8)
+        v0 = (packed & 0x03).to(torch.int8) - 2
+        v1 = ((packed >> 2) & 0x03).to(torch.int8) - 2
+        v2 = ((packed >> 4) & 0x03).to(torch.int8) - 2
+        v3 = (packed >> 6).to(torch.int8) - 2
+        return torch.stack([v0, v1, v2, v3], dim=-1).reshape(
+            *packed.shape[:-1],
+            -1,
+        )[..., :original_width]
+    if num_bits == 4:
+        packed = weight.to(torch.uint8)
+        low = (packed & 0x0F).to(torch.int8) - 8
+        high = (packed >> 4).to(torch.int8) - 8
+        return torch.stack([low, high], dim=-1).reshape(
+            *packed.shape[:-1],
+            -1,
+        )[..., :original_width]
+    if num_bits == 8:
+        return weight
+    return None
+
+
+def _packed_quantized_linear_target_logprobs(
+    hidden,
+    lm_head,
+    target_ids,
+    *,
+    vocab_chunk_size=8192,
+):
+    """Exact target logprobs for packed Gemma QAT-style QuantizedLinear heads."""
+    num_bits = getattr(lm_head, "num_bits", None)
+    if num_bits not in (2, 4, 8):
+        return None
+
+    weight = getattr(lm_head, "weight", None)
+    weight_scale = getattr(lm_head, "weight_scale", None)
+    in_features = getattr(lm_head, "in_features", None)
+    out_features = getattr(lm_head, "out_features", None)
+    if (
+        weight is None
+        or weight_scale is None
+        or in_features is None
+        or out_features is None
+        or int(hidden.shape[-1]) != int(in_features)
+    ):
+        return None
+
+    flat_hidden = hidden.reshape(-1, hidden.shape[-1])
+    flat_target_ids = target_ids.reshape(-1).long()
+    if flat_hidden.shape[0] != flat_target_ids.numel():
+        return None
+    if flat_target_ids.numel() == 0:
+        return flat_hidden.new_empty(target_ids.shape)
+
+    invalid_targets = (flat_target_ids < 0) | (flat_target_ids >= int(out_features))
+    if bool(invalid_targets.any().item()):
+        raise ValueError("target id is outside the quantized LM head vocabulary.")
+
+    input_scale = getattr(lm_head, "input_activation_scale", None)
+    if input_scale is not None:
+        flat_hidden = _apply_static_range_quantization(flat_hidden, input_scale)
+
+    bias = getattr(lm_head, "bias", None)
+    output_scale = getattr(lm_head, "output_activation_scale", None)
+    vocab_chunk_size = max(1, int(vocab_chunk_size))
+    target_logits = flat_hidden.new_empty(flat_target_ids.shape, dtype=torch.float32)
+    log_denominator = None
+
+    for start in range(0, int(out_features), vocab_chunk_size):
+        stop = min(start + vocab_chunk_size, int(out_features))
+        int_weight = _unpack_quantized_weight(
+            weight[start:stop],
+            int(num_bits),
+            int(in_features),
+        )
+        if int_weight is None:
+            return None
+        dequant_weight = int_weight.to(flat_hidden.dtype) * weight_scale[
+            start:stop
+        ].to(flat_hidden.dtype)
+        chunk_bias = None if bias is None else bias[start:stop].to(flat_hidden.dtype)
+        logits = F.linear(flat_hidden, dequant_weight, chunk_bias)
+        if output_scale is not None:
+            logits = _apply_static_range_quantization(logits, output_scale)
+        logits = logits.float()
+
+        chunk_denominator = torch.logsumexp(logits, dim=-1)
+        if log_denominator is None:
+            log_denominator = chunk_denominator
+        else:
+            log_denominator = torch.logaddexp(log_denominator, chunk_denominator)
+
+        in_chunk = (flat_target_ids >= start) & (flat_target_ids < stop)
+        if bool(in_chunk.any().item()):
+            local_target_ids = flat_target_ids[in_chunk] - start
+            selected_logits = logits[in_chunk].gather(
+                1,
+                local_target_ids.unsqueeze(1),
+            ).squeeze(1)
+            target_logits[in_chunk] = selected_logits
+
+    assert log_denominator is not None
+    return (target_logits - log_denominator).reshape_as(target_ids)
+
+
 def _compute_policy_loss(
     old_logprobs,
     new_logprobs,
@@ -258,6 +382,7 @@ class LocalTrainHelper:
                  clip_cov_min=1.0,
                  clip_cov_max=5.0,
                  train_microbatch_size=0,
+                 train_sft_microbatch_token_budget=0,
                  train_logprob_chunk_size=0,
                  liger_kernel=True,
                  liger_fused_linear_ce=True,
@@ -275,10 +400,12 @@ class LocalTrainHelper:
                  train_unsloth_fused_ce_target_gb=0.0,
                  train_unsloth_fused_ce_torch_compile=True,
                  train_compile_selective_ce="off",
-                 train_compile_selective_ce_min_tokens=128):
+                 train_compile_selective_ce_min_tokens=128,
+                 trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
+        self.trust_remote_code = bool(trust_remote_code)
         self.clip_eps = clip_eps
         self.clip_eps_high = clip_eps_high
         self._clip_fraction = 0.0
@@ -291,6 +418,10 @@ class LocalTrainHelper:
         self._policy_cov_fraction = 0.0
         self._policy_abs_kl = 0.0
         self.train_microbatch_size = max(0, int(train_microbatch_size))
+        self.train_sft_microbatch_token_budget = max(
+            0,
+            int(train_sft_microbatch_token_budget),
+        )
         self.train_logprob_chunk_size = max(0, int(train_logprob_chunk_size))
         self.liger_kernel = bool(liger_kernel)
         self.liger_fused_linear_ce = bool(liger_fused_linear_ce)
@@ -388,6 +519,7 @@ class LocalTrainHelper:
 
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
+        self.amp_dtype = dtype
 
         self._accelerator_metrics = cast(
             dict[str, object],
@@ -478,10 +610,21 @@ class LocalTrainHelper:
             weight_decay=0.0,
         )
 
-        # AMP scaler for mixed precision
-        self.scaler = torch.amp.GradScaler(enabled=self.use_amp)
+        # BF16 autocast does not need loss scaling. Enabling GradScaler for
+        # BF16 can silently skip every optimizer step after scaled-grad overflow.
+        self.scaler = torch.amp.GradScaler(
+            enabled=self.use_amp and self.amp_dtype == torch.float16
+        )
 
         print(f"LocalTrainHelper ready (engine={engine_type}, split_mode={self.split_mode}).")
+
+    def _autocast_context(self):
+        device_type = self.train_device.split(":")[0]
+        return torch.amp.autocast(
+            device_type=device_type,
+            enabled=self.use_amp,
+            dtype=self.amp_dtype if self.use_amp else None,
+        )
 
     def _build_peft_config(self, base_model, lora_rank, lora_alpha, lora_dropout):
         effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
@@ -501,6 +644,7 @@ class LocalTrainHelper:
         base_train = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=dtype,
+            trust_remote_code=self.trust_remote_code,
             **model_kwargs,
         )
         peft_config = self._build_peft_config(
@@ -731,9 +875,19 @@ class LocalTrainHelper:
             "local_gradient_checkpointing_enabled": int(
                 getattr(self, "gradient_checkpointing", False)
             ),
+            "local_train_amp_dtype": str(
+                getattr(self, "amp_dtype", "")
+            ).replace("torch.", ""),
+            "local_train_grad_scaler_enabled": int(
+                bool(getattr(self, "scaler", None))
+                and bool(getattr(self.scaler, "is_enabled", lambda: False)())
+            ),
             "local_sample_use_cache": int(getattr(self, "sample_use_cache", True)),
             "local_train_microbatch_size": int(
                 getattr(self, "train_microbatch_size", 0)
+            ),
+            "local_train_sft_microbatch_token_budget": int(
+                getattr(self, "train_sft_microbatch_token_budget", 0)
             ),
             "local_train_selective_suffix_logits": int(
                 getattr(self, "train_selective_suffix_logits", False)
@@ -804,6 +958,12 @@ class LocalTrainHelper:
             "local_train_chunked_logprob_batches": int(
                 getattr(self, "_loss_path_counts", {}).get("chunked_logprob", 0)
             ),
+            "local_train_packed_quantized_lm_head_batches": int(
+                getattr(self, "_loss_path_counts", {}).get(
+                    "packed_quantized_lm_head",
+                    0,
+                )
+            ),
             "local_train_logits_to_keep_supported": (
                 self._logits_to_keep_supported_metric()
             ),
@@ -828,6 +988,12 @@ class LocalTrainHelper:
             "local_train_selective_compiled_ce_batches": int(
                 getattr(self, "_selective_logprob_path_counts", {}).get(
                     "compiled_ce",
+                    0,
+                )
+            ),
+            "local_train_selective_packed_quantized_lm_head_batches": int(
+                getattr(self, "_selective_logprob_path_counts", {}).get(
+                    "packed_quantized_lm_head",
                     0,
                 )
             ),
@@ -1459,24 +1625,32 @@ class LocalTrainHelper:
             target_ids,
         )
         used_compiled_ce = selected_logprobs is not None
+        used_packed_quantized = False
         if selected_logprobs is None:
-            chunks = []
-            for start in range(0, selected_hidden.shape[0], chunk_size):
-                stop = min(start + chunk_size, selected_hidden.shape[0])
-                logits = lm_head(selected_hidden[start:stop])
-                # cross_entropy is exactly LogSoftmax + NLLLoss for class-index
-                # targets, and avoids materializing the full selected-token
-                # log-probability matrix before gathering one class per row.
-                chunks.append(
-                    -F.cross_entropy(
-                        logits.float(),
-                        target_ids[start:stop],
-                        reduction="none",
+            selected_logprobs = _packed_quantized_linear_target_logprobs(
+                selected_hidden,
+                lm_head,
+                target_ids,
+            )
+            used_packed_quantized = selected_logprobs is not None
+            if selected_logprobs is None:
+                chunks = []
+                for start in range(0, selected_hidden.shape[0], chunk_size):
+                    stop = min(start + chunk_size, selected_hidden.shape[0])
+                    logits = lm_head(selected_hidden[start:stop])
+                    # cross_entropy is exactly LogSoftmax + NLLLoss for class-index
+                    # targets, and avoids materializing the full selected-token
+                    # log-probability matrix before gathering one class per row.
+                    chunks.append(
+                        -F.cross_entropy(
+                            logits.float(),
+                            target_ids[start:stop],
+                            reduction="none",
+                        )
                     )
-                )
-            if not chunks:
-                return None
-            selected_logprobs = torch.cat(chunks, dim=0)
+                if not chunks:
+                    return None
+                selected_logprobs = torch.cat(chunks, dim=0)
         if selected_logprobs.numel() == 0:
             return None
         full = selected_logprobs.new_zeros((input_ids.shape[0], shifted_len))
@@ -1484,6 +1658,8 @@ class LocalTrainHelper:
         self._record_selective_logprob_path("hidden")
         if used_compiled_ce:
             self._record_selective_logprob_path("compiled_ce")
+        if used_packed_quantized:
+            self._record_selective_logprob_path("packed_quantized_lm_head")
         return full
 
     def _shifted_token_logprobs(self, input_ids, attention_mask, target_mask=None):
@@ -1522,6 +1698,14 @@ class LocalTrainHelper:
                 target_ids = input_ids[:, 1:]
                 flat_hidden = shifted_hidden.reshape(-1, shifted_hidden.shape[-1])
                 flat_target_ids = target_ids.reshape(-1)
+                packed_logprobs = _packed_quantized_linear_target_logprobs(
+                    flat_hidden,
+                    lm_head,
+                    flat_target_ids,
+                )
+                if packed_logprobs is not None:
+                    self._record_loss_path("packed_quantized_lm_head")
+                    return packed_logprobs.reshape_as(target_ids)
                 weight = getattr(lm_head, "weight")
                 try:
                     nll = liger_loss(weight, flat_hidden, flat_target_ids)
@@ -1553,6 +1737,15 @@ class LocalTrainHelper:
         hidden_states, lm_head = hidden_and_head
         shifted_hidden = hidden_states[:, :-1, :]
         target_ids = input_ids[:, 1:]
+        packed_logprobs = _packed_quantized_linear_target_logprobs(
+            shifted_hidden,
+            lm_head,
+            target_ids,
+        )
+        if packed_logprobs is not None:
+            self._record_loss_path("packed_quantized_lm_head")
+            return packed_logprobs
+
         chunks = []
         for start in range(0, shifted_hidden.shape[1], chunk_size):
             stop = min(start + chunk_size, shifted_hidden.shape[1])
@@ -1612,7 +1805,7 @@ class LocalTrainHelper:
 
     def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
         """Compute masked policy loss for one already-padded microbatch."""
-        with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
+        with self._autocast_context():
             old_lp = old_logprobs[:, 1:]  # [N, max_len-1]
             adv = advantages[:, 1:]       # [N, max_len-1]
             mask = attention_mask[:, 1:]   # [N, max_len-1] — exclude padding
@@ -1648,7 +1841,7 @@ class LocalTrainHelper:
 
     def _compute_sft_loss(self, input_ids, advantages, attention_mask):
         """Compute weighted next-token cross-entropy for SFT/ECHO datums."""
-        with torch.amp.autocast(device_type=self.train_device.split(":")[0], enabled=self.use_amp):
+        with self._autocast_context():
             weights = torch.clamp(advantages[:, 1:], min=0.0)
             weights = weights * attention_mask[:, 1:].float()
             sft_target_mask = weights > 0
@@ -1864,16 +2057,52 @@ class LocalTrainHelper:
             self._empty_cuda_cache_if_requested()
 
     @staticmethod
-    def _microbatch_padding_stats(lengths, microbatch_size):
+    def _sft_microbatch_ranges(lengths, microbatch_size, token_budget=0):
+        """Return microbatch [start, stop) ranges under count/token limits."""
+        batch_size = len(lengths)
+        if batch_size <= 0:
+            return []
+        max_count = int(microbatch_size or batch_size)
+        max_count = max(1, min(max_count, batch_size))
+        token_budget = max(0, int(token_budget or 0))
+
+        ranges = []
+        start = 0
+        while start < batch_size:
+            stop = start
+            max_len = 0
+            while stop < batch_size and stop - start < max_count:
+                candidate_max = max(max_len, int(lengths[stop]))
+                candidate_count = stop - start + 1
+                candidate_padded = candidate_count * candidate_max
+                if (
+                    token_budget > 0
+                    and stop > start
+                    and candidate_padded > token_budget
+                ):
+                    break
+                max_len = candidate_max
+                stop += 1
+            if stop == start:
+                stop += 1
+            ranges.append((start, stop))
+            start = stop
+        return ranges
+
+    @staticmethod
+    def _microbatch_padding_stats(lengths, microbatch_size, token_budget=0):
         """Return global and microbatch-local padded token counts."""
         if not lengths:
             return 0, 0
         batch_size = len(lengths)
         global_padded = batch_size * max(lengths)
-        microbatch_size = max(1, int(microbatch_size or batch_size))
         microbatch_padded = 0
-        for start in range(0, batch_size, microbatch_size):
-            chunk = lengths[start : start + microbatch_size]
+        for start, stop in LocalTrainHelper._sft_microbatch_ranges(
+            lengths,
+            microbatch_size,
+            token_budget,
+        ):
+            chunk = lengths[start:stop]
             if chunk:
                 microbatch_padded += len(chunk) * max(chunk)
         return global_padded, microbatch_padded
@@ -1927,10 +2156,17 @@ class LocalTrainHelper:
         microbatches = 0
         batch_size = len(all_tokens)
         microbatch_size = self.train_microbatch_size or batch_size
+        token_budget = getattr(self, "train_sft_microbatch_token_budget", 0)
         lengths = [len(row) for row in all_tokens]
         global_padded, microbatch_padded = self._microbatch_padding_stats(
             lengths,
             microbatch_size,
+            token_budget,
+        )
+        microbatch_ranges = self._sft_microbatch_ranges(
+            lengths,
+            microbatch_size,
+            token_budget,
         )
 
         try:
@@ -1945,8 +2181,7 @@ class LocalTrainHelper:
             )
             loss_sum = 0.0
 
-            for start in range(0, batch_size, microbatch_size):
-                stop = min(start + microbatch_size, batch_size)
+            for start, stop in microbatch_ranges:
                 microbatches += 1
                 input_ids, advantages, attention_mask = self._pad_sft_microbatch(
                     all_tokens,
@@ -2034,8 +2269,13 @@ class LocalTrainHelper:
                         "local_train_padding_avoidance_fraction": (
                             avoided / global_padded if global_padded else 0.0
                         ),
+                        "local_train_sft_microbatch_token_budget": int(token_budget),
                     }
                 )
+                if microbatches:
+                    metrics["local_train_sft_avg_microbatch_examples"] = (
+                        batch_size / microbatches
+                    )
             return loss_val
         finally:
             self.optimizer.zero_grad()
@@ -2092,10 +2332,7 @@ class LocalTrainHelper:
 
                 timer = _timer_start(self.train_device)
                 with self._saved_tensors_context():
-                    with torch.amp.autocast(
-                        device_type=self.train_device.split(":")[0],
-                        enabled=self.use_amp,
-                    ):
+                    with self._autocast_context():
                         old_lp = mb_old_logprobs[:, 1:]
                         adv = mb_advantages[:, 1:]
                         mask = mb_attention_mask[:, 1:]
@@ -2378,7 +2615,8 @@ class LocalTrainHelper:
             pg["weight_decay"] = weight_decay
 
         microbatch_size = self.train_microbatch_size or n
-        if microbatch_size < n:
+        token_budget = getattr(self, "train_sft_microbatch_token_budget", 0)
+        if microbatch_size < n or token_budget > 0:
             return self._do_sft_sequence_impl(all_tokens, all_advantages)
 
         token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
@@ -2476,16 +2714,22 @@ class LocalTrainHelper:
         )
 
     def load_state(self, name):
-        """Load adapter weights from a saved checkpoint for resume.
+        """Load adapter weights from a saved checkpoint or adapter directory.
 
         Restores LoRA adapter weights into the train model and re-syncs
         to the inference engine. Optimizer state (Adam momentum/variance)
         is NOT restored — training will re-warm the optimizer.
 
         Args:
-            name: Checkpoint name (subdirectory under adapter_path).
+            name: Checkpoint name under adapter_path, or a direct path to a
+                PEFT adapter directory containing adapter_model.*.
         """
-        save_dir = os.path.join(self.adapter_path, name)
+        candidate_dir = os.fspath(name)
+        direct_weights = (
+            os.path.isfile(os.path.join(candidate_dir, "adapter_model.safetensors"))
+            or os.path.isfile(os.path.join(candidate_dir, "adapter_model.bin"))
+        )
+        save_dir = candidate_dir if direct_weights else os.path.join(self.adapter_path, candidate_dir)
         if not os.path.isdir(save_dir):
             raise FileNotFoundError(
                 f"Adapter checkpoint not found: {save_dir}. "

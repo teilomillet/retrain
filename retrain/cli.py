@@ -1467,6 +1467,8 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         "sft_batch_size": config.sft_batch_size,
         "sft_max_tokens": config.sft_max_tokens,
         "sft_loss_fn": sft_loss_fn,
+        "sft_batch_order": config.sft_batch_order,
+        "sft_length_bucket_size": config.sft_length_bucket_size,
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
         "lr": config.lr,
@@ -1519,7 +1521,8 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
             "  sft           : "
             f"steps={config.max_steps if config.trainer == 'sft' else config.sft_warmup_steps} "
             f"batch={config.sft_batch_size or '(default)'} "
-            f"loss={sft_loss_fn}"
+            f"loss={sft_loss_fn} "
+            f"order={config.sft_batch_order}"
         )
         if config.sft_data_path:
             print(f"  sft_data      : {config.sft_data_path}")

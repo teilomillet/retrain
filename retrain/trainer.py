@@ -48,7 +48,13 @@ from retrain.runtime_support import (
     top_surprisal_entries,
 )
 from retrain.sepa import SEPAStateDict
-from retrain.sft import load_sft_jsonl, tokenize_sft_batch
+from retrain.sft import (
+    build_sft_example_order as _build_tokenized_sft_order,
+    build_sft_tokenized_batch,
+    load_sft_jsonl,
+    select_sft_batch_indices as _select_tokenized_sft_batch_indices,
+    tokenize_sft_dataset,
+)
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
     VerifiersRolloutTiming,
@@ -106,12 +112,7 @@ def _build_sft_example_order(example_count: int, seed: int) -> list[int]:
     which could spend the whole warmup budget on the earliest episodes in the
     JSONL file.
     """
-    if example_count <= 0:
-        return []
-    order = list(range(example_count))
-    rng = random.Random(seed)
-    rng.shuffle(order)
-    return order
+    return _build_tokenized_sft_order(example_count, seed)
 
 
 def _select_sft_batch_indices(
@@ -121,11 +122,11 @@ def _select_sft_batch_indices(
     step: int,
 ) -> list[int]:
     """Select a deterministic SFT warmup batch from the shuffled traversal."""
-    if batch_size <= 0 or not example_order:
-        return []
-    start = step * batch_size
-    size = len(example_order)
-    return [example_order[(start + offset) % size] for offset in range(batch_size)]
+    return _select_tokenized_sft_batch_indices(
+        example_order,
+        batch_size=batch_size,
+        step=step,
+    )
 
 
 def _process_max_rss_mb() -> float | None:
@@ -948,16 +949,35 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # SFT warmup data (load once if configured)
         # -----------------------------------------------------------------------
         sft_examples = []
+        sft_tokenized_examples = []
         sft_example_order: list[int] = []
         if config.sft_warmup_steps > 0 and config.sft_data_path:
             sft_path = Path(config.sft_data_path)
             if sft_path.exists():
                 sft_examples = load_sft_jsonl(sft_path)
-                sft_example_order = _build_sft_example_order(
-                    len(sft_examples),
-                    config.seed,
+                sft_token_limit = (
+                    config.sft_max_tokens
+                    if config.sft_max_tokens > 0
+                    else config.max_tokens + 512
                 )
-                print(f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path}")
+                sft_tokenized_examples = tokenize_sft_dataset(
+                    tokenizer,
+                    sft_examples,
+                    max_tokens=sft_token_limit,
+                )
+                sft_example_order = _build_tokenized_sft_order(
+                    len(sft_tokenized_examples),
+                    config.seed,
+                    lengths=[
+                        example.total_tokens for example in sft_tokenized_examples
+                    ],
+                    batch_order=config.sft_batch_order,
+                    length_bucket_size=config.sft_length_bucket_size,
+                )
+                print(
+                    f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path} "
+                    f"(order={config.sft_batch_order})"
+                )
             else:
                 print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
 
@@ -981,18 +1001,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     batch_size=sft_batch_size,
                     step=batch_idx,
                 )
-                sft_batch = [sft_examples[idx] for idx in sft_batch_indices]
-
-                sft_token_limit = (
-                    config.sft_max_tokens
-                    if config.sft_max_tokens > 0
-                    else config.max_tokens + 512
-                )
-                sft_tokenized = tokenize_sft_batch(
-                    tokenizer,
-                    sft_batch,
-                    max_tokens=sft_token_limit,
-                )
+                sft_batch = [
+                    sft_tokenized_examples[idx] for idx in sft_batch_indices
+                ]
+                sft_tokenized = build_sft_tokenized_batch(sft_batch)
                 sft_tokens_list = sft_tokenized.tokens
                 sft_advantages_list = sft_tokenized.advantages
                 sft_logprobs_list = [[0.0] * len(tokens) for tokens in sft_tokens_list]
@@ -1044,6 +1056,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "datums": len(sft_batch),
                     "tokens": sft_tokenized.total_tokens,
                     "supervised_tokens": sft_tokenized.supervised_tokens,
+                    "sft_batch_order": config.sft_batch_order,
+                    "sft_length_bucket_size": int(config.sft_length_bucket_size),
                     "sft_unique_examples_seen": min(
                         len(sft_examples),
                         (batch_idx + 1) * sft_batch_size,

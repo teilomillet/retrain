@@ -191,6 +191,7 @@ class _FakeSftHelper:
     def __init__(self):
         self.sft_loss_fn = ""
         self.calls = []
+        self.loaded = []
         self.saved = []
         self.shutdown_called = False
 
@@ -214,6 +215,9 @@ class _FakeSftHelper:
         (save_dir / "adapter_model.safetensors").write_text("fake")
         self.saved.append((path, name))
         return str(save_dir)
+
+    def load_state(self, ref):
+        self.loaded.append(ref)
 
     def runtime_metrics(self):
         return {"fake_metric": 1}
@@ -311,6 +315,55 @@ class TestSftRunner:
         )
         assert adapter_manifest["resume"]["from"] == str(log_dir)
         assert result.artifacts["sft_manifest.json"] == str(log_dir / "sft_manifest.json")
+
+    def test_sft_resume_from_loads_initial_adapter(self, tmp_path, monkeypatch):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": "sys"},
+                        {"role": "user", "content": "prompt"},
+                        {"role": "assistant", "content": "answer"},
+                    ]
+                }
+            )
+            + "\n"
+        )
+        adapter_path = tmp_path / "adapter"
+        resume_from = tmp_path / "previous" / "final"
+        log_dir = tmp_path / "logs"
+        helper = _FakeSftHelper()
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=1,
+            batch_size=1,
+            lr=1e-4,
+            model="fake-model",
+            adapter_path=str(adapter_path),
+            resume_from=str(resume_from),
+            log_dir=str(log_dir),
+        )
+
+        result = SftRunner().run(config)
+
+        assert result.ok
+        assert helper.loaded == [str(resume_from)]
+        assert len(helper.calls) == 1
 
     def test_missing_dataset_returns_failed_result(self, tmp_path):
         config = _bare_config(

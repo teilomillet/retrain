@@ -45,6 +45,63 @@ class _TinyHiddenLM(torch.nn.Module):
         return SimpleNamespace(logits=self.lm_head(hidden))
 
 
+def _pack_int2(values: torch.Tensor) -> torch.Tensor:
+    unsigned = (values + 2).to(torch.uint8)
+    pad = (-unsigned.shape[-1]) % 4
+    if pad:
+        unsigned = F.pad(unsigned, (0, pad))
+    return (
+        unsigned[:, 0::4]
+        | (unsigned[:, 1::4] << 2)
+        | (unsigned[:, 2::4] << 4)
+        | (unsigned[:, 3::4] << 6)
+    )
+
+
+class _FakePackedQuantizedHead(torch.nn.Module):
+    def __init__(self, in_features: int = 8, out_features: int = 16) -> None:
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.num_bits = 2
+        int_weight = (
+            torch.arange(out_features * in_features, dtype=torch.int8)
+            .reshape(out_features, in_features)
+            .remainder(4)
+            - 2
+        )
+        self.weight = torch.nn.Parameter(_pack_int2(int_weight), requires_grad=False)
+        self.weight_scale = torch.nn.Parameter(
+            torch.linspace(0.25, 1.0, out_features).unsqueeze(1),
+            requires_grad=False,
+        )
+        self.bias = torch.nn.Parameter(torch.linspace(-0.5, 0.5, out_features))
+        self.input_activation_scale = torch.nn.Parameter(torch.tensor(0.0))
+        self.output_activation_scale = torch.nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        weight = local_mod._unpack_quantized_weight(
+            self.weight,
+            self.num_bits,
+            self.in_features,
+        ).to(hidden.dtype)
+        weight = weight * self.weight_scale.to(hidden.dtype)
+        return F.linear(hidden, weight, self.bias.to(hidden.dtype))
+
+
+class _TinyPackedHiddenLM(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embed = torch.nn.Embedding(16, 8)
+        self.model = _TinyBackbone(self.embed)
+        self.lm_head = _FakePackedQuantizedHead(8, 16)
+
+    def forward(self, input_ids, attention_mask=None, **kwargs):  # noqa: ANN001
+        _ = kwargs
+        hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state
+        return SimpleNamespace(logits=self.lm_head(hidden))
+
+
 class _ScalarLM(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -193,6 +250,72 @@ def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> No
     assert torch.allclose(actual[target_mask], expected[target_mask])
     assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
     assert helper._selective_logprob_path_counts == {"hidden": 1}
+
+
+def test_packed_quantized_lm_head_target_logprobs_match_dense() -> None:
+    torch.manual_seed(123)
+    lm_head = _FakePackedQuantizedHead(in_features=8, out_features=16)
+    hidden = torch.randn(2, 3, 8, requires_grad=True)
+    target_ids = torch.tensor([[0, 5, 15], [3, 8, 12]], dtype=torch.long)
+
+    actual = local_mod._packed_quantized_linear_target_logprobs(
+        hidden,
+        lm_head,
+        target_ids,
+        vocab_chunk_size=5,
+    )
+
+    dense_logits = lm_head(hidden)
+    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
+        2,
+        target_ids.unsqueeze(2),
+    ).squeeze(2)
+
+    assert actual is not None
+    assert torch.allclose(actual, expected, atol=1e-6)
+    (-actual.sum()).backward()
+    assert hidden.grad is not None
+    assert torch.isfinite(hidden.grad).all()
+
+
+def test_selective_hidden_uses_packed_quantized_lm_head_path() -> None:
+    torch.manual_seed(321)
+    model = _TinyPackedHiddenLM()
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.train_selective_suffix_logits = True
+    helper.train_logprob_chunk_size = 1
+    helper.train_compile_selective_ce = "off"
+    helper._train_logits_to_keep_supported = False
+    helper._selective_logprob_path_counts = {}
+
+    input_ids = torch.tensor([[1, 2, 3, 4, 5]], dtype=torch.long)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    target_mask = torch.tensor([[False, False, True, True]])
+
+    actual = helper._shifted_token_logprobs(
+        input_ids,
+        attention_mask,
+        target_mask=target_mask,
+    )
+
+    hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
+    dense_logits = model.lm_head(hidden[:, :-1, :])
+    target_ids = input_ids[:, 1:]
+    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
+        2,
+        target_ids.unsqueeze(2),
+    ).squeeze(2)
+
+    assert torch.allclose(actual[target_mask], expected[target_mask], atol=1e-6)
+    assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
+    assert helper._selective_logprob_path_counts == {
+        "hidden": 1,
+        "packed_quantized_lm_head": 1,
+    }
+    metrics = helper.runtime_metrics()
+    assert metrics["local_train_selective_packed_quantized_lm_head_batches"] == 1
+    assert metrics["local_train_packed_quantized_lm_head_batches"] == 0
 
 
 def test_selective_compile_auto_falls_back_on_cpu() -> None:

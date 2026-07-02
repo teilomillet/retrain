@@ -129,6 +129,10 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             config.backend_options,
             "train_microbatch_size",
         ),
+        train_sft_microbatch_token_budget=_backend_option_int(
+            config.backend_options,
+            "train_sft_microbatch_token_budget",
+        ),
         train_logprob_chunk_size=_backend_option_int(
             config.backend_options,
             "train_logprob_chunk_size",
@@ -178,6 +182,7 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "train_compile_selective_ce_min_tokens",
             128,
         ),
+        trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
     return helper
@@ -422,6 +427,11 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=0,
                 validator=_validate_non_negative_int,
             ),
+            "train_sft_microbatch_token_budget": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
+            ),
             "train_logprob_chunk_size": BackendOptionSpec(
                 value_type=int,
                 default=0,
@@ -475,6 +485,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 default=128,
                 validator=_validate_non_negative_int,
             ),
+            "trust_remote_code": BackendOptionSpec(value_type=bool, default=False),
         },
     ),
     "unsloth": BackendDefinition(

@@ -149,6 +149,12 @@ def test_local_backend_contract(monkeypatch):
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 0
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_sft_microbatch_token_budget"
+        ]
+        == 0
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
@@ -165,6 +171,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         backend="local",
         backend_options={
             "train_microbatch_size": 2,
+            "train_sft_microbatch_token_budget": 9500,
             "cuda_empty_cache": True,
             "sample_use_cache": False,
             "gradient_checkpointing": False,
@@ -176,6 +183,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_unsloth_fused_ce_torch_compile": False,
             "train_compile_selective_ce": "auto",
             "train_compile_selective_ce_min_tokens": 256,
+            "trust_remote_code": True,
         },
         policy_loss_mode="kl_cov",
         kl_cov_percent=0.4,
@@ -185,6 +193,12 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     backend.create("local", cfg)
 
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_microbatch_size"] == 2
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "train_sft_microbatch_token_budget"
+        ]
+        == 9500
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is False
@@ -228,6 +242,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         ]
         == "auto"
     )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["trust_remote_code"] is True
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "train_compile_selective_ce_min_tokens"
