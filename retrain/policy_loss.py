@@ -3,9 +3,8 @@
 import torch
 
 
-def _masked_mean(values, mask):
-    denom = mask.float().sum().clamp(min=1)
-    return (values * mask.float()).sum() / denom
+def _masked_mean(values, mask_float, denom):
+    return (values * mask_float).sum() / denom
 
 
 def compute_policy_loss(
@@ -25,7 +24,10 @@ def compute_policy_loss(
     """Compute policy loss, optionally with covariance-aware entropy control."""
     logprob_delta = new_logprobs - old_logprobs
     ratio = torch.exp(logprob_delta)
-    abs_kl = _masked_mean(logprob_delta.abs(), mask)
+    mask_float = mask.float()
+    mask_sum = mask_float.sum()
+    denom = mask_sum.clamp(min=1)
+    abs_kl = _masked_mean(logprob_delta.abs(), mask_float, denom)
 
     def _standard_loss():
         if clip_eps > 0:
@@ -38,7 +40,7 @@ def compute_policy_loss(
                 clipped = (
                     (ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)
                 ).float()
-                frac = (clipped * mask).sum().item() / mask.sum().clamp(min=1).item()
+                frac = (clipped * mask_float).sum().item() / denom.item()
         else:
             per_token_loss = -(ratio * adv)
             frac = 0.0
@@ -73,14 +75,8 @@ def compute_policy_loss(
                 per_token_loss + kl_cov_coef * logprob_delta.abs(),
                 per_token_loss,
             )
-        cov_fraction = (
-            (cov_selected.float() * mask.float()).sum()
-            / mask.float().sum().clamp(min=1)
-        )
-        masked_loss = (
-            (per_token_loss * mask.float()).sum()
-            / mask.float().sum().clamp(min=1)
-        )
+        cov_fraction = (cov_selected.float() * mask_float).sum() / denom
+        masked_loss = (per_token_loss * mask_float).sum() / denom
         return (
             masked_loss,
             0.0,
@@ -100,8 +96,8 @@ def compute_policy_loss(
         per_token_loss = torch.maximum(pg_loss_unclipped, pg_loss_clipped)
         with torch.no_grad():
             cov_all = (
-                (adv - _masked_mean(adv, mask))
-                * (new_logprobs - _masked_mean(new_logprobs, mask))
+                (adv - _masked_mean(adv, mask_float, denom))
+                * (new_logprobs - _masked_mean(new_logprobs, mask_float, denom))
             )
             eligible = (
                 (mask > 0)
@@ -110,7 +106,7 @@ def compute_policy_loss(
                 & (cov_all < clip_cov_max)
             )
             eligible_idx = torch.nonzero(eligible)
-            clip_num = max(int(float(clip_cov_ratio) * mask.sum().item()), 1)
+            clip_num = max(int(float(clip_cov_ratio) * mask_sum.item()), 1)
             if len(eligible_idx) > 0:
                 perm = torch.randperm(len(eligible_idx), device=eligible_idx.device)
                 selected = eligible_idx[perm[: min(clip_num, len(eligible_idx))]]
@@ -120,14 +116,8 @@ def compute_policy_loss(
             torch.zeros_like(per_token_loss),
             per_token_loss,
         )
-        cov_fraction = (
-            (cov_selected.float() * mask.float()).sum()
-            / mask.float().sum().clamp(min=1)
-        )
-        masked_loss = (
-            (per_token_loss * mask.float()).sum()
-            / mask.float().sum().clamp(min=1)
-        )
+        cov_fraction = (cov_selected.float() * mask_float).sum() / denom
+        masked_loss = (per_token_loss * mask_float).sum() / denom
         cov_fraction_value = float(cov_fraction.detach().item())
         return (
             masked_loss,
@@ -142,8 +132,5 @@ def compute_policy_loss(
         )
 
     per_token_loss, frac = _standard_loss()
-    masked_loss = (
-        (per_token_loss * mask.float()).sum()
-        / mask.float().sum().clamp(min=1)
-    )
+    masked_loss = (per_token_loss * mask_float).sum() / denom
     return masked_loss, frac, 0.0, float(abs_kl.detach().item())
