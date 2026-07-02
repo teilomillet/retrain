@@ -24,9 +24,9 @@ from retrain.inference_engine.pytorch_engine import (
     _sample_next_token,
     _shannon_entropy_from_probs_logprobs,
 )
+from retrain.fast_lora import FastLoRALinearFunction
+from retrain.fast_lora import parse_lora_layers_to_transform
 from retrain.local_train_helper import LocalTrainHelper
-from retrain.local_train_helper import _FastLoRALinearFunction
-from retrain.local_train_helper import _parse_lora_layers_to_transform
 
 
 class _ExistingModel:
@@ -240,16 +240,16 @@ def test_gemma4_lora_targets_scan_unwrapped_peft_model():
 
 
 def test_lora_layers_to_transform_parser_supports_gate_specs():
-    assert _parse_lora_layers_to_transform("", 4) is None
-    assert _parse_lora_layers_to_transform("all", 4) is None
-    assert _parse_lora_layers_to_transform("last:2", 4) == [2, 3]
-    assert _parse_lora_layers_to_transform("first:2", 4) == [0, 1]
-    assert _parse_lora_layers_to_transform("0,2-3", 4) == [0, 2, 3]
+    assert parse_lora_layers_to_transform("", 4) is None
+    assert parse_lora_layers_to_transform("all", 4) is None
+    assert parse_lora_layers_to_transform("last:2", 4) == [2, 3]
+    assert parse_lora_layers_to_transform("first:2", 4) == [0, 1]
+    assert parse_lora_layers_to_transform("0,2-3", 4) == [0, 2, 3]
 
     with pytest.raises(ValueError, match="duplicate"):
-        _parse_lora_layers_to_transform("1,1", 4)
+        parse_lora_layers_to_transform("1,1", 4)
     with pytest.raises(ValueError, match="exceeds 3"):
-        _parse_lora_layers_to_transform("4", 4)
+        parse_lora_layers_to_transform("4", 4)
 
 
 def test_local_peft_config_can_select_qwen_layer_subset():
@@ -359,7 +359,7 @@ def test_fast_lora_linear_matches_dense_lora_forward_and_grad():
     lora_a.grad = None
     lora_b.grad = None
 
-    actual = _FastLoRALinearFunction.apply(
+    actual = FastLoRALinearFunction.apply(
         x,
         weight,
         bias,
@@ -397,7 +397,7 @@ def test_fast_lora_linear_detach_input_matches_dense_detached_lora_grad():
     lora_a.grad = None
     lora_b.grad = None
 
-    actual = _FastLoRALinearFunction.apply(
+    actual = FastLoRALinearFunction.apply(
         x,
         weight,
         bias,
@@ -434,7 +434,7 @@ def test_fast_lora_linear_freeze_a_matches_dense_lora_frozen_a_grad():
     lora_a.grad = None
     lora_b.grad = None
 
-    actual = _FastLoRALinearFunction.apply(
+    actual = FastLoRALinearFunction.apply(
         x,
         weight,
         bias,
