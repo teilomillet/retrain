@@ -1,15 +1,15 @@
-"""Tests for _compute_policy_loss ratio clipping in local_train_helper."""
+"""Tests for policy-loss ratio clipping."""
 
 import pytest
 import torch
 
-from retrain.local_train_helper import _compute_policy_loss
+from retrain.policy_loss import compute_policy_loss
 
 
 def _loss_from_ratio(ratio, adv, mask, *, clip_eps, clip_eps_high):
     old = torch.zeros_like(ratio)
     new = torch.log(ratio)
-    loss, frac, _, _ = _compute_policy_loss(
+    loss, frac, _, _ = compute_policy_loss(
         old,
         new,
         adv,

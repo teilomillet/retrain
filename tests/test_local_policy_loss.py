@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from retrain.local_train_helper import _compute_policy_loss
+from retrain.policy_loss import compute_policy_loss
 
 
 def test_standard_policy_loss_matches_importance_sampling() -> None:
@@ -12,7 +12,7 @@ def test_standard_policy_loss_matches_importance_sampling() -> None:
     adv = torch.tensor([[1.0, -0.5, 0.25]], dtype=torch.float32)
     mask = torch.ones_like(old, dtype=torch.bool)
 
-    loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
+    loss, clip_frac, cov_frac, abs_kl = compute_policy_loss(
         old,
         new,
         adv,
@@ -34,7 +34,7 @@ def test_kl_cov_penalizes_high_covariance_tokens() -> None:
     adv = torch.tensor([[1.0, 2.0, 3.0, 4.0]], dtype=torch.float32)
     mask = torch.ones_like(old, dtype=torch.bool)
 
-    standard_loss, *_ = _compute_policy_loss(
+    standard_loss, *_ = compute_policy_loss(
         old,
         new,
         adv,
@@ -42,7 +42,7 @@ def test_kl_cov_penalizes_high_covariance_tokens() -> None:
         clip_eps=0.0,
         clip_eps_high=0.0,
     )
-    kl_cov_loss, clip_frac, cov_frac, _ = _compute_policy_loss(
+    kl_cov_loss, clip_frac, cov_frac, _ = compute_policy_loss(
         old,
         new,
         adv,
@@ -68,7 +68,7 @@ def test_clip_cov_detaches_selected_covariance_tokens() -> None:
     adv = torch.tensor([[1.0, 2.0, 3.0, 4.0]], dtype=torch.float32)
     mask = torch.ones_like(old, dtype=torch.bool)
 
-    standard_loss, *_ = _compute_policy_loss(
+    standard_loss, *_ = compute_policy_loss(
         old,
         new,
         adv,
@@ -76,7 +76,7 @@ def test_clip_cov_detaches_selected_covariance_tokens() -> None:
         clip_eps=1.0,
         clip_eps_high=1.0,
     )
-    clip_cov_loss, clip_frac, cov_frac, _ = _compute_policy_loss(
+    clip_cov_loss, clip_frac, cov_frac, _ = compute_policy_loss(
         old,
         new,
         adv,
@@ -98,7 +98,7 @@ def test_unknown_policy_loss_mode_raises() -> None:
     values = torch.zeros((1, 1), dtype=torch.float32)
     mask = torch.ones_like(values, dtype=torch.bool)
     with pytest.raises(ValueError, match="policy_loss_mode"):
-        _compute_policy_loss(
+        compute_policy_loss(
             values,
             values,
             values,
