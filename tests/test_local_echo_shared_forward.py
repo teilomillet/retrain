@@ -713,7 +713,8 @@ def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch)
             helper._unsloth_fused_ce_attempts = 1
             helper._record_loss_path("unsloth_fused_ce")
             raise RuntimeError("Hard failure due to fullgraph=True")
-        return helper.train_model.bias * 0.0 + torch.tensor(0.5), torch.tensor(1.0)
+        token_count = (advantages[:, 1:] > 0).sum().clamp(min=1)
+        return helper.train_model.bias * 0.0 + torch.tensor(0.5), token_count
 
     monkeypatch.setattr(helper, "_compute_sft_loss", fake_compute_sft_loss)
 
@@ -724,12 +725,55 @@ def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch)
     )
 
     assert calls == 2
-    assert loss == pytest.approx(0.25)
+    assert loss == pytest.approx(0.5)
     assert helper._unsloth_fused_ce_available is False
     assert helper._unsloth_fused_ce_unavailable_reason == "runtime_RuntimeError"
     assert helper._unsloth_fused_ce_fallback_reason == "runtime_RuntimeError"
     assert helper._unsloth_fused_ce_runtime_disabled is True
     metrics = helper.runtime_metrics()
+    assert metrics["local_train_unsloth_fused_ce_attempts"] == 1
+    assert metrics["local_train_unsloth_fused_ce_batches"] == 0
+
+
+def test_sft_sequence_train_step_auto_retries_after_fused_ce_runtime_failure(
+    monkeypatch,
+) -> None:
+    helper = _helper(_ScalarLM())
+    helper.train_unsloth_fused_ce = "auto"
+    helper.train_microbatch_size = 1
+    helper.train_sft_microbatch_token_budget = 0
+    helper._unsloth_fused_ce_fallback_reason = ""
+    helper._unsloth_fused_ce_unavailable_reason = ""
+    helper._unsloth_fused_ce_available = None
+    helper._unsloth_fused_ce_runtime_disabled = False
+    calls = 0
+
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+        _ = input_ids, advantages, attention_mask
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            helper._unsloth_fused_ce_attempts = 1
+            helper._record_loss_path("unsloth_fused_ce")
+            raise RuntimeError("Hard failure due to fullgraph=True")
+        token_count = (advantages[:, 1:] > 0).sum().clamp(min=1)
+        return helper.train_model.bias * 0.0 + torch.tensor(0.5), token_count
+
+    monkeypatch.setattr(helper, "_compute_sft_loss", fake_compute_sft_loss)
+
+    loss = helper._do_sft_sequence_impl(
+        all_tokens=[[1, 2, 3], [4, 5]],
+        all_advantages=[[0.0, 1.0, 1.0], [0.0, 1.0]],
+    )
+
+    assert calls == 3
+    assert loss == pytest.approx(0.5)
+    assert helper._unsloth_fused_ce_available is False
+    assert helper._unsloth_fused_ce_unavailable_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_fallback_reason == "runtime_RuntimeError"
+    assert helper._unsloth_fused_ce_runtime_disabled is True
+    metrics = helper.runtime_metrics()
+    assert metrics["local_train_microbatches"] == 2
     assert metrics["local_train_unsloth_fused_ce_attempts"] == 1
     assert metrics["local_train_unsloth_fused_ce_batches"] == 0
 

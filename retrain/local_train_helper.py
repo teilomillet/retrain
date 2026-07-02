@@ -1956,6 +1956,58 @@ class LocalTrainHelper:
 
         return loss, token_count
 
+    def _backward_sft_microbatch(
+        self,
+        input_ids,
+        advantages,
+        attention_mask,
+        total_tokens,
+    ):
+        """Backward one SFT microbatch with the optional fused-CE retry policy."""
+        retried_fused_ce_runtime_failure = False
+        forward_s_total = 0.0
+        backward_s_total = 0.0
+        while True:
+            fused_ce_attempts_before = int(
+                getattr(self, "_unsloth_fused_ce_attempts", 0)
+            )
+            loss_counts = getattr(self, "_loss_path_counts", {})
+            fused_ce_batches_before = int(loss_counts.get("unsloth_fused_ce", 0))
+            timer = _timer_start(self.train_device)
+            try:
+                with self._saved_tensors_context():
+                    masked_loss, token_count = self._compute_sft_loss(
+                        input_ids,
+                        advantages,
+                        attention_mask,
+                    )
+                    forward_s_total += _timer_stop(timer)
+                    token_count_value = float(token_count.item())
+                    scaled_loss = masked_loss * (token_count / total_tokens)
+                    timer = _timer_start(self.train_device)
+                    self.scaler.scale(scaled_loss).backward()
+                    backward_s_total += _timer_stop(timer)
+            except Exception as exc:
+                fused_ce_attempted = (
+                    int(getattr(self, "_unsloth_fused_ce_attempts", 0))
+                    > fused_ce_attempts_before
+                )
+                if (
+                    self._is_cuda_oom_exception(exc)
+                    or not fused_ce_attempted
+                    or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
+                    or retried_fused_ce_runtime_failure
+                ):
+                    raise
+                loss_counts = getattr(self, "_loss_path_counts", {})
+                if int(loss_counts.get("unsloth_fused_ce", 0)) > fused_ce_batches_before:
+                    loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
+                self._disable_unsloth_fused_ce_after_runtime_failure(exc)
+                self.optimizer.zero_grad()
+                retried_fused_ce_runtime_failure = True
+                continue
+            return masked_loss, token_count_value, forward_s_total, backward_s_total
+
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
         """Execute training forward/backward/step on pre-prepared tensors.
 
@@ -2068,52 +2120,16 @@ class LocalTrainHelper:
             for start in range(0, batch_size, microbatch_size):
                 stop = min(start + microbatch_size, batch_size)
                 microbatches += 1
-                retried_fused_ce_runtime_failure = False
-                while True:
-                    fused_ce_attempts_before = int(
-                        getattr(self, "_unsloth_fused_ce_attempts", 0)
+                masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
+                    self._backward_sft_microbatch(
+                        input_ids[start:stop],
+                        advantages[start:stop],
+                        attention_mask[start:stop],
+                        total_tokens,
                     )
-                    loss_counts = getattr(self, "_loss_path_counts", {})
-                    fused_ce_batches_before = int(
-                        loss_counts.get("unsloth_fused_ce", 0)
-                    )
-                    timer = _timer_start(self.train_device)
-                    try:
-                        with self._saved_tensors_context():
-                            masked_loss, token_count = self._compute_sft_loss(
-                                input_ids[start:stop],
-                                advantages[start:stop],
-                                attention_mask[start:stop],
-                            )
-                            forward_s += _timer_stop(timer)
-                            token_count_value = float(token_count.item())
-                            scaled_loss = masked_loss * (token_count / total_tokens)
-                            timer = _timer_start(self.train_device)
-                            self.scaler.scale(scaled_loss).backward()
-                            backward_s += _timer_stop(timer)
-                    except Exception as exc:
-                        fused_ce_attempted = (
-                            int(getattr(self, "_unsloth_fused_ce_attempts", 0))
-                            > fused_ce_attempts_before
-                        )
-                        if (
-                            self._is_cuda_oom_exception(exc)
-                            or not fused_ce_attempted
-                            or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
-                            or retried_fused_ce_runtime_failure
-                        ):
-                            raise
-                        loss_counts = getattr(self, "_loss_path_counts", {})
-                        if (
-                            int(loss_counts.get("unsloth_fused_ce", 0))
-                            > fused_ce_batches_before
-                        ):
-                            loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
-                        self._disable_unsloth_fused_ce_after_runtime_failure(exc)
-                        self.optimizer.zero_grad()
-                        retried_fused_ce_runtime_failure = True
-                        continue
-                    break
+                )
+                forward_s += mb_forward_s
+                backward_s += mb_backward_s
                 loss_sum += float(masked_loss.detach().item()) * token_count_value
 
             timer = _timer_start(self.train_device)
@@ -2273,54 +2289,16 @@ class LocalTrainHelper:
                     start,
                     stop,
                 )
-                retried_fused_ce_runtime_failure = False
-                while True:
-                    fused_ce_attempts_before = int(
-                        getattr(self, "_unsloth_fused_ce_attempts", 0)
+                masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
+                    self._backward_sft_microbatch(
+                        input_ids,
+                        advantages,
+                        attention_mask,
+                        total_tokens_value,
                     )
-                    loss_counts = getattr(self, "_loss_path_counts", {})
-                    fused_ce_batches_before = int(
-                        loss_counts.get("unsloth_fused_ce", 0)
-                    )
-                    timer = _timer_start(self.train_device)
-                    try:
-                        with self._saved_tensors_context():
-                            masked_loss, token_count = self._compute_sft_loss(
-                                input_ids,
-                                advantages,
-                                attention_mask,
-                            )
-                            forward_s += _timer_stop(timer)
-                            token_count_value = float(token_count.item())
-                            scaled_loss = masked_loss * (
-                                token_count / total_tokens_value
-                            )
-                            timer = _timer_start(self.train_device)
-                            self.scaler.scale(scaled_loss).backward()
-                            backward_s += _timer_stop(timer)
-                    except Exception as exc:
-                        fused_ce_attempted = (
-                            int(getattr(self, "_unsloth_fused_ce_attempts", 0))
-                            > fused_ce_attempts_before
-                        )
-                        if (
-                            self._is_cuda_oom_exception(exc)
-                            or not fused_ce_attempted
-                            or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
-                            or retried_fused_ce_runtime_failure
-                        ):
-                            raise
-                        loss_counts = getattr(self, "_loss_path_counts", {})
-                        if (
-                            int(loss_counts.get("unsloth_fused_ce", 0))
-                            > fused_ce_batches_before
-                        ):
-                            loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
-                        self._disable_unsloth_fused_ce_after_runtime_failure(exc)
-                        self.optimizer.zero_grad()
-                        retried_fused_ce_runtime_failure = True
-                        continue
-                    break
+                )
+                forward_s += mb_forward_s
+                backward_s += mb_backward_s
                 loss_sum += float(masked_loss.detach().item()) * token_count_value
 
             timer = _timer_start(self.train_device)
