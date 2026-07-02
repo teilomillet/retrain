@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrain.metrics_scan import float_or_none, iter_jsonl_objects
+from retrain.metrics_scan import float_or_none, int_or_none, iter_jsonl_objects
 from retrain.status import format_time
 
 
@@ -99,6 +99,19 @@ def _winner(metric: str, val_a: float, val_b: float) -> str:
         return "<" if val_a < val_b else ">"
     return ">" if val_a > val_b else "<"
 
+
+def _float_metric(row: dict[str, object], key: str, default: float = 0.0) -> float:
+    """Read a required numeric metric for tolerant run comparisons."""
+    value = float_or_none(row.get(key))
+    return default if value is None else value
+
+
+def _int_metric(row: dict[str, object], key: str, default: int = 0) -> int:
+    """Read a required integer metric for tolerant run comparisons."""
+    value = int_or_none(row.get(key))
+    return default if value is None else value
+
+
 def load_metrics(run_dir: Path) -> list[MetricsEntry]:
     """Read metrics.jsonl from a run directory into a list of MetricsEntry."""
     metrics_path = run_dir / "metrics.jsonl"
@@ -109,11 +122,11 @@ def load_metrics(run_dir: Path) -> list[MetricsEntry]:
     for d in iter_jsonl_objects(metrics_path):
         entries.append(
             MetricsEntry(
-                step=d.get("step", 0),
-                loss=d.get("loss", 0.0),
-                correct_rate=d.get("correct_rate", 0.0),
-                mean_reward=d.get("mean_reward", 0.0),
-                step_time_s=d.get("step_time_s", 0.0),
+                step=_int_metric(d, "step"),
+                loss=_float_metric(d, "loss"),
+                correct_rate=_float_metric(d, "correct_rate"),
+                mean_reward=_float_metric(d, "mean_reward"),
+                step_time_s=_float_metric(d, "step_time_s"),
                 sample_time_s=float_or_none(d.get("sample_time_s")),
                 train_time_s=float_or_none(d.get("train_time_s")),
                 tokens_per_second=float_or_none(d.get("tokens_per_second")),

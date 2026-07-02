@@ -76,6 +76,27 @@ class TestLoadMetrics:
         assert loaded[0].step == 0
         assert loaded[1].step == 1
 
+    def test_load_sanitizes_non_numeric_scalars(self, tmp_path):
+        _write_metrics(
+            tmp_path / "run_a",
+            [
+                {
+                    "step": "bad",
+                    "loss": "bad",
+                    "correct_rate": None,
+                    "mean_reward": True,
+                    "step_time_s": {},
+                }
+            ],
+        )
+
+        [loaded] = load_metrics(tmp_path / "run_a")
+        assert loaded.step == 0
+        assert loaded.loss == 0.0
+        assert loaded.correct_rate == 0.0
+        assert loaded.mean_reward == 0.0
+        assert loaded.step_time_s == 0.0
+
 
 class TestSparkline:
     def test_empty(self):
