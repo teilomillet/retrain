@@ -96,7 +96,7 @@ class FastLoRALinearFunction(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             grad_x = grad_flat.matmul(weight.to(compute_dtype))
             if not ctx.detach_lora_input:
-            grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
+                grad_x = grad_x.addmm(grad_lora_hidden, lora_a_compute, alpha=scaling)
             grad_x = grad_x.reshape(x_shape)
         if ctx.needs_input_grad[3] and not ctx.freeze_lora_a:
             assert x is not None
