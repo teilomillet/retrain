@@ -501,6 +501,7 @@ def _helper_for_model(model: torch.nn.Module, *, train_microbatch_size: int):
     helper._clip_fraction = 0.0
     helper.split_mode = False
     helper._external_engine = False
+    helper._train_future = None
     helper.train_microbatch_size = train_microbatch_size
     helper.cuda_empty_cache = False
     return helper
@@ -541,3 +542,47 @@ def test_local_train_step_microbatch_matches_full_batch_update():
     assert metrics["local_train_optimizer_s"] >= 0.0
     for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
+
+
+def test_sft_train_step_microbatch_local_padding_matches_full_batch_update():
+    torch.manual_seed(321)
+    base = _TinyCausalModel()
+    full_model = _TinyCausalModel()
+    micro_model = _TinyCausalModel()
+    full_model.load_state_dict(base.state_dict())
+    micro_model.load_state_dict(base.state_dict())
+
+    tokens = [
+        [1, 2, 3, 4, 5, 6],
+        [1, 3, 4],
+        [2, 4, 5, 6, 7],
+    ]
+    advantages = [
+        [0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0, 1.0, 1.0],
+    ]
+
+    full = _helper_for_model(full_model, train_microbatch_size=0)
+    micro = _helper_for_model(micro_model, train_microbatch_size=1)
+    full.sft_loss_fn = "cross_entropy"
+    micro.sft_loss_fn = "cross_entropy"
+
+    full_loss = full.sft_train_step(tokens, advantages, lr=0.05, weight_decay=0.0)
+    micro_loss = micro.sft_train_step(tokens, advantages, lr=0.05, weight_decay=0.0)
+
+    assert micro_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
+    metrics = micro.runtime_metrics()
+    assert metrics["local_train_microbatches"] == 3
+    assert metrics["local_train_microbatch_local_padding"] == 1
+    assert metrics["local_train_global_padded_tokens"] == 18
+    assert metrics["local_train_microbatch_padded_tokens"] == 14
+    assert metrics["local_train_padding_tokens_avoided"] == 4
+    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+        assert torch.allclose(full_param, micro_param, atol=1e-6)
+
+
+def test_microbatch_padding_stats_preserve_full_batch_when_unsplit():
+    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 0) == (18, 18)
+    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 8) == (18, 18)
+    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 1) == (18, 14)

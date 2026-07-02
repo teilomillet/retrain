@@ -1863,6 +1863,184 @@ class LocalTrainHelper:
             self.optimizer.zero_grad()
             self._empty_cuda_cache_if_requested()
 
+    @staticmethod
+    def _microbatch_padding_stats(lengths, microbatch_size):
+        """Return global and microbatch-local padded token counts."""
+        if not lengths:
+            return 0, 0
+        batch_size = len(lengths)
+        global_padded = batch_size * max(lengths)
+        microbatch_size = max(1, int(microbatch_size or batch_size))
+        microbatch_padded = 0
+        for start in range(0, batch_size, microbatch_size):
+            chunk = lengths[start : start + microbatch_size]
+            if chunk:
+                microbatch_padded += len(chunk) * max(chunk)
+        return global_padded, microbatch_padded
+
+    def _pad_sft_microbatch(self, all_tokens, all_advantages, start, stop):
+        token_tensors = [
+            torch.tensor(t, dtype=torch.long) for t in all_tokens[start:stop]
+        ]
+        adv_tensors = [
+            torch.tensor(a, dtype=torch.float32) for a in all_advantages[start:stop]
+        ]
+
+        input_ids = pad_sequence(
+            token_tensors,
+            batch_first=True,
+            padding_value=0,
+        ).to(self.train_device)
+        advantages = pad_sequence(
+            adv_tensors,
+            batch_first=True,
+            padding_value=0.0,
+        ).to(self.train_device)
+
+        lengths = torch.tensor(
+            [len(t) for t in all_tokens[start:stop]],
+            device=self.train_device,
+        )
+        max_len = input_ids.shape[1]
+        attention_mask = (
+            torch.arange(max_len, device=self.train_device).unsqueeze(0)
+            < lengths.unsqueeze(1)
+        )
+        return input_ids, advantages, attention_mask
+
+    def _do_sft_sequence_impl(self, all_tokens, all_advantages):
+        """Execute one SFT update while padding only each microbatch.
+
+        This preserves the logical batch and optimizer-step semantics of
+        ``_do_sft_impl`` but avoids allocating ``[batch, global_max_len]`` on the
+        training device before microbatching. It targets long-context SFT rows
+        where a single outlier otherwise forces every row to the same width.
+        """
+        self.train_model.train()
+        self.optimizer.zero_grad()
+        wall_start = time.perf_counter()
+        _reset_cuda_peak(self.train_device)
+        forward_s = 0.0
+        backward_s = 0.0
+        optimizer_s = 0.0
+        snapshot_s = 0.0
+        microbatches = 0
+        batch_size = len(all_tokens)
+        microbatch_size = self.train_microbatch_size or batch_size
+        lengths = [len(row) for row in all_tokens]
+        global_padded, microbatch_padded = self._microbatch_padding_stats(
+            lengths,
+            microbatch_size,
+        )
+
+        try:
+            total_tokens_value = float(
+                sum(
+                    1
+                    for row in all_advantages
+                    for value in row[1:]
+                    if value > 0.0
+                )
+                or 1
+            )
+            loss_sum = 0.0
+
+            for start in range(0, batch_size, microbatch_size):
+                stop = min(start + microbatch_size, batch_size)
+                microbatches += 1
+                input_ids, advantages, attention_mask = self._pad_sft_microbatch(
+                    all_tokens,
+                    all_advantages,
+                    start,
+                    stop,
+                )
+                retried_fused_ce_runtime_failure = False
+                while True:
+                    fused_ce_attempts_before = int(
+                        getattr(self, "_unsloth_fused_ce_attempts", 0)
+                    )
+                    loss_counts = getattr(self, "_loss_path_counts", {})
+                    fused_ce_batches_before = int(
+                        loss_counts.get("unsloth_fused_ce", 0)
+                    )
+                    timer = _timer_start(self.train_device)
+                    try:
+                        with self._saved_tensors_context():
+                            masked_loss, token_count = self._compute_sft_loss(
+                                input_ids,
+                                advantages,
+                                attention_mask,
+                            )
+                            forward_s += _timer_stop(timer)
+                            token_count_value = float(token_count.item())
+                            scaled_loss = masked_loss * (
+                                token_count / total_tokens_value
+                            )
+                            timer = _timer_start(self.train_device)
+                            self.scaler.scale(scaled_loss).backward()
+                            backward_s += _timer_stop(timer)
+                    except Exception as exc:
+                        fused_ce_attempted = (
+                            int(getattr(self, "_unsloth_fused_ce_attempts", 0))
+                            > fused_ce_attempts_before
+                        )
+                        if (
+                            self._is_cuda_oom_exception(exc)
+                            or not fused_ce_attempted
+                            or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
+                            or retried_fused_ce_runtime_failure
+                        ):
+                            raise
+                        loss_counts = getattr(self, "_loss_path_counts", {})
+                        if (
+                            int(loss_counts.get("unsloth_fused_ce", 0))
+                            > fused_ce_batches_before
+                        ):
+                            loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
+                        self._disable_unsloth_fused_ce_after_runtime_failure(exc)
+                        self.optimizer.zero_grad()
+                        retried_fused_ce_runtime_failure = True
+                        continue
+                    break
+                loss_sum += float(masked_loss.detach().item()) * token_count_value
+
+            timer = _timer_start(self.train_device)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            optimizer_s += _timer_stop(timer)
+            loss_val = loss_sum / total_tokens_value
+
+            snapshot_s = self._snapshot_lora_weights_if_needed()
+            self._record_train_metrics(
+                kind="sft",
+                wall_start_s=wall_start,
+                forward_s=forward_s,
+                backward_s=backward_s,
+                optimizer_s=optimizer_s,
+                snapshot_s=snapshot_s,
+                microbatches=microbatches,
+                total_tokens=total_tokens_value,
+                batch_size=batch_size,
+            )
+            metrics = getattr(self, "_last_train_metrics", {})
+            if isinstance(metrics, dict):
+                avoided = max(0, global_padded - microbatch_padded)
+                metrics.update(
+                    {
+                        "local_train_microbatch_local_padding": 1,
+                        "local_train_global_padded_tokens": global_padded,
+                        "local_train_microbatch_padded_tokens": microbatch_padded,
+                        "local_train_padding_tokens_avoided": avoided,
+                        "local_train_padding_avoidance_fraction": (
+                            avoided / global_padded if global_padded else 0.0
+                        ),
+                    }
+                )
+            return loss_val
+        finally:
+            self.optimizer.zero_grad()
+            self._empty_cuda_cache_if_requested()
+
     def _do_hybrid_mask_impl(
         self,
         input_ids,
@@ -2198,6 +2376,10 @@ class LocalTrainHelper:
         for pg in self.optimizer.param_groups:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
+
+        microbatch_size = self.train_microbatch_size or n
+        if microbatch_size < n:
+            return self._do_sft_sequence_impl(all_tokens, all_advantages)
 
         token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
         adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
