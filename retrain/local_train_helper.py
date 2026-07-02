@@ -47,6 +47,114 @@ def _masked_mean(values, mask):
     return (values * mask.float()).sum() / denom
 
 
+def _config_value(config, key):
+    if config is None:
+        return None
+    if isinstance(config, dict):
+        return config.get(key)
+    return getattr(config, key, None)
+
+
+def _infer_transformer_layer_count(model):
+    config = getattr(model, "config", None)
+    candidates = [config]
+    for nested_key in ("text_config", "language_config", "llm_config"):
+        nested = _config_value(config, nested_key)
+        if nested is not None:
+            candidates.append(nested)
+
+    for candidate in candidates:
+        for key in ("num_hidden_layers", "n_layer", "num_layers"):
+            value = _config_value(candidate, key)
+            if value is None:
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                return count
+    return 0
+
+
+def _parse_lora_layers_to_transform(spec, layer_count=0):
+    raw = str(spec or "").strip()
+    if not raw or raw.lower() in {"all", "default"}:
+        return None
+
+    normalized = raw.replace(" ", "").lower()
+    if normalized.startswith(("last:", "first:")):
+        mode, raw_count = normalized.split(":", 1)
+        try:
+            count = int(raw_count)
+        except ValueError:
+            raise ValueError(
+                f"Invalid lora_layers_to_transform={raw!r}: expected {mode}:N."
+            ) from None
+        if count <= 0:
+            raise ValueError(
+                f"Invalid lora_layers_to_transform={raw!r}: N must be > 0."
+            )
+        if layer_count <= 0:
+            raise ValueError(
+                f"Invalid lora_layers_to_transform={raw!r}: model layer count is unknown."
+            )
+        if count > layer_count:
+            raise ValueError(
+                f"Invalid lora_layers_to_transform={raw!r}: N exceeds {layer_count} layers."
+            )
+        if mode == "first":
+            return list(range(count))
+        return list(range(layer_count - count, layer_count))
+
+    layers: list[int] = []
+    for part in normalized.split(","):
+        if not part:
+            raise ValueError(
+                f"Invalid lora_layers_to_transform={raw!r}: empty layer entry."
+            )
+        if "-" in part:
+            bounds = part.split("-", 1)
+            if len(bounds) != 2 or not bounds[0] or not bounds[1]:
+                raise ValueError(
+                    f"Invalid lora_layers_to_transform={raw!r}: bad range {part!r}."
+                )
+            try:
+                start, end = (int(bounds[0]), int(bounds[1]))
+            except ValueError:
+                raise ValueError(
+                    f"Invalid lora_layers_to_transform={raw!r}: bad range {part!r}."
+                ) from None
+            if start > end:
+                raise ValueError(
+                    f"Invalid lora_layers_to_transform={raw!r}: range {part!r} is reversed."
+                )
+            layers.extend(range(start, end + 1))
+        else:
+            try:
+                layers.append(int(part))
+            except ValueError:
+                raise ValueError(
+                    f"Invalid lora_layers_to_transform={raw!r}: bad layer {part!r}."
+                ) from None
+
+    if not layers:
+        raise ValueError(f"Invalid lora_layers_to_transform={raw!r}: no layers selected.")
+    if any(layer < 0 for layer in layers):
+        raise ValueError(
+            f"Invalid lora_layers_to_transform={raw!r}: layer ids must be >= 0."
+        )
+    if len(set(layers)) != len(layers):
+        raise ValueError(
+            f"Invalid lora_layers_to_transform={raw!r}: duplicate layer id."
+        )
+    if layer_count > 0 and max(layers) >= layer_count:
+        raise ValueError(
+            f"Invalid lora_layers_to_transform={raw!r}: layer id exceeds {layer_count - 1}."
+        )
+    return layers
+
+
 def _selected_linear_ce_logprobs_no_bias(hidden, weight, target_ids):
     logits = hidden @ weight.T
     return -F.cross_entropy(logits.float(), target_ids, reduction="none")
@@ -405,6 +513,8 @@ class LocalTrainHelper:
                  train_unsloth_fused_ce_torch_compile=True,
                  train_compile_selective_ce="off",
                  train_compile_selective_ce_min_tokens=128,
+                 lora_layers_to_transform="",
+                 lora_layers_pattern="layers",
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -473,6 +583,10 @@ class LocalTrainHelper:
             0,
             int(train_compile_selective_ce_min_tokens),
         )
+        self.lora_layers_to_transform_spec = str(lora_layers_to_transform or "")
+        self.lora_layers_pattern = str(lora_layers_pattern or "layers")
+        self._lora_layers_to_transform: list[int] | None = None
+        self._lora_model_metrics: dict[str, float | int | str] = {}
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int | str] = {}
         self._last_sync_metrics: dict[str, float | int] = {}
@@ -567,6 +681,7 @@ class LocalTrainHelper:
             lora_dropout,
         )
         self._move_train_model_to_device()
+        self._record_lora_model_metrics()
         if hasattr(self.train_model, "print_trainable_parameters"):
             self.train_model.print_trainable_parameters()
 
@@ -653,6 +768,18 @@ class LocalTrainHelper:
 
     def _build_peft_config(self, base_model, lora_rank, lora_alpha, lora_dropout):
         effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
+        layer_count = _infer_transformer_layer_count(base_model)
+        selected_layers = _parse_lora_layers_to_transform(
+            self.lora_layers_to_transform_spec,
+            layer_count,
+        )
+        self._lora_layers_to_transform = selected_layers
+        layer_kwargs = {}
+        if selected_layers is not None:
+            layer_kwargs = {
+                "layers_to_transform": selected_layers,
+                "layers_pattern": self.lora_layers_pattern,
+            }
         return LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             r=lora_rank,
@@ -662,7 +789,39 @@ class LocalTrainHelper:
                 base_model,
                 DEFAULT_LORA_TARGET_MODULES,
             ),
+            **layer_kwargs,
         )
+
+    def _record_lora_model_metrics(self) -> None:
+        model = getattr(self, "train_model", None)
+        named_parameters = getattr(model, "named_parameters", None)
+        if not callable(named_parameters):
+            self._lora_model_metrics = {}
+            return
+        lora_param_count = 0
+        lora_tensor_count = 0
+        trainable_param_count = 0
+        for name, param in named_parameters():
+            numel = int(param.numel())
+            if getattr(param, "requires_grad", False):
+                trainable_param_count += numel
+            if "lora_" in name:
+                lora_param_count += numel
+                lora_tensor_count += 1
+        selected_layers = self._lora_layers_to_transform
+        self._lora_model_metrics = {
+            "local_lora_layer_selection_enabled": int(selected_layers is not None),
+            "local_lora_selected_layer_count": (
+                0 if selected_layers is None else len(selected_layers)
+            ),
+            "local_lora_selected_layers": (
+                "" if selected_layers is None else ",".join(map(str, selected_layers))
+            ),
+            "local_lora_layers_pattern": self.lora_layers_pattern,
+            "local_lora_parameter_count": lora_param_count,
+            "local_lora_parameter_tensor_count": lora_tensor_count,
+            "local_lora_trainable_parameter_count": trainable_param_count,
+        }
 
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
         model_kwargs = from_pretrained_attention_kwargs(self.attention_kernel)
@@ -1107,6 +1266,7 @@ class LocalTrainHelper:
             ),
             "local_prefix_caching": int(getattr(self, "prefix_caching", True)),
         }
+        metrics.update(getattr(self, "_lora_model_metrics", {}))
         metrics.update(getattr(self, "_accelerator_metrics", {}))
         engine = getattr(self, "engine", None)
         if hasattr(engine, "performance_counters"):

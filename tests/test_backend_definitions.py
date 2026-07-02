@@ -61,6 +61,8 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "gradient_checkpointing_use_reentrant": "false",
             "gradient_checkpointing_skip_last_n": "2",
             "cudnn_causal_conv1d_shim": "true",
+            "lora_layers_to_transform": "last:8",
+            "lora_layers_pattern": "layers",
             "trust_remote_code": "true",
         },
     ) == {
@@ -85,6 +87,8 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "train_unsloth_fused_ce_torch_compile": True,
         "train_compile_selective_ce": "off",
         "train_compile_selective_ce_min_tokens": 128,
+        "lora_layers_to_transform": "last:8",
+        "lora_layers_pattern": "layers",
         "trust_remote_code": True,
     }
 

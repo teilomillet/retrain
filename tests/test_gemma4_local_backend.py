@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 import torch.nn.functional as F
+from peft import get_peft_model
+from transformers import Qwen2Config, Qwen2ForCausalLM
 
 from retrain import local_train_helper as local_mod
 from retrain.gemma4_text import (
@@ -22,6 +24,7 @@ from retrain.inference_engine.pytorch_engine import (
     _shannon_entropy_from_probs_logprobs,
 )
 from retrain.local_train_helper import LocalTrainHelper
+from retrain.local_train_helper import _parse_lora_layers_to_transform
 
 
 class _ExistingModel:
@@ -232,6 +235,51 @@ def test_gemma4_lora_targets_scan_unwrapped_peft_model():
         "model.language_model.layers.0.self_attn.k_proj",
         "model.language_model.layers.0.mlp.down_proj",
     ]
+
+
+def test_lora_layers_to_transform_parser_supports_gate_specs():
+    assert _parse_lora_layers_to_transform("", 4) is None
+    assert _parse_lora_layers_to_transform("all", 4) is None
+    assert _parse_lora_layers_to_transform("last:2", 4) == [2, 3]
+    assert _parse_lora_layers_to_transform("first:2", 4) == [0, 1]
+    assert _parse_lora_layers_to_transform("0,2-3", 4) == [0, 2, 3]
+
+    with pytest.raises(ValueError, match="duplicate"):
+        _parse_lora_layers_to_transform("1,1", 4)
+    with pytest.raises(ValueError, match="exceeds 3"):
+        _parse_lora_layers_to_transform("4", 4)
+
+
+def test_local_peft_config_can_select_qwen_layer_subset():
+    model = Qwen2ForCausalLM(
+        Qwen2Config(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=4,
+            num_attention_heads=2,
+            num_key_value_heads=2,
+        )
+    )
+    helper = object.__new__(LocalTrainHelper)
+    helper.lora_layers_to_transform_spec = "last:2"
+    helper.lora_layers_pattern = "layers"
+
+    peft_config = helper._build_peft_config(
+        model,
+        lora_rank=2,
+        lora_alpha=0,
+        lora_dropout=0.0,
+    )
+    wrapped = get_peft_model(model, peft_config)
+    lora_names = [name for name, _ in wrapped.named_parameters() if "lora_" in name]
+
+    assert peft_config.layers_to_transform == [2, 3]
+    assert peft_config.layers_pattern == "layers"
+    assert lora_names
+    assert all(".layers.0." not in name and ".layers.1." not in name for name in lora_names)
+    assert any(".layers.2." in name for name in lora_names)
+    assert any(".layers.3." in name for name in lora_names)
 
 
 def test_gemma4_forward_logits_bypasses_multimodal_wrapper():

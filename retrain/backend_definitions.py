@@ -192,6 +192,12 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             "train_compile_selective_ce_min_tokens",
             128,
         ),
+        lora_layers_to_transform=str(
+            config.backend_options.get("lora_layers_to_transform", "")
+        ),
+        lora_layers_pattern=str(
+            config.backend_options.get("lora_layers_pattern", "layers")
+        ),
         trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
@@ -508,6 +514,14 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=int,
                 default=128,
                 validator=_validate_non_negative_int,
+            ),
+            "lora_layers_to_transform": BackendOptionSpec(
+                value_type=str,
+                default="",
+            ),
+            "lora_layers_pattern": BackendOptionSpec(
+                value_type=str,
+                default="layers",
             ),
             "trust_remote_code": BackendOptionSpec(value_type=bool, default=False),
         },

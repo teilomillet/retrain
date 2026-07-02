@@ -174,6 +174,8 @@ def test_local_backend_contract(monkeypatch):
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cudnn_causal_conv1d_shim"]
         is False
     )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_to_transform"] == ""
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_pattern"] == "layers"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
 
@@ -202,6 +204,8 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_unsloth_fused_ce_torch_compile": False,
             "train_compile_selective_ce": "auto",
             "train_compile_selective_ce_min_tokens": 256,
+            "lora_layers_to_transform": "last:8",
+            "lora_layers_pattern": "layers",
             "trust_remote_code": True,
         },
         policy_loss_mode="kl_cov",
@@ -278,6 +282,14 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         == "auto"
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["trust_remote_code"] is True
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_to_transform"]
+        == "last:8"
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_pattern"]
+        == "layers"
+    )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "train_compile_selective_ce_min_tokens"

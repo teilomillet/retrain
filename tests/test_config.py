@@ -275,12 +275,16 @@ min_prompt_overlap = 0.75
         assert c.lora_dropout == pytest.approx(0.0)
         assert c.backend_options == {
             "train_microbatch_size": 0,
+            "train_sft_microbatch_token_budget": 0,
             "train_logprob_chunk_size": 0,
             "liger_kernel": True,
             "liger_fused_linear_ce": True,
             "cuda_empty_cache": True,
             "sample_use_cache": True,
             "gradient_checkpointing": True,
+            "gradient_checkpointing_use_reentrant": "auto",
+            "gradient_checkpointing_skip_last_n": 0,
+            "cudnn_causal_conv1d_shim": False,
             "train_selective_suffix_logits": False,
             "train_save_on_cpu": False,
             "train_save_on_cpu_pin_memory": True,
@@ -291,6 +295,9 @@ min_prompt_overlap = 0.75
             "train_unsloth_fused_ce_torch_compile": True,
             "train_compile_selective_ce": "off",
             "train_compile_selective_ce_min_tokens": 128,
+            "lora_layers_to_transform": "",
+            "lora_layers_pattern": "layers",
+            "trust_remote_code": False,
         }
         assert c.environment_provider == ""
         assert c.environment_id == ""
