@@ -70,7 +70,6 @@ def _build_config(base: TrainConfig, args: argparse.Namespace) -> TrainConfig:
         attention_kernel=args.attention_kernel,
         seed=args.seed,
         sft_warmup_steps=0,
-        sft_data_path="",
     )
 
 
