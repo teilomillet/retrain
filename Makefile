@@ -1,6 +1,7 @@
 .PHONY: setup build test test-python test-mojo lint typecheck chaos-backend-workflow run clean all
 
 TYPECHECK_PATHS = \
+	retrain/config.py \
 	retrain/type_defs.py \
 	retrain/data.py \
 	retrain/sepa.py \
@@ -13,6 +14,7 @@ TYPECHECK_PATHS = \
 	retrain/policy_loss.py \
 	retrain/qwen35_gated_delta.py \
 	retrain/local_train_helper.py \
+	retrain/flow.py \
 	retrain/trainer.py \
 	retrain/prime_rl_backend.py \
 	retrain/verifiers_bridge.py

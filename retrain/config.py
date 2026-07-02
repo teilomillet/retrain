@@ -813,6 +813,14 @@ _TOML_MAP: dict[str, dict[str, str]] = {
 
 # Resolve annotations to actual types (works with `from __future__ import annotations`)
 _FIELD_TYPES: dict[str, type] = typing.get_type_hints(TrainConfig)
+_MAPPING_OVERRIDE_FIELDS = frozenset(
+    {
+        "backend_options",
+        "algorithm_params",
+        "advantage_params",
+        "transform_params",
+    }
+)
 
 
 _LEGACY_PRIME_RL_KEYS: dict[str, str] = {
@@ -839,16 +847,24 @@ class BackendConfigMigrationResult:
     output_text: str
 
 
+def _as_object_dict(value: object) -> dict[str, object] | None:
+    """Return TOML-style tables as typed object mappings."""
+    if not isinstance(value, dict):
+        return None
+    return typing.cast(dict[str, object], value)
+
+
 def detect_legacy_prime_rl_backend_keys(
     backend_sec: object,
 ) -> dict[str, object]:
     """Detect legacy PRIME-RL keys still present in [backend]."""
-    if not isinstance(backend_sec, dict):
+    backend = _as_object_dict(backend_sec)
+    if backend is None:
         return {}
     return {
-        key: backend_sec[key]
+        key: backend[key]
         for key in _LEGACY_PRIME_RL_KEYS
-        if key in backend_sec
+        if key in backend
     }
 
 
@@ -943,7 +959,8 @@ def migrate_legacy_backend_keys_toml_text(toml_text: str) -> BackendConfigMigrat
             output_text=toml_text,
         )
 
-    if not isinstance(backend_sec, dict):
+    backend = _as_object_dict(backend_sec)
+    if backend is None:
         return BackendConfigMigrationResult(
             changed=False,
             legacy_keys=legacy_keys,
@@ -951,16 +968,17 @@ def migrate_legacy_backend_keys_toml_text(toml_text: str) -> BackendConfigMigrat
             output_text=toml_text,
         )
 
-    existing_opts_raw = backend_sec.get("options", {})
+    existing_opts_raw = backend.get("options", {})
     if existing_opts_raw is None:
         existing_options: dict[str, object] = {}
-    elif isinstance(existing_opts_raw, dict):
-        existing_options = dict(existing_opts_raw)
     else:
-        raise ValueError(
-            "Invalid [backend].options value. "
-            "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
-        )
+        existing_options = _as_object_dict(existing_opts_raw)
+        if existing_options is None:
+            raise ValueError(
+                "Invalid [backend].options value. "
+                "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
+            )
+        existing_options = dict(existing_options)
 
     migrated_options: dict[str, object] = {}
     for old_key, new_key in _LEGACY_PRIME_RL_KEYS.items():
@@ -1035,37 +1053,54 @@ def _extract_backend_options(backend_sec: object) -> dict[str, object] | None:
     """Extract [backend.options] table when present."""
     if backend_sec is None:
         return None
-    if not isinstance(backend_sec, dict):
+    backend = _as_object_dict(backend_sec)
+    if backend is None:
         return None
 
-    legacy_hits = sorted(detect_legacy_prime_rl_backend_keys(backend_sec))
+    legacy_hits = sorted(detect_legacy_prime_rl_backend_keys(backend))
     if legacy_hits:
-        raise _migration_error_for_legacy_prime_rl_keys(backend_sec)
+        raise _migration_error_for_legacy_prime_rl_keys(backend)
 
-    raw_options = backend_sec.get("options")
+    raw_options = backend.get("options")
     if raw_options is None:
         return None
-    if not isinstance(raw_options, dict):
+    options = _as_object_dict(raw_options)
+    if options is None:
         raise ValueError(
             "Invalid [backend].options value. "
             "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
         )
-    return dict(raw_options)
+    return dict(options)
+
+
+def _coerce_mapping_value(field_name: str, raw: object) -> dict[str, object]:
+    """Coerce one mapping-style override."""
+    mapping = _as_object_dict(raw)
+    if mapping is None:
+        raise ValueError(f"{field_name} override must be a mapping of key=value options.")
+    return dict(mapping)
+
+
+def _coerce_int_value(field_name: str, raw: object) -> int:
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, (str, bytes, bytearray, typing.SupportsInt)):
+        return int(raw)
+    raise ValueError(f"Expected int-coercible value for {field_name}, got {type(raw).__name__}")
+
+
+def _coerce_float_value(field_name: str, raw: object) -> float:
+    if isinstance(raw, float):
+        return raw
+    if isinstance(raw, (str, bytes, bytearray, typing.SupportsFloat)):
+        return float(raw)
+    raise ValueError(f"Expected float-coercible value for {field_name}, got {type(raw).__name__}")
 
 
 def _coerce_value(field_name: str, raw: object) -> object:
     """Coerce a CLI string value to the type expected by *field_name*."""
-    if field_name in (
-        "backend_options",
-        "algorithm_params",
-        "advantage_params",
-        "transform_params",
-    ):
-        if not isinstance(raw, dict):
-            raise ValueError(
-                f"{field_name} override must be a mapping of key=value options."
-            )
-        return dict(raw)
+    if field_name in _MAPPING_OVERRIDE_FIELDS:
+        return _coerce_mapping_value(field_name, raw)
 
     if field_name == "plugins_search_paths":
         if isinstance(raw, list):
@@ -1091,25 +1126,16 @@ def _coerce_value(field_name: str, raw: object) -> object:
             raise ValueError(f"Expected string for {field_name}, got {type(raw).__name__}")
         return raw.lower() in ("1", "true", "yes")
     if ftype is int:
-        if isinstance(raw, int):
-            return raw
-        return int(raw)
+        return _coerce_int_value(field_name, raw)
     if ftype is float:
-        if isinstance(raw, float):
-            return raw
-        return float(raw)
+        return _coerce_float_value(field_name, raw)
     return raw
 
 
 # Build CLI flag map: --kebab-case → snake_case field name
 _CLI_FLAG_MAP: dict[str, str] = {}
 for _f in fields(TrainConfig):
-    if _f.name in (
-        "backend_options",
-        "algorithm_params",
-        "advantage_params",
-        "transform_params",
-    ):
+    if _f.name in _MAPPING_OVERRIDE_FIELDS:
         continue
     _CLI_FLAG_MAP["--" + _f.name.replace("_", "-")] = _f.name
 # Explicit alias
@@ -1362,16 +1388,11 @@ def load_config(
     # Apply CLI overrides
     if overrides:
         for field_name, raw_value in overrides.items():
-            if field_name in (
-                "backend_options",
-                "algorithm_params",
-                "advantage_params",
-                "transform_params",
-            ):
+            if field_name in _MAPPING_OVERRIDE_FIELDS:
                 merged = dict(getattr(config, "backend_options", {}))
                 if field_name != "backend_options":
                     merged = dict(getattr(config, field_name, {}))
-                merged.update(_coerce_value(field_name, raw_value))
+                merged.update(_coerce_mapping_value(field_name, raw_value))
                 setattr(config, field_name, merged)
                 continue
             setattr(config, field_name, _coerce_value(field_name, raw_value))

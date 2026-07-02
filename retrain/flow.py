@@ -54,26 +54,37 @@ _SCALAR_BACKEND_DISALLOWED_BUILTIN_ALGORITHM_MODES = frozenset(
     }
 )
 
-_FLOW_PROBE_CASES = (
-    {
-        "rewards_G": [1.0, 0.0],
-        "logprobs_G": [[-0.2, -1.1, -0.4], [-0.3, -0.6, -1.3]],
-        "planning_masks_G": [[0, 1, 0], [1, 0, 1]],
-        "sepa_lambda": 0.7,
-        "step": 7,
-    },
-    {
-        "rewards_G": [0.9, 0.1],
-        "logprobs_G": [[-0.9, -0.1, -0.7], [-0.2, -1.4, -0.3]],
-        "planning_masks_G": [[1, 0, 0], [0, 1, 0]],
-        "sepa_lambda": 0.35,
-        "step": 29,
-    },
-)
 _UNIFORMITY_EPS = 1e-6
 
 
 # ── Data types ───────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class FlowProbeCase:
+    rewards: tuple[float, ...]
+    logprobs: tuple[tuple[float, ...], ...]
+    planning_masks: tuple[tuple[int, ...], ...]
+    sepa_lambda: float
+    step: int
+
+
+_FLOW_PROBE_CASES: tuple[FlowProbeCase, ...] = (
+    FlowProbeCase(
+        rewards=(1.0, 0.0),
+        logprobs=((-0.2, -1.1, -0.4), (-0.3, -0.6, -1.3)),
+        planning_masks=((0, 1, 0), (1, 0, 1)),
+        sepa_lambda=0.7,
+        step=7,
+    ),
+    FlowProbeCase(
+        rewards=(0.9, 0.1),
+        logprobs=((-0.9, -0.1, -0.7), (-0.2, -1.4, -0.3)),
+        planning_masks=((1, 0, 0), (0, 1, 0)),
+        sepa_lambda=0.35,
+        step=29,
+    ),
+)
+
 
 @dataclass
 class TraceIssue:
@@ -294,15 +305,15 @@ def _token_advs_are_uniform(
 
 def _run_probe(
     flow: TrainingFlow,
-    case: dict[str, object],
+    case: FlowProbeCase,
 ) -> AdvantageResult:
     """Run one synthetic probe case through the advantage pipeline."""
     config = flow.config
-    rewards = list(case["rewards_G"])  # type: ignore[arg-type]
-    logprobs = [list(seq) for seq in case["logprobs_G"]]  # type: ignore[union-attr]
-    masks = [list(seq) for seq in case["planning_masks_G"]]  # type: ignore[union-attr]
-    sepa_lambda = float(case["sepa_lambda"])  # type: ignore[arg-type]
-    step = int(case["step"])  # type: ignore[arg-type]
+    rewards = list(case.rewards)
+    logprobs = [list(seq) for seq in case.logprobs]
+    masks = [list(seq) for seq in case.planning_masks]
+    sepa_lambda = case.sepa_lambda
+    step = case.step
 
     # Generate synthetic precomputed entropies when the config requests
     # shannon_entropy and the engine can provide GPU-computed entropy.

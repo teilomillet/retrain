@@ -682,6 +682,13 @@ class TestCLIParsing:
         assert c.backend_options["transport"] == "zmq"
         assert c.backend_options["zmq_port"] == 7777
 
+    def test_numeric_programmatic_overrides_accept_numeric_values(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text("")
+        c = load_config(str(toml), overrides={"max_steps": 42.0, "temperature": 1})
+        assert c.max_steps == 42
+        assert c.temperature == pytest.approx(1.0)
+
     def test_missing_value_exits(self):
         with pytest.raises(SystemExit):
             parse_cli_overrides(["--seed"])
