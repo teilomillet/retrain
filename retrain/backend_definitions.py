@@ -201,6 +201,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         lora_layers_pattern=str(
             config.backend_options.get("lora_layers_pattern", "layers")
         ),
+        lora_detach_input=bool(
+            config.backend_options.get("lora_detach_input", False)
+        ),
         trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", _effective_sft_loss_fn(config))
@@ -530,6 +533,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             "lora_layers_pattern": BackendOptionSpec(
                 value_type=str,
                 default="layers",
+            ),
+            "lora_detach_input": BackendOptionSpec(
+                value_type=bool,
+                default=False,
             ),
             "trust_remote_code": BackendOptionSpec(value_type=bool, default=False),
         },

@@ -315,6 +315,29 @@ def test_local_peft_config_can_select_target_modules():
     assert not any(".up_proj." in name for name in lora_names)
 
 
+def test_lora_detached_input_hook_preserves_weight_grad_but_stops_input_grad():
+    root = torch.nn.Module()
+    branch = torch.nn.Module()
+    branch.lora_A = torch.nn.ModuleDict(
+        {"default": torch.nn.Linear(4, 2, bias=False)}
+    )
+    root.branch = branch
+
+    helper = object.__new__(LocalTrainHelper)
+    helper.train_model = root
+    helper.lora_detach_input = True
+
+    helper._configure_lora_detached_input()
+
+    x = torch.randn(3, 4, requires_grad=True)
+    y = root.branch.lora_A["default"](x).sum()
+    y.backward()
+
+    assert helper._lora_detach_input_hook_count == 1
+    assert root.branch.lora_A["default"].weight.grad is not None
+    assert x.grad is None
+
+
 def test_gemma4_forward_logits_bypasses_multimodal_wrapper():
     model = _FakeGemma4TextModel()
     input_ids = torch.tensor([[1, 2, 3]])

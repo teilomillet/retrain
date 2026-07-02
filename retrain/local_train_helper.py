@@ -516,6 +516,7 @@ class LocalTrainHelper:
                  lora_target_modules="",
                  lora_layers_to_transform="",
                  lora_layers_pattern="layers",
+                 lora_detach_input=False,
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -589,7 +590,10 @@ class LocalTrainHelper:
         )
         self.lora_layers_to_transform_spec = str(lora_layers_to_transform or "")
         self.lora_layers_pattern = str(lora_layers_pattern or "layers")
+        self.lora_detach_input = bool(lora_detach_input)
         self._lora_layers_to_transform: list[int] | None = None
+        self._lora_detach_input_hook_handles = []
+        self._lora_detach_input_hook_count = 0
         self._lora_model_metrics: dict[str, float | int | str] = {}
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int | str] = {}
@@ -684,6 +688,7 @@ class LocalTrainHelper:
             lora_alpha,
             lora_dropout,
         )
+        self._configure_lora_detached_input()
         self._move_train_model_to_device()
         self._record_lora_model_metrics()
         if hasattr(self.train_model, "print_trainable_parameters"):
@@ -837,6 +842,8 @@ class LocalTrainHelper:
             "local_lora_parameter_count": lora_param_count,
             "local_lora_parameter_tensor_count": lora_tensor_count,
             "local_lora_trainable_parameter_count": trainable_param_count,
+            "local_lora_detach_input_enabled": int(self.lora_detach_input),
+            "local_lora_detach_input_hook_count": self._lora_detach_input_hook_count,
         }
 
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
@@ -854,6 +861,35 @@ class LocalTrainHelper:
             lora_dropout,
         )
         return get_peft_model(base_train, peft_config), peft_config
+
+    @staticmethod
+    def _detach_first_tensor_input(_module, inputs):
+        if not inputs:
+            return inputs
+        first = inputs[0]
+        if torch.is_tensor(first):
+            return (first.detach(), *inputs[1:])
+        return inputs
+
+    def _configure_lora_detached_input(self):
+        self._lora_detach_input_hook_handles = []
+        self._lora_detach_input_hook_count = 0
+        if not self.lora_detach_input:
+            return
+        named_modules = getattr(self.train_model, "named_modules", None)
+        if not callable(named_modules):
+            return
+        for name, module in named_modules():
+            if ".lora_A." not in f".{name}.":
+                continue
+            if not torch.is_tensor(getattr(module, "weight", None)):
+                continue
+            register = getattr(module, "register_forward_pre_hook", None)
+            if not callable(register):
+                continue
+            handle = register(self._detach_first_tensor_input)
+            self._lora_detach_input_hook_handles.append(handle)
+        self._lora_detach_input_hook_count = len(self._lora_detach_input_hook_handles)
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)

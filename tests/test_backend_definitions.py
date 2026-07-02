@@ -64,6 +64,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
             "lora_target_modules": "o_proj",
             "lora_layers_to_transform": "last:8",
             "lora_layers_pattern": "layers",
+            "lora_detach_input": "true",
             "trust_remote_code": "true",
         },
     ) == {
@@ -91,6 +92,7 @@ def test_local_backend_options_accept_memory_controls() -> None:
         "lora_target_modules": "o_proj",
         "lora_layers_to_transform": "last:8",
         "lora_layers_pattern": "layers",
+        "lora_detach_input": True,
         "trust_remote_code": True,
     }
 
