@@ -9,6 +9,10 @@ import torch.nn.functional as F
 
 from retrain import local_train_helper as local_mod
 from retrain.local_train_helper import LocalTrainHelper
+from retrain.selective_logprobs import (
+    packed_quantized_linear_target_logprobs,
+    unpack_quantized_weight,
+)
 
 
 class _TinyLM(torch.nn.Module):
@@ -80,7 +84,7 @@ class _FakePackedQuantizedHead(torch.nn.Module):
         self.output_activation_scale = torch.nn.Parameter(torch.tensor(0.0))
 
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
-        weight = local_mod._unpack_quantized_weight(
+        weight = unpack_quantized_weight(
             self.weight,
             self.num_bits,
             self.in_features,
@@ -258,7 +262,7 @@ def test_packed_quantized_lm_head_target_logprobs_match_dense() -> None:
     hidden = torch.randn(2, 3, 8, requires_grad=True)
     target_ids = torch.tensor([[0, 5, 15], [3, 8, 12]], dtype=torch.long)
 
-    actual = local_mod._packed_quantized_linear_target_logprobs(
+    actual = packed_quantized_linear_target_logprobs(
         hidden,
         lm_head,
         target_ids,
