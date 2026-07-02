@@ -9,6 +9,7 @@ TYPECHECK_PATHS = \
 	retrain/backend_definitions.py \
 	retrain/registry.py \
 	retrain/backends.py \
+	retrain/backpressure.py \
 	retrain/fast_lora.py \
 	retrain/selective_logprobs.py \
 	retrain/policy_loss.py \

@@ -11,7 +11,10 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
+
+_IntCoercible: TypeAlias = str | bytes | bytearray | SupportsInt | SupportsIndex
+_FloatCoercible: TypeAlias = str | bytes | bytearray | SupportsFloat | SupportsIndex
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +43,7 @@ def usl_optimal_p(sigma: float, kappa: float) -> float:
 def _clamp_int(value: object, lower: int, upper: int, *, fallback: int) -> int:
     """Best-effort int parsing with bounds and a safe fallback."""
     try:
-        parsed = int(value)
+        parsed = int(cast(_IntCoercible, value))
     except (TypeError, ValueError, OverflowError):
         return fallback
     return max(lower, min(upper, parsed))
@@ -49,7 +52,7 @@ def _clamp_int(value: object, lower: int, upper: int, *, fallback: int) -> int:
 def _nonnegative_float(value: object) -> float:
     """Parse a finite, non-negative float or fall back to 0.0."""
     try:
-        parsed = float(value)
+        parsed = float(cast(_FloatCoercible, value))
     except (TypeError, ValueError, OverflowError):
         return 0.0
     if not math.isfinite(parsed):
