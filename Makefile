@@ -11,6 +11,7 @@ TYPECHECK_PATHS = \
 	retrain/fast_lora.py \
 	retrain/selective_logprobs.py \
 	retrain/policy_loss.py \
+	retrain/qwen35_gated_delta.py \
 	retrain/local_train_helper.py \
 	retrain/trainer.py \
 	retrain/prime_rl_backend.py \

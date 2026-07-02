@@ -32,7 +32,6 @@ from retrain.accelerators import (
     from_pretrained_attention_kwargs,
     install_cudnn_causal_conv1d_shim,
     module_available,
-    patch_qwen35_gated_delta_kernel,
 )
 from retrain.gemma4_text import (
     forward_hidden_states_and_lm_head,
@@ -52,6 +51,7 @@ from retrain.selective_logprobs import (
     selected_linear_ce_logprobs_with_bias as _selected_linear_ce_logprobs_with_bias,
 )
 from retrain.policy_loss import compute_policy_loss as _compute_policy_loss
+from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
 
 
 def _parse_device(device_str):
