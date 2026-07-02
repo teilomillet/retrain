@@ -579,11 +579,8 @@ class LocalTrainHelper:
         # every training segment can use the expandable policy.
         self._configure_cuda_allocator()
 
-        self._accelerator_metrics = cast(
-            dict[str, object],
-            install_cudnn_causal_conv1d_shim(
-                enabled=self.cudnn_causal_conv1d_shim,
-            ),
+        self._accelerator_metrics = install_cudnn_causal_conv1d_shim(
+            enabled=self.cudnn_causal_conv1d_shim,
         )
         self._accelerator_metrics.update(
             cast(
@@ -904,7 +901,8 @@ class LocalTrainHelper:
         try:
             setter = getattr(torch._C, "_accelerator_setAllocatorSettings", None)
             if setter is None:
-                setter = torch.cuda.memory._set_allocator_settings
+                memory = getattr(torch.cuda, "memory")
+                setter = getattr(memory, "_set_allocator_settings")
             setter("expandable_segments:True")
         except Exception as exc:  # noqa: BLE001 - allocator tuning must not kill runs
             metrics["set_failed"] = 1
