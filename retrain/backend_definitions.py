@@ -149,6 +149,10 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
         gradient_checkpointing_use_reentrant=str(
             config.backend_options.get("gradient_checkpointing_use_reentrant", "auto")
         ),
+        gradient_checkpointing_skip_last_n=_backend_option_int(
+            config.backend_options,
+            "gradient_checkpointing_skip_last_n",
+        ),
         cudnn_causal_conv1d_shim=bool(
             config.backend_options.get("cudnn_causal_conv1d_shim", False)
         ),
@@ -452,6 +456,11 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
                 value_type=str,
                 default="auto",
                 choices=("auto", "true", "false"),
+            ),
+            "gradient_checkpointing_skip_last_n": BackendOptionSpec(
+                value_type=int,
+                default=0,
+                validator=_validate_non_negative_int,
             ),
             "cudnn_causal_conv1d_shim": BackendOptionSpec(
                 value_type=bool,

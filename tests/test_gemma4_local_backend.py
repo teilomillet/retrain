@@ -107,6 +107,30 @@ class _CheckpointToggleModel:
         self.enable_kwargs.append(dict(kwargs))
 
 
+class _CheckpointLayer(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gradient_checkpointing = False
+
+
+class _LayerCheckpointModel(torch.nn.Module):
+    def __init__(self, layer_count: int) -> None:
+        super().__init__()
+        self.layers = torch.nn.ModuleList(
+            _CheckpointLayer() for _ in range(layer_count)
+        )
+        self.enable_kwargs: list[dict] = []
+
+    def gradient_checkpointing_enable(self, **kwargs) -> None:
+        self.enable_kwargs.append(dict(kwargs))
+        for layer in self.layers:
+            layer.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self) -> None:
+        for layer in self.layers:
+            layer.gradient_checkpointing = False
+
+
 class _ConstructorFakeModel(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -310,6 +334,29 @@ def test_local_helper_gradient_checkpointing_auto_preserves_legacy_call():
     helper._configure_gradient_checkpointing()
 
     assert model.enable_kwargs == [{}]
+
+
+def test_local_helper_gradient_checkpointing_can_skip_last_layers():
+    model = _LayerCheckpointModel(layer_count=4)
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.train_model = model
+    helper.gradient_checkpointing = True
+    helper.gradient_checkpointing_use_reentrant = "auto"
+    helper.gradient_checkpointing_skip_last_n = 2
+
+    helper._configure_gradient_checkpointing()
+
+    assert [layer.gradient_checkpointing for layer in model.layers] == [
+        True,
+        True,
+        False,
+        False,
+    ]
+    assert helper._gradient_checkpointing_layer_metrics == {
+        "total": 4,
+        "enabled": 2,
+        "skipped_last_n": 2,
+    }
 
 
 def test_local_helper_enables_cache_during_shared_model_sampling():

@@ -391,6 +391,7 @@ class LocalTrainHelper:
                  sample_use_cache=True,
                  gradient_checkpointing=True,
                  gradient_checkpointing_use_reentrant="auto",
+                 gradient_checkpointing_skip_last_n=0,
                  cudnn_causal_conv1d_shim=False,
                  attention_kernel="default",
                  prefix_caching=True,
@@ -435,6 +436,15 @@ class LocalTrainHelper:
         self.gradient_checkpointing_use_reentrant = str(
             gradient_checkpointing_use_reentrant or "auto"
         ).lower()
+        self.gradient_checkpointing_skip_last_n = max(
+            0,
+            int(gradient_checkpointing_skip_last_n),
+        )
+        self._gradient_checkpointing_layer_metrics = {
+            "total": 0,
+            "enabled": 0,
+            "skipped_last_n": 0,
+        }
         self.cudnn_causal_conv1d_shim = bool(cudnn_causal_conv1d_shim)
         self.prefix_caching = bool(prefix_caching)
         self.train_selective_suffix_logits = bool(train_selective_suffix_logits)
@@ -682,6 +692,38 @@ class LocalTrainHelper:
         else:
             model.gradient_checkpointing_enable()
 
+    @staticmethod
+    def _gradient_checkpointing_layers(model):
+        modules = getattr(model, "modules", None)
+        if not callable(modules):
+            return []
+        return [
+            module
+            for module in modules()
+            if module is not model
+            and hasattr(module, "gradient_checkpointing")
+            and isinstance(getattr(module, "gradient_checkpointing"), bool)
+        ]
+
+    def _apply_gradient_checkpointing_layer_policy(self, model) -> None:
+        layers = self._gradient_checkpointing_layers(model)
+        skip_last_n = min(
+            int(getattr(self, "gradient_checkpointing_skip_last_n", 0)),
+            len(layers),
+        )
+        if skip_last_n:
+            for module in layers[-skip_last_n:]:
+                module.gradient_checkpointing = False
+        enabled = sum(
+            int(bool(getattr(module, "gradient_checkpointing", False)))
+            for module in layers
+        )
+        self._gradient_checkpointing_layer_metrics = {
+            "total": len(layers),
+            "enabled": enabled,
+            "skipped_last_n": skip_last_n,
+        }
+
     def _configure_gradient_checkpointing(self):
         # Gradient checkpointing trades compute for VRAM; benchmarks must be
         # able to toggle it because it changes both memory fit and throughput.
@@ -690,8 +732,14 @@ class LocalTrainHelper:
             "gradient_checkpointing_enable",
         ):
             self._enable_gradient_checkpointing(self.train_model)
+            self._apply_gradient_checkpointing_layer_policy(self.train_model)
         elif hasattr(self.train_model, "gradient_checkpointing_disable"):
             self.train_model.gradient_checkpointing_disable()
+            self._gradient_checkpointing_layer_metrics = {
+                "total": len(self._gradient_checkpointing_layers(self.train_model)),
+                "enabled": 0,
+                "skipped_last_n": 0,
+            }
 
     def _liger_fused_linear_ce_loss(self):
         if not (
@@ -901,6 +949,27 @@ class LocalTrainHelper:
             ),
             "local_gradient_checkpointing_use_reentrant": str(
                 getattr(self, "gradient_checkpointing_use_reentrant", "auto")
+            ),
+            "local_gradient_checkpointing_skip_last_n": int(
+                getattr(self, "gradient_checkpointing_skip_last_n", 0)
+            ),
+            "local_gradient_checkpointing_layer_count": int(
+                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
+                    "total",
+                    0,
+                )
+            ),
+            "local_gradient_checkpointing_enabled_layers": int(
+                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
+                    "enabled",
+                    0,
+                )
+            ),
+            "local_gradient_checkpointing_skipped_last_layers": int(
+                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
+                    "skipped_last_n",
+                    0,
+                )
             ),
             "local_train_amp_dtype": str(
                 getattr(self, "amp_dtype", "")
