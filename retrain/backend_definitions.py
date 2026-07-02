@@ -142,6 +142,9 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
             config.backend_options.get("liger_fused_linear_ce", True)
         ),
         cuda_empty_cache=bool(config.backend_options.get("cuda_empty_cache", True)),
+        cuda_expandable_segments=str(
+            config.backend_options.get("cuda_expandable_segments", "auto")
+        ),
         sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),
         gradient_checkpointing=bool(
             config.backend_options.get("gradient_checkpointing", True)
@@ -469,6 +472,10 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             "liger_kernel": BackendOptionSpec(value_type=bool, default=True),
             "liger_fused_linear_ce": BackendOptionSpec(value_type=bool, default=True),
             "cuda_empty_cache": BackendOptionSpec(value_type=bool, default=True),
+            "cuda_expandable_segments": BackendOptionSpec(
+                value_type=str,
+                default="auto",
+            ),
             "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
             "gradient_checkpointing": BackendOptionSpec(value_type=bool, default=True),
             "gradient_checkpointing_use_reentrant": BackendOptionSpec(

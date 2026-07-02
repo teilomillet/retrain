@@ -637,6 +637,7 @@ class LocalTrainHelper:
                  liger_kernel=True,
                  liger_fused_linear_ce=True,
                  cuda_empty_cache=False,
+                 cuda_expandable_segments="auto",
                  sample_use_cache=True,
                  gradient_checkpointing=True,
                  gradient_checkpointing_use_reentrant="auto",
@@ -686,6 +687,14 @@ class LocalTrainHelper:
         self.liger_fused_linear_ce = bool(liger_fused_linear_ce)
         self.attention_kernel = str(attention_kernel or "default")
         self.cuda_empty_cache = bool(cuda_empty_cache)
+        self.cuda_expandable_segments = self._normalize_expandable_segments_mode(
+            cuda_expandable_segments
+        )
+        self._cuda_allocator_metrics = {
+            "enabled": 0,
+            "env_preset": 0,
+            "set_failed": 0,
+        }
         self.sample_use_cache = bool(sample_use_cache)
         self.gradient_checkpointing = bool(gradient_checkpointing)
         self.gradient_checkpointing_use_reentrant = str(
@@ -806,6 +815,10 @@ class LocalTrainHelper:
         self.use_amp = self.train_device != "cpu"
         dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
         self.amp_dtype = dtype
+
+        # Configure the allocator before the first training-model allocation so
+        # every training segment can use the expandable policy.
+        self._configure_cuda_allocator()
 
         self._accelerator_metrics = cast(
             dict[str, object],
@@ -1082,6 +1095,68 @@ class LocalTrainHelper:
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
+
+    @staticmethod
+    def _normalize_expandable_segments_mode(raw) -> str:
+        if isinstance(raw, bool):
+            return "on" if raw else "off"
+        text = str(raw or "auto").strip().lower()
+        aliases = {
+            "0": "off",
+            "false": "off",
+            "no": "off",
+            "none": "off",
+            "disabled": "off",
+            "1": "on",
+            "true": "on",
+            "yes": "on",
+            "enabled": "on",
+        }
+        text = aliases.get(text, text)
+        if text not in {"off", "auto", "on"}:
+            raise ValueError(
+                "cuda_expandable_segments must be 'off', 'auto', or 'on'."
+            )
+        return text
+
+    def _configure_cuda_allocator(self):
+        """Enable expandable CUDA segments in-process when the run needs them.
+
+        The measured fast-LoRA + skip-last-N path OOMs from allocator
+        fragmentation unless ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True``
+        is exported before launch (docs: qwen35 no-offload gate, 2026-07-02).
+        Setting the allocator here removes that env footgun. An operator who
+        already mentions ``expandable_segments`` in ``PYTORCH_CUDA_ALLOC_CONF``
+        or ``PYTORCH_ALLOC_CONF`` keeps their explicit choice.
+        """
+        metrics = {"enabled": 0, "env_preset": 0, "set_failed": 0}
+        self._cuda_allocator_metrics = metrics
+        mode = getattr(self, "cuda_expandable_segments", "off")
+        if mode == "off" or not _is_cuda_device(self.train_device):
+            return
+        for env_name in ("PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"):
+            env_conf = os.environ.get(env_name, "")
+            if "expandable_segments" in env_conf:
+                metrics["env_preset"] = 1
+                metrics["enabled"] = int(
+                    "expandable_segments:true" in env_conf.lower()
+                )
+                return
+        if (
+            mode == "auto"
+            and getattr(self, "gradient_checkpointing_skip_last_n", 0) <= 0
+        ):
+            return
+        try:
+            setter = getattr(torch._C, "_accelerator_setAllocatorSettings", None)
+            if setter is None:
+                setter = torch.cuda.memory._set_allocator_settings
+            setter("expandable_segments:True")
+        except Exception as exc:  # noqa: BLE001 - allocator tuning must not kill runs
+            metrics["set_failed"] = 1
+            print(f"cuda_expandable_segments setup failed: {exc}")
+            return
+        metrics["enabled"] = 1
 
     def _enable_gradient_checkpointing(self, model):
         mode = getattr(self, "gradient_checkpointing_use_reentrant", "auto")
@@ -1368,6 +1443,24 @@ class LocalTrainHelper:
             "local_gradient_checkpointing_skipped_last_layers": int(
                 getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
                     "skipped_last_n",
+                    0,
+                )
+            ),
+            "local_cuda_expandable_segments_enabled": int(
+                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
+                    "enabled",
+                    0,
+                )
+            ),
+            "local_cuda_expandable_segments_env_preset": int(
+                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
+                    "env_preset",
+                    0,
+                )
+            ),
+            "local_cuda_expandable_segments_set_failed": int(
+                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
+                    "set_failed",
                     0,
                 )
             ),

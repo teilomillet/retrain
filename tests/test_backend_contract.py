@@ -156,6 +156,10 @@ def test_local_backend_contract(monkeypatch):
         == 0
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_expandable_segments"]
+        == "auto"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
     assert (
@@ -191,6 +195,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_microbatch_size": 2,
             "train_sft_microbatch_token_budget": 9500,
             "cuda_empty_cache": True,
+            "cuda_expandable_segments": "off",
             "sample_use_cache": False,
             "gradient_checkpointing": False,
             "gradient_checkpointing_use_reentrant": "false",
@@ -226,6 +231,10 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         == 9500
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_empty_cache"] is True
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_expandable_segments"]
+        == "off"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is False
     assert (

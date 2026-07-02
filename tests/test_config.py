@@ -280,6 +280,7 @@ min_prompt_overlap = 0.75
             "liger_kernel": True,
             "liger_fused_linear_ce": True,
             "cuda_empty_cache": True,
+            "cuda_expandable_segments": "auto",
             "sample_use_cache": True,
             "gradient_checkpointing": True,
             "gradient_checkpointing_use_reentrant": "auto",
