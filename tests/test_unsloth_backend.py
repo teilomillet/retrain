@@ -434,6 +434,42 @@ def test_unsloth_helper_can_force_qwen35_gated_delta_chunk(monkeypatch, tmp_path
         helper.shutdown()
 
 
+def test_unsloth_qwen35_auto_keeps_installed_gated_delta_path(monkeypatch, tmp_path):
+    _FakeFastLanguageModel.calls.clear()
+    monkeypatch.setitem(
+        sys.modules,
+        "unsloth",
+        SimpleNamespace(FastLanguageModel=_FakeFastLanguageModel),
+    )
+    monkeypatch.setattr(
+        UnslothTrainHelper,
+        "_qwen35_gated_delta_shared_memory_limit",
+        lambda self: 101376,
+    )
+
+    helper = UnslothTrainHelper(
+        "Qwen/Qwen3.5-2B",
+        str(tmp_path),
+        "cpu",
+        load_in_4bit=True,
+        train_microbatch_size=1,
+        liger_kernel=False,
+        liger_fused_linear_ce=False,
+        qwen35_gated_delta_chunk_size="auto",
+    )
+    try:
+        result = helper.train_model.linear_attn.chunk_gated_delta_rule(marker=True)
+        assert result == "ok"
+        assert "chunk_size" not in helper.train_model.linear_attn.chunk_kwargs[-1]
+        metrics = helper.runtime_metrics()
+        assert metrics["unsloth_qwen35_gated_delta_chunk_size"] == 0
+        assert metrics["unsloth_qwen35_gated_delta_patched_modules"] == 0
+        assert metrics["unsloth_qwen35_gated_delta_torch_fallback"] == 0
+        assert metrics["unsloth_qwen35_gated_delta_shared_memory_limit"] == 101376
+    finally:
+        helper.shutdown()
+
+
 def test_unsloth_helper_moves_non_quantized_models(monkeypatch, tmp_path):
     _FakeFastLanguageModel.calls.clear()
     monkeypatch.setitem(

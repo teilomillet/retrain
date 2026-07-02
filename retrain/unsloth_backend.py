@@ -316,13 +316,10 @@ class UnslothTrainHelper(LocalTrainHelper):
         if text in {"torch", "torch_fallback", "safe"}:
             return "torch", 0
         if text == "auto":
-            shared_limit = self._qwen35_gated_delta_shared_memory_limit()
-            # The default FLA Qwen3.5 chunk kernel needed 131072 bytes in
-            # remote smoke tests; Ada consumer cards such as 4070 Ti expose
-            # 101376 bytes. FLA currently hardcodes chunk_size=64 internally,
-            # so route these cards to the model's torch fallback.
-            if shared_limit and shared_limit < 131072:
-                return "torch", 0
+            # Prefer the model's installed implementation. A 4070 Ti 8k QLoRA
+            # gate showed the forced torch fallback was slower and used more
+            # memory than leaving FLA enabled; explicit "torch" remains the
+            # escape hatch for hosts where the fast path fails.
             return "off", 0
         try:
             value = int(raw)
