@@ -2111,10 +2111,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 wandb_run.log(
                     build_wandb_metrics(
                         step_log,
-                        config=config,
-                        backend_caps=backend_caps,
-                        rollout=rollout_log,
-                        bp_decision=bp_decision,
+                        adv_results=acc.adv_results,
                         batch_norm_metrics=batch_norm_metrics,
                         metrics=metrics,
                     ),

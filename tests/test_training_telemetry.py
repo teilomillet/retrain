@@ -187,10 +187,7 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     )
     wandb = build_wandb_metrics(
         step,
-        config=config,
-        backend_caps=backend_caps,
-        rollout=rollout,
-        bp_decision=bp_decision,
+        adv_results=rollout.adv_results,
         batch_norm_metrics={"adv_batch_mean": 0.0},
         metrics=metrics,
     )
@@ -217,8 +214,88 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     assert wandb["train/echo/kept_tokens"] == 5
     assert wandb["train/behavior/action_dominance"] == pytest.approx(0.75)
     assert wandb["train/tl_grpo_ema_baseline"] == pytest.approx(0.7)
+    assert wandb["train/rewards/mean_reward"] == metrics["mean_reward"]
+    assert wandb["train/backpressure/warmup"] == 0
+    assert type(wandb["train/backpressure/warmup"]) is int
+    assert wandb["train/backend/reports_sync_loss"] == 1
+    assert type(wandb["train/backend/reports_sync_loss"]) is int
 
     assert emergence["correct_count"] == 1
     assert emergence["total_count"] == 2
     assert emergence["dg_eta"] == pytest.approx(0.3)
     assert emergence["post_plan_surprisal_var"] == pytest.approx(0.9)
+
+
+def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:
+    data = StepLogData(
+        step=1,
+        condition_label="grpo+none",
+        loss_value=0.0,
+        echo_loss=0.0,
+        echo_joint_optimizer_step=False,
+        mean_reward=0.0,
+        correct_rate=0.0,
+        running_correct_rate=0.0,
+        max_token_hit_rate=0.0,
+        num_datums=0,
+        step_time=1.0,
+        sample_time=0.0,
+        train_time=0.0,
+        rl_train_time=0.0,
+        echo_train_time=0.0,
+        bp_total_tokens=0,
+        batch_size=1,
+        group_size=1,
+        bp_warmup=True,
+        sepa_lambda=0.0,
+        sepa_gate=False,
+        clip_fraction=0.0,
+        policy_cov_fraction=0.0,
+        policy_abs_kl=0.0,
+        adv_cap_fraction=0.0,
+        adv_cap_magnitude=0.0,
+        tl_grpo_ema=None,
+        surprisal=summarize_surprisal_stats([]),
+    )
+    metrics = {
+        "loss": 0.0,
+        "reported_loss": 0.0,
+        "uncertainty_kind": "surprisal",
+        "loss_is_placeholder": False,
+        "bp_warmup": True,
+        "echo/enabled": 0,
+        "echo/loss": 0.0,
+        "echo/train_time_s": 0.0,
+        "echo/weight": 0.0,
+        "echo/allowed_tokens": 0,
+        "echo/reference_completion_tokens": 0,
+        "echo/completion_surprisal_mean": 0.0,
+        "echo/candidate_datums": 0,
+        "echo/candidate_tokens": 0,
+        "echo/observation_mask_datums": 0,
+        "echo/kept_datums": 0,
+        "echo/kept_tokens": 0,
+        "echo/truncated_tokens": 0,
+        "echo/token_ratio": 0.0,
+        "echo/skipped_low_overlap": 0,
+        "echo/skipped_bad_observation_mask": 0,
+        "echo/skipped_entropy_floor": 0,
+        "echo/entropy_floor": 0.0,
+        "echo/mode_collapse_guard": 0,
+        "rl/train_time_s": 0.0,
+        "rl/completion_tokens": 0,
+        "rl/completion_surprisal_mean": 0.0,
+    }
+
+    wandb = build_wandb_metrics(
+        data,
+        adv_results=[],
+        batch_norm_metrics={},
+        metrics=metrics,
+    )
+
+    assert "exec_surprisal_mean" not in metrics
+    assert wandb["train/surprisal/exec_mean"] == 0.0
+    assert wandb["train/surprisal/post_plan_var"] == 0.0
+    assert wandb["train/backpressure/warmup"] == 1
+    assert type(wandb["train/backpressure/warmup"]) is int

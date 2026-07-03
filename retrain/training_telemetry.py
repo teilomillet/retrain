@@ -52,6 +52,85 @@ _WANDB_BEHAVIOR_METRIC_KEYS = (
     "behavior/avg_response_chars",
 )
 
+_WANDB_METRIC_ALIASES = (
+    ("loss", "train/loss"),
+    ("reported_loss", "train/reported_loss"),
+    ("uncertainty_kind", "train/uncertainty_kind"),
+    ("loss_is_placeholder", "train/loss_is_placeholder"),
+    ("mean_reward", "train/rewards/mean_reward"),
+    ("correct_rate", "train/rewards/correct_rate"),
+    ("running_correct_rate", "train/rewards/running_correct_rate"),
+    ("reward_tie_eligible_groups", "train/rewards/tie_eligible_groups"),
+    ("reward_tie_groups", "train/rewards/tie_groups"),
+    ("reward_uniform_groups", "train/rewards/uniform_groups"),
+    ("reward_tie_group_rate", "train/rewards/tie_group_rate"),
+    ("reward_uniform_group_rate", "train/rewards/uniform_group_rate"),
+    ("reward_tie_pair_rate", "train/rewards/tie_pair_rate"),
+    ("reward_unique_fraction_mean", "train/rewards/unique_fraction_mean"),
+    ("backend_reports_sync_loss", "train/backend/reports_sync_loss"),
+    (
+        "backend_preserves_token_advantages",
+        "train/backend/preserves_token_advantages",
+    ),
+    ("sepa_lambda", "train/sepa_lambda"),
+    ("sepa_gate_open", "train/sepa_gate_open"),
+    ("max_token_hit_rate", "train/max_token_hit_rate"),
+    ("num_datums", "train/num_datums"),
+    ("step_time_s", "train/step_time_s"),
+    ("batch_size", "train/batch_size"),
+    ("group_size", "train/group_size"),
+    ("exec_entropy_mean", "train/entropy/exec_mean"),
+    ("exec_entropy_var", "train/entropy/exec_var"),
+    ("plan_entropy_mean", "train/entropy/plan_mean"),
+    ("plan_entropy_var", "train/entropy/plan_var"),
+    ("exec_surprisal_mean", "train/surprisal/exec_mean"),
+    ("exec_surprisal_var", "train/surprisal/exec_var"),
+    ("plan_surprisal_mean", "train/surprisal/plan_mean"),
+    ("plan_surprisal_var", "train/surprisal/plan_var"),
+    ("post_exec_surprisal_mean", "train/surprisal/post_exec_mean"),
+    ("post_exec_surprisal_var", "train/surprisal/post_exec_var"),
+    ("post_plan_surprisal_mean", "train/surprisal/post_plan_mean"),
+    ("post_plan_surprisal_var", "train/surprisal/post_plan_var"),
+    ("clip_fraction", "train/clip_fraction"),
+    ("policy/cov_fraction", "train/policy_cov_fraction"),
+    ("policy/abs_kl", "train/policy_abs_kl"),
+    ("adv_cap_fraction", "train/adv_cap_fraction"),
+    ("adv_cap_magnitude", "train/adv_cap_magnitude"),
+    ("bp_action", "train/backpressure/action"),
+    ("bp_regime", "train/backpressure/regime"),
+    ("bp_p_star", "train/backpressure/p_star"),
+    ("bp_sigma", "train/backpressure/sigma"),
+    ("bp_kappa", "train/backpressure/kappa"),
+    ("bp_utilization", "train/backpressure/utilization"),
+    ("bp_throughput", "train/backpressure/throughput"),
+    ("bp_warmup", "train/backpressure/warmup"),
+)
+
+_WANDB_INT_SOURCE_KEYS = frozenset(
+    {
+        "loss_is_placeholder",
+        "backend_reports_sync_loss",
+        "backend_preserves_token_advantages",
+        "sepa_gate_open",
+        "bp_warmup",
+    }
+)
+
+_WANDB_SURPRISAL_DEFAULTS = (
+    ("train/entropy/exec_mean", "exec_mean"),
+    ("train/entropy/exec_var", "exec_var"),
+    ("train/entropy/plan_mean", "plan_mean"),
+    ("train/entropy/plan_var", "plan_var"),
+    ("train/surprisal/exec_mean", "exec_mean"),
+    ("train/surprisal/exec_var", "exec_var"),
+    ("train/surprisal/plan_mean", "plan_mean"),
+    ("train/surprisal/plan_var", "plan_var"),
+    ("train/surprisal/post_exec_mean", "post_exec_mean"),
+    ("train/surprisal/post_exec_var", "post_exec_var"),
+    ("train/surprisal/post_plan_mean", "post_plan_mean"),
+    ("train/surprisal/post_plan_var", "post_plan_var"),
+)
+
 
 class RewardTieTelemetry(Protocol):
     eligible_groups: int
@@ -234,6 +313,21 @@ def _add_behavior_metrics(
         )
 
 
+def _wandb_metric_value(source_key: str, value: MetricValue) -> MetricValue:
+    if source_key in _WANDB_INT_SOURCE_KEYS:
+        return int(value)
+    return value
+
+
+def _add_wandb_surprisal_defaults(
+    wandb_metrics: dict[str, MetricValue],
+    data: StepLogData,
+) -> None:
+    for target_key, attr_name in _WANDB_SURPRISAL_DEFAULTS:
+        if target_key not in wandb_metrics:
+            wandb_metrics[target_key] = getattr(data.surprisal, attr_name)
+
+
 def build_step_metrics(
     data: StepLogData,
     *,
@@ -356,68 +450,21 @@ def build_step_metrics(
 def build_wandb_metrics(
     data: StepLogData,
     *,
-    config: TrainConfig,
-    backend_caps: BackendCapabilities,
-    rollout: RolloutTelemetry,
-    bp_decision: BackPressureDecision,
+    adv_results: Sequence[AdvantageResult],
     batch_norm_metrics: Mapping[str, float],
     metrics: Mapping[str, MetricValue],
 ) -> dict[str, MetricValue]:
-    wandb_metrics: dict[str, MetricValue] = {
-        "train/loss": data.loss_value,
-        "train/reported_loss": data.loss_value,
-        "train/uncertainty_kind": config.uncertainty_kind,
-        "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
-        "train/rewards/mean_reward": data.mean_reward,
-        "train/rewards/correct_rate": data.correct_rate,
-        "train/rewards/running_correct_rate": data.running_correct_rate,
-        "train/rewards/tie_eligible_groups": rollout.ties.eligible_groups,
-        "train/rewards/tie_groups": rollout.ties.tie_groups,
-        "train/rewards/uniform_groups": rollout.ties.uniform_groups,
-        "train/rewards/tie_group_rate": rollout.ties.tie_group_rate,
-        "train/rewards/uniform_group_rate": rollout.ties.uniform_group_rate,
-        "train/rewards/tie_pair_rate": rollout.ties.tie_pair_rate,
-        "train/rewards/unique_fraction_mean": rollout.ties.unique_fraction_mean,
-        "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
-        "train/backend/preserves_token_advantages": int(
-            backend_caps.preserves_token_advantages
-        ),
-        "train/sepa_lambda": data.sepa_lambda,
-        "train/sepa_gate_open": int(data.sepa_gate),
-        "train/max_token_hit_rate": data.max_token_hit_rate,
-        "train/num_datums": data.num_datums,
-        "train/step_time_s": data.step_time,
-        "train/batch_size": data.batch_size,
-        "train/group_size": data.group_size,
-        "train/entropy/exec_mean": data.surprisal.exec_mean,
-        "train/entropy/exec_var": data.surprisal.exec_var,
-        "train/entropy/plan_mean": data.surprisal.plan_mean,
-        "train/entropy/plan_var": data.surprisal.plan_var,
-        "train/surprisal/exec_mean": data.surprisal.exec_mean,
-        "train/surprisal/exec_var": data.surprisal.exec_var,
-        "train/surprisal/plan_mean": data.surprisal.plan_mean,
-        "train/surprisal/plan_var": data.surprisal.plan_var,
-        "train/surprisal/post_exec_mean": data.surprisal.post_exec_mean,
-        "train/surprisal/post_exec_var": data.surprisal.post_exec_var,
-        "train/surprisal/post_plan_mean": data.surprisal.post_plan_mean,
-        "train/surprisal/post_plan_var": data.surprisal.post_plan_var,
-        "train/clip_fraction": data.clip_fraction,
-        "train/policy_cov_fraction": data.policy_cov_fraction,
-        "train/policy_abs_kl": data.policy_abs_kl,
-        "train/adv_cap_fraction": data.adv_cap_fraction,
-        "train/adv_cap_magnitude": data.adv_cap_magnitude,
-        "train/backpressure/action": bp_decision.action,
-        "train/backpressure/regime": bp_decision.regime,
-        "train/backpressure/p_star": bp_decision.p_star,
-        "train/backpressure/sigma": bp_decision.sigma,
-        "train/backpressure/kappa": bp_decision.kappa,
-        "train/backpressure/utilization": bp_decision.utilization,
-        "train/backpressure/throughput": bp_decision.throughput,
-        "train/backpressure/warmup": int(data.bp_warmup),
-    }
+    wandb_metrics: dict[str, MetricValue] = {}
+    for source_key, target_key in _WANDB_METRIC_ALIASES:
+        if source_key in metrics:
+            wandb_metrics[target_key] = _wandb_metric_value(
+                source_key,
+                metrics[source_key],
+            )
+    _add_wandb_surprisal_defaults(wandb_metrics, data)
     for key, value in batch_norm_metrics.items():
-        wandb_metrics[f"train/{key}"] = value
-    for key in _advantage_extra_metric_names(rollout.adv_results):
+        wandb_metrics[f"train/{key}"] = metrics.get(key, value)
+    for key in _advantage_extra_metric_names(adv_results):
         wandb_metrics[f"train/{key}"] = metrics.get(key, 0.0)
     for key in _WANDB_ECHO_METRIC_KEYS:
         wandb_metrics[f"train/{key}"] = metrics[key]
