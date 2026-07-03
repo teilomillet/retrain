@@ -10,6 +10,7 @@ import json
 import pytest
 
 from retrain.training.flow import TraceIssue, TraceResult, build_flow
+from retrain.training.console import print_flow_warnings
 from retrain.training.signals import (
     assert_uniform_completion_advantages_for_non_preserving_backend,
 )
@@ -20,7 +21,6 @@ from retrain.training.state import (
     save_trainer_state,
 )
 from retrain.training.trainer import (
-    _print_flow_warnings,
     _run_rl_echo_train_step,
 )
 
@@ -160,7 +160,7 @@ class TestLossDisplaySemantics:
             ]
         )
 
-        _print_flow_warnings(result)
+        print_flow_warnings(result)
 
         out = capsys.readouterr().out
         assert "Training flow warning [compat]: backend caveat" in out

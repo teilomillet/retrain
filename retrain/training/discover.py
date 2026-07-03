@@ -34,10 +34,7 @@ from retrain.training.rollouts import (
     TokenTextLookup,
     decode_sequence_groups,
 )
-from retrain.training.trainer import (
-    _print_backend_capability_summary,
-    _print_config_summary,
-)
+from retrain.training import console
 from retrain.training.state import save_trainer_state
 from retrain.training.signals import (
     CORRECT_THRESHOLD,
@@ -441,7 +438,7 @@ class TTTDiscoverRunner:
                 flush_interval_s=1.0,
             )
 
-            _print_config_summary(config)
+            console.print_config_summary(config)
 
             print("Loading discovery problem...")
             example, verifiers_env, reward_fn = _load_discovery_source(config)
@@ -455,7 +452,7 @@ class TTTDiscoverRunner:
             assert flow.backpressure is not None
             backpressure = flow.backpressure
             backend_caps = flow.backend_capabilities
-            _print_backend_capability_summary(
+            console.print_backend_capability_summary(
                 config.backend,
                 flow.backend_capability_source,
                 backend_caps.reports_sync_loss,

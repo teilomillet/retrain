@@ -1591,6 +1591,7 @@ ARCHITECTURE
         +-- validate/            Defaults, bounds, modes, runtime checks, warnings
     +-- types.py                 Shared type aliases
     +-- training/                Training loop and support modules
+        +-- console.py           Terminal summaries for training runs
         +-- trainer.py           Main RL loop
         +-- discover.py          Test-time training over one problem
         +-- runner.py            TrainingRunner protocol and built-in runners

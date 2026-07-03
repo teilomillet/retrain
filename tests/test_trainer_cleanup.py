@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from retrain.config import TrainConfig
+from retrain.training import console as console_mod
 from retrain.training import trainer as trainer_mod
 from retrain.training.flow import TraceIssue, TraceResult
 
@@ -78,7 +79,7 @@ def test_train_shuts_down_backend_when_flow_trace_fails(tmp_path, monkeypatch) -
         "build_flow",
         lambda *args, **kwargs: _BadFlow(backend),
     )
-    monkeypatch.setattr(trainer_mod, "_print_config_summary", lambda config: None)
+    monkeypatch.setattr(console_mod, "print_config_summary", lambda config: None)
     config = TrainConfig(
         log_dir=str(tmp_path / "logs"),
         adapter_path=str(tmp_path / "adapter"),
@@ -104,10 +105,10 @@ def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -
         "from_pretrained",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    monkeypatch.setattr(trainer_mod, "_print_config_summary", lambda config: None)
+    monkeypatch.setattr(console_mod, "print_config_summary", lambda config: None)
     monkeypatch.setattr(
-        trainer_mod,
-        "_print_backend_capability_summary",
+        console_mod,
+        "print_backend_capability_summary",
         lambda *args, **kwargs: None,
     )
 

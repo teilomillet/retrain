@@ -23,7 +23,6 @@ from retrain.backends import (
     EntropySamplingHelper,
     TrainHelper,
 )
-from retrain.backends.catalog import BackendCapabilities
 from retrain.training.backpressure import (
     StepObservation,
 )
@@ -40,6 +39,7 @@ from retrain.training.flow import (
     _condition_label,
     build_flow,
 )
+from retrain.training import console
 from retrain.io.log import JsonlLogger
 from retrain.planning.types import PlanningDetector
 from retrain.registry.builtin import get_registry
@@ -231,104 +231,6 @@ def _add_echo_build_stats(
             left.skipped_bad_observation_mask + right.skipped_bad_observation_mask
         ),
     )
-
-
-def _print_config_summary(config: TrainConfig) -> None:
-    """Print a bordered summary of key config values at train start."""
-    lines = [
-        f"  model         : {config.model}",
-        f"  backend       : {config.backend}",
-        f"  algorithm     : {_condition_label(config)}",
-        f"  batch_size    : {config.batch_size}",
-        f"  group_size    : {config.group_size}",
-        f"  max_steps     : {config.max_steps}",
-        f"  lr            : {config.lr}" + (f"  (sft_lr: {config.sft_lr})" if config.sft_lr > 0 else ""),
-        f"  lora_rank     : {config.lora_rank}",
-        f"  max_tokens    : {config.max_tokens}",
-        f"  temperature   : {config.temperature}",
-        f"  seed          : {config.seed}",
-        f"  adapter_path  : {config.adapter_path}",
-    ]
-    if config.wandb_project:
-        lines.append(f"  wandb         : {config.wandb_project}")
-    if config.resume_from:
-        lines.append(f"  resume_from   : {config.resume_from}")
-    if config.echo_enabled:
-        lines.append(
-            "  echo          : "
-            f"on weight={config.echo_weight} "
-            f"cap={config.echo_max_tokens_per_step} "
-            f"ratio={config.echo_max_token_ratio}"
-        )
-    width = max(len(l) for l in lines) + 2
-    sep = "-" * width
-    print(sep)
-    for l in lines:
-        print(l)
-    print(sep)
-
-
-def _print_backend_capability_summary(
-    backend_name: str,
-    source: str,
-    reports_sync_loss: bool,
-    preserves_token_advantages: bool,
-    supports_checkpoint_resume: bool,
-    resume_runtime_dependent: bool,
-) -> None:
-    """Print backend capability metadata for run-time diagnostics."""
-    print(
-        "Backend capabilities: "
-        f"backend={backend_name}, "
-        f"source={source}, "
-        f"reports_sync_loss={reports_sync_loss}, "
-        f"preserves_token_advantages={preserves_token_advantages}, "
-        f"supports_checkpoint_resume={supports_checkpoint_resume}, "
-        f"resume_runtime_dependent={resume_runtime_dependent}"
-    )
-    if not reports_sync_loss:
-        print("Backend note: loss is reported as placeholder by backend design.")
-
-
-def _print_flow_warnings(trace_result: object) -> None:
-    """Print non-fatal training-flow warnings before setup starts."""
-    for issue in getattr(trace_result, "issues", []):
-        if getattr(issue, "severity", "") != "warning":
-            continue
-        category = getattr(issue, "category", "config")
-        message = getattr(issue, "message", str(issue))
-        print(f"Training flow warning [{category}]: {message}")
-
-
-def _print_group_summary(rewards: list[float], answer: str) -> None:
-    correct = sum(1 for r in rewards if r > CORRECT_THRESHOLD)
-    print(f"  group: {correct}/{len(rewards)} correct | answer={answer[:40]}")
-
-
-def _keep_uniform_group(
-    rewards: list[float],
-    *,
-    batch_advantage_norm: bool,
-    keep_for_echo: bool,
-) -> bool:
-    """Print the disposition of an all-same-reward group; False → skip it.
-
-    With batch_advantage_norm, uniform groups are kept — cross-group
-    reward differences still provide signal after batch normalization.
-    ECHO keeps them too: its datums come from observation tokens, not
-    reward contrast.
-    """
-    if batch_advantage_norm:
-        print(f"    -> uniform (reward={rewards[0]:.3f}, kept for batch norm)")
-        return True
-    if keep_for_echo:
-        print(f"    -> uniform (reward={rewards[0]:.3f}, kept for ECHO)")
-        return True
-    if rewards[0] > CORRECT_THRESHOLD:
-        print("    -> skipped (all correct)")
-    else:
-        print(f"    -> skipped (all same, reward={rewards[0]:.3f})")
-    return False
 
 
 @dataclass
@@ -572,10 +474,10 @@ def _run_multiturn_rollouts(
                     + (1 - config.tl_grpo_ema_decay) * r
                 )
 
-        _print_group_summary(rewards_G, answer)
+        console.print_group_summary(rewards_G, answer)
         reward_tie_stats = acc.ties.observe(rewards_G)
         if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-            if not _keep_uniform_group(
+            if not console.keep_uniform_group(
                 rewards_G,
                 batch_advantage_norm=config.batch_advantage_norm,
                 keep_for_echo=config.echo_enabled,
@@ -884,10 +786,10 @@ def _run_singleturn_rollouts(
             if len(sample.token_ids) >= config.max_tokens:
                 acc.max_token_hits += 1
 
-        _print_group_summary(rewards_G, answer)
+        console.print_group_summary(rewards_G, answer)
         reward_tie_stats = acc.ties.observe(rewards_G)
         if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-            if not _keep_uniform_group(
+            if not console.keep_uniform_group(
                 rewards_G,
                 batch_advantage_norm=config.batch_advantage_norm,
                 keep_for_echo=False,
@@ -966,7 +868,7 @@ def _run_singleturn_rollouts(
 def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     """Main training loop -- fully self-contained. Returns final adapter path."""
 
-    _print_config_summary(config)
+    console.print_config_summary(config)
 
     # -----------------------------------------------------------------------
     # 0a. Build and validate flow
@@ -983,7 +885,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     pass
             msgs = [i.message for i in trace_result.issues if i.severity == "error"]
             raise ValueError("Training flow validation failed:\n" + "\n".join(msgs))
-        _print_flow_warnings(trace_result)
+        console.print_flow_warnings(trace_result)
 
     # -----------------------------------------------------------------------
     # 0. Setup directories + loggers
@@ -1056,7 +958,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         helper = flow.backend
         assert helper is not None
         backend_caps = flow.backend_capabilities
-        _print_backend_capability_summary(
+        console.print_backend_capability_summary(
             config.backend,
             flow.backend_capability_source,
             backend_caps.reports_sync_loss,

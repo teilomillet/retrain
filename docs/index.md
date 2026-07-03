@@ -39,6 +39,7 @@ retrain
 │   └── validate/       # Defaults, bounds, modes, runtime checks, warnings
 ├── types.py            # Shared type aliases
 ├── training/           # The training loop and its support modules
+│   ├── console.py      # Terminal summaries for training runs
 │   ├── trainer.py      # Main RL loop: sample, score, compute advantages, train
 │   ├── discover.py     # Test-time training over a single problem
 │   ├── runner.py       # TrainingRunner protocol + built-in runners

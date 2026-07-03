@@ -52,6 +52,7 @@ retrain/
     validate/
   types.py
   training/
+    console.py
     trainer.py
     discover.py
     runner.py
@@ -204,6 +205,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `registry/`: registry core, built-in factories, and dependency health probes.
 - `rewards/`: boxed-match, verifiers-backed, and custom rewards.
 - `planning/`: regex and semantic planning-token detectors.
+- `training/console.py`: terminal summaries for training runs.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
 - `training/flow.py`: flow construction and traceable preflight state.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
