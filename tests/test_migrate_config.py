@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from retrain.cli import _run_migrate_config
+from retrain.commands.migrate import run as _run_migrate_config
 
 
 _LEGACY_CFG = """\
