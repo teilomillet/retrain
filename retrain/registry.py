@@ -320,7 +320,7 @@ def _trainer_command(config: TrainConfig) -> TrainingRunner:
 
 @trainer.register("ttt_discover")
 def _trainer_ttt_discover(config: TrainConfig) -> TrainingRunner:
-    from retrain.ttt_discover import TTTDiscoverRunner
+    from retrain.training.discover import TTTDiscoverRunner
     return TTTDiscoverRunner()
 
 

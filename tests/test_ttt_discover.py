@@ -13,7 +13,7 @@ from retrain.advantages import compute_algorithm_advantages
 from retrain.backends.catalog import BackendCapabilities
 from retrain.config import TrainConfig
 from retrain.data import Example
-from retrain.ttt_discover import (
+from retrain.training.discover import (
     DiscoverArchive,
     TTTDiscoverRunner,
     build_discovery_prompt,
@@ -217,9 +217,9 @@ class TestTTTDiscoverRunner:
             condition_label="discover_entropic",
         )
 
-        monkeypatch.setattr("retrain.ttt_discover.build_flow", lambda config, gpu=True: flow)
+        monkeypatch.setattr("retrain.training.discover.build_flow", lambda config, gpu=True: flow)
         monkeypatch.setattr(
-            "retrain.ttt_discover._load_discovery_source",
+            "retrain.training.discover._load_discovery_source",
             lambda config: (
                 Example(prompt="solve", reference="unused"),
                 None,
@@ -227,7 +227,7 @@ class TestTTTDiscoverRunner:
             ),
         )
         monkeypatch.setattr(
-            "retrain.ttt_discover.AutoTokenizer.from_pretrained",
+            "retrain.training.discover.AutoTokenizer.from_pretrained",
             lambda model, trust_remote_code=True: FakeTokenizer(),
         )
 

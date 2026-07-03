@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from retrain.config import TrainConfig
-from retrain.ttt_discover import TTTDiscoverRunner
+from retrain.training.discover import TTTDiscoverRunner
 from retrain.training.runner import (
     CommandRunner,
     RetainRunner,
@@ -84,7 +84,7 @@ class TestTrainingRunResult:
 
 
 class TestRetainRunner:
-    @patch("retrain.trainer.train")
+    @patch("retrain.training.trainer.train")
     def test_delegates_to_train(self, mock_train):
         mock_train.return_value = "/tmp/adapter"
         runner = RetainRunner()
@@ -95,7 +95,7 @@ class TestRetainRunner:
         assert result.ok
         assert result.policy_ref == "/tmp/adapter"
 
-    @patch("retrain.trainer.train")
+    @patch("retrain.training.trainer.train")
     def test_returns_failed_result_when_train_returns_none(self, mock_train):
         mock_train.return_value = None
         runner = RetainRunner()
@@ -103,7 +103,7 @@ class TestRetainRunner:
         assert not result.ok
         assert result.failure_status == "missing_policy_ref"
 
-    @patch("retrain.trainer.train")
+    @patch("retrain.training.trainer.train")
     def test_returns_failed_result_when_train_raises(self, mock_train):
         mock_train.side_effect = RuntimeError("boom")
         runner = RetainRunner()

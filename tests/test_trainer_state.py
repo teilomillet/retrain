@@ -19,7 +19,7 @@ from retrain.training.state import (
     load_trainer_state,
     save_trainer_state,
 )
-from retrain.trainer import (
+from retrain.training.trainer import (
     _print_flow_warnings,
     _run_rl_echo_train_step,
 )

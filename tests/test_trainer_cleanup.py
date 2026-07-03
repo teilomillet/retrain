@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from retrain.config import TrainConfig
-from retrain import trainer as trainer_mod
+from retrain.training import trainer as trainer_mod
 from retrain.training.flow import TraceIssue, TraceResult
 
 

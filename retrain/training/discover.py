@@ -34,7 +34,7 @@ from retrain.training.rollouts import (
     TokenTextLookup,
     decode_sequence_groups,
 )
-from retrain.trainer import (
+from retrain.training.trainer import (
     _print_backend_capability_summary,
     _print_config_summary,
 )

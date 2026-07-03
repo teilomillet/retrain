@@ -146,10 +146,10 @@ class TrainingRunner(Protocol):
 
 
 class RetainRunner:
-    """Built-in runner — delegates to ``retrain.trainer.train()``."""
+    """Built-in runner — delegates to ``retrain.training.trainer.train()``."""
 
     def run(self, config: TrainConfig) -> TrainingRunResult:
-        from retrain.trainer import train
+        from retrain.training.trainer import train
 
         try:
             policy_ref = train(config) or ""

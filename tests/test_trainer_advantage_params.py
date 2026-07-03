@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from retrain import trainer as trainer_mod
+from retrain.training import trainer as trainer_mod
 from retrain.training import signals as signal_mod
 from retrain.advantages import AdvantageResult
 from retrain.training.backpressure import NoOpBackPressure
