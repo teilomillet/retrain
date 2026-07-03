@@ -25,6 +25,7 @@ from retrain.advantages import (
 )
 from retrain.backends import (
     EntropySamplingHelper,
+    TrainHelper,
     collect_runtime_metrics,
     run_sft_train_step,
 )
@@ -55,10 +56,12 @@ from retrain.runtime_support import (
 )
 from retrain.sepa import SEPAStateDict
 from retrain.sft import (
-    build_sft_example_order as _build_tokenized_sft_order,
+    SftExample,
+    SftTokenizedExample,
+    build_sft_example_order,
     build_sft_tokenized_batch,
     load_sft_jsonl,
-    select_sft_batch_indices as _select_tokenized_sft_batch_indices,
+    select_sft_batch_indices,
     tokenize_sft_dataset,
 )
 from retrain.type_defs import ExampleInfoLike, PromptLike
@@ -108,30 +111,6 @@ class WandbModuleLike(Protocol):
         group: str | None = None,
         tags: list[str] | None = None,
     ) -> WandbRunLike: ...
-
-
-def _build_sft_example_order(example_count: int, seed: int) -> list[int]:
-    """Return a deterministic shuffled traversal for SFT warmup examples.
-
-    This keeps resume behavior stable while avoiding the old prefix-only walk,
-    which could spend the whole warmup budget on the earliest episodes in the
-    JSONL file.
-    """
-    return _build_tokenized_sft_order(example_count, seed)
-
-
-def _select_sft_batch_indices(
-    example_order: list[int],
-    *,
-    batch_size: int,
-    step: int,
-) -> list[int]:
-    """Select a deterministic SFT warmup batch from the shuffled traversal."""
-    return _select_tokenized_sft_batch_indices(
-        example_order,
-        batch_size=batch_size,
-        step=step,
-    )
 
 
 def _process_max_rss_mb() -> float | None:
@@ -702,6 +681,148 @@ def _keep_uniform_group(
     return False
 
 
+@dataclass
+class _SftWarmupData:
+    """SFT warmup dataset, loaded and tokenized once before the step loop."""
+
+    examples: list[SftExample]
+    tokenized: list[SftTokenizedExample]
+    order: list[int]
+
+
+def _load_sft_warmup_data(
+    config: TrainConfig,
+    tokenizer: object,
+) -> _SftWarmupData | None:
+    """Load the SFT warmup dataset, or None when unconfigured or missing."""
+    if config.sft_warmup_steps <= 0 or not config.sft_data_path:
+        return None
+    sft_path = Path(config.sft_data_path)
+    if not sft_path.exists():
+        print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
+        return None
+    examples = load_sft_jsonl(sft_path)
+    token_limit = (
+        config.sft_max_tokens
+        if config.sft_max_tokens > 0
+        else config.max_tokens + 512
+    )
+    tokenized = tokenize_sft_dataset(tokenizer, examples, max_tokens=token_limit)
+    order = build_sft_example_order(
+        len(tokenized),
+        config.seed,
+        lengths=[example.total_tokens for example in tokenized],
+        batch_order=config.sft_batch_order,
+        length_bucket_size=config.sft_length_bucket_size,
+    )
+    print(
+        f"Loaded {len(examples)} SFT warmup examples from {sft_path} "
+        f"(order={config.sft_batch_order})"
+    )
+    return _SftWarmupData(examples=examples, tokenized=tokenized, order=order)
+
+
+def _run_sft_warmup_step(
+    helper: TrainHelper,
+    config: TrainConfig,
+    sft_data: _SftWarmupData,
+    step: int,
+    *,
+    metrics_logger: JsonlLogger,
+    steps_logger: JsonlLogger,
+    wandb_run: WandbRunLike | None,
+) -> None:
+    """Run one supervised warmup step from oracle demonstrations."""
+    step_start = time.perf_counter()
+    helper.checkpoint(f"step_{step}")
+
+    batch_size = (
+        config.sft_batch_size
+        if config.sft_batch_size > 0
+        else min(16, len(sft_data.examples))
+    )
+    batch_indices = select_sft_batch_indices(
+        sft_data.order,
+        batch_size=batch_size,
+        step=step,
+    )
+    batch = [sft_data.tokenized[idx] for idx in batch_indices]
+    tokenized = build_sft_tokenized_batch(batch)
+
+    # Use sft_lr if set, otherwise fall back to main lr.
+    effective_lr = config.sft_lr if config.sft_lr > 0 else config.lr
+    print(
+        f"Step {step} [SFT warmup]: {len(batch)} examples "
+        f"(lr={effective_lr:.1e})...",
+        flush=True,
+    )
+    loss = run_sft_train_step(
+        helper,
+        tokenized.tokens,
+        tokenized.advantages,
+        effective_lr,
+        config.weight_decay,
+    )
+    elapsed = time.perf_counter() - step_start
+    # Tinker's importance_sampling loss with logprobs=0 produces negative
+    # values that get MORE negative as the model learns
+    # (-exp(logprob) * advantage). Report both the raw IS loss and the
+    # flipped "sft_signal" (= -loss, higher = better) so the learning
+    # curve is intuitive.
+    sft_signal = -loss
+    print(
+        f"Step {step} [SFT warmup] | is_loss={loss:.4f} | "
+        f"sft_signal={sft_signal:.4f} | "
+        f"datums={len(batch)} | time={elapsed:.1f}s",
+        flush=True,
+    )
+
+    metrics: dict[str, int | float | str] = {
+        "step": step,
+        "loss": loss,
+        "sft_signal": sft_signal,
+        "phase": "sft",
+        "datums": len(batch),
+        "tokens": tokenized.total_tokens,
+        "supervised_tokens": tokenized.supervised_tokens,
+        "sft_batch_order": config.sft_batch_order,
+        "sft_length_bucket_size": int(config.sft_length_bucket_size),
+        "sft_unique_examples_seen": min(
+            len(sft_data.examples),
+            (step + 1) * batch_size,
+        ),
+        "sft_dataset_coverage": min(
+            1.0,
+            ((step + 1) * batch_size) / max(len(sft_data.examples), 1),
+        ),
+        "time_s": round(elapsed, 2),
+        "advantage_mode": config.advantage_mode,
+        "lr": effective_lr,
+    }
+    rss_mb = _process_max_rss_mb()
+    if rss_mb is not None:
+        metrics["process_max_rss_mb"] = round(rss_mb, 3)
+    metrics_logger.log(metrics)
+    steps_logger.log(metrics)
+
+    if wandb_run is not None:
+        wandb_run.log(
+            {
+                "train/loss": loss,
+                "train/sft_signal": sft_signal,
+                "train/sft_warmup": 1,
+                "train/step": step,
+                "train/lr": effective_lr,
+            },
+            step=step,
+        )
+
+    if config.save_every > 0 and (step + 1) % config.save_every == 0:
+        ckpt_name = f"checkpoint_step_{step + 1}"
+        helper.save_adapter(config.adapter_path, ckpt_name)
+        print(f"Saved checkpoint: {ckpt_name}")
+
+
 def _init_wandb(config: TrainConfig) -> WandbRunLike | None:
     """Start a wandb run mirroring the config, or None when unconfigured."""
     if not config.wandb_project:
@@ -1069,38 +1190,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # SFT warmup data (load once if configured)
         # -----------------------------------------------------------------------
-        sft_examples = []
-        sft_tokenized_examples = []
-        sft_example_order: list[int] = []
-        if config.sft_warmup_steps > 0 and config.sft_data_path:
-            sft_path = Path(config.sft_data_path)
-            if sft_path.exists():
-                sft_examples = load_sft_jsonl(sft_path)
-                sft_token_limit = (
-                    config.sft_max_tokens
-                    if config.sft_max_tokens > 0
-                    else config.max_tokens + 512
-                )
-                sft_tokenized_examples = tokenize_sft_dataset(
-                    tokenizer,
-                    sft_examples,
-                    max_tokens=sft_token_limit,
-                )
-                sft_example_order = _build_tokenized_sft_order(
-                    len(sft_tokenized_examples),
-                    config.seed,
-                    lengths=[
-                        example.total_tokens for example in sft_tokenized_examples
-                    ],
-                    batch_order=config.sft_batch_order,
-                    length_bucket_size=config.sft_length_bucket_size,
-                )
-                print(
-                    f"Loaded {len(sft_examples)} SFT warmup examples from {sft_path} "
-                    f"(order={config.sft_batch_order})"
-                )
-            else:
-                print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
+        sft_data = _load_sft_warmup_data(config, tokenizer)
 
         for batch_idx in range(start_step, config.max_steps):
             step_start = time.perf_counter()
@@ -1108,108 +1198,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # =================================================================
             # SFT warmup: supervised training from oracle demonstrations
             # =================================================================
-            if batch_idx < config.sft_warmup_steps and sft_examples:
-                helper.checkpoint(f"step_{batch_idx}")
-
-                # Sample a batch of SFT examples
-                sft_batch_size = (
-                    config.sft_batch_size
-                    if config.sft_batch_size > 0
-                    else min(16, len(sft_examples))
-                )
-                sft_batch_indices = _select_sft_batch_indices(
-                    sft_example_order,
-                    batch_size=sft_batch_size,
-                    step=batch_idx,
-                )
-                sft_batch = [
-                    sft_tokenized_examples[idx] for idx in sft_batch_indices
-                ]
-                sft_tokenized = build_sft_tokenized_batch(sft_batch)
-                sft_tokens_list = sft_tokenized.tokens
-                sft_advantages_list = sft_tokenized.advantages
-
-                # Train with cross-entropy loss (actual SFT, not importance sampling)
-                # Use sft_lr if set, otherwise fall back to main lr
-                effective_sft_lr = config.sft_lr if config.sft_lr > 0 else config.lr
-                print(
-                    f"Step {batch_idx} [SFT warmup]: {len(sft_batch)} examples "
-                    f"(lr={effective_sft_lr:.1e})...",
-                    flush=True,
-                )
-                loss = run_sft_train_step(
+            if batch_idx < config.sft_warmup_steps and sft_data and sft_data.examples:
+                _run_sft_warmup_step(
                     helper,
-                    sft_tokens_list,
-                    sft_advantages_list,
-                    effective_sft_lr,
-                    config.weight_decay,
+                    config,
+                    sft_data,
+                    batch_idx,
+                    metrics_logger=metrics_logger,
+                    steps_logger=steps_logger,
+                    wandb_run=wandb_run,
                 )
-                elapsed = time.perf_counter() - step_start
-                # Note: tinker's importance_sampling loss with logprobs=0 produces
-                # negative values that get MORE negative as the model learns
-                # (-exp(logprob) * advantage).  We report both the raw IS loss
-                # and the flipped "sft_signal" (= -loss, higher = better) so
-                # the learning curve is intuitive.
-                sft_signal = -loss
-                print(
-                    f"Step {batch_idx} [SFT warmup] | is_loss={loss:.4f} | "
-                    f"sft_signal={sft_signal:.4f} | "
-                    f"datums={len(sft_batch)} | time={elapsed:.1f}s",
-                    flush=True,
-                )
-
-                # Log to metrics.jsonl (trace every SFT step)
-                sft_metrics: dict[str, int | float | str] = {
-                    "step": batch_idx,
-                    "loss": loss,
-                    "sft_signal": sft_signal,
-                    "phase": "sft",
-                    "datums": len(sft_batch),
-                    "tokens": sft_tokenized.total_tokens,
-                    "supervised_tokens": sft_tokenized.supervised_tokens,
-                    "sft_batch_order": config.sft_batch_order,
-                    "sft_length_bucket_size": int(config.sft_length_bucket_size),
-                    "sft_unique_examples_seen": min(
-                        len(sft_examples),
-                        (batch_idx + 1) * sft_batch_size,
-                    ),
-                    "sft_dataset_coverage": min(
-                        1.0,
-                        ((batch_idx + 1) * sft_batch_size) / max(len(sft_examples), 1),
-                    ),
-                    "time_s": round(elapsed, 2),
-                    "advantage_mode": config.advantage_mode,
-                    "lr": effective_sft_lr,
-                }
-                sft_rss_mb = _process_max_rss_mb()
-                if sft_rss_mb is not None:
-                    sft_metrics["process_max_rss_mb"] = round(sft_rss_mb, 3)
-                metrics_logger.log(sft_metrics)
-                steps_logger.log(sft_metrics)
-
-                # Wandb
-                if wandb_run is not None:
-                    wandb_run.log(
-                        {
-                            "train/loss": loss,
-                            "train/sft_signal": sft_signal,
-                            "train/sft_warmup": 1,
-                            "train/step": batch_idx,
-                            "train/lr": effective_sft_lr,
-                        },
-                        step=batch_idx,
-                    )
-
-                # Save checkpoint
-                if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
-                    ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-                    helper.save_adapter(config.adapter_path, ckpt_name)
-                    print(f"Saved checkpoint: {ckpt_name}")
-
-                # Note: SFT→GRPO transition eval removed (caused context overflow).
-                # The first GRPO step (step 10) serves as the eval — if reward > 0,
-                # the SFT produced valid actions.
-
                 continue  # Skip the RL pipeline for this step
 
             # Back pressure warmup sweep
