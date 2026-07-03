@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from retrain.inference_engine.openai_engine import OpenAIEngine
 
 
@@ -546,3 +548,69 @@ def test_null_choice_token_ids_with_unconvertible_tokens_reencodes_text(monkeypa
 
     assert results[0][0].token_ids == [101, 102]
     assert results[0][0].logprobs == [-0.5, -0.3]
+
+
+def test_content_logprobs_with_token_ids_use_content_path(monkeypatch):
+    monkeypatch.setattr(
+        "retrain.inference_engine.openai_engine.AutoTokenizer.from_pretrained",
+        lambda _model_name: _FallbackTokenizer(),
+    )
+
+    engine = OpenAIEngine(
+        base_url="http://localhost:8000",
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        engine_type="openai",
+    )
+
+    response = {
+        "choices": [
+            {
+                "text": "world",
+                "logprobs": {
+                    "content": [
+                        {"token_id": 701, "logprob": "-0.7"},
+                        {"token_id": "702", "logprob": -0.2},
+                    ]
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)  # noqa: ARG005
+
+    results = engine.generate(
+        [[1, 2, 3]],
+        num_samples=1,
+        max_tokens=10,
+        temperature=0.7,
+        top_p=0.95,
+    )
+
+    assert results[0][0].token_ids == [701, 702]
+    assert results[0][0].logprobs == [-0.7, -0.2]
+
+
+def test_malformed_choices_response_raises(monkeypatch):
+    monkeypatch.setattr(
+        "retrain.inference_engine.openai_engine.AutoTokenizer.from_pretrained",
+        lambda _model_name: _FakeTokenizer(),
+    )
+
+    engine = OpenAIEngine(
+        base_url="http://localhost:8000",
+        model_name="Qwen/Qwen3-4B-Instruct-2507",
+        engine_type="openai",
+    )
+    monkeypatch.setattr(
+        engine,
+        "_post",
+        lambda endpoint, payload, max_retries=3: {"choices": {"text": "bad"}},  # noqa: ARG005
+    )
+
+    with pytest.raises(RuntimeError, match="'choices' must be a list"):
+        engine.generate(
+            [[1, 2, 3]],
+            num_samples=1,
+            max_tokens=10,
+            temperature=0.7,
+            top_p=0.95,
+        )

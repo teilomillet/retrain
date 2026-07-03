@@ -12,12 +12,37 @@ Weight reloading uses:
 - per-request "adapters" payload field for MLX-LM server
 """
 
+from __future__ import annotations
+
 import time
+from collections.abc import Sequence
+from typing import Protocol, cast
 
 import requests
 from transformers import AutoTokenizer
 
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+
+
+class _Tokenizer(Protocol):
+    def decode(
+        self,
+        token_ids: Sequence[int],
+        *,
+        skip_special_tokens: bool = False,
+    ) -> str: ...
+
+    def encode(
+        self,
+        text: str,
+        *,
+        add_special_tokens: bool = False,
+    ) -> list[int]: ...
+
+    def convert_tokens_to_ids(
+        self,
+        tokens: Sequence[str],
+    ) -> int | list[int | None]: ...
 
 
 _TOKEN_NATIVE_ENGINES = frozenset({"vllm", "sglang"})
@@ -28,7 +53,7 @@ _LIVE_LORA_INT_ID = 0
 class OpenAIEngine(InferenceEngine):
     """HTTP client targeting OpenAI-compatible /v1/completions endpoints."""
 
-    def __init__(self, base_url, model_name, engine_type="openai"):
+    def __init__(self, base_url: str, model_name: str, engine_type: str = "openai") -> None:
         """Initialize the HTTP engine.
 
         Args:
@@ -43,10 +68,10 @@ class OpenAIEngine(InferenceEngine):
 
         # Local tokenizer for prompt decoding and token ID recovery
         print(f"Loading tokenizer for OpenAI engine: {model_name}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = cast(_Tokenizer, AutoTokenizer.from_pretrained(model_name))
 
         # Adapter tracking
-        self._current_adapter_path = None
+        self._current_adapter_path: str | None = None
         self._prompt_text_cache: dict[tuple[int, ...], str] = {}
         self._prompt_decode_calls = 0
         self._prompt_cache_hits = 0
@@ -58,19 +83,26 @@ class OpenAIEngine(InferenceEngine):
 
         print(f"OpenAIEngine ready ({engine_type} @ {self.base_url}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                 compute_entropy=False):
+    def generate(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        compute_entropy: bool = False,
+    ) -> list[list[SampleResult]]:
         """Generate completions via /v1/completions with logprobs.
 
         vLLM/SGLang receive prompt token IDs directly. Text-only servers receive
         decoded prompts with a local decode cache.
         """
-        results = []
+        results: list[list[SampleResult]] = []
 
         for prompt_ids in prompt_ids_list:
             prompt_payload, token_native = self._prompt_payload(prompt_ids)
 
-            payload = {
+            payload: dict[str, object] = {
                 "model": self._request_model_name(),
                 "prompt": prompt_payload,
                 "max_tokens": max_tokens,
@@ -97,17 +129,16 @@ class OpenAIEngine(InferenceEngine):
                 self._token_prompt_fallbacks += 1
                 payload["prompt"] = self._prompt_text(prompt_ids)
                 response = self._post("/v1/completions", payload)
-            choices = response.get("choices", [])
-
-            group = []
-            for choice in choices:
-                text = choice.get("text", "")
-                lp_info = choice.get("logprobs", {})
+            group: list[SampleResult] = []
+            for choice in _response_choices(response):
+                raw_text = choice.get("text", "")
+                text = raw_text if isinstance(raw_text, str) else ""
+                logprobs_info = choice.get("logprobs", {})
 
                 token_ids, logprobs = self._recover_tokens(
                     prompt_ids,
                     text,
-                    lp_info,
+                    logprobs_info,
                     choice,
                 )
                 group.append(SampleResult(token_ids=token_ids, logprobs=logprobs))
@@ -116,20 +147,20 @@ class OpenAIEngine(InferenceEngine):
 
         return results
 
-    def _request_model_name(self):
+    def _request_model_name(self) -> str:
         if self.engine_type == "vllm" and self._current_adapter_path:
             return _LIVE_LORA_NAME
         if self.engine_type == "sglang" and self._current_adapter_path:
             return f"{self.model_name}:{_LIVE_LORA_NAME}"
         return self.model_name
 
-    def _prompt_payload(self, prompt_ids):
+    def _prompt_payload(self, prompt_ids: list[int]) -> tuple[list[int] | str, bool]:
         if self.engine_type in _TOKEN_NATIVE_ENGINES:
             self._token_prompt_calls += 1
             return list(prompt_ids), True
         return self._prompt_text(prompt_ids), False
 
-    def _prompt_text(self, prompt_ids):
+    def _prompt_text(self, prompt_ids: Sequence[int]) -> str:
         """Decode prompt ids to text once per unique prompt."""
         key = tuple(prompt_ids)
         prompt_text = self._prompt_text_cache.get(key)
@@ -144,7 +175,7 @@ class OpenAIEngine(InferenceEngine):
             self._prompt_cache_hits += 1
         return prompt_text
 
-    def performance_counters(self):
+    def performance_counters(self) -> dict[str, int]:
         """Return cumulative prompt-decode cache counters."""
         return {
             "engine_prompt_decode_calls": self._prompt_decode_calls,
@@ -161,11 +192,17 @@ class OpenAIEngine(InferenceEngine):
         }
 
     @staticmethod
-    def _is_token_prompt_rejection(exc):
+    def _is_token_prompt_rejection(exc: RuntimeError) -> bool:
         text = str(exc)
         return "400" in text or "422" in text
 
-    def _recover_tokens(self, prompt_ids, text, logprobs_info, choice=None):
+    def _recover_tokens(
+        self,
+        prompt_ids: list[int],
+        text: str,
+        logprobs_info: object,
+        choice: dict[str, object] | None = None,
+    ) -> tuple[list[int], list[float]]:
         """Recover token IDs and logprobs from API response.
 
         Primary path: use tokenizer.convert_tokens_to_ids() on the API's
@@ -181,84 +218,101 @@ class OpenAIEngine(InferenceEngine):
         """
         if not isinstance(logprobs_info, dict):
             # No logprobs returned — fallback to re-encoding
-            direct_ids = None if not isinstance(choice, dict) else self._choice_token_ids(choice)
+            direct_ids = None if choice is None else self._choice_token_ids(choice)
             if isinstance(direct_ids, list):
                 return direct_ids, [0.0] * len(direct_ids)
             token_ids = self.tokenizer.encode(text, add_special_tokens=False)
             return token_ids, [0.0] * len(token_ids)
 
-        content = logprobs_info.get("content", [])
+        info = cast(dict[str, object], logprobs_info)
+        content = info.get("content", [])
         if isinstance(content, list):
-            ids = []
-            logprobs = []
-            for item in content:
-                if not isinstance(item, dict):
+            ids: list[int] = []
+            logprobs: list[float] = []
+            for raw_item in content:
+                if not isinstance(raw_item, dict):
                     continue
-                logprob = item.get("logprob")
+                item = cast(dict[str, object], raw_item)
+                logprob = _float_value(item.get("logprob"))
                 if logprob is None:
                     continue
-                token_id = item.get("token_id")
+                token_id = _int_value(item.get("token_id"))
                 if token_id is None:
                     ids = []
                     break
-                ids.append(int(token_id))
-                logprobs.append(float(logprob))
+                ids.append(token_id)
+                logprobs.append(logprob)
             if ids and len(ids) == len(logprobs):
                 return ids, logprobs
 
-        tokens = logprobs_info.get("tokens", [])
-        token_logprobs = logprobs_info.get("token_logprobs", [])
-        direct_ids = self._choice_token_ids(logprobs_info)
-        if direct_ids is None and isinstance(choice, dict):
+        tokens = info.get("tokens", [])
+        token_logprobs = info.get("token_logprobs", [])
+        direct_ids = self._choice_token_ids(info)
+        if direct_ids is None and choice is not None:
             direct_ids = self._choice_token_ids(choice)
         if isinstance(direct_ids, list) and isinstance(token_logprobs, list):
-            logprobs = [
-                float(lp) if lp is not None else 0.0
-                for lp in token_logprobs
-            ]
+            logprobs = [_float_value(lp) or 0.0 for lp in token_logprobs]
             return self._align_ids_and_logprobs(direct_ids, logprobs, prompt_ids)
 
-        if tokens:
+        token_strings: list[str] | None = None
+        if (
+            isinstance(tokens, list)
+            and tokens
+            and all(isinstance(token, str) for token in tokens)
+        ):
+            token_strings = cast(list[str], tokens)
+        if token_strings is not None:
             # Primary path: convert token strings to IDs via tokenizer
-            token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+            token_ids = self.tokenizer.convert_tokens_to_ids(token_strings)
 
             # Handle unknown tokens (returned as single unk_token_id)
             # by falling back to re-encoding for those positions
-            logprobs = []
-            for i, lp in enumerate(token_logprobs):
-                logprobs.append(float(lp) if lp is not None else 0.0)
+            logprobs: list[float] = []
+            if isinstance(token_logprobs, list):
+                for lp in token_logprobs:
+                    logprobs.append(_float_value(lp) or 0.0)
 
             if isinstance(token_ids, int):
                 token_ids = [token_ids]
-            if (
-                not isinstance(token_ids, list)
-                or len(token_ids) != len(tokens)
-                or any(not isinstance(token_id, int) for token_id in token_ids)
-            ):
+            converted_ids: list[int] | None = None
+            if isinstance(token_ids, list) and len(token_ids) == len(token_strings):
+                maybe_ids = [
+                    token_id for token_id in token_ids if isinstance(token_id, int)
+                ]
+                if len(maybe_ids) == len(token_strings):
+                    converted_ids = maybe_ids
+            if converted_ids is None:
                 encoded_ids = self.tokenizer.encode(text, add_special_tokens=False)
                 min_len = min(len(encoded_ids), len(logprobs))
                 return list(encoded_ids[:min_len]), logprobs[:min_len]
 
             # Ensure lengths match
-            min_len = min(len(token_ids), len(logprobs))
-            return list(token_ids[:min_len]), logprobs[:min_len]
+            min_len = min(len(converted_ids), len(logprobs))
+            return list(converted_ids[:min_len]), logprobs[:min_len]
 
         # Fallback: re-encode text
         token_ids = self.tokenizer.encode(text, add_special_tokens=False)
         return token_ids, [0.0] * len(token_ids)
 
     @staticmethod
-    def _choice_token_ids(payload):
+    def _choice_token_ids(payload: dict[str, object]) -> list[int] | None:
         raw_ids = payload.get("completion_ids") or payload.get("token_ids")
         if isinstance(raw_ids, list):
-            try:
-                return [int(token_id) for token_id in raw_ids]
-            except (TypeError, ValueError):
-                return None
+            ids: list[int] = []
+            for raw_id in raw_ids:
+                token_id = _int_value(raw_id)
+                if token_id is None:
+                    return None
+                ids.append(token_id)
+            return ids
         return None
 
     @staticmethod
-    def _align_ids_and_logprobs(ids, logprobs, prompt_ids):
+    def _align_ids_and_logprobs(
+        ids: list[int],
+        logprobs: list[float],
+        prompt_ids: list[int],
+    ) -> tuple[list[int], list[float]]:
         if len(ids) > len(logprobs) and len(logprobs) > 0:
             ids = ids[-len(logprobs):]
         if len(ids) >= len(prompt_ids) and ids[:len(prompt_ids)] == prompt_ids:
@@ -268,7 +322,7 @@ class OpenAIEngine(InferenceEngine):
         n = min(len(ids), len(logprobs))
         return list(ids[:n]), list(logprobs[:n])
 
-    def reload_weights(self, adapter_path):
+    def reload_weights(self, adapter_path: str) -> None:
         """Tell the server to load/reload a LoRA adapter.
 
         Uses the backend-specific LoRA load route for vLLM/SGLang servers.
@@ -290,7 +344,7 @@ class OpenAIEngine(InferenceEngine):
             print(f"TensorRT-LLM adapter set for per-request LoRA: {adapter_path}")
             return
 
-        payload = {
+        payload: dict[str, object] = {
             "lora_name": _LIVE_LORA_NAME,
             "lora_path": adapter_path,
         }
@@ -309,20 +363,26 @@ class OpenAIEngine(InferenceEngine):
             print(f"Warning: adapter reload failed ({e}). "
                   f"Server may not support dynamic LoRA loading.")
 
-    def _adapter_reload_endpoint(self):
+    def _adapter_reload_endpoint(self) -> str:
         if self.engine_type == "sglang":
             return "/load_lora_adapter"
         return "/v1/load_lora_adapter"
 
-    def _unload_sglang_adapter(self):
-        payload = {"lora_name": _LIVE_LORA_NAME}
+    def _unload_sglang_adapter(self) -> None:
+        payload: dict[str, object] = {"lora_name": _LIVE_LORA_NAME}
         self._post("/unload_lora_adapter", payload, expect_json=False)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Close HTTP session."""
         self.session.close()
 
-    def _post(self, endpoint, payload, max_retries=3, expect_json=True):
+    def _post(
+        self,
+        endpoint: str,
+        payload: dict[str, object],
+        max_retries: int = 3,
+        expect_json: bool = True,
+    ) -> dict[str, object]:
         """POST to server with retry logic for transient failures.
 
         Args:
@@ -344,10 +404,10 @@ class OpenAIEngine(InferenceEngine):
                 resp.raise_for_status()
                 if not expect_json:
                     try:
-                        return resp.json()
+                        return cast(dict[str, object], resp.json())
                     except ValueError:
                         return {"text": resp.text}
-                return resp.json()
+                return cast(dict[str, object], resp.json())
             except requests.exceptions.ConnectionError:
                 if attempt < max_retries - 1:
                     wait = 2 ** attempt
@@ -366,4 +426,46 @@ class OpenAIEngine(InferenceEngine):
                 if attempt < max_retries - 1:
                     print(f"Timeout on {url}, retrying...")
                 else:
-                    raise RuntimeError(f"Request to {url} timed out after {max_retries} attempts")
+                    raise RuntimeError(
+                        f"Request to {url} timed out after {max_retries} attempts"
+                    )
+        raise RuntimeError(f"Request to {url} was not attempted")
+
+
+def _float_value(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float | str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _int_value(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _response_choices(response: dict[str, object]) -> list[dict[str, object]]:
+    raw_choices = response.get("choices", [])
+    if not isinstance(raw_choices, list):
+        raise RuntimeError("OpenAI-compatible response field 'choices' must be a list")
+    choices: list[dict[str, object]] = []
+    for index, raw_choice in enumerate(raw_choices):
+        if not isinstance(raw_choice, dict):
+            raise RuntimeError(
+                "OpenAI-compatible response choices must be objects "
+                f"(choice {index} was {type(raw_choice).__name__})"
+            )
+        choices.append(cast(dict[str, object], raw_choice))
+    return choices
