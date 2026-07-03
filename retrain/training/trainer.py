@@ -6,55 +6,38 @@ Backend-agnostic — drives any TrainHelper (local, Unsloth, Tinker, ...).
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 from transformers import AutoTokenizer
 
-from retrain.advantages import (
-    AdvantageResult,
-    EntropyStats,
-    apply_batch_advantage_normalization,
-)
-from retrain.backends import (
-    EntropySamplingHelper,
-    TrainHelper,
-)
+from retrain.advantages import apply_batch_advantage_normalization
 from retrain.training.backpressure import (
     StepObservation,
 )
 from retrain.config import TrainConfig
-from retrain.training.echo import (
-    EchoBuildStats,
-    EchoLimitStats,
-    build_rollout_echo_datum,
-    limit_echo_masks,
-    merge_echo_build_stats,
-    run_rl_echo_train_step,
-)
+from retrain.training.echo import run_rl_echo_train_step
 from retrain.training.flow import (
     TrainingFlow,
     _condition_label,
     build_flow,
 )
 from retrain.training.examples import load_training_examples
-from retrain.training.generations import (
-    generation_log_indices,
-    top_surprisal_payload,
-)
-from retrain.training.prompts import PromptBatch, select_prompt_batch
+from retrain.training.prompts import select_prompt_batch
 from retrain.training import console
 from retrain.io.log import JsonlLogger
-from retrain.planning.types import PlanningDetector
 from retrain.registry.builtin import get_registry
-from retrain.rewards.types import RewardFunction
 from retrain.training.rollouts import (
     ExamplePromptCache,
     RuntimeCounters,
     TokenTextLookup,
-    decode_sequence_groups,
+)
+from retrain.training.rollout import (
+    RolloutAccumulator,
+    has_nonzero_advantage,
+    prepare_echo_step_plan,
+    run_multiturn,
+    run_singleturn,
 )
 from retrain.training.log import (
     StepLoggingContext,
@@ -62,13 +45,10 @@ from retrain.training.log import (
     init_wandb,
     record_training_step,
 )
-from retrain.training.telemetry import EchoStepPlan, RolloutTelemetry
+from retrain.training.telemetry import RolloutTelemetry
 from retrain.training.signals import (
-    CORRECT_THRESHOLD,
-    RewardTieAccumulator,
     apply_advantage_cap,
     assert_uniform_completion_advantages_for_non_preserving_backend,
-    compute_group_advantages,
     prepare_algorithm_params_for_step,
     prepare_transform_params_for_step,
 )
@@ -83,628 +63,6 @@ from retrain.environments.verifiers import (
     run_multiturn_group,
     score_singleturn_group,
 )
-
-
-def _accumulate_metric_totals(
-    totals: dict[str, float],
-    metrics: Mapping[str, float],
-) -> None:
-    for key, value in metrics.items():
-        totals[key] = totals.get(key, 0.0) + float(value)
-
-
-def _has_nonzero_advantage(rows: list[list[float]]) -> bool:
-    return any(abs(value) > 0.0 for row in rows for value in row)
-
-
-def _echo_allowed_tokens(
-    *,
-    rl_completion_tokens: int,
-    max_tokens_per_step: int,
-    max_token_ratio: float,
-) -> int:
-    """Compute the active ECHO cap for this step."""
-
-    ratio_cap = int(rl_completion_tokens * max_token_ratio)
-    return max(0, min(max_tokens_per_step, ratio_cap))
-
-
-@dataclass
-class _RolloutAccumulator:
-    """Everything one RL step's rollout phase produces for training/logging."""
-
-    rewards: list[float] = field(default_factory=list)
-    correct: int = 0
-    max_token_hits: int = 0
-    total_completions: int = 0
-    ties: RewardTieAccumulator = field(default_factory=RewardTieAccumulator)
-    surprisal_stats: list[EntropyStats] = field(default_factory=list)
-    adv_results: list[AdvantageResult] = field(default_factory=list)
-    logprobs_sepa: list[list[float]] = field(default_factory=list)
-    planning_masks_sepa: list[list[int]] = field(default_factory=list)
-    datum_tokens: list[list[int]] = field(default_factory=list)
-    datum_logprobs: list[list[float]] = field(default_factory=list)
-    datum_advantages: list[list[float]] = field(default_factory=list)
-    datum_echo_advantages: list[list[float]] = field(default_factory=list)
-    datum_echo_full_observation_counts: list[int] = field(default_factory=list)
-    echo_build: EchoBuildStats = field(default_factory=EchoBuildStats)
-    rl_completion_token_count: int = 0
-    rl_completion_surprisal_sum: float = 0.0
-    sampled_completion_token_count: int = 0
-    sampled_completion_surprisal_sum: float = 0.0
-    behavior_turns: int = 0
-    behavior_invalid: int = 0
-    behavior_actions: dict[str, int] = field(default_factory=dict)
-    behavior_resp_lens: list[int] = field(default_factory=list)
-    rollout_timing_metrics: dict[str, float] = field(default_factory=dict)
-    sample_time_s: float = 0.0
-    tl_grpo_ema: float | None = None
-
-
-def _prepare_echo_step_plan(
-    config: TrainConfig,
-    acc: _RolloutAccumulator,
-) -> EchoStepPlan:
-    """Apply ECHO token limits and return the values logged for this step."""
-    rl_completion_surprisal_mean = (
-        acc.rl_completion_surprisal_sum / acc.rl_completion_token_count
-        if acc.rl_completion_token_count > 0
-        else 0.0
-    )
-    echo_completion_surprisal_mean = (
-        acc.sampled_completion_surprisal_sum / acc.sampled_completion_token_count
-        if acc.sampled_completion_token_count > 0
-        else rl_completion_surprisal_mean
-    )
-    if not config.echo_enabled:
-        return EchoStepPlan(
-            limit=EchoLimitStats(),
-            allowed_tokens=0,
-            reference_completion_tokens=0,
-            skipped_entropy_floor=False,
-            rl_completion_surprisal_mean=rl_completion_surprisal_mean,
-            echo_completion_surprisal_mean=echo_completion_surprisal_mean,
-        )
-
-    reference_completion_tokens = acc.sampled_completion_token_count
-    allowed_tokens = _echo_allowed_tokens(
-        rl_completion_tokens=reference_completion_tokens,
-        max_tokens_per_step=config.echo_max_tokens_per_step,
-        max_token_ratio=config.echo_max_token_ratio,
-    )
-    if echo_completion_surprisal_mean < config.echo_entropy_floor:
-        acc.datum_echo_advantages = [
-            [0.0] * len(row) for row in acc.datum_echo_advantages
-        ]
-        return EchoStepPlan(
-            limit=EchoLimitStats(
-                kept_datums=0,
-                kept_tokens=0,
-                truncated_tokens=acc.echo_build.candidate_tokens,
-            ),
-            allowed_tokens=allowed_tokens,
-            reference_completion_tokens=reference_completion_tokens,
-            skipped_entropy_floor=True,
-            rl_completion_surprisal_mean=rl_completion_surprisal_mean,
-            echo_completion_surprisal_mean=echo_completion_surprisal_mean,
-        )
-
-    acc.datum_echo_advantages, limit = limit_echo_masks(
-        acc.datum_echo_advantages,
-        max_positive_tokens=allowed_tokens,
-    )
-    return EchoStepPlan(
-        limit=limit,
-        allowed_tokens=allowed_tokens,
-        reference_completion_tokens=reference_completion_tokens,
-        skipped_entropy_floor=False,
-        rl_completion_surprisal_mean=rl_completion_surprisal_mean,
-        echo_completion_surprisal_mean=echo_completion_surprisal_mean,
-    )
-
-
-def _run_multiturn_rollouts(
-    config: TrainConfig,
-    helper: TrainHelper,
-    tokenizer: object,
-    verifiers_env: object,
-    prompts: PromptBatch,
-    acc: _RolloutAccumulator,
-    *,
-    step: int,
-    group_size: int,
-    sepa_lambda: float,
-    algorithm_params: Mapping[str, object],
-    transform_params: Mapping[str, object],
-    needs_planning: bool,
-    detector: PlanningDetector | None,
-    token_lookup: TokenTextLookup,
-    generations_logger: JsonlLogger,
-) -> None:
-    """Roll out, score, and datum-ize multiturn environment groups."""
-    sample_start = time.perf_counter()
-    for f_idx in range(len(prompts.ids)):
-        prompt_obj = prompts.objs[f_idx]
-        answer = prompts.answers[f_idx]
-        task = prompts.tasks[f_idx]
-        info = prompts.infos[f_idx]
-
-        (
-            rewards_G,
-            turns_G,
-            completion_texts_G,
-            turn_rewards_G,
-            turn_advantages_G,
-            turn_logs_G,
-            branch_rewards_G,
-            rollout_timing,
-        ) = run_multiturn_group(
-            verifiers_env,
-            helper=helper,
-            tokenizer=tokenizer,
-            model_name=config.model,
-            prompt=prompt_obj,
-            answer=answer,
-            task=task,
-            info=info,
-            num_rollouts=group_size,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            top_p=config.top_p,
-            max_turns_override=config.environment_max_turns,
-            tl_grpo=config.tl_grpo,
-            tl_grpo_branch_mode=config.tl_grpo_branch_mode,
-            tl_grpo_branch_size=config.tl_grpo_branch_size,
-            tl_grpo_lookahead_steps=config.tl_grpo_lookahead_steps,
-            tl_grpo_outcome_baseline=acc.tl_grpo_ema,
-            rollout_env_workers=config.environment_rollout_env_workers,
-            rollout_buffer_size=config.environment_rollout_buffer_size,
-        )
-        _accumulate_metric_totals(
-            acc.rollout_timing_metrics,
-            rollout_timing.as_metrics(),
-        )
-
-        logprobs_G: list[list[float]] = []
-        planning_masks_G: list[list[int]] = []
-        turns_logprobs_G: list[list[list[float]]] = []
-        turns_token_ids_G: list[list[list[int]]] = []
-        turns_prompt_ids_G: list[list[list[int]]] = []
-
-        for turns in turns_G:
-            seq_logprobs: list[float] = []
-            seq_token_ids: list[int] = []
-            turn_logprobs: list[list[float]] = []
-            turn_token_ids: list[list[int]] = []
-            turn_prompt_ids: list[list[int]] = []
-            for turn in turns:
-                turn_prompt_ids.append(list(turn.prompt_ids))
-                turn_token_ids.append(list(turn.completion_ids))
-                turn_logprobs.append(list(turn.completion_logprobs))
-                seq_logprobs.extend(turn.completion_logprobs)
-                seq_token_ids.extend(turn.completion_ids)
-            logprobs_G.append(seq_logprobs)
-            turns_logprobs_G.append(turn_logprobs)
-            turns_token_ids_G.append(turn_token_ids)
-            turns_prompt_ids_G.append(turn_prompt_ids)
-            if needs_planning:
-                assert detector is not None
-                planning_masks_G.append(
-                    detector.detect(token_lookup.get_many(seq_token_ids))
-                )
-            else:
-                planning_masks_G.append([0] * len(seq_logprobs))
-
-            acc.total_completions += 1
-            acc.sampled_completion_token_count += len(seq_token_ids)
-            acc.sampled_completion_surprisal_sum += sum(
-                -lp for lp in seq_logprobs
-            )
-            if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
-                acc.max_token_hits += 1
-
-        acc.logprobs_sepa.extend(logprobs_G)
-        acc.planning_masks_sepa.extend(planning_masks_G)
-
-        for r in rewards_G:
-            acc.rewards.append(r)
-            if r > CORRECT_THRESHOLD:
-                acc.correct += 1
-            if acc.tl_grpo_ema is not None:
-                acc.tl_grpo_ema = (
-                    config.tl_grpo_ema_decay * acc.tl_grpo_ema
-                    + (1 - config.tl_grpo_ema_decay) * r
-                )
-
-        console.print_group_summary(rewards_G, answer)
-        reward_tie_stats = acc.ties.observe(rewards_G)
-        if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-            if not console.keep_uniform_group(
-                rewards_G,
-                batch_advantage_norm=config.batch_advantage_norm,
-                keep_for_echo=config.echo_enabled,
-            ):
-                continue
-
-        adv_result = compute_group_advantages(
-            config,
-            rewards_G,
-            logprobs_G,
-            planning_masks_G,
-            step=step,
-            sepa_lambda=sepa_lambda,
-            algorithm_params=algorithm_params,
-            transform_params=transform_params,
-        )
-        all_token_advs_G = adv_result.token_advs
-        if adv_result.has_stats:
-            acc.surprisal_stats.append(adv_result.stats)
-        if adv_result.extra_metrics:
-            acc.adv_results.append(adv_result)
-
-        for s_idx in range(len(rewards_G)):
-            turn_token_ids = turns_token_ids_G[s_idx]
-            turn_logprobs = turns_logprobs_G[s_idx]
-            token_advs = all_token_advs_G[s_idx]
-
-            # MT-GRPO: when per-turn advantages are provided by the
-            # environment rubric (e.g. soma's _compute_turn_advantages),
-            # use them directly as the advantage for each turn's tokens
-            # instead of the uniform episode-level expansion.
-            # All-or-nothing per rollout: if turn_advantages covers all
-            # turns, use it; otherwise fall back entirely to episode-level
-            # to avoid offset drift between the two modes.
-            s_turn_advs: list[float] | None = None
-            if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
-                candidate = turn_advantages_G[s_idx]
-                if len(candidate) >= len(turn_token_ids):
-                    s_turn_advs = candidate
-
-            offset = 0
-            seq_advs_by_turn: list[list[float]] = []
-            for t_idx in range(len(turn_token_ids)):
-                seq_tokens = turn_token_ids[t_idx]
-
-                if s_turn_advs is not None:
-                    # Per-turn advantage: broadcast the turn's advantage
-                    # to all tokens in this turn's completion.
-                    seq_advs = [s_turn_advs[t_idx]] * len(seq_tokens)
-                else:
-                    # Fallback: use episode-level token advantages.
-                    seq_advs = token_advs[offset : offset + len(seq_tokens)]
-
-                offset += len(seq_tokens)
-                seq_advs_by_turn.append(seq_advs)
-
-            if config.echo_enabled:
-                rollout_datum, rollout_echo_build = build_rollout_echo_datum(
-                    turns_G[s_idx],
-                    completion_advantages=seq_advs_by_turn,
-                    weight=config.echo_weight,
-                    min_prompt_overlap=config.echo_min_prompt_overlap,
-                )
-                acc.echo_build = merge_echo_build_stats(
-                    acc.echo_build,
-                    rollout_echo_build,
-                )
-                if rollout_datum is not None:
-                    acc.datum_tokens.append(rollout_datum.tokens)
-                    acc.datum_logprobs.append(rollout_datum.logprobs)
-                    acc.datum_advantages.append(rollout_datum.advantages)
-                    acc.datum_echo_advantages.append(
-                        rollout_datum.echo_advantages
-                    )
-                    acc.datum_echo_full_observation_counts.append(
-                        rollout_datum.full_observation_count
-                    )
-                    acc.rl_completion_token_count += sum(
-                        len(tokens) for tokens in turn_token_ids
-                    )
-                    acc.rl_completion_surprisal_sum += sum(
-                        -lp for turn_lps in turn_logprobs for lp in turn_lps
-                    )
-                    continue
-
-            turn_prompt_ids = turns_prompt_ids_G[s_idx]
-            for t_idx in range(len(turn_token_ids)):
-                seq_tokens = turn_token_ids[t_idx]
-                seq_logprobs = turn_logprobs[t_idx]
-                prompt_ids = turn_prompt_ids[t_idx]
-                seq_advs = seq_advs_by_turn[t_idx]
-
-                full_tokens = list(prompt_ids) + list(seq_tokens)
-                padded_logprobs = [0.0] * len(prompt_ids) + list(seq_logprobs)
-                padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
-                acc.datum_tokens.append(full_tokens)
-                acc.datum_logprobs.append(padded_logprobs)
-                acc.datum_advantages.append(padded_advantages)
-                acc.datum_echo_advantages.append(
-                    [0.0] * len(full_tokens)
-                )
-                acc.datum_echo_full_observation_counts.append(0)
-                acc.rl_completion_token_count += len(seq_tokens)
-                acc.rl_completion_surprisal_sum += sum(
-                    -lp for lp in seq_logprobs
-                )
-
-        generation_entries: list[dict[str, object]] = []
-        selected_generation_indices = (
-            generation_log_indices(
-                len(completion_texts_G),
-                samples_per_prompt=config.generation_log_samples_per_prompt,
-                rewards=rewards_G,
-            )
-            if generations_logger.enabled
-            else []
-        )
-        for s_idx in selected_generation_indices:
-            comp_text = completion_texts_G[s_idx]
-            gen_entry: dict[str, object] = {
-                "step": step,
-                "prompt": prompts.previews[f_idx],
-                "completion": comp_text[:500],
-                "reward": rewards_G[s_idx],
-                "num_tokens": len(logprobs_G[s_idx]),
-            }
-            if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:
-                turn_summary = []
-                for tl in turn_logs_G[s_idx]:
-                    obs_raw = tl.get("observation", {})
-                    obs = (
-                        cast(Mapping[str, object], obs_raw)
-                        if isinstance(obs_raw, Mapping)
-                        else {}
-                    )
-                    entry: dict[str, object] = {
-                        "turn": tl.get("turn"),
-                        "tick": obs.get("tick", 0),
-                        "customer_waiting": obs.get(
-                            "customer_waiting",
-                            False,
-                        ),
-                        "inventory": obs.get("inventory", 0),
-                        "operation": tl.get("operation"),
-                        "reward_delta": tl.get("reward_delta", 0.0),
-                        "valid": tl.get("valid", True),
-                    }
-                    if not tl.get("valid"):
-                        entry["error"] = tl.get("error", "")
-                    turn_summary.append(entry)
-                    # ── Behavior accumulation ──
-                    acc.behavior_turns += 1
-                    if not tl.get("valid", True):
-                        acc.behavior_invalid += 1
-                    _op = str(tl.get("operation", "unknown"))
-                    acc.behavior_actions[_op] = (
-                        acc.behavior_actions.get(_op, 0) + 1
-                    )
-                gen_entry["turn_log"] = turn_summary
-                acc.behavior_resp_lens.append(
-                    len(str(gen_entry.get("completion", "")))
-                )
-            if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
-                gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
-            if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
-                gen_entry["branch_rewards"] = branch_rewards_G[s_idx]
-            if s_idx < len(turns_logprobs_G) and turns_logprobs_G[s_idx]:
-                turn_lps = turns_logprobs_G[s_idx]
-                gen_entry["turn_mean_logprobs"] = [
-                    sum(lps) / len(lps) if lps else 0.0
-                    for lps in turn_lps
-                ]
-                gen_entry["turn_logprob_var"] = [
-                    (sum((x - sum(lps) / len(lps)) ** 2 for x in lps) / len(lps))
-                    if len(lps) > 1 else 0.0
-                    for lps in turn_lps
-                ]
-            # Log top-K highest surprisal tokens with decoded text.
-            # Useful for debugging DG gating and blog post analysis:
-            # shows which tokens the gate considers "fork-points".
-            if s_idx < len(logprobs_G):
-                # Flatten token IDs for this sample
-                s_tids: list[int] = []
-                for t_idx2 in range(len(turns_token_ids_G[s_idx])):
-                    s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
-                top_entries = top_surprisal_payload(
-                    logprobs_G[s_idx],
-                    s_tids,
-                    token_lookup,
-                    limit=config.generation_top_surprisal_limit,
-                )
-                if top_entries:
-                    gen_entry["top_surprisal_tokens"] = top_entries
-            generation_entries.append(gen_entry)
-        if generation_entries:
-            generations_logger.log_many(generation_entries)
-    acc.sample_time_s = time.perf_counter() - sample_start
-
-
-def _run_singleturn_rollouts(
-    config: TrainConfig,
-    helper: TrainHelper,
-    tokenizer: object,
-    verifiers_env: object | None,
-    reward_fn: RewardFunction | None,
-    prompts: PromptBatch,
-    acc: _RolloutAccumulator,
-    *,
-    step: int,
-    group_size: int,
-    sepa_lambda: float,
-    algorithm_params: Mapping[str, object],
-    transform_params: Mapping[str, object],
-    needs_planning: bool,
-    detector: PlanningDetector | None,
-    token_lookup: TokenTextLookup,
-    runtime_counters: RuntimeCounters,
-    generations_logger: JsonlLogger,
-) -> None:
-    """Sample, score, and datum-ize single-turn completion groups."""
-    # 10c. Sample completions
-    sample_start = time.perf_counter()
-    entropy_helper = (
-        helper
-        if config.uncertainty_kind == "shannon_entropy"
-        and isinstance(helper, EntropySamplingHelper)
-        else None
-    )
-    precomputed_entropies_batch: list[list[list[float]]] | None = None
-    if entropy_helper is not None:
-        enriched_sequences = entropy_helper.sample_with_entropy(
-            prompts.ids,
-            group_size,
-            config.max_tokens,
-            config.temperature,
-            config.top_p,
-        )
-        # Separate into standard 2-tuples + entropy side channel
-        all_group_sequences = [
-            [(ids, lps) for ids, lps, _ent in group]
-            for group in enriched_sequences
-        ]
-        precomputed_entropies_batch = [
-            [ent if ent is not None else [] for _ids, _lps, ent in group]
-            for group in enriched_sequences
-        ]
-    else:
-        all_group_sequences = helper.sample(
-            prompts.ids,
-            group_size,
-            config.max_tokens,
-            config.temperature,
-            config.top_p,
-        )
-    acc.sample_time_s = time.perf_counter() - sample_start
-
-    decoded_groups = decode_sequence_groups(
-        tokenizer,
-        all_group_sequences,
-        needs_planning=needs_planning,
-        token_lookup=token_lookup if needs_planning else None,
-        detector=detector if needs_planning else None,
-        counters=runtime_counters,
-    )
-
-    for f_idx, decoded_group in enumerate(decoded_groups):
-        prompt_ids = prompts.ids[f_idx]
-        answer = prompts.answers[f_idx]
-        task = prompts.tasks[f_idx]
-        info = prompts.infos[f_idx]
-        prompt_obj = prompts.objs[f_idx]
-
-        rewards_G: list[float] = []
-        logprobs_G: list[list[float]] = []
-        planning_masks_G: list[list[int]] = []
-        completion_texts_G: list[str] = []
-        for sample in decoded_group:
-            completion_texts_G.append(sample.text)
-            logprobs_G.append(sample.logprobs)
-            planning_masks_G.append(sample.planning_mask)
-
-        if verifiers_env is None:
-            assert reward_fn is not None
-            for text in completion_texts_G:
-                rewards_G.append(reward_fn.score(text, answer))
-        else:
-            rewards_G = score_singleturn_group(
-                verifiers_env,
-                prompt=prompt_obj,
-                answer=answer,
-                task=task,
-                info=info,
-                completion_texts=completion_texts_G,
-            )
-
-        acc.logprobs_sepa.extend(logprobs_G)
-        acc.planning_masks_sepa.extend(planning_masks_G)
-
-        for r in rewards_G:
-            acc.rewards.append(r)
-            if r > CORRECT_THRESHOLD:
-                acc.correct += 1
-
-        for sample in decoded_group:
-            acc.total_completions += 1
-            if len(sample.token_ids) >= config.max_tokens:
-                acc.max_token_hits += 1
-
-        console.print_group_summary(rewards_G, answer)
-        reward_tie_stats = acc.ties.observe(rewards_G)
-        if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-            if not console.keep_uniform_group(
-                rewards_G,
-                batch_advantage_norm=config.batch_advantage_norm,
-                keep_for_echo=False,
-            ):
-                continue
-
-        # Resolve per-group precomputed entropies
-        group_entropies_G: list[list[float]] | None = None
-        if precomputed_entropies_batch is not None:
-            group_entropies_G = precomputed_entropies_batch[f_idx]
-
-        adv_result = compute_group_advantages(
-            config,
-            rewards_G,
-            logprobs_G,
-            planning_masks_G,
-            step=step,
-            sepa_lambda=sepa_lambda,
-            algorithm_params=algorithm_params,
-            transform_params=transform_params,
-            precomputed_entropies_G=group_entropies_G,
-        )
-        all_token_advs_G = adv_result.token_advs
-        if adv_result.has_stats:
-            acc.surprisal_stats.append(adv_result.stats)
-        if adv_result.extra_metrics:
-            acc.adv_results.append(adv_result)
-
-        for sample, token_advs in zip(decoded_group, all_token_advs_G):
-            full_tokens = list(prompt_ids) + list(sample.token_ids)
-            padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
-            padded_advantages = [0.0] * len(prompt_ids) + list(token_advs)
-            acc.datum_tokens.append(full_tokens)
-            acc.datum_logprobs.append(padded_logprobs)
-            acc.datum_advantages.append(padded_advantages)
-            acc.datum_echo_advantages.append([0.0] * len(full_tokens))
-            acc.datum_echo_full_observation_counts.append(0)
-            acc.rl_completion_token_count += len(sample.token_ids)
-            acc.rl_completion_surprisal_sum += sum(
-                -lp for lp in sample.logprobs
-            )
-
-        generation_entries: list[dict[str, object]] = []
-        selected_generation_indices = (
-            generation_log_indices(
-                len(decoded_group),
-                samples_per_prompt=config.generation_log_samples_per_prompt,
-                rewards=rewards_G,
-            )
-            if generations_logger.enabled
-            else []
-        )
-        for s_idx in selected_generation_indices:
-            sample = decoded_group[s_idx]
-            gen_entry: dict[str, object] = {
-                "step": step,
-                "prompt": prompts.previews[f_idx],
-                "completion": sample.text[:500],
-                "reward": rewards_G[s_idx],
-                "num_tokens": len(sample.logprobs),
-            }
-            # Top-K highest surprisal tokens with decoded text
-            top_entries = top_surprisal_payload(
-                sample.logprobs,
-                sample.token_ids,
-                token_lookup,
-                limit=config.generation_top_surprisal_limit,
-            )
-            if top_entries:
-                gen_entry["top_surprisal_tokens"] = top_entries
-            generation_entries.append(gen_entry)
-        if generation_entries:
-            generations_logger.log_many(generation_entries)
 
 
 def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
@@ -948,7 +306,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             )
 
             # 10d. Rollout accumulation + post-rollout ECHO state
-            acc = _RolloutAccumulator(tl_grpo_ema=tl_grpo_ema)
+            acc = RolloutAccumulator(tl_grpo_ema=tl_grpo_ema)
             echo_loss = 0.0
             echo_train_time = 0.0
             echo_joint_optimizer_step = False
@@ -966,7 +324,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 sepa_lambda_val = sepa_controller.resolve_lambda(step=float(batch_idx))
 
             if verifiers_multiturn:
-                _run_multiturn_rollouts(
+                run_multiturn(
                     config,
                     helper,
                     tokenizer,
@@ -982,9 +340,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     detector=detector,
                     token_lookup=token_lookup,
                     generations_logger=generations_logger,
+                    group_runner=run_multiturn_group,
                 )
             else:
-                _run_singleturn_rollouts(
+                run_singleturn(
                     config,
                     helper,
                     tokenizer,
@@ -1002,6 +361,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     token_lookup=token_lookup,
                     runtime_counters=runtime_counters,
                     generations_logger=generations_logger,
+                    singleturn_scorer=score_singleturn_group,
                 )
             tl_grpo_ema = acc.tl_grpo_ema
 
@@ -1050,11 +410,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     apply_advantage_cap(acc.datum_advantages, config.adv_clip_max)
                 )
 
-            echo_plan = _prepare_echo_step_plan(config, acc)
+            echo_plan = prepare_echo_step_plan(config, acc)
 
-            rl_has_signal = _has_nonzero_advantage(acc.datum_advantages)
+            rl_has_signal = has_nonzero_advantage(acc.datum_advantages)
             echo_has_datums = bool(
-                config.echo_enabled and _has_nonzero_advantage(
+                config.echo_enabled and has_nonzero_advantage(
                     acc.datum_echo_advantages
                 )
             )

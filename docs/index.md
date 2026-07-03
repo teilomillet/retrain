@@ -47,6 +47,10 @@ retrain
 │   │   ├── prompt.py   # Discovery memory prompt rendering
 │   │   └── summary.py  # Discovery archive JSON summary export
 │   ├── examples.py     # Training example loading across providers
+│   ├── rollout/        # RL rollout execution and rollout-step state
+│   │   ├── state.py    # RolloutAccumulator and ECHO planning
+│   │   ├── multi.py    # Multiturn environment rollout path
+│   │   └── single.py   # Single-turn completion rollout path
 │   ├── runner/         # TrainingRunner protocol + built-in runners
 │   │   ├── result.py   # Run results, metrics, and artifacts
 │   │   ├── protocol.py # Runner protocol
