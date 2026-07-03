@@ -25,7 +25,7 @@ from retrain.backends.catalog import (
 from retrain.backpressure import BackPressure
 from retrain.config import TrainConfig
 from retrain.data import DataSource
-from retrain.plugin_resolver import resolve_dotted_attribute
+from retrain.plugins.resolve import resolve_dotted_attribute
 from retrain.planning import PlanningDetector
 from retrain.rewards import RewardFunction
 from retrain.training.runner import TrainingRunner

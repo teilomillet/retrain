@@ -1,6 +1,4 @@
-"""Compatibility exports for plugin resolution."""
-
-from __future__ import annotations
+"""Plugin loading and discovery."""
 
 from retrain.plugins.resolve import (
     PluginResolution,

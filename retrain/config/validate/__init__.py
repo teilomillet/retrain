@@ -9,7 +9,7 @@ from retrain.config.validate.defaults import apply_env_defaults
 from retrain.config.validate.mode import collect_mode_errors
 from retrain.config.validate.runtime import collect_runtime_errors
 from retrain.config.validate.warn import emit_warnings
-from retrain.plugin_resolver import set_plugin_runtime
+from retrain.plugins.resolve import set_plugin_runtime
 
 if TYPE_CHECKING:
     from retrain.config.schema import TrainConfig

@@ -57,6 +57,8 @@ retrain/
     log.py
   metrics/
     scan.py
+  plugins/
+    resolve.py
   process/
     metrics.py
 ```
@@ -91,6 +93,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `io/json.py`: JSON loading and compact JSONL row encoding.
 - `io/log.py`: buffered JSONL append logging.
 - `metrics/scan.py`: one-pass metrics JSONL readers and aggregates.
+- `plugins/resolve.py`: dotted-path plugin runtime, cache, and discovery.
 - `process/metrics.py`: process-local runtime measurements such as peak RSS.
 
 Do not split just to hide lines. A private helper is worth keeping only when it

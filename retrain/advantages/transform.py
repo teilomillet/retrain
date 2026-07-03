@@ -20,7 +20,7 @@ from retrain.advantages.plugin import (
     _validate_short_registry_name,
 )
 from retrain.advantages.types import TransformContextFn, TransformSpec
-from retrain.plugin_resolver import resolve_dotted_attribute
+from retrain.plugins.resolve import resolve_dotted_attribute
 
 _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
     "none": TransformSpec(name="none", use_gtpo=False),

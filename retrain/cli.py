@@ -582,7 +582,7 @@ def _run_plugins(args: list[str]) -> None:
         get_builtin_transform_modes,
     )
     from retrain.config import TrainConfig, load_config
-    from retrain.plugin_resolver import discover_plugin_modules, get_plugin_runtime
+    from retrain.plugins.resolve import discover_plugin_modules, get_plugin_runtime
     from retrain.registry import get_registry
 
     fmt = "text"

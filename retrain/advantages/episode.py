@@ -12,7 +12,7 @@ from retrain.advantages.plugin import (
     _validate_short_registry_name,
 )
 from retrain.advantages.types import AdvantageSpec, EpisodeAdvantageComputeFn
-from retrain.plugin_resolver import resolve_dotted_attribute
+from retrain.plugins.resolve import resolve_dotted_attribute
 
 # 0. GRPO advantages (simple reward centering)
 # ---------------------------------------------------------------------------

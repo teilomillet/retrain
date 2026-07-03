@@ -19,7 +19,7 @@ from retrain.advantages.types import (
     AlgorithmContextFn,
     AlgorithmSpec,
 )
-from retrain.plugin_resolver import get_plugin_runtime, resolve_dotted_attribute
+from retrain.plugins.resolve import get_plugin_runtime, resolve_dotted_attribute
 
 # 1c. Algorithm mode registry (built-ins + dotted-path plugins)
 # ---------------------------------------------------------------------------

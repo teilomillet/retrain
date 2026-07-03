@@ -1,11 +1,11 @@
-"""Tests for shared plugin resolver behavior."""
+"""Tests for plugin resolution behavior."""
 
 from __future__ import annotations
 
 
 import pytest
 
-from retrain.plugin_resolver import (
+from retrain.plugins.resolve import (
     discover_plugin_modules,
     get_plugin_runtime,
     resolve_dotted_attribute,
@@ -82,3 +82,10 @@ class TestPluginResolver:
         found = discover_plugin_modules(["plugins"])
         assert "plugins.a" in found
         assert all(not m.endswith("._ignore") for m in found)
+
+    def test_legacy_plugin_resolver_module_reexports_resolver(self):
+        from retrain.plugin_resolver import (
+            resolve_dotted_attribute as legacy_resolve,
+        )
+
+        assert legacy_resolve is resolve_dotted_attribute
