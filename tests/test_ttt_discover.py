@@ -120,7 +120,9 @@ class TestBuildDiscoveryPrompt:
 
         assert isinstance(prompt, list)
         assert prompt[-1]["role"] == "user"
-        assert "Discovery memory" in prompt[-1]["content"]
+        content = prompt[-1]["content"]
+        assert isinstance(content, str)
+        assert "Discovery memory" in content
 
 
 class TestTTTDiscoverRunner:
