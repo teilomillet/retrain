@@ -5,25 +5,50 @@ from __future__ import annotations
 import heapq
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, asdict
-from typing import Protocol
+from typing import Protocol, cast
 
 from retrain.type_defs import PromptLike
 from retrain.verifiers_bridge import encode_prompt_for_sampling, prompt_preview
 
 
-class _TokenizerWithIds(Protocol):
-    def convert_ids_to_tokens(self, ids: list[int]) -> list[object]: ...
+class _ConvertIdsToTokens(Protocol):
+    def __call__(self, ids: list[int]) -> Sequence[object]: ...
 
-    def batch_decode(
+
+class _BatchDecode(Protocol):
+    def __call__(
         self,
         token_ids: Sequence[Sequence[int]],
         *,
         skip_special_tokens: bool = True,
-    ) -> list[str]: ...
+    ) -> Sequence[str]: ...
 
 
-class _PlanningDetector(Protocol):
-    def detect(self, token_strs: list[str]) -> list[int]: ...
+class _DetectPlanning(Protocol):
+    def __call__(self, token_strs: list[str]) -> Sequence[int]: ...
+
+
+def _require_convert_ids_to_tokens(tokenizer: object) -> _ConvertIdsToTokens:
+    convert_ids_to_tokens = getattr(tokenizer, "convert_ids_to_tokens", None)
+    if not callable(convert_ids_to_tokens):
+        raise TypeError(
+            "Tokenizer must expose convert_ids_to_tokens() for planning detection."
+        )
+    return cast(_ConvertIdsToTokens, convert_ids_to_tokens)
+
+
+def _require_batch_decode(tokenizer: object) -> _BatchDecode:
+    batch_decode = getattr(tokenizer, "batch_decode", None)
+    if not callable(batch_decode):
+        raise TypeError("Tokenizer must expose batch_decode().")
+    return cast(_BatchDecode, batch_decode)
+
+
+def _require_planning_detect(detector: object) -> _DetectPlanning:
+    detect = getattr(detector, "detect", None)
+    if not callable(detect):
+        raise TypeError("Planning detector must expose detect().")
+    return cast(_DetectPlanning, detect)
 
 
 @dataclass
@@ -69,13 +94,8 @@ class TokenTextLookup:
             seen_missing.add(token_id)
 
         if missing:
-            tokenizer = self._tokenizer
-            if not hasattr(tokenizer, "convert_ids_to_tokens"):
-                raise TypeError(
-                    "Tokenizer must expose convert_ids_to_tokens() for planning detection."
-                )
-            tokenizer_typed = tokenizer
-            raw_tokens = tokenizer_typed.convert_ids_to_tokens(missing)  # type: ignore[unresolved-attribute]
+            convert_ids_to_tokens = _require_convert_ids_to_tokens(self._tokenizer)
+            raw_tokens = convert_ids_to_tokens(missing)
             for token_id, token in zip(missing, raw_tokens):
                 self._cache[token_id] = str(token) if token is not None else ""
             if self._counters is not None:
@@ -161,12 +181,12 @@ def decode_sequence_groups(
 
     decoded_texts: list[str]
     if flat_token_ids:
-        if not hasattr(tokenizer, "batch_decode"):
-            raise TypeError("Tokenizer must expose batch_decode().")
-        tokenizer_typed = tokenizer
-        decoded_texts = tokenizer_typed.batch_decode(  # type: ignore[unresolved-attribute]
-            flat_token_ids,
-            skip_special_tokens=True,
+        batch_decode = _require_batch_decode(tokenizer)
+        decoded_texts = list(
+            batch_decode(
+                flat_token_ids,
+                skip_special_tokens=True,
+            )
         )
         if counters is not None:
             counters.batch_decode_calls += 1
@@ -174,11 +194,13 @@ def decode_sequence_groups(
     else:
         decoded_texts = []
 
+    detect_planning: _DetectPlanning | None = None
     if needs_planning:
         if token_lookup is None or detector is None:
             raise ValueError(
                 "Planning decode requires both token_lookup and detector."
             )
+        detect_planning = _require_planning_detect(detector)
         all_token_ids = [token_id for seq in flat_token_ids for token_id in seq]
         all_token_texts = token_lookup.get_many(all_token_ids)
         offset = 0
@@ -195,9 +217,11 @@ def decode_sequence_groups(
             token_ids_list = list(token_ids)
             logprobs = list(seq_logprobs)
             if needs_planning:
-                detector_typed = detector
-                planning_mask = detector_typed.detect(  # type: ignore[unresolved-attribute]
-                    flat_token_texts[flat_offset + seq_idx]
+                assert detect_planning is not None
+                planning_mask = list(
+                    detect_planning(
+                        flat_token_texts[flat_offset + seq_idx]
+                    )
                 )
             else:
                 planning_mask = [0] * len(logprobs)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from retrain.runtime_support import (
     DecodedSequence,
     ExamplePromptCache,
@@ -35,6 +37,18 @@ class _FakeDetector:
         return [1 if token.endswith("7") else 0 for token in token_strs]
 
 
+class _NonCallableConvertTokenizer:
+    convert_ids_to_tokens = 1
+
+
+class _NonCallableDecodeTokenizer:
+    batch_decode = 1
+
+
+class _NonCallableDetector:
+    detect = 1
+
+
 def test_token_text_lookup_batches_cache_misses() -> None:
     tokenizer = _FakeTokenizer()
     counters = RuntimeCounters()
@@ -49,6 +63,13 @@ def test_token_text_lookup_batches_cache_misses() -> None:
     assert counters.token_lookup_requests == 5
     assert counters.token_lookup_convert_calls == 2
     assert counters.token_lookup_cache_misses == 3
+
+
+def test_token_text_lookup_requires_callable_converter() -> None:
+    lookup = TokenTextLookup(_NonCallableConvertTokenizer())
+
+    with pytest.raises(TypeError, match="convert_ids_to_tokens"):
+        lookup.get_many([1])
 
 
 def test_example_prompt_cache_uses_supplied_callables() -> None:
@@ -111,3 +132,25 @@ def test_decode_sequence_groups_and_top_surprisal_entries() -> None:
     ]
     assert counters.batch_decode_calls == 1
     assert counters.batch_decoded_sequences == 2
+
+
+def test_decode_sequence_groups_requires_callable_batch_decode() -> None:
+    with pytest.raises(TypeError, match="batch_decode"):
+        decode_sequence_groups(
+            _NonCallableDecodeTokenizer(),
+            [[([1], [-0.1])]],
+            needs_planning=False,
+        )
+
+
+def test_decode_sequence_groups_requires_callable_planning_detector() -> None:
+    tokenizer = _FakeTokenizer()
+
+    with pytest.raises(TypeError, match="Planning detector"):
+        decode_sequence_groups(
+            tokenizer,
+            [[([1], [-0.1])]],
+            needs_planning=True,
+            token_lookup=TokenTextLookup(tokenizer),
+            detector=_NonCallableDetector(),
+        )
