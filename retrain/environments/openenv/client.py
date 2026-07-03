@@ -20,6 +20,7 @@ The action schema is served over plain HTTP at ``<base>/schema``.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -74,14 +75,15 @@ def http_url(base_url: str) -> str:
 
 async def _default_connect(url: str) -> Transport:
     try:
-        from websockets.asyncio.client import (
-            connect,
+        module = importlib.import_module(
+            "websockets.asyncio.client",
         )
     except ImportError:
         raise ImportError(
             "OpenEnv environments require the websockets package.\n"
             "Install it with: pip install retrain[openenv]"
         ) from None
+    connect = getattr(module, "connect")
     return cast(Transport, await connect(url))
 
 

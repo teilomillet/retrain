@@ -18,7 +18,7 @@ jobs:
       - name: Install package and quality tooling
         run: |
           uv venv
-          uv pip install -e ".[docs]" pytest "ruff==0.15.7" "ty==0.0.24" "ordeal==0.3.39"
+          uv pip install -e ".[docs,openenv]" pytest "ruff==0.15.7" "ty==0.0.24" "ordeal==0.3.39"
       - name: Run ruff
         run: .venv/bin/ruff check retrain scripts tests
       - name: Run ty checks
