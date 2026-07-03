@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from retrain.backends import (
     EntropySamplingHelper,
     RuntimeMetricsHelper,
+    SftTrainHelper,
     TrainHelper,
     collect_runtime_metrics,
+    run_sft_train_step,
 )
 from retrain.config import TrainConfig
 from retrain.registry import backend
@@ -18,6 +20,7 @@ from retrain.registry import backend
 class _BaseFakeHelper:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.last_train_step: dict[str, object] | None = None
 
     def checkpoint(self, name: str) -> None:
         self.calls.append(f"checkpoint:{name}")
@@ -46,7 +49,13 @@ class _BaseFakeHelper:
         weight_decay: float,
     ) -> float:
         self.calls.append("train_step")
-        _ = all_tokens, all_logprobs, all_advantages, lr, weight_decay
+        self.last_train_step = {
+            "all_tokens": all_tokens,
+            "all_logprobs": all_logprobs,
+            "all_advantages": all_advantages,
+            "lr": lr,
+            "weight_decay": weight_decay,
+        }
         return 0.0
 
     def save_adapter(self, path: str, name: str) -> str:
@@ -114,6 +123,23 @@ class _NonCallableRuntimeMetricsHelper(_BaseFakeHelper):
 class _NonMappingRuntimeMetricsHelper(_BaseFakeHelper):
     def runtime_metrics(self) -> list[tuple[str, int]]:
         return [("fake_backend_metric", 1)]
+
+
+class _SftFakeHelper(_BaseFakeHelper):
+    def sft_train_step(
+        self,
+        all_tokens: list[list[int]],
+        all_advantages: list[list[float]],
+        lr: float,
+        weight_decay: float,
+    ) -> float:
+        self.calls.append("sft_train_step")
+        _ = all_tokens, all_advantages, lr, weight_decay
+        return 1.25
+
+
+class _NonCallableSftHelper(_BaseFakeHelper):
+    sft_train_step = 1
 
 
 def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
@@ -475,3 +501,60 @@ def test_collect_runtime_metrics_tolerates_malformed_helpers():
     assert isinstance(non_callable, RuntimeMetricsHelper)
     assert collect_runtime_metrics(non_callable) == {}
     assert collect_runtime_metrics(non_mapping) == {}
+
+
+def test_run_sft_train_step_uses_native_capability():
+    helper = _SftFakeHelper()
+
+    loss = run_sft_train_step(
+        helper,
+        [[101, 102]],
+        [[0.0, 1.0]],
+        lr=1e-4,
+        weight_decay=0.0,
+    )
+
+    assert isinstance(helper, SftTrainHelper)
+    assert loss == 1.25
+    assert helper.calls == ["sft_train_step"]
+
+
+def test_run_sft_train_step_falls_back_to_train_helper():
+    helper = _BaseFakeHelper()
+    tokens = [[101, 102], [201]]
+    advantages = [[0.0, 1.0], [1.0]]
+
+    loss = run_sft_train_step(
+        helper,
+        tokens,
+        advantages,
+        lr=1e-4,
+        weight_decay=0.0,
+    )
+
+    assert not isinstance(helper, SftTrainHelper)
+    assert loss == 0.0
+    assert helper.calls == ["train_step"]
+    assert helper.last_train_step == {
+        "all_tokens": tokens,
+        "all_logprobs": [[0.0, 0.0], [0.0]],
+        "all_advantages": advantages,
+        "lr": 1e-4,
+        "weight_decay": 0.0,
+    }
+
+
+def test_run_sft_train_step_tolerates_malformed_capability():
+    helper = _NonCallableSftHelper()
+
+    loss = run_sft_train_step(
+        helper,
+        [[101, 102]],
+        [[0.0, 1.0]],
+        lr=1e-4,
+        weight_decay=0.0,
+    )
+
+    assert isinstance(helper, SftTrainHelper)
+    assert loss == 0.0
+    assert helper.calls == ["train_step"]

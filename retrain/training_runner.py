@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from retrain.backends import collect_runtime_metrics
+from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
 
 
@@ -313,26 +313,13 @@ class SftRunner:
                 batch = [tokenized_examples[idx] for idx in indices]
                 tokenized = build_sft_tokenized_batch(batch)
 
-                if hasattr(helper, "sft_train_step"):
-                    loss = float(
-                        helper.sft_train_step(  # type: ignore[call-non-callable]
-                            tokenized.tokens,
-                            tokenized.advantages,
-                            lr,
-                            config.weight_decay,
-                        )
-                    )
-                else:
-                    all_logprobs = [[0.0] * len(tokens) for tokens in tokenized.tokens]
-                    loss = float(
-                        helper.train_step(
-                            tokenized.tokens,
-                            all_logprobs,
-                            tokenized.advantages,
-                            lr,
-                            config.weight_decay,
-                        )
-                    )
+                loss = run_sft_train_step(
+                    helper,
+                    tokenized.tokens,
+                    tokenized.advantages,
+                    lr,
+                    config.weight_decay,
+                )
 
                 elapsed = time.perf_counter() - step_start
                 metrics: dict[str, int | float | str] = {

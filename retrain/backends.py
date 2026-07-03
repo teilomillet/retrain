@@ -63,6 +63,19 @@ class RuntimeMetricsHelper(Protocol):
     def runtime_metrics(self) -> Mapping[str, object]: ...
 
 
+@runtime_checkable
+class SftTrainHelper(Protocol):
+    """Optional backend capability for native supervised fine-tuning loss."""
+
+    def sft_train_step(
+        self,
+        all_tokens: list[list[int]],
+        all_advantages: list[list[float]],
+        lr: float,
+        weight_decay: float,
+    ) -> float: ...
+
+
 def collect_runtime_metrics(helper: object) -> dict[str, object]:
     """Return backend runtime telemetry when the helper exposes it safely."""
     runtime_metrics = getattr(helper, "runtime_metrics", None)
@@ -72,3 +85,27 @@ def collect_runtime_metrics(helper: object) -> dict[str, object]:
     if isinstance(metrics, Mapping):
         return dict(metrics)
     return {}
+
+
+def run_sft_train_step(
+    helper: TrainHelper,
+    all_tokens: list[list[int]],
+    all_advantages: list[list[float]],
+    lr: float,
+    weight_decay: float,
+) -> float:
+    """Use a backend's native SFT path, falling back to TrainHelper semantics."""
+    sft_train_step = getattr(helper, "sft_train_step", None)
+    if callable(sft_train_step):
+        return float(sft_train_step(all_tokens, all_advantages, lr, weight_decay))
+
+    all_logprobs = [[0.0] * len(tokens) for tokens in all_tokens]
+    return float(
+        helper.train_step(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            lr,
+            weight_decay,
+        )
+    )

@@ -21,7 +21,11 @@ from retrain.advantages import (
     compute_algorithm_advantages,
     compute_composable_advantages,
 )
-from retrain.backends import EntropySamplingHelper, collect_runtime_metrics
+from retrain.backends import (
+    EntropySamplingHelper,
+    collect_runtime_metrics,
+    run_sft_train_step,
+)
 from retrain.backpressure import (
     StepObservation,
 )
@@ -998,7 +1002,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 sft_tokenized = build_sft_tokenized_batch(sft_batch)
                 sft_tokens_list = sft_tokenized.tokens
                 sft_advantages_list = sft_tokenized.advantages
-                sft_logprobs_list = [[0.0] * len(tokens) for tokens in sft_tokens_list]
 
                 # Train with cross-entropy loss (actual SFT, not importance sampling)
                 # Use sft_lr if set, otherwise fall back to main lr
@@ -1008,22 +1011,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     f"(lr={effective_sft_lr:.1e})...",
                     flush=True,
                 )
-                if hasattr(helper, "sft_train_step"):
-                    loss = helper.sft_train_step(  # type: ignore[call-non-callable]
-                        sft_tokens_list,
-                        sft_advantages_list,
-                        effective_sft_lr,
-                        config.weight_decay,
-                    )
-                else:
-                    # Fallback: use standard train_step with importance_sampling
-                    loss = helper.train_step(
-                        sft_tokens_list,
-                        sft_logprobs_list,
-                        sft_advantages_list,
-                        effective_sft_lr,
-                        config.weight_decay,
-                    )
+                loss = run_sft_train_step(
+                    helper,
+                    sft_tokens_list,
+                    sft_advantages_list,
+                    effective_sft_lr,
+                    config.weight_decay,
+                )
                 elapsed = time.perf_counter() - step_start
                 # Note: tinker's importance_sampling loss with logprobs=0 produces
                 # negative values that get MORE negative as the model learns
