@@ -114,7 +114,12 @@ retrain/
   status/
     scan.py
     format.py
-    export.py
+    export/
+      scan.py
+      prometheus.py
+      runs.py
+      server.py
+      types.py
   tree/
     model.py
     state.py
@@ -209,8 +214,10 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `campaign/`: sweep config expansion, sequential/parallel execution, and
   post-campaign squeeze/delight summaries.
 - `squeeze/`: adapter IO, LoRA-Squeeze rank math, and squeeze workflow command.
-- `status/`, `tree/`, `diff/`, and `benchmark/`: command-domain packages for
-  scanning/rendering runs, experiment trees, comparisons, and repeated runs.
+- `status/`: run scanning, table formatting, and live export split into scan,
+  Prometheus, JSON, server, and snapshot-type modules.
+- `tree/`, `diff/`, and `benchmark/`: command-domain packages for experiment
+  trees, comparisons, and repeated runs.
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.

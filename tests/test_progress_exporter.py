@@ -128,6 +128,10 @@ def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> Non
     assert "soma_retrain_run_info" in text
     assert 'run="energy-sft-demo"' in text
     assert "soma_retrain_recent_completion_tokens_max" in text
+    assert (
+        "# HELP soma_retrain_recent_completion_tokens_max "
+        "Max recent completion token count seen in diagnostics."
+    ) in text
     assert "soma_retrain_sample_result_age_seconds" in text
     assert "soma_retrain_latest_tokens_per_second" in text
 
