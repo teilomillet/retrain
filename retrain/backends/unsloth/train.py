@@ -14,6 +14,10 @@ from contextlib import contextmanager
 from functools import wraps
 
 from retrain.backends.unsloth.runtime import FastLanguageModel, load_fast_language_model
+from retrain.backends.local.lora import (
+    DEFAULT_TARGET_SUFFIXES as _DEFAULT_LORA_TARGET_SUFFIXES,
+    build_config as _build_lora_config,
+)
 
 try:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = load_fast_language_model()
@@ -268,12 +272,22 @@ class UnslothTrainHelper(LocalTrainHelper):
                 unsloth_tiled_mlp=self.unsloth_tiled_mlp,
                 text_only=self.unsloth_text_only,
             )
-        peft_config = self._build_peft_config(
-            model,
-            lora_rank,
-            lora_alpha,
-            lora_dropout,
+        target_module_suffixes = getattr(
+            self,
+            "lora_target_module_suffixes",
+            _DEFAULT_LORA_TARGET_SUFFIXES,
         )
+        peft_build = _build_lora_config(
+            model,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            dropout=lora_dropout,
+            layers_spec=self.lora_layers_to_transform_spec,
+            layers_pattern=self.lora_layers_pattern,
+            target_module_suffixes=target_module_suffixes,
+        )
+        self._lora_layers_to_transform = peft_build.selected_layers
+        peft_config = peft_build.config
         model = fast_language_model.get_peft_model(
             model,
             r=lora_rank,

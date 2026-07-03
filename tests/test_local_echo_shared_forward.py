@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from retrain.backends import local as local_mod
+from retrain.backends.local import train as local_mod
 from retrain.backends.local import LocalTrainHelper
 from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs,

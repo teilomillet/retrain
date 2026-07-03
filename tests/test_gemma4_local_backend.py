@@ -10,7 +10,8 @@ import torch.nn.functional as F
 from peft import get_peft_model
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
-from retrain.backends import local as local_mod
+from retrain.backends.local import lora as local_lora
+from retrain.backends.local import train as local_mod
 from retrain.models.gemma4 import (
     DEFAULT_LORA_TARGET_MODULES,
     eos_token_ids,
@@ -263,16 +264,16 @@ def test_local_peft_config_can_select_qwen_layer_subset():
             num_key_value_heads=2,
         )
     )
-    helper = object.__new__(LocalTrainHelper)
-    helper.lora_layers_to_transform_spec = "last:2"
-    helper.lora_layers_pattern = "layers"
-
-    peft_config = helper._build_peft_config(
+    peft_build = local_lora.build_config(
         model,
-        lora_rank=2,
-        lora_alpha=0,
-        lora_dropout=0.0,
+        rank=2,
+        alpha=0,
+        dropout=0.0,
+        layers_spec="last:2",
+        layers_pattern="layers",
+        target_module_suffixes=parse_lora_target_module_suffixes(""),
     )
+    peft_config = peft_build.config
     wrapped = get_peft_model(model, peft_config)
     lora_names = [name for name, _ in wrapped.named_parameters() if "lora_" in name]
 
@@ -295,17 +296,16 @@ def test_local_peft_config_can_select_target_modules():
             num_key_value_heads=2,
         )
     )
-    helper = object.__new__(LocalTrainHelper)
-    helper.lora_target_module_suffixes = parse_lora_target_module_suffixes("o_proj")
-    helper.lora_layers_to_transform_spec = ""
-    helper.lora_layers_pattern = "layers"
-
-    peft_config = helper._build_peft_config(
+    peft_build = local_lora.build_config(
         model,
-        lora_rank=2,
-        lora_alpha=0,
-        lora_dropout=0.0,
+        rank=2,
+        alpha=0,
+        dropout=0.0,
+        layers_spec="",
+        layers_pattern="layers",
+        target_module_suffixes=parse_lora_target_module_suffixes("o_proj"),
     )
+    peft_config = peft_build.config
     wrapped = get_peft_model(model, peft_config)
     lora_names = [name for name, _ in wrapped.named_parameters() if "lora_" in name]
 
@@ -324,17 +324,13 @@ def test_lora_detached_input_hook_preserves_weight_grad_but_stops_input_grad():
     )
     root.branch = branch
 
-    helper = object.__new__(LocalTrainHelper)
-    helper.train_model = root
-    helper.lora_detach_input = True
-
-    helper._configure_lora_detached_input()
+    handles = local_lora.detach_input(root, enabled=True)
 
     x = torch.randn(3, 4, requires_grad=True)
     y = root.branch.lora_A["default"](x).sum()
     y.backward()
 
-    assert helper._lora_detach_input_hook_count == 1
+    assert len(handles) == 1
     assert root.branch.lora_A["default"].weight.grad is not None
     assert x.grad is None
 
@@ -480,18 +476,18 @@ def test_fast_lora_linear_patch_wraps_eligible_peft_module():
 
     root = torch.nn.Module()
     root.proj = FakeLoraLinear()
-    helper = object.__new__(LocalTrainHelper)
-    helper.train_model = root
-    helper.lora_fast_linear = True
-    helper.lora_detach_input = False
-    helper.lora_freeze_a = False
 
     x = torch.randn(2, 3, 4)
     expected = root.proj(x)
 
-    helper._configure_lora_fast_linear()
+    patch_count = local_lora.patch_fast(
+        root,
+        enabled=True,
+        detach=False,
+        freeze=False,
+    )
 
-    assert helper._lora_fast_linear_patch_count == 1
+    assert patch_count == 1
     assert torch.allclose(root.proj(x), expected)
 
 
@@ -505,13 +501,9 @@ def test_lora_freeze_a_marks_only_lora_a_not_trainable():
         {"default": torch.nn.Linear(2, 5, bias=False)}
     )
 
-    helper = object.__new__(LocalTrainHelper)
-    helper.train_model = root
-    helper.lora_freeze_a = True
+    frozen = local_lora.freeze_a(root, enabled=True)
 
-    helper._configure_lora_frozen_a()
-
-    assert helper._lora_frozen_a_tensor_count == 1
+    assert frozen == 1
     assert root.branch.lora_A["default"].weight.requires_grad is False
     assert root.branch.lora_B["default"].weight.requires_grad is True
 
@@ -544,11 +536,6 @@ def test_fast_lora_linear_patch_keeps_detached_lora_input_grad_boundary():
 
     root = torch.nn.Module()
     root.proj = FakeLoraLinear()
-    helper = object.__new__(LocalTrainHelper)
-    helper.train_model = root
-    helper.lora_fast_linear = True
-    helper.lora_detach_input = True
-    helper.lora_freeze_a = False
 
     x = torch.randn(2, 3, 4, requires_grad=True)
     expected = root.proj.base_layer(x) + (
@@ -559,11 +546,16 @@ def test_fast_lora_linear_patch_keeps_detached_lora_input_grad_boundary():
 
     root.proj.zero_grad(set_to_none=True)
     x.grad = None
-    helper._configure_lora_fast_linear()
+    patch_count = local_lora.patch_fast(
+        root,
+        enabled=True,
+        detach=True,
+        freeze=False,
+    )
     actual = root.proj(x)
     actual.backward(torch.ones_like(actual))
 
-    assert helper._lora_fast_linear_patch_count == 1
+    assert patch_count == 1
     assert root.proj._retrain_fast_lora_detach_input is True
     assert torch.allclose(actual, expected.detach())
     assert torch.allclose(x.grad, expected_x_grad)
@@ -599,22 +591,21 @@ def test_fast_lora_linear_patch_keeps_frozen_a_grad_boundary():
 
     root = torch.nn.Module()
     root.proj = FakeLoraLinear()
-    helper = object.__new__(LocalTrainHelper)
-    helper.train_model = root
-    helper.lora_freeze_a = True
-    helper.lora_fast_linear = True
-    helper.lora_detach_input = False
-
-    helper._configure_lora_frozen_a()
+    frozen = local_lora.freeze_a(root, enabled=True)
     x = torch.randn(2, 3, 4, requires_grad=True)
     expected = root.proj(x)
 
-    helper._configure_lora_fast_linear()
+    patch_count = local_lora.patch_fast(
+        root,
+        enabled=True,
+        detach=False,
+        freeze=True,
+    )
     actual = root.proj(x)
     actual.sum().backward()
 
-    assert helper._lora_frozen_a_tensor_count == 1
-    assert helper._lora_fast_linear_patch_count == 1
+    assert frozen == 1
+    assert patch_count == 1
     assert root.proj._retrain_fast_lora_freeze_a is True
     assert torch.allclose(actual, expected)
     assert root.proj.lora_A["default"].weight.grad is None
@@ -826,7 +817,7 @@ def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(local_mod, "get_peft_model", fake_get_peft_model)
     monkeypatch.setattr(
-        local_mod,
+        local_lora,
         "resolve_lora_target_modules",
         lambda _model, _defaults: ["q_proj"],
     )

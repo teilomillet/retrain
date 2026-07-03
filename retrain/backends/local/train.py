@@ -1,6 +1,6 @@
-"""Python helper for LocalBackend: PyTorch/PEFT training + pluggable inference.
+"""Local PyTorch backend: PEFT training + pluggable inference.
 
-This helper provides:
+This backend provides:
 - PyTorch model with PEFT LoRA for training (gradient computation)
 - Pluggable InferenceEngine for sampling (PyTorch fallback or server-based)
 - Adapter save/load for weight synchronization
@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM
-from peft import get_peft_model, LoraConfig, TaskType
+from peft import get_peft_model
 
 from retrain.kernels.accelerators import (
     accelerator_status,
@@ -31,17 +31,19 @@ from retrain.kernels.accelerators import (
     install_cudnn_causal_conv1d_shim,
     module_available,
 )
+from retrain.inference_engine import create_engine
+from retrain.backends.local.lora import (
+    DEFAULT_TARGET_SUFFIXES as _DEFAULT_LORA_TARGET_SUFFIXES,
+    build_config as _build_lora_config,
+    detach_input as _detach_lora_input,
+    freeze_a as _freeze_lora_a,
+    metrics as _lora_metrics,
+    patch_fast as _patch_fast_lora,
+)
 from retrain.models.gemma4 import (
     forward_hidden_states_and_lm_head,
     forward_logits,
     parse_lora_target_module_suffixes,
-    resolve_lora_target_modules,
-)
-from retrain.inference_engine import create_engine
-from retrain.kernels.lora import (
-    infer_transformer_layer_count as _infer_transformer_layer_count,
-    parse_lora_layers_to_transform as _parse_lora_layers_to_transform,
-    patch_lora_fast_linear_modules,
 )
 from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs as _packed_quantized_linear_target_logprobs,
@@ -61,7 +63,7 @@ from retrain.backends.torch import (
 
 
 class LocalTrainHelper:
-    """Local GPU helper: pluggable inference engine + PyTorch/PEFT training."""
+    """Local GPU backend: pluggable inference engine + PyTorch/PEFT training."""
 
     def __init__(self, model_name, adapter_path, devices, lora_rank=32,
                  engine_type="pytorch", inference_url="",
@@ -190,11 +192,11 @@ class LocalTrainHelper:
         self.lora_fast_linear = bool(lora_fast_linear)
         self.lora_freeze_a = bool(lora_freeze_a)
         self.qwen35_gated_delta_kernel = str(qwen35_gated_delta_kernel or "auto")
-        self._lora_layers_to_transform: list[int] | None = None
         self._lora_detach_input_hook_handles = []
         self._lora_detach_input_hook_count = 0
         self._lora_fast_linear_patch_count = 0
         self._lora_frozen_a_tensor_count = 0
+        self._lora_layers_to_transform: list[int] | None = None
         self._lora_model_metrics: dict[str, float | int | str] = {}
         self._last_sample_metrics: dict[str, float | int] = {}
         self._last_train_metrics: dict[str, float | int | str] = {}
@@ -292,11 +294,36 @@ class LocalTrainHelper:
                 device=self.train_device,
             )
         )
-        self._configure_lora_frozen_a()
-        self._configure_lora_detached_input()
-        self._configure_lora_fast_linear()
+        self._lora_frozen_a_tensor_count = _freeze_lora_a(
+            self.train_model,
+            enabled=self.lora_freeze_a,
+        )
+        self._lora_detach_input_hook_handles = _detach_lora_input(
+            self.train_model,
+            enabled=self.lora_detach_input,
+        )
+        self._lora_detach_input_hook_count = len(
+            self._lora_detach_input_hook_handles
+        )
+        self._lora_fast_linear_patch_count = _patch_fast_lora(
+            self.train_model,
+            enabled=self.lora_fast_linear,
+            detach=self.lora_detach_input,
+            freeze=self.lora_freeze_a,
+        )
         self._move_train_model_to_device()
-        self._record_lora_model_metrics()
+        self._lora_model_metrics = _lora_metrics(
+            self.train_model,
+            selected_layers=self._lora_layers_to_transform,
+            layers_pattern=self.lora_layers_pattern,
+            target_module_suffixes=self.lora_target_module_suffixes,
+            freeze_a_enabled=self.lora_freeze_a,
+            frozen_a_tensors=self._lora_frozen_a_tensor_count,
+            detach_input_enabled=self.lora_detach_input,
+            detach_input_hooks=self._lora_detach_input_hook_count,
+            fast_enabled=self.lora_fast_linear,
+            fast_patches=self._lora_fast_linear_patch_count,
+        )
         if hasattr(self.train_model, "print_trainable_parameters"):
             self.train_model.print_trainable_parameters()
 
@@ -381,82 +408,6 @@ class LocalTrainHelper:
             dtype=self.amp_dtype if self.use_amp else None,
         )
 
-    def _build_peft_config(self, base_model, lora_rank, lora_alpha, lora_dropout):
-        effective_alpha = lora_alpha if lora_alpha > 0 else lora_rank * 2
-        layer_count = _infer_transformer_layer_count(base_model)
-        selected_layers = _parse_lora_layers_to_transform(
-            self.lora_layers_to_transform_spec,
-            layer_count,
-        )
-        self._lora_layers_to_transform = selected_layers
-        selected_layers_pattern = (
-            self.lora_layers_pattern if selected_layers is not None else None
-        )
-        target_module_suffixes = getattr(
-            self,
-            "lora_target_module_suffixes",
-            parse_lora_target_module_suffixes(""),
-        )
-        return LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            r=lora_rank,
-            lora_alpha=effective_alpha,
-            lora_dropout=lora_dropout,
-            target_modules=resolve_lora_target_modules(
-                base_model,
-                target_module_suffixes,
-            ),
-            layers_to_transform=selected_layers,
-            layers_pattern=selected_layers_pattern,
-        )
-
-    def _record_lora_model_metrics(self) -> None:
-        model = getattr(self, "train_model", None)
-        named_parameters = getattr(model, "named_parameters", None)
-        if not callable(named_parameters):
-            self._lora_model_metrics = {}
-            return
-        lora_param_count = 0
-        lora_tensor_count = 0
-        trainable_param_count = 0
-        for name, param in named_parameters():
-            numel = int(param.numel())
-            if getattr(param, "requires_grad", False):
-                trainable_param_count += numel
-            if "lora_" in name:
-                lora_param_count += numel
-                lora_tensor_count += 1
-        selected_layers = self._lora_layers_to_transform
-        target_module_suffixes = getattr(
-            self,
-            "lora_target_module_suffixes",
-            parse_lora_target_module_suffixes(""),
-        )
-        self._lora_model_metrics = {
-            "local_lora_layer_selection_enabled": int(selected_layers is not None),
-            "local_lora_selected_layer_count": (
-                0 if selected_layers is None else len(selected_layers)
-            ),
-            "local_lora_selected_layers": (
-                "" if selected_layers is None else ",".join(map(str, selected_layers))
-            ),
-            "local_lora_layers_pattern": self.lora_layers_pattern,
-            "local_lora_target_modules": ",".join(target_module_suffixes),
-            "local_lora_target_module_count": len(target_module_suffixes),
-            "local_lora_parameter_count": lora_param_count,
-            "local_lora_parameter_tensor_count": lora_tensor_count,
-            "local_lora_trainable_parameter_count": trainable_param_count,
-            "local_lora_freeze_a_enabled": int(self.lora_freeze_a),
-            "local_lora_frozen_a_tensor_count": self._lora_frozen_a_tensor_count,
-            "local_lora_detach_input_enabled": int(self.lora_detach_input),
-            "local_lora_detach_input_hook_count": self._lora_detach_input_hook_count,
-            "local_lora_fast_linear_enabled": int(self.lora_fast_linear),
-            "local_lora_fast_linear_patch_count": self._lora_fast_linear_patch_count,
-            "local_lora_fast_linear_detach_input_enabled": int(
-                self.lora_fast_linear and self.lora_detach_input
-            ),
-        }
-
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
         model_kwargs = from_pretrained_attention_kwargs(self.attention_kernel)
         base_train = AutoModelForCausalLM.from_pretrained(
@@ -465,65 +416,22 @@ class LocalTrainHelper:
             trust_remote_code=self.trust_remote_code,
             **model_kwargs,
         )
-        peft_config = self._build_peft_config(
+        target_module_suffixes = getattr(
+            self,
+            "lora_target_module_suffixes",
+            _DEFAULT_LORA_TARGET_SUFFIXES,
+        )
+        peft_build = _build_lora_config(
             base_train,
-            lora_rank,
-            lora_alpha,
-            lora_dropout,
+            rank=lora_rank,
+            alpha=lora_alpha,
+            dropout=lora_dropout,
+            layers_spec=self.lora_layers_to_transform_spec,
+            layers_pattern=self.lora_layers_pattern,
+            target_module_suffixes=target_module_suffixes,
         )
-        return get_peft_model(base_train, peft_config), peft_config
-
-    def _configure_lora_frozen_a(self):
-        self._lora_frozen_a_tensor_count = 0
-        if not self.lora_freeze_a:
-            return
-        named_parameters = getattr(self.train_model, "named_parameters", None)
-        if not callable(named_parameters):
-            return
-        for name, param in named_parameters():
-            if ".lora_A." not in f".{name}.":
-                continue
-            param.requires_grad_(False)
-            self._lora_frozen_a_tensor_count += 1
-
-    @staticmethod
-    def _detach_first_tensor_input(_module, inputs):
-        if not inputs:
-            return inputs
-        first = inputs[0]
-        if torch.is_tensor(first):
-            return (first.detach(), *inputs[1:])
-        return inputs
-
-    def _configure_lora_detached_input(self):
-        self._lora_detach_input_hook_handles = []
-        self._lora_detach_input_hook_count = 0
-        if not self.lora_detach_input:
-            return
-        named_modules = getattr(self.train_model, "named_modules", None)
-        if not callable(named_modules):
-            return
-        for name, module in named_modules():
-            if ".lora_A." not in f".{name}.":
-                continue
-            if not torch.is_tensor(getattr(module, "weight", None)):
-                continue
-            register = getattr(module, "register_forward_pre_hook", None)
-            if not callable(register):
-                continue
-            handle = register(self._detach_first_tensor_input)
-            self._lora_detach_input_hook_handles.append(handle)
-        self._lora_detach_input_hook_count = len(self._lora_detach_input_hook_handles)
-
-    def _configure_lora_fast_linear(self):
-        self._lora_fast_linear_patch_count = 0
-        if not self.lora_fast_linear:
-            return
-        self._lora_fast_linear_patch_count = patch_lora_fast_linear_modules(
-            self.train_model,
-            detach_input=self.lora_detach_input,
-            freeze_a=self.lora_freeze_a,
-        )
+        self._lora_layers_to_transform = peft_build.selected_layers
+        return get_peft_model(base_train, peft_build.config), peft_build.config
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
