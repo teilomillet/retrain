@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -333,6 +333,8 @@ class TestRuntimeProbes:
             assert isinstance(probe.detail, str)
 
     def test_probe_backend_runtime_validates_unsloth_api(self, monkeypatch):
+        from retrain.unsloth_backend import validate_fast_language_model_api
+
         class _FastLanguageModel:
             @staticmethod
             def from_pretrained(
@@ -413,7 +415,10 @@ class TestRuntimeProbes:
                 _ = model
 
         fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
+        fake_backend = ModuleType("retrain.unsloth_backend")
+        fake_backend.validate_fast_language_model_api = validate_fast_language_model_api
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_backend)
         monkeypatch.setitem(
             sys.modules,
             "unsloth",
