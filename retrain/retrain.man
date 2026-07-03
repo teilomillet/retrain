@@ -1574,6 +1574,11 @@ ARCHITECTURE
     +-- cli.py                   Entry point, TOML + CLI override parsing
     +-- config.py                TrainConfig dataclass, TOML loader
     +-- trainer.py               Main training loop
+    +-- training/                Training runner, metrics, logging support
+        +-- runner.py            TrainingRunner protocol and built-in runners
+        +-- signals.py           Advantage caps, ties, algorithm params
+        +-- telemetry.py         Step metrics, wandb payloads, emergence logs
+        +-- log.py               Side effects for recording one RL step
     +-- advantages.py            GRPO, MaxRL, GTPO, HICRA, SEPA
     +-- flow.py                  Pre-flight: flow construction and synthetic trace
     +-- sepa.py                  SEPA scheduler (linear / auto)
@@ -1587,8 +1592,9 @@ ARCHITECTURE
         +-- __init__.py          TrainHelper protocols and shared helpers
         +-- catalog.py           Backend capabilities and option schemas
         +-- local.py             Local GPU backend (PyTorch/PEFT)
-        +-- unsloth.py           Optional Unsloth-backed local backend
-        +-- tinker.py            Remote GPU backend (Tinker API)
+        +-- prime.py             PRIME-RL bridge backend
+        +-- tinker/              Remote Tinker backend and runtime helpers
+        +-- unsloth/             Optional Unsloth backend and runtime helpers
     +-- data.py                  MATH dataset loader
     +-- logging_utils.py         JSONL logger
 

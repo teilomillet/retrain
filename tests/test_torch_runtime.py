@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from retrain.backends.torch_runtime import (
+from retrain.backends.torch import (
     is_cuda_device,
     pad_to_width,
     parse_device_spec,

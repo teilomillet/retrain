@@ -22,6 +22,11 @@ retrain
 ├── cli.py              # Entry point, TOML + CLI override parsing
 ├── config.py           # TrainConfig dataclass, TOML loader
 ├── trainer.py          # Main training loop
+├── training/           # Training runner, metrics, and logging support
+│   ├── runner.py       # TrainingRunner protocol + built-in runners
+│   ├── signals.py      # Advantage caps, ties, and algorithm params
+│   ├── telemetry.py    # Step metrics, wandb payloads, emergence logs
+│   └── log.py          # Side effects for recording one RL step
 ├── advantages.py       # GRPO, MaxRL, GTPO, HICRA, SEPA, planning tokens
 ├── sepa.py             # SEPA scheduler (linear / auto)
 ├── rewards.py          # match, math, judge, custom reward functions
@@ -32,8 +37,9 @@ retrain
 │   ├── __init__.py     # TrainHelper protocols + shared helper functions
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
 │   ├── local.py        # Local GPU backend (PyTorch/PEFT + inference engine)
-│   ├── unsloth.py      # Optional Unsloth-backed local TrainHelper
-│   └── tinker.py       # Remote GPU backend (Tinker API)
+│   ├── prime.py        # PRIME-RL bridge backend
+│   ├── tinker/         # Remote Tinker backend + runtime helpers
+│   └── unsloth/        # Optional Unsloth backend + runtime helpers
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
 ├── data.py             # MATH dataset loader
 └── logging_utils.py    # JSONL logger

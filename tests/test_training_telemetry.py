@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-import retrain.training_telemetry as telemetry
+import retrain.training.telemetry as telemetry
 from retrain.advantages import AdvantageResult, EntropyStats
 from retrain.backends.catalog import BackendCapabilities
 from retrain.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
 from retrain.echo import EchoBuildStats, EchoLimitStats
 from retrain.runtime_support import RuntimeCounters
-from retrain.training_telemetry import (
+from retrain.training.telemetry import (
     EchoStepPlan,
     StepLogData,
     build_emergence_step_entry,

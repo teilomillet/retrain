@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from retrain.backends.tinker_runtime import (
+from retrain.backends.tinker.runtime import (
     load_tensor_data,
     load_tinker,
     load_tinker_types,

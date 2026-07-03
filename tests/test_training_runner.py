@@ -9,7 +9,7 @@ import pytest
 
 from retrain.config import TrainConfig
 from retrain.ttt_discover import TTTDiscoverRunner
-from retrain.training_runner import (
+from retrain.training.runner import (
     CommandRunner,
     RetainRunner,
     SftRunner,

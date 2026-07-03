@@ -5,13 +5,12 @@ Backend-agnostic — drives any TrainHelper (local, Unsloth, Tinker, ...).
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from heapq import nlargest
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 from transformers import AutoTokenizer
 
@@ -62,17 +61,14 @@ from retrain.sft import (
     tokenize_sft_dataset,
 )
 from retrain.type_defs import ExampleInfoLike, PromptLike
-from retrain.training_telemetry import (
-    EchoStepPlan,
-    RolloutTelemetry,
-    StepLogData,
-    build_emergence_step_entry,
-    build_step_metrics,
-    build_wandb_metrics,
-    format_step_log_summary,
-    summarize_surprisal_stats,
+from retrain.training.log import (
+    StepLoggingContext,
+    WandbRunLike,
+    init_wandb,
+    record_training_step,
 )
-from retrain.training_signals import (
+from retrain.training.telemetry import EchoStepPlan, RolloutTelemetry
+from retrain.training.signals import (
     CORRECT_THRESHOLD,
     RewardTieAccumulator,
     apply_advantage_cap,
@@ -99,30 +95,6 @@ def _accumulate_metric_totals(
 ) -> None:
     for key, value in metrics.items():
         totals[key] = totals.get(key, 0.0) + float(value)
-
-
-class WandbRunLike(Protocol):
-    def log(
-        self,
-        data: Mapping[str, object],
-        *,
-        step: int | None = None,
-    ) -> object: ...
-
-    def finish(self) -> object: ...
-
-
-class WandbModuleLike(Protocol):
-    def init(
-        self,
-        *,
-        project: str,
-        name: str,
-        config: Mapping[str, str | int | float],
-        entity: str | None = None,
-        group: str | None = None,
-        tags: list[str] | None = None,
-    ) -> WandbRunLike: ...
 
 
 def _generation_log_indices(
@@ -509,71 +481,6 @@ def _run_sft_warmup_step(
         print(f"Saved checkpoint: {ckpt_name}")
 
 
-def _init_wandb(config: TrainConfig) -> WandbRunLike | None:
-    """Start a wandb run mirroring the config, or None when unconfigured."""
-    if not config.wandb_project:
-        return None
-    import wandb as wandb_module
-
-    wandb = cast(WandbModuleLike, wandb_module)
-    condition_label = _condition_label(config)
-    run_name = config.wandb_run_name or Path(config.log_dir).name or condition_label
-    wandb_tags = (
-        [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
-        if config.wandb_tags
-        else None
-    )
-    wandb_config: dict[str, str | int | float] = {
-        "algorithm_mode": config.algorithm_mode,
-        "advantage_mode": config.advantage_mode,
-        "transform_mode": config.transform_mode,
-        "uncertainty_kind": config.uncertainty_kind,
-        "condition": condition_label,
-        "model": config.model,
-        "lora_rank": config.lora_rank,
-        "lr": config.lr,
-        "batch_size": config.batch_size,
-        "group_size": config.group_size,
-        "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
-        "gtpo_beta": config.gtpo_beta,
-        "hicra_alpha": config.hicra_alpha,
-        "sepa_steps": config.sepa_steps,
-        "sepa_delay_steps": config.sepa_delay_steps,
-        "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
-        "max_steps": config.max_steps,
-        "backend": config.backend,
-        "seed": config.seed,
-        "batch_advantage_norm": int(config.batch_advantage_norm),
-        "clip_eps": config.clip_eps,
-        "clip_eps_high": config.clip_eps_high,
-        "policy_loss_mode": config.policy_loss_mode,
-        "kl_cov_percent": config.kl_cov_percent,
-        "kl_cov_coef": config.kl_cov_coef,
-        "clip_cov_ratio": config.clip_cov_ratio,
-        "clip_cov_min": config.clip_cov_min,
-        "clip_cov_max": config.clip_cov_max,
-        "adv_clip_max": config.adv_clip_max,
-        "sft_warmup_steps": config.sft_warmup_steps,
-        "tl_grpo": int(config.tl_grpo),
-        "echo_enabled": int(config.echo_enabled),
-        "echo_weight": config.echo_weight,
-        "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
-        "echo_max_token_ratio": config.echo_max_token_ratio,
-        "echo_entropy_floor": config.echo_entropy_floor,
-    }
-    run = wandb.init(
-        project=config.wandb_project,
-        name=run_name,
-        config=wandb_config,
-        entity=config.wandb_entity or None,
-        group=config.wandb_group or None,
-        tags=wandb_tags,
-    )
-    print(f"Wandb initialized: {config.wandb_project}/{run_name}")
-    return run
-
-
 @dataclass
 class _PromptBatch:
     """Parallel per-prompt arrays for one training batch."""
@@ -638,6 +545,7 @@ class _RolloutAccumulator:
     rollout_timing_metrics: dict[str, float] = field(default_factory=dict)
     sample_time_s: float = 0.0
     tl_grpo_ema: float | None = None
+
 
 def _prepare_echo_step_plan(
     config: TrainConfig,
@@ -1345,7 +1253,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # 8. Optional wandb
         # -----------------------------------------------------------------------
-        wandb_run = _init_wandb(config)
+        condition_label = _condition_label(config)
+        wandb_run = init_wandb(config, condition_label=condition_label)
 
         # -----------------------------------------------------------------------
         # 9. Training loop
@@ -1628,90 +1537,50 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         current_batch_size = new_bs
 
             # 10g. Logging
-            step_log = StepLogData(
-                step=batch_idx,
-                condition_label=_condition_label(config),
-                loss_value=loss_value,
-                echo_loss=echo_loss,
-                echo_joint_optimizer_step=echo_joint_optimizer_step,
-                mean_reward=sum(acc.rewards) / len(acc.rewards) if acc.rewards else 0.0,
-                correct_rate=correct_rate,
-                running_correct_rate=(
-                    total_correct / total_completions if total_completions > 0 else 0.0
+            step_logging = record_training_step(
+                StepLoggingContext(
+                    step=batch_idx,
+                    condition_label=condition_label,
+                    loss_value=loss_value,
+                    echo_loss=echo_loss,
+                    echo_joint_optimizer_step=echo_joint_optimizer_step,
+                    num_datums=num_datums,
+                    total_correct=total_correct,
+                    total_completions=total_completions,
+                    step_time=step_time,
+                    train_time=train_time,
+                    rl_train_time=rl_train_time,
+                    echo_train_time=echo_train_time,
+                    bp_total_tokens=bp_total_tokens,
+                    batch_size=current_batch_size,
+                    group_size=current_group_size,
+                    bp_warmup=bp_warmup,
+                    sepa_lambda=sepa_lambda_val,
+                    sepa_gate=(
+                        sepa_controller.gate_open() if uses_sepa_controller else False
+                    ),
+                    clip_fraction=clip_fraction,
+                    policy_cov_fraction=policy_cov_fraction,
+                    policy_abs_kl=policy_abs_kl,
+                    adv_cap_fraction=adv_cap_fraction,
+                    adv_cap_magnitude=adv_cap_magnitude,
+                    tl_grpo_ema=tl_grpo_ema,
+                    surprisal_stats=acc.surprisal_stats,
                 ),
-                max_token_hit_rate=(
-                    acc.max_token_hits / acc.total_completions
-                    if acc.total_completions > 0
-                    else 0.0
-                ),
-                num_datums=num_datums,
-                step_time=step_time,
-                sample_time=acc.sample_time_s,
-                train_time=train_time,
-                rl_train_time=rl_train_time,
-                echo_train_time=echo_train_time,
-                bp_total_tokens=bp_total_tokens,
-                batch_size=current_batch_size,
-                group_size=current_group_size,
-                bp_warmup=bp_warmup,
-                sepa_lambda=sepa_lambda_val,
-                sepa_gate=(
-                    sepa_controller.gate_open()
-                    if uses_sepa_controller
-                    else False
-                ),
-                clip_fraction=clip_fraction,
-                policy_cov_fraction=policy_cov_fraction,
-                policy_abs_kl=policy_abs_kl,
-                adv_cap_fraction=adv_cap_fraction,
-                adv_cap_magnitude=adv_cap_magnitude,
-                tl_grpo_ema=tl_grpo_ema,
-                surprisal=summarize_surprisal_stats(acc.surprisal_stats),
-            )
-            rollout_log = cast(RolloutTelemetry, acc)
-            metrics = build_step_metrics(
-                step_log,
                 config=config,
                 backend_caps=backend_caps,
-                rollout=rollout_log,
+                rollout=cast(RolloutTelemetry, acc),
                 echo_plan=echo_plan,
                 bp_decision=bp_decision,
                 batch_norm_metrics=batch_norm_metrics,
                 runtime_counters=runtime_counters,
                 helper=helper,
+                metrics_logger=metrics_logger,
+                steps_logger=steps_logger,
+                wandb_run=wandb_run,
             )
-            if "dg_eta" in metrics:
-                delight_eta_ema = float(metrics["dg_eta"])
-
-            metrics_logger.log(metrics)
-            print(
-                format_step_log_summary(
-                    step_log,
-                    backend_caps=backend_caps,
-                    rollout=rollout_log,
-                )
-            )
-
-            if wandb_run is not None:
-                wandb_run.log(
-                    build_wandb_metrics(
-                        step_log,
-                        adv_results=acc.adv_results,
-                        batch_norm_metrics=batch_norm_metrics,
-                        metrics=metrics,
-                    ),
-                    step=batch_idx,
-                )
-
-            steps_logger.log(
-                build_emergence_step_entry(
-                    step_log,
-                    config=config,
-                    rollout=rollout_log,
-                    echo_plan=echo_plan,
-                    metrics=metrics,
-                )
-            )
+            if step_logging.delight_eta_ema is not None:
+                delight_eta_ema = step_logging.delight_eta_ema
 
             # Periodic checkpoint
             if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:

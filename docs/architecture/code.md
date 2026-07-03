@@ -1,0 +1,89 @@
+# Code Organization
+
+This guide is for contributors changing retrain internals. The goal is a codebase
+that is easy to browse from the tree alone: folders provide the context, files
+name one concept, and the training path stays auditable.
+
+## Shape
+
+Prefer package-scoped modules with short names:
+
+```text
+retrain/
+  training/
+    runner.py
+    signals.py
+    telemetry.py
+    log.py
+  backends/
+    catalog.py
+    local.py
+    tinker/
+      helper.py
+      runtime.py
+      throttle.py
+```
+
+Avoid long top-level compound modules such as `training_step_logging.py`. If the
+name needs several words, it usually wants a folder. The folder explains the
+domain; the file names the local concept.
+
+## Split Rules
+
+Split code when it creates a stable place a maintainer would naturally search:
+
+- `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
+- `training/telemetry.py`: pure builders for metrics, wandb payloads, and
+  emergence rows.
+- `training/log.py`: side effects for recording one training step.
+- `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
+
+Do not split just to hide lines. A private helper is worth keeping only when it
+removes real branching, names a non-obvious invariant, or serves more than one
+call site. Otherwise, keep the logic local.
+
+## Trainer Boundary
+
+`trainer.py` should read as the orchestration path:
+
+1. build flow
+2. load data and backend
+3. sample and score rollouts
+4. build train datums
+5. train
+6. record state and logs
+
+It should not own schema details for JSONL metrics, wandb payloads, checkpoint
+state, or backend-specific setup. Those belong in narrow package modules that
+can be tested directly.
+
+## Import Rules
+
+Internal imports should use the package path that matches the tree. Prefer:
+
+```python
+from retrain.training.signals import apply_advantage_cap
+from retrain.training.telemetry import build_step_metrics
+from retrain.backends.tinker.runtime import load_tinker
+```
+
+Avoid compatibility shims unless an import path is part of a documented plugin
+or public extension surface. If a shim is needed, keep it tiny and document the
+removal plan.
+
+## Comments
+
+Comments should explain facts the code cannot show locally: protocol contracts,
+determinism requirements, numerical invariants, and intentional tradeoffs. Do
+not comment line-by-line mechanics.
+
+## Review Checklist
+
+Before committing an internal refactor:
+
+- The tree shape explains the module names without a glossary.
+- The changed files have one primary responsibility each.
+- Public behavior is unchanged unless the commit message says otherwise.
+- Focused tests cover the moved boundary.
+- `make lint`, `make typecheck`, `uv run pytest -q`, and strict docs build pass
+  before pushing.

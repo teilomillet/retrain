@@ -1,11 +1,11 @@
-"""Tests for retrain.backends.tinker_throttle counting semaphore."""
+"""Tests for retrain.backends.tinker.throttle counting semaphore."""
 
 import threading
 import time
 
 import pytest
 
-from retrain.backends.tinker_throttle import NoOpThrottle, TinkerThrottle
+from retrain.backends.tinker.throttle import NoOpThrottle, TinkerThrottle
 
 
 class TestTinkerThrottle:

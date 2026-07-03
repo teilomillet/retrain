@@ -48,6 +48,8 @@ nav:
   - Getting Started: getting-started.md
   - Configuration: configuration.md
   - Plugins: plugins.md
+  - Architecture:
+    - Code Organization: architecture/code.md
   - Algorithms:
     - Advantage Functions: advantages.md
     - SEPA: sepa.md

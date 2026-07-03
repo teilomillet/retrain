@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from retrain import trainer as trainer_mod
-from retrain import training_signals as signal_mod
+from retrain.training import signals as signal_mod
 from retrain.advantages import AdvantageResult
 from retrain.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig

@@ -39,7 +39,7 @@ from retrain.trainer import (
     _print_config_summary,
 )
 from retrain.trainer_state import save_trainer_state
-from retrain.training_signals import (
+from retrain.training.signals import (
     CORRECT_THRESHOLD,
     apply_advantage_cap,
     assert_uniform_completion_advantages_for_non_preserving_backend,
@@ -48,8 +48,8 @@ from retrain.training_signals import (
     prepare_transform_params_for_step,
     summarize_reward_ties,
 )
-from retrain.training_telemetry import format_loss_for_display
-from retrain.training_runner import (
+from retrain.training.telemetry import format_loss_for_display
+from retrain.training.runner import (
     TrainingRunResult,
     build_run_result,
     failed_run_result,

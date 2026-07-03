@@ -10,10 +10,10 @@ import json
 import pytest
 
 from retrain.flow import TraceIssue, TraceResult, build_flow
-from retrain.training_signals import (
+from retrain.training.signals import (
     assert_uniform_completion_advantages_for_non_preserving_backend,
 )
-from retrain.training_telemetry import format_loss_for_display
+from retrain.training.telemetry import format_loss_for_display
 from retrain.trainer_state import (
     TRAINER_STATE_FILE,
     load_trainer_state,

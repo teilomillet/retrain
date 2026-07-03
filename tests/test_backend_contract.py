@@ -485,7 +485,7 @@ def test_tinker_backend_contract(monkeypatch):
 
 def test_prime_rl_backend_contract(monkeypatch):
     fake_mod = SimpleNamespace(PrimeRLTrainHelper=_FakePrimeRLTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.backends.prime_rl", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.prime", fake_mod)
 
     cfg = TrainConfig(backend="prime_rl")
     helper = backend.create("prime_rl", cfg)

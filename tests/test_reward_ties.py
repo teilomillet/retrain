@@ -1,7 +1,7 @@
-"""Tests for reward tie diagnostics in retrain.training_signals."""
+"""Tests for reward tie diagnostics in retrain.training.signals."""
 
 from retrain.flow import _UNIFORMITY_EPS
-from retrain.training_signals import summarize_reward_ties
+from retrain.training.signals import summarize_reward_ties
 
 
 class TestSummarizeRewardTies:

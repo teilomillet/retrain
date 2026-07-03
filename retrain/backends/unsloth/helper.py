@@ -13,7 +13,7 @@ import os
 from contextlib import contextmanager
 from functools import wraps
 
-from retrain.backends.unsloth_runtime import FastLanguageModel, load_fast_language_model
+from retrain.backends.unsloth.runtime import FastLanguageModel, load_fast_language_model
 
 try:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = load_fast_language_model()

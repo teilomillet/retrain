@@ -18,7 +18,7 @@ from retrain.ttt_discover import (
     TTTDiscoverRunner,
     build_discovery_prompt,
 )
-from retrain.training_runner import TrainingRunResult
+from retrain.training.runner import TrainingRunResult
 
 
 def _bare_config(**overrides: object) -> TrainConfig:

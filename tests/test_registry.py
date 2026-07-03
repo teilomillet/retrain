@@ -206,7 +206,7 @@ class TestBuiltinCreation:
             base_url="http://model-base-url",
             adapter_path="adapters/prime-output",
         )
-        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://prime-inference"
@@ -227,7 +227,7 @@ class TestBuiltinCreation:
             inference_url="",
             base_url="http://model-base-url",
         )
-        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://model-base-url"
@@ -247,7 +247,7 @@ class TestBuiltinCreation:
                 "sync_poll_s": 0.5,
             },
         )
-        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["transport_type"] == "zmq"

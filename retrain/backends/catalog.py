@@ -383,7 +383,7 @@ def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOpt
 
 def _create_prime_rl(config: "TrainConfig") -> "TrainHelper":
     try:
-        from retrain.backends.prime_rl import PrimeRLTrainHelper
+        from retrain.backends.prime import PrimeRLTrainHelper
     except ImportError:
         raise RuntimeError(
             "Backend 'prime_rl' requires PRIME-RL.\n"

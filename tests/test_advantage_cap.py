@@ -8,7 +8,7 @@ dynamics).
 
 import pytest
 
-from retrain.training_signals import apply_advantage_cap
+from retrain.training.signals import apply_advantage_cap
 
 
 class TestApplyAdvantageCap:

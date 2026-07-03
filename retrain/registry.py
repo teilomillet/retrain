@@ -28,7 +28,7 @@ from retrain.data import DataSource
 from retrain.plugin_resolver import resolve_dotted_attribute
 from retrain.planning import PlanningDetector
 from retrain.rewards import RewardFunction
-from retrain.training_runner import TrainingRunner
+from retrain.training.runner import TrainingRunner
 
 
 T = TypeVar("T")
@@ -298,19 +298,19 @@ def _bp_usl(config: TrainConfig) -> BackPressure:
 
 @trainer.register("retrain")
 def _trainer_retrain(config: TrainConfig) -> TrainingRunner:
-    from retrain.training_runner import RetainRunner
+    from retrain.training.runner import RetainRunner
     return RetainRunner()
 
 
 @trainer.register("sft")
 def _trainer_sft(config: TrainConfig) -> TrainingRunner:
-    from retrain.training_runner import SftRunner
+    from retrain.training.runner import SftRunner
     return SftRunner()
 
 
 @trainer.register("command")
 def _trainer_command(config: TrainConfig) -> TrainingRunner:
-    from retrain.training_runner import CommandRunner
+    from retrain.training.runner import CommandRunner
     if not config.trainer_command:
         raise ValueError(
             "trainer='command' requires [training] trainer_command to be set."
