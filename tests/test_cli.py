@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 import retrain.cli as cli
+from retrain.commands.backends import run as _run_backends
+from retrain.commands.doctor import run as _run_doctor
 from retrain.commands.init.customize import customize as _customize_toml
 from retrain.commands.init.interactive import run as _run_init_interactive
 from retrain.commands.init.run import run as _run_init
@@ -15,8 +17,6 @@ from retrain.commands.plugins.scaffold import run as _run_init_plugin
 from retrain.commands.top import print_help
 from retrain.cli import (
     _run_benchmark,
-    _run_backends,
-    _run_doctor,
     _run_explain,
 )
 from retrain.config import parse_cli_overrides
@@ -501,7 +501,7 @@ class TestBenchmarkCommand:
                 adapter_path=str(tmp_path / "base-adapter"),
             ),
         )
-        monkeypatch.setattr("retrain.cli._check_environment", lambda config: None)
+        monkeypatch.setattr("retrain.cli.warn_missing", lambda config: None)
         monkeypatch.setattr(
             "retrain.benchmark.run_benchmark_suite",
             lambda config, *, repeats, output_dir, runner_factory, disable_wandb: recorded.update(

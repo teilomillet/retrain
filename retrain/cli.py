@@ -23,43 +23,22 @@ import os
 import sys
 import tomllib
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 from retrain.commands import manual as manual_command
+from retrain.commands.backends import run as run_backends
+from retrain.commands.capability import capability_payload, capability_summary
+from retrain.commands.doctor import run as run_doctor
+from retrain.commands.doctor import warn_missing
 from retrain.commands.init.run import run as run_init
 from retrain.commands.name import resolve as resolve_cli_name
 from retrain.commands.plugins.run import run as run_plugins
 from retrain.commands.plugins.scaffold import run as run_init_plugin
 from retrain.commands.top import print_help
 
-if TYPE_CHECKING:
-    from retrain.config import TrainConfig
-
 
 def _manual_path() -> Path:
     """Location of the editable bundled manual file."""
     return Path(__file__).with_name("retrain.man")
-
-
-def _object_dict(value: object, name: str) -> dict[str, object]:
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError(f"Invalid {name}: expected object mapping")
-    return cast(dict[str, object], value)
-
-
-def _object_list(value: object, name: str) -> list[dict[str, object]]:
-    if not isinstance(value, list):
-        raise ValueError(f"Invalid {name}: expected list")
-    rows: list[dict[str, object]] = []
-    for idx, item in enumerate(value):
-        rows.append(_object_dict(item, f"{name}[{idx}]"))
-    return rows
-
-
-def _string_list(value: object, name: str) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"Invalid {name}: expected list of strings")
-    return cast(list[str], value)
 
 
 def _load_dotenv() -> None:
@@ -94,154 +73,6 @@ def _is_campaign(path: str) -> bool:
     with open(path, "rb") as f:
         data = tomllib.load(f)
     return "campaign" in data
-
-
-def _resolve_backend_capability_payload(
-    backend_name: str,
-    backend_options: dict[str, object] | None = None,
-) -> dict[str, object]:
-    from retrain.backends.catalog import (
-        backend_capability_source,
-        resolve_backend_capabilities,
-    )
-
-    caps = resolve_backend_capabilities(backend_name, backend_options or {})
-    return {
-        "backend": backend_name,
-        "source": backend_capability_source(backend_name, backend_options or {}),
-        "reports_sync_loss": caps.reports_sync_loss,
-        "preserves_token_advantages": caps.preserves_token_advantages,
-        "supports_checkpoint_resume": caps.supports_checkpoint_resume,
-        "resume_runtime_dependent": caps.resume_runtime_dependent,
-        "supports_echo_shared_forward": caps.supports_echo_shared_forward,
-    }
-
-
-def _format_backend_capability_summary(capabilities: dict[str, object]) -> str:
-    return (
-        f"source={capabilities['source']}, "
-        f"reports_sync_loss={capabilities['reports_sync_loss']}, "
-        f"preserves_token_advantages={capabilities['preserves_token_advantages']}, "
-        f"supports_checkpoint_resume={capabilities['supports_checkpoint_resume']}, "
-        f"resume_runtime_dependent={capabilities['resume_runtime_dependent']}, "
-        f"supports_echo_shared_forward={capabilities['supports_echo_shared_forward']}"
-    )
-
-
-def _run_backends(args: list[str]) -> None:
-    """Print backend metadata catalog."""
-    from retrain.backends.catalog import describe_backends_catalog
-
-    fmt = "text"
-    for arg in args:
-        if arg == "--json":
-            fmt = "json"
-        elif arg.startswith("--"):
-            print(f"Unknown backends flag: {arg}", file=sys.stderr)
-            sys.exit(1)
-        else:
-            print(f"Unexpected argument for backends: {arg}", file=sys.stderr)
-            sys.exit(1)
-
-    payload = describe_backends_catalog()
-    if fmt == "json":
-        print(json.dumps(payload, indent=2))
-        return
-
-    print("Built-in backends:")
-    for backend_item in _object_list(payload.get("builtins"), "backends.builtins"):
-        name = str(backend_item.get("name", ""))
-        dep = _object_dict(backend_item.get("dependency"), "backend.dependency")
-        caps = _object_dict(backend_item.get("capabilities"), "backend.capabilities")
-        print(f"  {name}")
-        print(f"    dependency: {dep.get('import', '')} ({dep.get('hint', '')})")
-        print(
-            "    capabilities: "
-            f"reports_sync_loss={caps.get('reports_sync_loss')}, "
-            f"preserves_token_advantages={caps.get('preserves_token_advantages')}, "
-            f"supports_checkpoint_resume={caps.get('supports_checkpoint_resume')}, "
-            f"resume_runtime_dependent={caps.get('resume_runtime_dependent')}, "
-            f"supports_echo_shared_forward={caps.get('supports_echo_shared_forward')}"
-        )
-        option_schema = _object_dict(
-            backend_item.get("option_schema"),
-            "backend.option_schema",
-        )
-        if option_schema:
-            print("    options:")
-            for key, raw_spec in sorted(option_schema.items()):
-                spec = _object_dict(raw_spec, f"backend.option_schema.{key}")
-                choices = spec.get("choices")
-                choice_text = f" choices={choices}" if choices else ""
-                print(
-                    f"      {key}: type={spec.get('type')} "
-                    f"default={spec.get('default')!r}{choice_text}"
-                )
-        else:
-            print("    options: none")
-
-    plugin = _object_dict(payload.get("plugin"), "backends.plugin")
-    print("\nPlugin metadata hooks:")
-    print(f"  dotted_path_supported: {plugin.get('dotted_path_supported')}")
-    print(
-        "  capability_hooks     : "
-        f"{', '.join(_string_list(plugin.get('capability_hooks'), 'plugin.capability_hooks'))}"
-    )
-    print(
-        "  option_schema_hooks  : "
-        f"{', '.join(_string_list(plugin.get('option_schema_hooks'), 'plugin.option_schema_hooks'))}"
-    )
-    print(f"  schema_format        : {plugin.get('option_schema_format', '')}")
-
-
-def _run_doctor() -> None:
-    """Print dependency status for all known components."""
-    from retrain.backends.catalog import get_builtin_backend_definitions
-    from retrain.registry import check_environment, probe_backend_runtime
-
-    print("retrain doctor — checking component dependencies\n")
-    results = check_environment(config=None)
-    all_ok = True
-    for name, import_name, hint, available in results:
-        status = "OK" if available else "MISSING"
-        if not available:
-            all_ok = False
-        print(f"  {name:20s} {import_name:25s} {status}")
-        if not available:
-            print(f"  {'':20s} -> {hint}")
-
-    print("\nBackend capability summary:")
-    for backend_name in sorted(get_builtin_backend_definitions()):
-        caps = _resolve_backend_capability_payload(backend_name, {})
-        print(f"  {backend_name:20s} {_format_backend_capability_summary(caps)}")
-    plugin_caps = _resolve_backend_capability_payload("myplugin.CustomBackend", {})
-    print(f"  {'plugin/default':20s} {_format_backend_capability_summary(plugin_caps)}")
-
-    print("\nRuntime probes:")
-    for probe in probe_backend_runtime(config=None):
-        print(
-            f"  {probe.backend:20s} {probe.probe:20s} "
-            f"{probe.status.upper():5s} {probe.detail}"
-        )
-
-    print()
-    if all_ok:
-        print("All optional dependencies are installed.")
-    else:
-        print("Some optional dependencies are missing (see above).")
-
-
-def _check_environment(config: "TrainConfig") -> None:
-    """Warn if the config references components whose deps are missing."""
-    from retrain.registry import check_environment
-
-    results = check_environment(config=config)
-    for name, import_name, hint, available in results:
-        if not available:
-            print(
-                f"WARNING: component '{name}' requires '{import_name}' "
-                f"which is not installed.\n  -> {hint}"
-            )
 
 
 def _run_status(args: list[str]) -> None:
@@ -387,7 +218,7 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
         data_info = f"{config.environment_provider}:{config.environment_id}"
     if config.trainer == "sft":
         data_info = config.sft_data_path
-    backend_capabilities = _resolve_backend_capability_payload(
+    backend_capabilities = capability_payload(
         config.backend,
         config.backend_options,
     )
@@ -448,7 +279,7 @@ def _explain_single(config_path: str | None, fmt: str) -> None:
     print(f"  model         : {config.model}")
     print(f"  trainer       : {config.trainer}")
     print(f"  backend       : {config.backend}")
-    print(f"  backend caps  : {_format_backend_capability_summary(backend_capabilities)}")
+    print(f"  backend caps  : {capability_summary(backend_capabilities)}")
     if not backend_capabilities["reports_sync_loss"]:
         print("  note          : loss is reported as placeholder by backend design")
     print(f"  condition     : {condition}")
@@ -512,7 +343,7 @@ def _explain_campaign(config_path: str, fmt: str) -> None:
         raw_options = backend_sec.get("options", {})
         if isinstance(raw_options, dict):
             backend_options = dict(raw_options)
-    backend_capabilities = _resolve_backend_capability_payload(
+    backend_capabilities = capability_payload(
         backend_name,
         backend_options,
     )
@@ -535,7 +366,7 @@ def _explain_campaign(config_path: str, fmt: str) -> None:
     print(f"retrain explain — campaign dry-run preview")
     print(f"  config        : {config_path}")
     print(f"  backend       : {backend_name}")
-    print(f"  backend caps  : {_format_backend_capability_summary(backend_capabilities)}")
+    print(f"  backend caps  : {capability_summary(backend_capabilities)}")
     print(f"  conditions    : {', '.join(condition_labels)}")
     print(f"  seeds         : {seeds}")
     print(f"  max_steps     : {max_steps}")
@@ -698,7 +529,7 @@ def _run_benchmark(args: list[str]) -> None:
         sys.exit(1)
 
     config = load_config(str(target), overrides=overrides)
-    _check_environment(config)
+    warn_missing(config)
     suite_dir = Path(output_dir) if output_dir else default_benchmark_output_dir(
         str(target),
         config,
@@ -1223,11 +1054,11 @@ def main() -> None:
         sys.exit(0)
 
     if args and args[0] == "backends":
-        _run_backends(args[1:])
+        run_backends(args[1:])
         sys.exit(0)
 
     if args and args[0] == "doctor":
-        _run_doctor()
+        run_doctor()
         sys.exit(0)
 
     if args and args[0] == "migrate-config":
@@ -1314,7 +1145,7 @@ def main() -> None:
         from retrain.config import load_config
         from retrain.registry import get_registry
         config = load_config(config_path, overrides=overrides)
-        _check_environment(config)
+        warn_missing(config)
         meta_dir = Path(config.log_dir)
         meta_dir.mkdir(parents=True, exist_ok=True)
         meta_path = meta_dir / "run_meta.json"
