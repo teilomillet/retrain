@@ -50,8 +50,19 @@ retrain/
     load.py
     override.py
     validate/
+  types.py
   training/
+    trainer.py
+    discover.py
     runner.py
+    flow.py
+    sft.py
+    state.py
+    sepa.py
+    echo.py
+    rollouts.py
+    loss.py
+    backpressure.py
     signals.py
     telemetry.py
     log.py
@@ -69,6 +80,59 @@ retrain/
     uncertainty.py
     planning.py
     pipeline.py
+  environments/
+    verifiers.py
+  rewards/
+    boxed.py
+    create.py
+    custom.py
+    types.py
+    verifiers.py
+  planning/
+    regex.py
+    semantic.py
+    create.py
+    tokens.py
+    types.py
+  registry/
+    core.py
+    builtin.py
+    health.py
+  campaign/
+    run.py
+    sequential.py
+    parallel.py
+    parse.py
+    configs.py
+    squeeze.py
+    delight.py
+  squeeze/
+    rank.py
+    adapter.py
+    run.py
+  status/
+    scan.py
+    format.py
+    export.py
+  tree/
+    model.py
+    state.py
+    eval.py
+    format.py
+  diff/
+    compute.py
+    format.py
+  benchmark/
+    run.py
+    summary.py
+    format.py
+  models/
+    gemma4.py
+    qwen35.py
+  kernels/
+    lora.py
+    logprobs.py
+    accelerators.py
   backends/
     catalog.py
     local/
@@ -90,6 +154,9 @@ retrain/
     resolve.py
   process/
     metrics.py
+  data/
+    source.py
+    math.py
 ```
 
 Avoid long top-level compound modules such as `training_step_logging.py`. If the
@@ -117,18 +184,35 @@ Split code when it creates a stable place a maintainer would naturally search:
   evaluation side effects.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
+- `environments/verifiers.py`: verifiers environment loading, prompt rendering,
+  multi-turn rollouts, and rubric scoring.
+- `registry/`: registry core, built-in factories, and dependency health probes.
+- `rewards/`: boxed-match, verifiers-backed, and custom rewards.
+- `planning/`: regex and semantic planning-token detectors.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
+- `training/flow.py`: flow construction and traceable preflight state.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
+- `training/trainer.py`: the main RL orchestration path.
+- `training/discover.py`: test-time training over a single problem.
 - `advantages/episode.py`: episode-level GRPO, MaxRL, and REINFORCE++ modes.
 - `advantages/credit.py`: token-credit transforms such as GTPO, HICRA, SEPA,
   and masking.
 - `advantages/delight/`: Delight gates, eta resolution, metrics, and transforms.
 - `advantages/pipeline.py`: the composable advantage computation path.
+- `campaign/`: sweep config expansion, sequential/parallel execution, and
+  post-campaign squeeze/delight summaries.
+- `squeeze/`: adapter IO, LoRA-Squeeze rank math, and squeeze workflow command.
+- `status/`, `tree/`, `diff/`, and `benchmark/`: command-domain packages for
+  scanning/rendering runs, experiment trees, comparisons, and repeated runs.
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.
+- `backends/local/`: local PyTorch backend orchestration and LoRA-specific setup.
+- `models/`: model-specific compatibility and kernel selection.
+- `kernels/`: GPU-kernel adapters and selected-token logprob math.
+- `data/`: example shape, data-source protocol, and built-in datasets.
 - `io/json.py`: JSON loading and compact JSONL row encoding.
 - `io/log.py`: buffered JSONL append logging.
 - `metrics/scan.py`: one-pass metrics JSONL readers and aggregates.
@@ -141,7 +225,7 @@ call sites across different concerns. Otherwise, keep the logic local.
 
 ## Trainer Boundary
 
-`trainer.py` should read as the orchestration path:
+`training/trainer.py` should read as the orchestration path:
 
 1. build flow
 2. load data and backend

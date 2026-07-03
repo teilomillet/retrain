@@ -37,9 +37,19 @@ retrain
 │   ├── override.py     # CLI override parser
 │   ├── migrate.py      # Legacy backend config migration
 │   └── validate/       # Defaults, bounds, modes, runtime checks, warnings
-├── trainer.py          # Main training loop
-├── training/           # Training runner, metrics, and logging support
+├── types.py            # Shared type aliases
+├── training/           # The training loop and its support modules
+│   ├── trainer.py      # Main RL loop: sample, score, compute advantages, train
+│   ├── discover.py     # Test-time training over a single problem
 │   ├── runner.py       # TrainingRunner protocol + built-in runners
+│   ├── flow.py         # Construct-and-trace of the training flow
+│   ├── sft.py          # SFT dataset and tokenization helpers
+│   ├── state.py        # Checkpoint state serialization
+│   ├── sepa.py         # SEPA scheduler (linear / auto)
+│   ├── echo.py         # ECHO observation-token datums
+│   ├── rollouts.py     # Prompt caching and decoded rollout batches
+│   ├── loss.py         # Policy-gradient loss variants
+│   ├── backpressure.py # USL+Roofline adaptive batch sizing
 │   ├── signals.py      # Advantage caps, ties, and algorithm params
 │   ├── telemetry.py    # Step metrics, wandb payloads, emergence logs
 │   └── log.py          # Side effects for recording one RL step
@@ -52,11 +62,19 @@ retrain
 │   ├── uncertainty.py  # Token uncertainty signals
 │   ├── planning.py     # Strategic planning-token detection
 │   └── pipeline.py     # Composable advantage pipeline
-├── sepa.py             # SEPA scheduler (linear / auto)
-├── rewards.py          # match, math, judge, custom reward functions
-├── backpressure.py     # USL+Roofline adaptive batch sizing
-├── campaign.py         # Sweep orchestrator (conditions x seeds) with auto-squeeze
-├── squeeze.py          # LoRA-Squeeze rank analysis and compression
+├── environments/       # Training environment integrations
+│   └── verifiers.py    # Verifiers bridge: loading, prompts, rollouts, scoring
+├── rewards/            # match, math, judge, custom reward functions
+├── planning/           # Planning-token detectors (regex, semantic)
+├── registry/           # Component registries, builtins, dependency health
+├── campaign/           # Sweep orchestrator (conditions x seeds) with auto-squeeze
+├── squeeze/            # LoRA-Squeeze rank analysis and compression
+├── status/             # Run/campaign scanning, rendering, live export
+├── tree/               # Experiment tech tree (model, state, eval, render)
+├── diff/               # Run comparison (compute, render)
+├── benchmark/          # Repeated-run benchmark suites
+├── models/             # Model-specific quirks (Gemma4 text, Qwen3.5 kernels)
+├── kernels/            # GPU kernel helpers (fast LoRA, selected-token CE)
 ├── backends/           # Backend protocols, catalog, and implementations
 │   ├── __init__.py     # TrainHelper protocols + backend contracts
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas

@@ -1589,9 +1589,19 @@ ARCHITECTURE
         +-- override.py          CLI override parser
         +-- migrate.py           Legacy backend config migration
         +-- validate/            Defaults, bounds, modes, runtime checks, warnings
-    +-- trainer.py               Main training loop
-    +-- training/                Training runner, metrics, logging support
+    +-- types.py                 Shared type aliases
+    +-- training/                Training loop and support modules
+        +-- trainer.py           Main RL loop
+        +-- discover.py          Test-time training over one problem
         +-- runner.py            TrainingRunner protocol and built-in runners
+        +-- flow.py              Flow construction and synthetic trace
+        +-- sft.py               SFT dataset and tokenization helpers
+        +-- state.py             Checkpoint state serialization
+        +-- sepa.py              SEPA scheduler (linear / auto)
+        +-- echo.py              ECHO observation-token datums
+        +-- rollouts.py          Prompt caching and decoded rollouts
+        +-- loss.py              Policy-gradient loss variants
+        +-- backpressure.py      USL+Roofline adaptive batch sizing
         +-- signals.py           Advantage caps, ties, algorithm params
         +-- telemetry.py         Step metrics, wandb payloads, emergence logs
         +-- log.py               Side effects for recording one RL step
@@ -1604,14 +1614,19 @@ ARCHITECTURE
         +-- uncertainty.py       Token uncertainty signals
         +-- planning.py          Strategic planning-token detection
         +-- pipeline.py          Composable advantage pipeline
-    +-- flow.py                  Pre-flight: flow construction and synthetic trace
-    +-- sepa.py                  SEPA scheduler (linear / auto)
-    +-- rewards.py               match, math, judge, custom rewards
-    +-- backpressure.py          USL+Roofline adaptive batch sizing
-    +-- campaign.py              Sweep orchestrator (conditions x seeds)
-    +-- squeeze.py               LoRA-Squeeze rank analysis
-    +-- diff.py                  Run comparison and sparkline rendering
-    +-- status.py                Log scanning and status reporting
+    +-- environments/            Training environment integrations
+        +-- verifiers.py         Verifiers bridge: loading, rollouts, scoring
+    +-- rewards/                 match, math, judge, custom rewards
+    +-- planning/                Planning-token detectors
+    +-- registry/                Registries, builtins, dependency health
+    +-- campaign/                Sweep orchestration and summaries
+    +-- squeeze/                 LoRA-Squeeze rank analysis and compression
+    +-- status/                  Run/campaign scanning, rendering, export
+    +-- tree/                    Experiment tech tree
+    +-- diff/                    Run comparison
+    +-- benchmark/               Repeated-run benchmark suites
+    +-- models/                  Model-specific quirks and kernels
+    +-- kernels/                 GPU-kernel helpers
     +-- backends/                Backend protocols, catalog, implementations
         +-- __init__.py          TrainHelper protocols and backend contracts
         +-- catalog.py           Backend capabilities and option schemas
