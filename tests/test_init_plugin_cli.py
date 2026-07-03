@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from retrain.cli import _run_init_plugin, _run_plugins
+from retrain.commands.plugins.run import run as _run_plugins
+from retrain.commands.plugins.scaffold import run as _run_init_plugin
 
 
 class TestInitPlugin:

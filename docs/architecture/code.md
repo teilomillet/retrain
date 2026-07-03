@@ -13,6 +13,17 @@ retrain/
   commands/
     top.py
     name.py
+    init/
+      run.py
+      interactive.py
+      templates.py
+      customize.py
+    plugins/
+      run.py
+      scaffold.py
+      template.py
+      kinds.py
+      name.py
     manual/
       run.py
       render.py
@@ -76,6 +87,9 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `config/override.py`: CLI override parsing and coercion.
 - `config/validate/`: focused validation passes for bounds, modes, runtime
   compatibility, defaults, and warnings.
+- `commands/init/`: starter config templates, noninteractive init, and the TTY
+  interactive setup flow.
+- `commands/plugins/`: plugin discovery listing and plugin scaffold generation.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.

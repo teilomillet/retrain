@@ -23,6 +23,8 @@ retrain
 ├── commands/           # CLI command implementation packages
 │   ├── name.py         # CLI display-name resolution
 │   ├── top.py          # Top-level help text
+│   ├── init/           # Config templates and init command flows
+│   ├── plugins/        # Plugin listing and scaffold commands
 │   └── manual/         # Manual topics, rendering, sync, and dispatch
 ├── config/             # TrainConfig schema, TOML loading, CLI overrides
 │   ├── schema.py       # TrainConfig fields and derived params

@@ -6,18 +6,18 @@ from pathlib import Path
 import pytest
 
 import retrain.cli as cli
+from retrain.commands.init.customize import customize as _customize_toml
+from retrain.commands.init.interactive import run as _run_init_interactive
+from retrain.commands.init.run import run as _run_init
 from retrain.commands import manual as manual_command
+from retrain.commands.plugins.run import run as _run_plugins
+from retrain.commands.plugins.scaffold import run as _run_init_plugin
 from retrain.commands.top import print_help
 from retrain.cli import (
-    _customize_toml,
     _run_benchmark,
     _run_backends,
     _run_doctor,
     _run_explain,
-    _run_init,
-    _run_init_plugin,
-    _run_init_interactive,
-    _run_plugins,
 )
 from retrain.config import parse_cli_overrides
 
