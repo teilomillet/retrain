@@ -1632,6 +1632,7 @@ ARCHITECTURE
         +-- catalog.py           Backend capabilities and option schemas
         +-- local/               Local GPU backend package
             +-- train.py         PyTorch/PEFT training and inference orchestration
+            +-- checkpointing.py Gradient-checkpointing policy and layer metrics
             +-- lora.py          Local-backend LoRA setup
             +-- memory.py        CUDA allocator, cache, and saved-tensor policy
         +-- prime.py             PRIME-RL bridge backend

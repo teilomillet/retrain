@@ -80,6 +80,7 @@ retrain
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
 │   ├── local/          # Local GPU backend package
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
+│   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics
 │   │   └── memory.py   # CUDA allocator, cache, and saved-tensor policy
 │   ├── prime.py        # PRIME-RL bridge backend

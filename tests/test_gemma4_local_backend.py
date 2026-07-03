@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from peft import get_peft_model
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
+from retrain.backends.local import checkpointing as local_checkpointing
 from retrain.backends.local import lora as local_lora
 from retrain.backends.local import memory as local_memory
 from retrain.backends.local import train as local_mod
@@ -689,41 +690,42 @@ def test_gemma4_text_sampler_can_disable_kv_cache():
 
 def test_local_helper_gradient_checkpointing_can_use_non_reentrant_mode():
     model = _CheckpointToggleModel()
-    helper = LocalTrainHelper.__new__(LocalTrainHelper)
-    helper.train_model = model
-    helper.gradient_checkpointing = True
-    helper.gradient_checkpointing_use_reentrant = "false"
 
-    helper._configure_gradient_checkpointing()
+    metrics = local_checkpointing.configure_gradient_checkpointing(
+        model,
+        enabled=True,
+        use_reentrant="false",
+    )
 
     assert model.checkpointing_enabled is True
     assert model.enable_calls == 1
     assert model.enable_kwargs == [
         {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
     ]
+    assert metrics == {"total": 0, "enabled": 0, "skipped_last_n": 0}
 
 
 def test_local_helper_gradient_checkpointing_auto_preserves_legacy_call():
     model = _CheckpointToggleModel()
-    helper = LocalTrainHelper.__new__(LocalTrainHelper)
-    helper.train_model = model
-    helper.gradient_checkpointing = True
-    helper.gradient_checkpointing_use_reentrant = "auto"
 
-    helper._configure_gradient_checkpointing()
+    local_checkpointing.configure_gradient_checkpointing(
+        model,
+        enabled=True,
+        use_reentrant="auto",
+    )
 
     assert model.enable_kwargs == [{}]
 
 
 def test_local_helper_gradient_checkpointing_can_skip_last_layers():
     model = _LayerCheckpointModel(layer_count=4)
-    helper = LocalTrainHelper.__new__(LocalTrainHelper)
-    helper.train_model = model
-    helper.gradient_checkpointing = True
-    helper.gradient_checkpointing_use_reentrant = "auto"
-    helper.gradient_checkpointing_skip_last_n = 2
 
-    helper._configure_gradient_checkpointing()
+    metrics = local_checkpointing.configure_gradient_checkpointing(
+        model,
+        enabled=True,
+        use_reentrant="auto",
+        skip_last_n=2,
+    )
 
     assert [layer.gradient_checkpointing for layer in model.layers] == [
         True,
@@ -731,7 +733,7 @@ def test_local_helper_gradient_checkpointing_can_skip_last_layers():
         False,
         False,
     ]
-    assert helper._gradient_checkpointing_layer_metrics == {
+    assert metrics == {
         "total": 4,
         "enabled": 2,
         "skipped_last_n": 2,

@@ -40,6 +40,10 @@ from retrain.backends.local.lora import (
     metrics as _lora_metrics,
     patch_fast as _patch_fast_lora,
 )
+from retrain.backends.local.checkpointing import (
+    configure_gradient_checkpointing,
+    enable_gradient_checkpointing,
+)
 from retrain.backends.local.memory import (
     configure_cuda_allocator,
     empty_cuda_cache_if_requested,
@@ -336,7 +340,12 @@ class LocalTrainHelper:
         if hasattr(self.train_model, "print_trainable_parameters"):
             self.train_model.print_trainable_parameters()
 
-        self._configure_gradient_checkpointing()
+        self._gradient_checkpointing_layer_metrics = configure_gradient_checkpointing(
+            self.train_model,
+            enabled=self.gradient_checkpointing,
+            use_reentrant=self.gradient_checkpointing_use_reentrant,
+            skip_last_n=self.gradient_checkpointing_skip_last_n,
+        )
 
         # Async pipeline state — initialized before first _sync_lora_weights call
         self._train_future = None       # Future from last submitted training
@@ -444,64 +453,6 @@ class LocalTrainHelper:
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
-
-    def _enable_gradient_checkpointing(self, model):
-        mode = getattr(self, "gradient_checkpointing_use_reentrant", "auto")
-        if mode in ("true", "false"):
-            model.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": mode == "true"}
-            )
-        else:
-            model.gradient_checkpointing_enable()
-
-    @staticmethod
-    def _gradient_checkpointing_layers(model):
-        modules = getattr(model, "modules", None)
-        if not callable(modules):
-            return []
-        return [
-            module
-            for module in modules()
-            if module is not model
-            and hasattr(module, "gradient_checkpointing")
-            and isinstance(getattr(module, "gradient_checkpointing"), bool)
-        ]
-
-    def _apply_gradient_checkpointing_layer_policy(self, model) -> None:
-        layers = self._gradient_checkpointing_layers(model)
-        skip_last_n = min(
-            int(getattr(self, "gradient_checkpointing_skip_last_n", 0)),
-            len(layers),
-        )
-        if skip_last_n:
-            for module in layers[-skip_last_n:]:
-                module.gradient_checkpointing = False
-        enabled = sum(
-            int(bool(getattr(module, "gradient_checkpointing", False)))
-            for module in layers
-        )
-        self._gradient_checkpointing_layer_metrics = {
-            "total": len(layers),
-            "enabled": enabled,
-            "skipped_last_n": skip_last_n,
-        }
-
-    def _configure_gradient_checkpointing(self):
-        # Gradient checkpointing trades compute for VRAM; benchmarks must be
-        # able to toggle it because it changes both memory fit and throughput.
-        if self.gradient_checkpointing and hasattr(
-            self.train_model,
-            "gradient_checkpointing_enable",
-        ):
-            self._enable_gradient_checkpointing(self.train_model)
-            self._apply_gradient_checkpointing_layer_policy(self.train_model)
-        elif hasattr(self.train_model, "gradient_checkpointing_disable"):
-            self.train_model.gradient_checkpointing_disable()
-            self._gradient_checkpointing_layer_metrics = {
-                "total": len(self._gradient_checkpointing_layers(self.train_model)),
-                "enabled": 0,
-                "skipped_last_n": 0,
-            }
 
     def _liger_fused_linear_ce_loss(self):
         if not (
@@ -625,7 +576,14 @@ class LocalTrainHelper:
             if toggled:
                 model = self.train_model
                 if hasattr(model, "gradient_checkpointing_enable"):
-                    self._enable_gradient_checkpointing(model)
+                    enable_gradient_checkpointing(
+                        model,
+                        getattr(
+                            self,
+                            "gradient_checkpointing_use_reentrant",
+                            "auto",
+                        ),
+                    )
                 if config is not None and previous_use_cache is not None:
                     config.use_cache = previous_use_cache
 
