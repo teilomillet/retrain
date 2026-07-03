@@ -1,4 +1,4 @@
-"""`retrain status` and `retrain top` commands."""
+"""`retrain status` command."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 # Dead/partial/done campaigns disappear from the default view after 24h idle.
-_STALE_HIDE_SECONDS = 86400
+STALE_HIDE_SECONDS = 86400
 
 
 def run(args: list[str]) -> None:
@@ -15,6 +15,7 @@ def run(args: list[str]) -> None:
     import time as _time
 
     from retrain.status import (
+        CampaignSummary,
         format_campaign,
         format_run,
         format_summary_banner,
@@ -52,23 +53,18 @@ def run(args: list[str]) -> None:
     while True:
         now = _time.time()
         runs, campaigns = scan_all(root_path)
-
-        # Banner uses ALL campaigns (before filtering)
         banner = format_summary_banner(campaigns)
 
         if not show_all:
 
-            from retrain.status import CampaignSummary
-
-            def _is_visible(c: CampaignSummary) -> bool:
-                if c.status == "running":
+            def is_visible(campaign: CampaignSummary) -> bool:
+                if campaign.status == "running":
                     return True
-                if c.status in ("dead", "partial", "done"):
-                    # Show only if there was recent activity
-                    return c.last_activity > now - _STALE_HIDE_SECONDS
+                if campaign.status in ("dead", "partial", "done"):
+                    return campaign.last_activity > now - STALE_HIDE_SECONDS
                 return True
 
-            campaigns = [c for c in campaigns if _is_visible(c)]
+            campaigns = [c for c in campaigns if is_visible(c)]
 
         if fmt == "json":
             payload = {
@@ -89,8 +85,8 @@ def run(args: list[str]) -> None:
                     print(f"No active campaigns in {root}  (use --all to see everything)")
             else:
                 if campaigns:
-                    for camp in campaigns:
-                        print(format_campaign(camp))
+                    for campaign in campaigns:
+                        print(format_campaign(campaign))
                         print()
 
                 if runs:
@@ -103,18 +99,6 @@ def run(args: list[str]) -> None:
 
         try:
             _time.sleep(5)
-            # Clear screen for refresh
             print("\033[2J\033[H", end="")
         except KeyboardInterrupt:
             return
-
-
-def run_top(args: list[str]) -> None:
-    """Live dashboard: alias for ``retrain status --watch --active``."""
-    status_args = ["--watch", "--active"]
-    # Accept optional positional logdir
-    for arg in args:
-        if not arg.startswith("-"):
-            status_args.append(arg)
-            break
-    run(status_args)

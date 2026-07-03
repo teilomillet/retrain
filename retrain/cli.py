@@ -35,8 +35,8 @@ from retrain.commands.name import resolve as resolve_cli_name
 from retrain.commands.plugins.run import run as run_plugins
 from retrain.commands.plugins.scaffold import run as run_init_plugin
 from retrain.commands.help import print_help
-from retrain.commands.status import run as run_status
-from retrain.commands.status import run_top
+from retrain.commands.status.run import run as run_status
+from retrain.commands.status.top import run as run_top
 
 
 def _manual_path() -> Path:
@@ -62,20 +62,6 @@ def _load_dotenv() -> None:
             val = val[1:-1]
         os.environ[key] = val
     print("Loaded .env", file=sys.stderr)
-
-
-def _is_squeeze(path: str) -> bool:
-    """Check if a TOML file has a [squeeze] section."""
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    return "squeeze" in data
-
-
-def _is_campaign(path: str) -> bool:
-    """Check if a TOML file has a [campaign] section."""
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    return "campaign" in data
 
 
 def _explain_single(config_path: str | None, fmt: str) -> None:
@@ -642,9 +628,12 @@ def _run_explain(args: list[str]) -> None:
         sys.exit(1)
 
     # Route by config type
-    if _is_campaign(config_path):
+    from retrain.config import config_kind
+
+    kind = config_kind(config_path)
+    if kind == "campaign":
         _explain_campaign(config_path, fmt)
-    elif _is_squeeze(config_path):
+    elif kind == "squeeze":
         _explain_squeeze(config_path, fmt)
     else:
         _explain_single(config_path, fmt)
@@ -1026,40 +1015,46 @@ def main() -> None:
 
     # Route: campaign | squeeze | single run
     # Campaign/squeeze only when a TOML file is provided (CLI overrides don't apply)
-    if config_path is not None and _is_campaign(config_path):
-        from retrain.campaign import run_campaign
-        run_campaign(config_path)
-    elif config_path is not None and _is_squeeze(config_path):
-        from retrain.squeeze import run_squeeze
-        run_squeeze(config_path)
-    else:
-        from retrain.config import load_config
-        from retrain.registry import get_registry
-        config = load_config(config_path, overrides=overrides)
-        warn_missing(config)
-        meta_dir = Path(config.log_dir)
-        meta_dir.mkdir(parents=True, exist_ok=True)
-        meta_path = meta_dir / "run_meta.json"
-        meta_path.write_text(
-            json.dumps(
-                {
-                    "trainer": config.trainer,
-                    "run_id": meta_dir.name or "run",
-                    "status": "running",
-                }
-            )
+    if config_path is not None:
+        from retrain.config import config_kind
+
+        kind = config_kind(config_path)
+        if kind == "campaign":
+            from retrain.campaign import run_campaign
+            run_campaign(config_path)
+            return
+        if kind == "squeeze":
+            from retrain.squeeze import run_squeeze
+            run_squeeze(config_path)
+            return
+    from retrain.config import load_config
+    from retrain.registry import get_registry
+
+    config = load_config(config_path, overrides=overrides)
+    warn_missing(config)
+    meta_dir = Path(config.log_dir)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = meta_dir / "run_meta.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "trainer": config.trainer,
+                "run_id": meta_dir.name or "run",
+                "status": "running",
+            }
         )
-        runner = get_registry("trainer").create(config.trainer, config)
-        result = runner.run(config)
-        meta: dict[str, object] = {"trainer": config.trainer}
-        meta.update(result.to_dict())
-        meta_path.write_text(json.dumps(meta))
-        if not result.ok:
-            print(
-                f"Training failed ({result.failure_status}): {result.error_message}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+    )
+    runner = get_registry("trainer").create(config.trainer, config)
+    result = runner.run(config)
+    meta: dict[str, object] = {"trainer": config.trainer}
+    meta.update(result.to_dict())
+    meta_path.write_text(json.dumps(meta))
+    if not result.ok:
+        print(
+            f"Training failed ({result.failure_status}): {result.error_message}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

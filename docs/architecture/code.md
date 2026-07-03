@@ -11,8 +11,14 @@ Prefer package-scoped modules with short names:
 ```text
 retrain/
   commands/
-    top.py
+    help.py
     name.py
+    backends/
+      run.py
+      capability.py
+    doctor/
+      run.py
+      warn.py
     init/
       run.py
       interactive.py
@@ -24,6 +30,9 @@ retrain/
       template.py
       kinds.py
       name.py
+    status/
+      run.py
+      top.py
     manual/
       run.py
       render.py
@@ -87,9 +96,13 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `config/override.py`: CLI override parsing and coercion.
 - `config/validate/`: focused validation passes for bounds, modes, runtime
   compatibility, defaults, and warnings.
+- `commands/backends/`: backend catalog display and capability summaries used by
+  CLI previews.
+- `commands/doctor/`: dependency probes and config-backed dependency warnings.
 - `commands/init/`: starter config templates, noninteractive init, and the TTY
   interactive setup flow.
 - `commands/plugins/`: plugin discovery listing and plugin scaffold generation.
+- `commands/status/`: log status scanning and the live `top` dashboard alias.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.

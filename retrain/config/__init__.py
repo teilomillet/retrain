@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from retrain.config.constants import _DEFAULT_ADAPTER_PATH, _VALID_ENVIRONMENT_PROVIDERS
+from retrain.config.kind import config_kind
 from retrain.config.load import load_config
 from retrain.config.migrate import (
     BackendConfigMigrationResult,
@@ -23,6 +24,7 @@ __all__ = [
     "BackendConfigMigrationResult",
     "SqueezeConfig",
     "TrainConfig",
+    "config_kind",
     "detect_legacy_prime_rl_backend_keys",
     "load_config",
     "load_squeeze_config",

@@ -4,7 +4,7 @@ import warnings
 
 import pytest
 
-from retrain.config import TrainConfig, load_config, parse_cli_overrides
+from retrain.config import TrainConfig, config_kind, load_config, parse_cli_overrides
 
 
 class TestDefaults:
@@ -56,6 +56,28 @@ class TestLoadConfig:
         assert c.max_steps == 100
         # Other defaults preserved
         assert c.batch_size == 8
+
+
+class TestConfigKind:
+    def test_single_config(self, tmp_path):
+        path = tmp_path / "retrain.toml"
+        path.write_text("[training]\nmax_steps = 1\n")
+        assert config_kind(str(path)) == "single"
+
+    def test_campaign_config(self, tmp_path):
+        path = tmp_path / "campaign.toml"
+        path.write_text("[campaign]\nmax_steps = 1\n")
+        assert config_kind(str(path)) == "campaign"
+
+    def test_squeeze_config(self, tmp_path):
+        path = tmp_path / "squeeze.toml"
+        path.write_text("[squeeze]\nadapter_path = 'adapter'\n")
+        assert config_kind(str(path)) == "squeeze"
+
+    def test_campaign_wins_over_squeeze(self, tmp_path):
+        path = tmp_path / "combined.toml"
+        path.write_text("[campaign]\nmax_steps = 1\n\n[squeeze]\nadapter_path = 'adapter'\n")
+        assert config_kind(str(path)) == "campaign"
 
     def test_all_sections(self, tmp_path):
         toml = tmp_path / "config.toml"
