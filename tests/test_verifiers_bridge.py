@@ -11,6 +11,7 @@ from retrain.environments import verifiers as bridge_mod
 from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
 from retrain.environments.verifiers import (
+    StateDict,
     VerifiersRolloutTiming,
     _coerce_float_list,
     encode_prompt_for_sampling,
@@ -20,6 +21,11 @@ from retrain.environments.verifiers import (
     prompt_preview,
     run_multiturn_group,
 )
+
+
+def test_state_dict_alias_remains_on_legacy_bridge_module():
+    state: StateDict = {"reward": 1.0}
+    assert state["reward"] == 1.0
 
 
 class _DummyTokenizer:
