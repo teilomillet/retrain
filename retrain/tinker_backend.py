@@ -13,6 +13,7 @@ Ports src/tinker_backend.mojo into pure Python.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,13 @@ from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
 
 if TYPE_CHECKING:
     import torch
+
+
+def _mean_loss_from_result(result: object, datum_count: int) -> float:
+    metrics = getattr(result, "metrics", None)
+    if not isinstance(metrics, Mapping) or not metrics:
+        return 0.0
+    return float(metrics.get("loss:sum", 0.0)) / max(datum_count, 1)
 
 
 class TinkerTrainHelper:
@@ -331,11 +339,7 @@ class TinkerTrainHelper:
             fwd_bwd_result = fwd_bwd_future.result()
             optim_future.result()
 
-            if hasattr(fwd_bwd_result, "metrics") and fwd_bwd_result.metrics:
-                n = max(len(datums), 1)
-                loss_sum = fwd_bwd_result.metrics.get("loss:sum", 0.0)
-                return float(loss_sum) / n
-            return 0.0
+            return _mean_loss_from_result(fwd_bwd_result, len(datums))
 
     def train_step_with_echo_masks(
         self,
@@ -554,11 +558,7 @@ class TinkerTrainHelper:
             # Extract mean loss
             if ppo_metrics is not None:
                 return float(ppo_metrics.get("ppo_custom_loss", 0.0))
-            if hasattr(fwd_bwd_result, "metrics") and fwd_bwd_result.metrics:
-                n = max(len(datums), 1)
-                loss_sum = fwd_bwd_result.metrics.get("loss:sum", 0.0)
-                return float(loss_sum) / n
-            return 0.0
+            return _mean_loss_from_result(fwd_bwd_result, len(datums))
 
     def load_state(self, name: str) -> None:
         """Load training state from a Tinker checkpoint.
