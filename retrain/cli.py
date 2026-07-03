@@ -139,7 +139,7 @@ def main() -> None:
 
         kind = config_kind(config_path)
         if kind == "campaign":
-            from retrain.campaign import run_campaign
+            from retrain.campaign.run import run_campaign
             run_campaign(config_path)
             return
         if kind == "squeeze":

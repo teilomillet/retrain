@@ -331,25 +331,25 @@ lora_rank = 128
 class TestCampaignAutoSqueeze:
     def test_auto_squeeze_with_local_adapter(self, tmp_path):
         """_auto_squeeze analyzes a local adapter and returns recommended rank."""
-        from retrain.campaign import _auto_squeeze
+        from retrain.campaign.squeeze import auto_squeeze
 
         adapter_dir = _make_peft_adapter(tmp_path, 64, 64, 16)
         squeeze_cfg = {"min_variance_retention": 0.95}
 
-        rank = _auto_squeeze(str(adapter_dir), squeeze_cfg, lora_rank=16)
+        rank = auto_squeeze(str(adapter_dir), squeeze_cfg, lora_rank=16)
         assert isinstance(rank, int)
         assert 1 <= rank <= 16
 
     def test_auto_squeeze_respects_threshold(self, tmp_path):
         """Lower threshold -> lower or equal recommended rank."""
-        from retrain.campaign import _auto_squeeze
+        from retrain.campaign.squeeze import auto_squeeze
 
         adapter_dir = _make_peft_adapter(tmp_path, 64, 64, 16)
 
-        rank_strict = _auto_squeeze(
+        rank_strict = auto_squeeze(
             str(adapter_dir), {"min_variance_retention": 0.99}, lora_rank=16
         )
-        rank_loose = _auto_squeeze(
+        rank_loose = auto_squeeze(
             str(adapter_dir), {"min_variance_retention": 0.5}, lora_rank=16
         )
         assert rank_loose <= rank_strict

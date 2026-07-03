@@ -1,4 +1,4 @@
-"""Tests for retrain.campaign condition parsing, TOML serialization, and parallel execution."""
+"""Tests for campaign condition parsing, TOML serialization, and parallel execution."""
 
 import json
 import tomllib
@@ -7,15 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from retrain.campaign import (
-    DEFAULT_CONDITIONS,
-    _config_to_toml,
-    parse_campaign_conditions,
-    _run_parallel,
-    _toml_value,
-    _write_run_configs,
-    run_campaign,
-)
+from retrain.campaign.configs import config_to_toml, toml_value, write_run_configs
+from retrain.campaign.parallel import run_parallel
+from retrain.campaign.parse import DEFAULT_CONDITIONS, parse_campaign_conditions
+from retrain.campaign.run import run_campaign
 from retrain.config import TrainConfig, load_config
 
 
@@ -174,28 +169,28 @@ class TestParseCampaignConditions:
 
 class TestTomlValue:
     def test_string(self):
-        assert _toml_value("hello") == '"hello"'
+        assert toml_value("hello") == '"hello"'
 
     def test_string_with_quotes(self):
-        assert _toml_value('say "hi"') == '"say \\"hi\\""'
+        assert toml_value('say "hi"') == '"say \\"hi\\""'
 
     def test_bool_true(self):
-        assert _toml_value(True) == "true"
+        assert toml_value(True) == "true"
 
     def test_bool_false(self):
-        assert _toml_value(False) == "false"
+        assert toml_value(False) == "false"
 
     def test_int(self):
-        assert _toml_value(42) == "42"
+        assert toml_value(42) == "42"
 
     def test_negative_int(self):
-        assert _toml_value(-1) == "-1"
+        assert toml_value(-1) == "-1"
 
     def test_float(self):
-        assert _toml_value(0.7) == "0.7"
+        assert toml_value(0.7) == "0.7"
 
     def test_empty_string(self):
-        assert _toml_value("") == '""'
+        assert toml_value("") == '""'
 
 
 class TestConfigToToml:
@@ -209,7 +204,7 @@ class TestConfigToToml:
             lr=1e-4,
             log_dir="logs/test",
         )
-        toml_str = _config_to_toml(original)
+        toml_str = config_to_toml(original)
         toml_path = tmp_path / "roundtrip.toml"
         toml_path.write_text(toml_str)
 
@@ -231,7 +226,7 @@ class TestConfigToToml:
             wandb_project="my-proj",
             prefix_caching=False,
         )
-        toml_str = _config_to_toml(original)
+        toml_str = config_to_toml(original)
         toml_path = tmp_path / "special.toml"
         toml_path.write_text(toml_str)
 
@@ -245,14 +240,14 @@ class TestConfigToToml:
     def test_defaults_produce_minimal_output(self):
         """A default config should produce near-empty TOML (only non-defaults emitted)."""
         cfg = TrainConfig()
-        toml_str = _config_to_toml(cfg)
+        toml_str = config_to_toml(cfg)
         # Should be essentially empty (just newline) since all values are defaults
         assert toml_str.strip() == ""
 
     def test_only_changed_fields_emitted(self):
         """Only non-default fields appear in the TOML output."""
         cfg = TrainConfig(seed=42, max_steps=100)
-        toml_str = _config_to_toml(cfg)
+        toml_str = config_to_toml(cfg)
         assert "seed = 42" in toml_str
         assert "max_steps = 100" in toml_str
         # Default fields should not appear
@@ -266,7 +261,7 @@ class TestConfigToToml:
 
 
 class TestWriteRunConfigs:
-    def test_write_run_configs(self, tmp_path):
+    def testwrite_run_configs(self, tmp_path):
         """2 conditions x 2 seeds → 4 TOML files with correct overrides."""
         base = TrainConfig()
         runs = [
@@ -305,7 +300,7 @@ class TestWriteRunConfigs:
         ]
 
         config_dir = tmp_path / "configs"
-        _write_run_configs(runs, base, max_steps=50, config_dir=config_dir)
+        write_run_configs(runs, base, max_steps=50, config_dir=config_dir)
 
         # 4 TOML files created
         toml_files = sorted(config_dir.glob("*.toml"))
@@ -351,9 +346,9 @@ class TestRunParallel:
             mock.pid = 12345
             return mock
 
-        with patch("retrain.campaign.subprocess.Popen", side_effect=make_proc):
-            with patch("retrain.campaign.time.sleep"):
-                result = _run_parallel(runs, tmp_path, max_workers=3)
+        with patch("retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc):
+            with patch("retrain.campaign.parallel.time.sleep"):
+                result = run_parallel(runs, max_workers=3)
 
         assert all(r["returncode"] == 0 for r in result)
         assert len(result) == 3
@@ -374,9 +369,9 @@ class TestRunParallel:
             mock.pid = 10000 + idx
             return mock
 
-        with patch("retrain.campaign.subprocess.Popen", side_effect=make_proc):
-            with patch("retrain.campaign.time.sleep"):
-                result = _run_parallel(runs, tmp_path, max_workers=3)
+        with patch("retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc):
+            with patch("retrain.campaign.parallel.time.sleep"):
+                result = run_parallel(runs, max_workers=3)
 
         failed = sum(1 for r in result if r.get("returncode", -1) != 0)
         assert failed == 1
@@ -414,9 +409,9 @@ class TestRunParallel:
             mock.poll.return_value = 0  # immediately done
             return mock
 
-        with patch("retrain.campaign.subprocess.Popen", side_effect=make_proc_simple):
-            with patch("retrain.campaign.time.sleep"):
-                result = _run_parallel(runs, tmp_path, max_workers=2)
+        with patch("retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc_simple):
+            with patch("retrain.campaign.parallel.time.sleep"):
+                result = run_parallel(runs, max_workers=2)
 
         assert len(result) == 4
         assert all(r["returncode"] == 0 for r in result)
@@ -466,8 +461,8 @@ class TestParallelCampaignConfig:
             '[squeeze]\nmin_variance_retention = 0.95\n'
         )
 
-        # Mock _run_parallel to return runs with returncode=0
-        def mock_run_parallel(runs, config_dir, max_workers, stagger_seconds=0):
+        # Mock run_parallel to return runs with returncode=0
+        def mock_run_parallel(runs, max_workers, stagger_seconds=0):
             for r in runs:
                 r["returncode"] = 0
             return runs
@@ -478,16 +473,15 @@ class TestParallelCampaignConfig:
             squeeze_called[0] = True
             return 16
 
-        with patch("retrain.campaign._run_parallel", side_effect=mock_run_parallel):
-            with patch("retrain.campaign._write_run_configs"):
-                with patch("retrain.campaign._auto_squeeze", side_effect=mock_auto_squeeze):
-                    with patch("retrain.campaign.load_config", return_value=TrainConfig()):
+        with patch("retrain.campaign.run.run_parallel", side_effect=mock_run_parallel):
+            with patch("retrain.campaign.run.write_run_configs"):
+                with patch("retrain.campaign.run.auto_squeeze", side_effect=mock_auto_squeeze):
+                    with patch("retrain.campaign.run.load_config", return_value=TrainConfig()):
                         import os
                         old_cwd = os.getcwd()
                         os.chdir(tmp_path)
                         try:
-                            from retrain.campaign import run_campaign
-                            run_campaign(str(toml_path))
+                                                        run_campaign(str(toml_path))
                         finally:
                             os.chdir(old_cwd)
 
@@ -509,15 +503,15 @@ class TestParallelCampaignConfig:
             'transform_mode = "none"\n'
         )
 
-        def mock_run_parallel(runs, config_dir, max_workers, stagger_seconds=0):
-            _ = config_dir, max_workers, stagger_seconds
+        def mock_run_parallel(runs, max_workers, stagger_seconds=0):
+            _ = max_workers, stagger_seconds
             for run in runs:
                 run["returncode"] = 0
             return runs
 
-        with patch("retrain.campaign._run_parallel", side_effect=mock_run_parallel):
-            with patch("retrain.campaign.subprocess.run", return_value=MagicMock(returncode=0)) as run_mock:
-                with patch("retrain.campaign.load_config", return_value=TrainConfig()):
+        with patch("retrain.campaign.run.run_parallel", side_effect=mock_run_parallel):
+            with patch("retrain.campaign.run.subprocess.run", return_value=MagicMock(returncode=0)) as run_mock:
+                with patch("retrain.campaign.run.load_config", return_value=TrainConfig()):
                     import os
 
                     old_cwd = os.getcwd()
@@ -562,9 +556,9 @@ class TestRunPidFileWritten:
             mock.poll.return_value = 0
             return mock
 
-        with patch("retrain.campaign.subprocess.Popen", side_effect=make_proc):
-            with patch("retrain.campaign.time.sleep"):
-                _run_parallel(runs, tmp_path, max_workers=2)
+        with patch("retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc):
+            with patch("retrain.campaign.parallel.time.sleep"):
+                run_parallel(runs, max_workers=2)
 
         for i, run in enumerate(runs):
             pid_file = Path(run["log_dir"]) / "run.pid"

@@ -11,7 +11,7 @@ from retrain.commands.backends.capability import summary as capability_summary
 
 def explain_campaign(config_path: str, fmt: str) -> None:
     """Explain what a campaign would do."""
-    from retrain.campaign import DEFAULT_SEEDS, parse_campaign_conditions
+    from retrain.campaign.parse import DEFAULT_SEEDS, parse_campaign_conditions
 
     with open(config_path, "rb") as f:
         data = tomllib.load(f)

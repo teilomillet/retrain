@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 def run_campaign_node(tree, node_id: str) -> None:
     """Launch a node's campaign and record state."""
-    from retrain.campaign import run_campaign
+    from retrain.campaign.run import run_campaign
     from retrain.tree.model import NodeState
     from retrain.tree.state import save_state
 
