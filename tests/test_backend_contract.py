@@ -125,6 +125,19 @@ class _NonMappingRuntimeMetricsHelper(_BaseFakeHelper):
         return [("fake_backend_metric", 1)]
 
 
+class _MixedRuntimeMetricsHelper(_BaseFakeHelper):
+    def runtime_metrics(self) -> dict[object, object]:
+        return {
+            "int_metric": 1,
+            "float_metric": 2.5,
+            "str_metric": "ok",
+            "bool_metric": True,
+            "none_metric": None,
+            "object_metric": object(),
+            123: "bad_key",
+        }
+
+
 class _SftFakeHelper(_BaseFakeHelper):
     def sft_train_step(
         self,
@@ -497,10 +510,17 @@ def test_runtime_metrics_helper_is_optional_capability():
 def test_collect_runtime_metrics_tolerates_malformed_helpers():
     non_callable = _NonCallableRuntimeMetricsHelper()
     non_mapping = _NonMappingRuntimeMetricsHelper()
+    mixed = _MixedRuntimeMetricsHelper()
 
     assert isinstance(non_callable, RuntimeMetricsHelper)
     assert collect_runtime_metrics(non_callable) == {}
     assert collect_runtime_metrics(non_mapping) == {}
+    assert collect_runtime_metrics(mixed) == {
+        "int_metric": 1,
+        "float_metric": 2.5,
+        "str_metric": "ok",
+        "bool_metric": True,
+    }
 
 
 def test_run_sft_train_step_uses_native_capability():

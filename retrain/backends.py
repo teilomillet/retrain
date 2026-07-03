@@ -12,6 +12,8 @@ from typing import Protocol, runtime_checkable
 
 from retrain.type_defs import EnrichedSampleBatch, SampleBatch
 
+type RuntimeMetric = int | float | str
+
 
 @runtime_checkable
 class TrainHelper(Protocol):
@@ -76,15 +78,19 @@ class SftTrainHelper(Protocol):
     ) -> float: ...
 
 
-def collect_runtime_metrics(helper: object) -> dict[str, object]:
+def collect_runtime_metrics(helper: object) -> dict[str, RuntimeMetric]:
     """Return backend runtime telemetry when the helper exposes it safely."""
     runtime_metrics = getattr(helper, "runtime_metrics", None)
     if not callable(runtime_metrics):
         return {}
     metrics = runtime_metrics()
-    if isinstance(metrics, Mapping):
-        return dict(metrics)
-    return {}
+    if not isinstance(metrics, Mapping):
+        return {}
+    return {
+        key: value
+        for key, value in metrics.items()
+        if isinstance(key, str) and isinstance(value, (int, float, str))
+    }
 
 
 def run_sft_train_step(
