@@ -15,6 +15,7 @@ from retrain.advantages import (
     apply_sepa_amplification,
     apply_sepa_amplification_clamped,
     apply_sepa_pooling,
+    compute_algorithm_advantages,
     compute_composable_advantages,
     compute_entropy_mask_threshold,
     compute_entropy_stats,
@@ -639,6 +640,20 @@ class TestComposablePipeline:
                 transform_params={"uncertainty_kind": "entropy"},
             )
 
+    def test_conflicting_uncertainty_selector_params_raise(self):
+        with pytest.raises(ValueError, match="Conflicting uncertainty kind"):
+            compute_composable_advantages(
+                rewards_G=[1.0, 0.0],
+                logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+                planning_masks_G=[[0, 0], [0, 0]],
+                advantage_mode="grpo",
+                transform_mode="gtpo",
+                transform_params={
+                    "uncertainty_kind": "surprisal",
+                    "uncertainty_metric": "predictive_variance",
+                },
+            )
+
 
 # ---------------------------------------------------------------------------
 # Numeric guard tests (inf entropy)
@@ -863,6 +878,21 @@ class TestPrecomputedShannonEntropy:
         assert result.has_stats
         for ta in result.token_advs:
             assert all(math.isfinite(a) for a in ta)
+
+    def test_builtin_algorithm_pipeline_forwards_precomputed_entropies(self):
+        """Built-in algorithm modes preserve the entropy side channel."""
+        result = compute_algorithm_advantages(
+            rewards_G=[1.0, 0.0],
+            logprobs_G=[[-0.5, -0.3], [-0.8, -0.6]],
+            planning_masks_G=[[0, 0], [0, 0]],
+            algorithm_mode="maxrl_gtpo",
+            params={"transform_params": {"uncertainty_kind": "shannon_entropy"}},
+            precomputed_entropies_G=[[0.5, 1.2], [0.8, 0.3]],
+        )
+        assert len(result.token_advs) == 2
+        assert result.has_stats
+        for token_advs in result.token_advs:
+            assert all(math.isfinite(advantage) for advantage in token_advs)
 
     def test_pipeline_with_sepa_and_precomputed_entropies(self):
         """Shannon entropy works with SEPA transforms via precomputed path."""

@@ -503,6 +503,51 @@ class TestValidation:
         c = TrainConfig(uncertainty_kind="entropy")
         assert c.uncertainty_kind == "shannon_entropy"
 
+    def test_transform_param_uncertainty_kind_promotes_to_config(self):
+        c = TrainConfig(transform_params={"uncertainty_kind": "entropy"})
+        assert c.uncertainty_kind == "shannon_entropy"
+        assert c.transform_params["uncertainty_kind"] == "shannon_entropy"
+
+    def test_algorithm_transform_uncertainty_kind_promotes_to_config(self):
+        c = TrainConfig(
+            algorithm_mode="maxrl_gtpo",
+            algorithm_params={
+                "transform_params": {"uncertainty_metric": "pred_var"},
+            }
+        )
+        assert c.uncertainty_kind == "predictive_variance"
+        assert isinstance(c.algorithm_params["transform_params"], dict)
+        nested = c.algorithm_params["transform_params"]
+        assert nested["uncertainty_metric"] == "predictive_variance"
+
+    def test_inactive_algorithm_params_do_not_override_uncertainty_kind(self):
+        c = TrainConfig(algorithm_params={"uncertainty_kind": "pred_var"})
+        assert c.uncertainty_kind == "surprisal"
+        assert c.algorithm_params["uncertainty_kind"] == "pred_var"
+
+    def test_conflicting_uncertainty_kind_overrides_raise(self):
+        with pytest.raises(ValueError, match="Conflicting uncertainty_kind"):
+            TrainConfig(
+                uncertainty_kind="predictive_variance",
+                transform_params={"uncertainty_kind": "surprisal"},
+            )
+
+    def test_conflicting_uncertainty_selectors_in_transform_params_raise(self):
+        with pytest.raises(ValueError, match="Conflicting uncertainty kind"):
+            TrainConfig(
+                transform_params={
+                    "uncertainty_kind": "surprisal",
+                    "uncertainty_metric": "predictive_variance",
+                }
+            )
+
+    def test_transform_param_shannon_entropy_gets_backend_validation(self):
+        with pytest.raises(ValueError, match="shannon_entropy.*not supported.*tinker"):
+            TrainConfig(
+                backend="tinker",
+                transform_params={"uncertainty_kind": "shannon_entropy"},
+            )
+
     def test_invalid_uncertainty_kind_raises(self):
         with pytest.raises(ValueError, match="Unknown uncertainty kind"):
             TrainConfig(uncertainty_kind="mystery_metric")

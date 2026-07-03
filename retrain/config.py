@@ -19,6 +19,7 @@ from pathlib import Path
 
 from retrain.advantages import (
     canonicalize_uncertainty_kind,
+    get_uncertainty_kind_param,
     get_builtin_algorithm_modes,
     get_builtin_advantage_modes,
     get_builtin_transform_modes,
@@ -31,6 +32,42 @@ from retrain.plugin_resolver import set_plugin_runtime
 
 _VALID_ENVIRONMENT_PROVIDERS = {"", "verifiers"}
 _DEFAULT_ADAPTER_PATH = "/tmp/retrain_adapter"
+
+
+def _canonicalize_uncertainty_override(
+    params: dict[str, object],
+    *,
+    label: str,
+    errors: list[str],
+) -> tuple[str, str] | None:
+    """Canonicalize uncertainty selector params and return ``(label.key, value)``."""
+    try:
+        override = get_uncertainty_kind_param(params)
+    except ValueError as exc:
+        errors.append(f"{label}.{exc}")
+        return None
+    if override is None:
+        return None
+    key, value = override
+    params[key] = value
+    return f"{label}.{key}", value
+
+
+def _first_uncertainty_override(
+    overrides: list[tuple[str, str]],
+    *,
+    errors: list[str],
+) -> tuple[str, str] | None:
+    if not overrides:
+        return None
+    first_label, first_value = overrides[0]
+    for label, value in overrides[1:]:
+        if value != first_value:
+            errors.append(
+                "Conflicting uncertainty_kind overrides: "
+                f"{first_label}={first_value!r} but {label}={value!r}."
+            )
+    return first_label, first_value
 
 
 def _first_non_empty_env(*names: str) -> str:
@@ -460,6 +497,70 @@ class TrainConfig:
             if not isinstance(value, dict):
                 errors.append(
                     f"{field_name} must be a mapping table."
+                )
+
+        uncertainty_overrides: list[tuple[str, str]] = []
+        if isinstance(self.transform_params, dict):
+            override = _canonicalize_uncertainty_override(
+                self.transform_params,
+                label="transform_params",
+                errors=errors,
+            )
+            if override is not None:
+                uncertainty_overrides.append(override)
+        if self.algorithm_mode and isinstance(self.algorithm_params, dict):
+            override = _canonicalize_uncertainty_override(
+                self.algorithm_params,
+                label="algorithm_params",
+                errors=errors,
+            )
+            if override is not None:
+                uncertainty_overrides.append(override)
+
+            raw_transform_params = self.algorithm_params.get("transform_params")
+            nested_transform_params: dict[str, object] | None
+            if isinstance(raw_transform_params, dict):
+                nested_transform_params = typing.cast(
+                    dict[str, object],
+                    raw_transform_params,
+                )
+            elif isinstance(raw_transform_params, typing.Mapping):
+                nested_transform_params = typing.cast(
+                    dict[str, object],
+                    dict(raw_transform_params),
+                )
+                self.algorithm_params["transform_params"] = nested_transform_params
+            elif raw_transform_params is not None:
+                nested_transform_params = None
+                errors.append(
+                    "algorithm_params.transform_params must be a mapping table."
+                )
+            else:
+                nested_transform_params = None
+            if nested_transform_params is not None:
+                override = _canonicalize_uncertainty_override(
+                    nested_transform_params,
+                    label="algorithm_params.transform_params",
+                    errors=errors,
+                )
+                if override is not None:
+                    uncertainty_overrides.append(override)
+
+        override = _first_uncertainty_override(
+            uncertainty_overrides,
+            errors=errors,
+        )
+        if override is not None:
+            label, value = override
+            # The documented transform-param override may replace the default.
+            # Any explicit non-default top-level selector must still agree.
+            if self.uncertainty_kind == "surprisal":
+                self.uncertainty_kind = value
+            elif self.uncertainty_kind != value:
+                errors.append(
+                    "Conflicting uncertainty_kind settings: "
+                    f"uncertainty_kind={self.uncertainty_kind!r} but "
+                    f"{label}={value!r}."
                 )
 
         if not isinstance(self.plugins_search_paths, list) or not all(

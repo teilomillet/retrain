@@ -755,6 +755,8 @@ def _make_builtin_algorithm_spec(
             else {},
             step=ctx.step,
             post_process_params=post_process,
+            token_distributions_G=ctx.token_distributions_G,
+            precomputed_entropies_G=ctx.precomputed_entropies_G,
         )
 
     return AlgorithmSpec(
@@ -2286,12 +2288,26 @@ def _resolve_uncertainty_kind(params: Mapping[str, object]) -> str:
 
     Default is sampled-token surprisal (`-logprob`).
     """
-    raw_value: object = "surprisal"
+    override = get_uncertainty_kind_param(params)
+    if override is not None:
+        return override[1]
+    return canonicalize_uncertainty_kind("surprisal")
+
+
+def get_uncertainty_kind_param(params: Mapping[str, object]) -> tuple[str, str] | None:
+    """Return the first configured uncertainty selector as ``(key, canonical_value)``."""
+    selected: tuple[str, str] | None = None
     for key in _UNCERTAINTY_KIND_PARAM_KEYS:
         if key in params:
-            raw_value = params[key]
-            break
-    return canonicalize_uncertainty_kind(raw_value)
+            value = canonicalize_uncertainty_kind(params[key])
+            if selected is not None and value != selected[1]:
+                raise ValueError(
+                    "Conflicting uncertainty kind selector params: "
+                    f"{selected[0]}={selected[1]!r} but {key}={value!r}."
+                )
+            if selected is None:
+                selected = key, value
+    return selected
 
 
 def canonicalize_uncertainty_kind(raw_value: object) -> str:
