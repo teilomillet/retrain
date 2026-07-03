@@ -18,6 +18,7 @@ TYPECHECK_PATHS = \
 	retrain/backend_definitions.py \
 	retrain/registry.py \
 	retrain/backends.py \
+	retrain/rewards.py \
 	retrain/inference_engine/pytorch_engine.py \
 	retrain/inference_engine/openai_engine.py \
 	retrain/backpressure.py \

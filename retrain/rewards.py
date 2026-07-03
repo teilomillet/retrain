@@ -4,7 +4,7 @@ Provides pluggable reward functions dispatched via ``create_reward(config)``.
 
 Supported reward types (set via ``[reward] type`` in TOML):
   match  — string-match on \\boxed{} (default, no extra deps)
-  math   — symbolic math equivalence via ``verifiers.MathRubric``
+  math   — symbolic math equivalence via ``math_verify``
   judge  — LLM-based evaluation via ``verifiers.JudgeRubric``
   custom — user-provided ``module:function``
 """
@@ -13,10 +13,35 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Protocol, SupportsFloat, SupportsIndex, cast, runtime_checkable
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
+
+
+class _MathParse(Protocol):
+    def __call__(
+        self,
+        text: str,
+        *,
+        extraction_config: list[object],
+        parsing_timeout: int,
+    ) -> list[object]: ...
+
+
+class _MathVerify(Protocol):
+    def __call__(self, reference: list[object], response: list[object]) -> bool: ...
+
+
+class _JudgeRubric(Protocol):
+    def judge(
+        self,
+        *,
+        prompt: list[dict[str, str]],
+        completion: list[dict[str, str]],
+        answer: str,
+    ) -> Coroutine[object, object, str]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -87,21 +112,24 @@ class VerifiersMathReward:
     """
 
     def __init__(self) -> None:
-        from math_verify import LatexExtractionConfig, parse, verify
+        math_verify = importlib.import_module("math_verify")
+        extraction_config = cast(
+            Callable[[], object],
+            getattr(math_verify, "LatexExtractionConfig"),
+        )
+        self._parse = cast(_MathParse, getattr(math_verify, "parse"))
+        self._verify = cast(_MathVerify, getattr(math_verify, "verify"))
+        self._extraction_config = [extraction_config()]
+        self._ref_cache: dict[str, list[object]] = {}
 
-        self._parse = parse
-        self._verify = verify
-        self._extraction_config = [LatexExtractionConfig()]
-        self._ref_cache: dict[str, list] = {}
-
-    def _parse_expr(self, text: str) -> list:
+    def _parse_expr(self, text: str) -> list[object]:
         return self._parse(
             f"\\boxed{{{text}}}",
             extraction_config=self._extraction_config,
             parsing_timeout=5,
         )
 
-    def _parse_ref(self, reference: str) -> list:
+    def _parse_ref(self, reference: str) -> list[object]:
         cached = self._ref_cache.get(reference)
         if cached is not None:
             return cached
@@ -134,8 +162,12 @@ class VerifiersJudgeReward:
     """
 
     def __init__(self, model: str = "gpt-4o-mini") -> None:
-        from verifiers.rubrics.judge_rubric import JudgeRubric
-        self._rubric = JudgeRubric(judge_model=model)
+        judge_module = importlib.import_module("verifiers.rubrics.judge_rubric")
+        judge_cls = cast(
+            Callable[..., _JudgeRubric],
+            getattr(judge_module, "JudgeRubric"),
+        )
+        self._rubric = judge_cls(judge_model=model)
 
     def score(self, response: str, reference: str) -> float:
         # judge() accesses prompt[-1] so we must pass a non-empty list.
@@ -176,8 +208,8 @@ class CustomReward:
     def score(self, response: str, reference: str) -> float:
         result = self._fn(response, reference)
         if asyncio.iscoroutine(result):
-            return float(asyncio.run(result))
-        return float(result)
+            result = asyncio.run(cast(Coroutine[object, object, object], result))
+        return _float_score(result)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +228,7 @@ def create_reward(config: TrainConfig) -> RewardFunction:
 
     if rtype in _VERIFIERS_TYPES:
         try:
-            import verifiers as _verifiers  # noqa: F841
+            importlib.import_module("verifiers")
         except ModuleNotFoundError:
             raise ImportError(
                 f"Reward type '{rtype}' requires the verifiers library. "
@@ -223,3 +255,9 @@ def create_reward(config: TrainConfig) -> RewardFunction:
         f"Unknown reward type '{rtype}'. "
         "Choose from: match, math, judge, custom"
     )
+
+
+def _float_score(value: object) -> float:
+    if isinstance(value, str):
+        return float(value)
+    return float(cast(SupportsFloat | SupportsIndex, value))
