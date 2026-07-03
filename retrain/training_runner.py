@@ -19,6 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
+from retrain.metrics_scan import scan_metrics_file
 from retrain.process_metrics import process_max_rss_mb
 
 
@@ -85,22 +86,7 @@ def _latest_metrics(log_dir: Path) -> dict[str, object]:
     metrics_path = log_dir / "metrics.jsonl"
     if not metrics_path.is_file():
         return {}
-
-    last = ""
-    with open(metrics_path) as f:
-        for line in f:
-            if line.strip():
-                last = line
-    if not last:
-        return {}
-
-    try:
-        payload = json.loads(last)
-    except json.JSONDecodeError:
-        return {}
-    if isinstance(payload, dict):
-        return payload
-    return {}
+    return scan_metrics_file(metrics_path).last or {}
 
 
 def _artifact_map(log_dir: Path, policy_ref: str = "") -> dict[str, str]:

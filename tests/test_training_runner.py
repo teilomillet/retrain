@@ -139,6 +139,24 @@ class TestCommandRunner:
         assert result.metrics["loss"] == pytest.approx(0.5)
         assert "metrics.jsonl" in result.artifacts
 
+    def test_run_result_uses_last_valid_metrics_row(self, tmp_path):
+        adapter_dir = tmp_path / "adapter"
+        adapter_dir.mkdir()
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        (log_dir / "metrics.jsonl").write_text(
+            '{"step": 1, "loss": 0.5}\nnot json yet\n'
+        )
+        config = _bare_config(
+            log_dir=str(log_dir),
+            adapter_path=str(adapter_dir),
+            model="test-model",
+        )
+
+        result = CommandRunner("echo ok").run(config)
+
+        assert result.metrics["loss"] == pytest.approx(0.5)
+
     def test_returns_failed_result_on_failure(self, tmp_path):
         config = _bare_config(
             log_dir=str(tmp_path / "logs"),
