@@ -1,6 +1,6 @@
 import pytest
 
-from retrain.unsloth_backend import validate_fast_language_model_api
+from retrain.backends.unsloth import validate_fast_language_model_api
 
 
 def test_installed_unsloth_fast_language_model_api_is_supported():

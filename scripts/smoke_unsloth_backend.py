@@ -131,7 +131,7 @@ def _set_seed(torch: ModuleType, seed: int) -> None:
 
 def _check_unsloth_api() -> dict[str, object]:
     unsloth = importlib.import_module("unsloth")
-    unsloth_backend = importlib.import_module("retrain.unsloth_backend")
+    unsloth_backend = importlib.import_module("retrain.backends.unsloth")
     fast_language_model = getattr(unsloth, "FastLanguageModel")
     payload = unsloth_backend.validate_fast_language_model_api(fast_language_model)
     return {
@@ -193,7 +193,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     helper = None
     try:
         torch = importlib.import_module("torch")
-        unsloth_backend = importlib.import_module("retrain.unsloth_backend")
+        unsloth_backend = importlib.import_module("retrain.backends.unsloth")
         auto_tokenizer = importlib.import_module("transformers").AutoTokenizer
         unsloth_train_helper = unsloth_backend.UnslothTrainHelper
 

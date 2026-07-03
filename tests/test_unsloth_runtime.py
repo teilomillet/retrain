@@ -7,7 +7,7 @@ from types import ModuleType
 
 import pytest
 
-from retrain.unsloth_runtime import load_fast_language_model
+from retrain.backends.unsloth_runtime import load_fast_language_model
 
 
 def test_load_fast_language_model_reports_malformed_unsloth_module(

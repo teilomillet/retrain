@@ -23,7 +23,7 @@ from retrain.advantages import (
     is_valid_advantage_mode_name,
     is_valid_transform_mode_name,
 )
-from retrain.backend_definitions import normalize_backend_options
+from retrain.backends.catalog import normalize_backend_options
 from retrain.plugin_resolver import set_plugin_runtime
 
 _VALID_ENVIRONMENT_PROVIDERS = {"", "verifiers"}

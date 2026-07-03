@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from retrain.tinker_backend import _mean_loss_from_result
+from retrain.backends.tinker import _mean_loss_from_result
 
 
 @pytest.mark.parametrize(

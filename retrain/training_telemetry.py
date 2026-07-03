@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from retrain.advantages import AdvantageResult, EntropyStats
-from retrain.backend_definitions import BackendCapabilities
+from retrain.backends.catalog import BackendCapabilities
 from retrain.backends import TrainHelper, collect_runtime_metrics
 from retrain.backpressure import BackPressureDecision
 from retrain.config import TrainConfig

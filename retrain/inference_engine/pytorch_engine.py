@@ -24,7 +24,7 @@ from retrain.accelerators import (
 from retrain.gemma4_text import is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
 from retrain.token_ids import model_eos_token_ids
-from retrain.torch_runtime import (
+from retrain.backends.torch_runtime import (
     is_cuda_device,
     timer_start as _timer_start,
     timer_stop as _timer_stop,

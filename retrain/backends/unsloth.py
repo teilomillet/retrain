@@ -13,14 +13,14 @@ import os
 from contextlib import contextmanager
 from functools import wraps
 
-from retrain.unsloth_runtime import FastLanguageModel, load_fast_language_model
+from retrain.backends.unsloth_runtime import FastLanguageModel, load_fast_language_model
 
 try:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = load_fast_language_model()
 except ImportError:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = None
 
-from retrain.local_train_helper import LocalTrainHelper
+from retrain.backends.local import LocalTrainHelper
 from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
 
 REQUIRED_FROM_PRETRAINED_PARAMS = frozenset(

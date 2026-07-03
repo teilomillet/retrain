@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 from typing import cast
 
-from retrain.backend_definitions import (
+from retrain.backends.catalog import (
     BackendOptionSpec,
     backend_capability_source,
     describe_backends_catalog,

@@ -1,4 +1,4 @@
-"""Tests for retrain.prime_rl_backend."""
+"""Tests for retrain.backends.prime_rl."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from retrain.prime_rl_backend import PrimeRLTrainHelper
+from retrain.backends.prime_rl import PrimeRLTrainHelper
 
 
 class _FakeTrainingSample:

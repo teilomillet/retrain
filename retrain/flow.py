@@ -24,7 +24,7 @@ from retrain.advantages import (
     get_algorithm_spec,
     get_transform_spec,
 )
-from retrain.backend_definitions import (
+from retrain.backends.catalog import (
     BackendCapabilities,
     backend_capability_source,
     resolve_backend_capabilities,

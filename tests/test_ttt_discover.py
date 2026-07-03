@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from retrain.advantages import compute_algorithm_advantages
-from retrain.backend_definitions import BackendCapabilities
+from retrain.backends.catalog import BackendCapabilities
 from retrain.config import TrainConfig
 from retrain.data import Example
 from retrain.ttt_discover import (

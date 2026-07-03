@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file, save_file
 
-from retrain.tinker_runtime import load_tinker
+from retrain.backends.tinker_runtime import load_tinker
 
 
 # ---------------------------------------------------------------------------

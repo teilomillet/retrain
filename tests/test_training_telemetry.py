@@ -6,7 +6,7 @@ import pytest
 
 import retrain.training_telemetry as telemetry
 from retrain.advantages import AdvantageResult, EntropyStats
-from retrain.backend_definitions import BackendCapabilities
+from retrain.backends.catalog import BackendCapabilities
 from retrain.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
 from retrain.echo import EchoBuildStats, EchoLimitStats

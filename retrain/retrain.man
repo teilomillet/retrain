@@ -1583,8 +1583,12 @@ ARCHITECTURE
     +-- squeeze.py               LoRA-Squeeze rank analysis
     +-- diff.py                  Run comparison and sparkline rendering
     +-- status.py                Log scanning and status reporting
-    +-- local_train_helper.py    Local GPU backend (PyTorch/PEFT)
-    +-- tinker_backend.py        Remote GPU backend (Tinker API)
+    +-- backends/                Backend protocols, catalog, implementations
+        +-- __init__.py          TrainHelper protocols and shared helpers
+        +-- catalog.py           Backend capabilities and option schemas
+        +-- local.py             Local GPU backend (PyTorch/PEFT)
+        +-- unsloth.py           Optional Unsloth-backed local backend
+        +-- tinker.py            Remote GPU backend (Tinker API)
     +-- data.py                  MATH dataset loader
     +-- logging_utils.py         JSONL logger
 

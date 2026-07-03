@@ -11,7 +11,7 @@ This script has two checks:
 
 It uses a tiny CausalLM-shaped module so the benchmark is reproducible without
 downloading a model. The measured region is exactly the allocation avoided by
-the sparse suffix guard in retrain.local_train_helper.
+the sparse suffix guard in retrain.backends.local.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from types import SimpleNamespace
 import torch
 import torch.nn.functional as F
 
-from retrain.local_train_helper import LocalTrainHelper
+from retrain.backends.local import LocalTrainHelper
 
 
 def _selected_linear_ce_logprobs(hidden, weight, target_ids):

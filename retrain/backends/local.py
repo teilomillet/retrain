@@ -50,7 +50,7 @@ from retrain.selective_logprobs import (
 )
 from retrain.policy_loss import compute_policy_loss as _compute_policy_loss
 from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
-from retrain.torch_runtime import (
+from retrain.backends.torch_runtime import (
     cuda_peak_metrics as _cuda_peak_metrics,
     is_cuda_device as _is_cuda_device,
     parse_device_spec as _parse_device,

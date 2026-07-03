@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from retrain.unsloth_backend import UnslothTrainHelper
+from retrain.backends.unsloth import UnslothTrainHelper
 
 
 class Qwen3_5GatedDeltaNet(torch.nn.Module):

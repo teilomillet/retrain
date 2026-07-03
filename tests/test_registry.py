@@ -179,7 +179,7 @@ class TestBuiltinCreation:
             inference_url="http://inference-url",
             base_url="http://model-base-url",
         )
-        with patch.dict(sys.modules, {"retrain.tinker_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.tinker": fake_mod}):
             backend.create("tinker", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args[0][1] == "http://inference-url"
@@ -192,7 +192,7 @@ class TestBuiltinCreation:
             inference_url="",
             base_url="http://model-base-url",
         )
-        with patch.dict(sys.modules, {"retrain.tinker_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.tinker": fake_mod}):
             backend.create("tinker", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args[0][1] == "http://model-base-url"
@@ -206,7 +206,7 @@ class TestBuiltinCreation:
             base_url="http://model-base-url",
             adapter_path="adapters/prime-output",
         )
-        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://prime-inference"
@@ -227,7 +227,7 @@ class TestBuiltinCreation:
             inference_url="",
             base_url="http://model-base-url",
         )
-        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["inference_url"] == "http://model-base-url"
@@ -247,7 +247,7 @@ class TestBuiltinCreation:
                 "sync_poll_s": 0.5,
             },
         )
-        with patch.dict(sys.modules, {"retrain.prime_rl_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.prime_rl": fake_mod}):
             backend.create("prime_rl", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["transport_type"] == "zmq"
@@ -269,7 +269,7 @@ class TestBuiltinCreation:
                 "gpu_memory_utilization": 0.85,
             },
         )
-        with patch.dict(sys.modules, {"retrain.unsloth_backend": fake_mod}):
+        with patch.dict(sys.modules, {"retrain.backends.unsloth": fake_mod}):
             backend.create("unsloth", config)
         mock_cls.assert_called_once()
         assert mock_cls.call_args.kwargs["max_seq_length"] == 65536
@@ -333,7 +333,7 @@ class TestRuntimeProbes:
             assert isinstance(probe.detail, str)
 
     def test_probe_backend_runtime_validates_unsloth_api(self, monkeypatch):
-        from retrain.unsloth_backend import validate_fast_language_model_api
+        from retrain.backends.unsloth import validate_fast_language_model_api
 
         class _FastLanguageModel:
             @staticmethod
@@ -415,10 +415,10 @@ class TestRuntimeProbes:
                 _ = model
 
         fake_torch = SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: True))
-        fake_backend = ModuleType("retrain.unsloth_backend")
+        fake_backend = ModuleType("retrain.backends.unsloth")
         fake_backend.validate_fast_language_model_api = validate_fast_language_model_api
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
-        monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_backend)
+        monkeypatch.setitem(sys.modules, "retrain.backends.unsloth", fake_backend)
         monkeypatch.setitem(
             sys.modules,
             "unsloth",

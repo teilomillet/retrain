@@ -199,7 +199,7 @@ def _read_compare_peak(path: str) -> float:
 
 def _check_unsloth_api() -> dict[str, object]:
     unsloth = importlib.import_module("unsloth")
-    unsloth_backend = importlib.import_module("retrain.unsloth_backend")
+    unsloth_backend = importlib.import_module("retrain.backends.unsloth")
     fast_language_model = getattr(unsloth, "FastLanguageModel")
     payload = unsloth_backend.validate_fast_language_model_api(fast_language_model)
     return {

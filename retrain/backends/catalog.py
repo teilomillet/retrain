@@ -98,7 +98,7 @@ def _effective_sft_loss_fn(config: "TrainConfig") -> str:
 
 def _create_local(config: "TrainConfig") -> "TrainHelper":
     try:
-        from retrain.local_train_helper import LocalTrainHelper
+        from retrain.backends.local import LocalTrainHelper
     except ImportError:
         raise RuntimeError(
             "Backend 'local' requires PyTorch.\n"
@@ -223,7 +223,7 @@ def _create_local(config: "TrainConfig") -> "TrainHelper":
 
 def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
     try:
-        from retrain.unsloth_backend import UnslothTrainHelper
+        from retrain.backends.unsloth import UnslothTrainHelper
     except ImportError:
         raise RuntimeError(
             "Backend 'unsloth' requires PyTorch and Unsloth Core.\n"
@@ -341,7 +341,7 @@ def _create_unsloth(config: "TrainConfig") -> "TrainHelper":
 
 def _create_tinker(config: "TrainConfig") -> "TrainHelper":
     try:
-        from retrain.tinker_backend import TinkerTrainHelper
+        from retrain.backends.tinker import TinkerTrainHelper
     except ImportError:
         raise RuntimeError(
             "Backend 'tinker' requires the tinker SDK.\n"
@@ -383,7 +383,7 @@ def _normalize_prime_rl_options(raw_options: Mapping[str, object]) -> PrimeRLOpt
 
 def _create_prime_rl(config: "TrainConfig") -> "TrainHelper":
     try:
-        from retrain.prime_rl_backend import PrimeRLTrainHelper
+        from retrain.backends.prime_rl import PrimeRLTrainHelper
     except ImportError:
         raise RuntimeError(
             "Backend 'prime_rl' requires PRIME-RL.\n"

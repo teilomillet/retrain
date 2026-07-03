@@ -184,7 +184,7 @@ class SftRunner:
     def _run(self, config: TrainConfig) -> TrainingRunResult:
         from transformers import AutoTokenizer
 
-        from retrain.backend_definitions import (
+        from retrain.backends.catalog import (
             _effective_sft_loss_fn,
             backend_capability_source,
             resolve_backend_capabilities,

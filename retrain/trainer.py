@@ -25,7 +25,7 @@ from retrain.backends import (
     TrainHelper,
     run_sft_train_step,
 )
-from retrain.backend_definitions import BackendCapabilities
+from retrain.backends.catalog import BackendCapabilities
 from retrain.backpressure import (
     StepObservation,
 )

@@ -1193,7 +1193,7 @@ def _resolve_backend_capability_payload(
     backend_name: str,
     backend_options: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    from retrain.backend_definitions import (
+    from retrain.backends.catalog import (
         backend_capability_source,
         resolve_backend_capabilities,
     )
@@ -1223,7 +1223,7 @@ def _format_backend_capability_summary(capabilities: dict[str, object]) -> str:
 
 def _run_backends(args: list[str]) -> None:
     """Print backend metadata catalog."""
-    from retrain.backend_definitions import describe_backends_catalog
+    from retrain.backends.catalog import describe_backends_catalog
 
     fmt = "text"
     for arg in args:
@@ -1289,7 +1289,7 @@ def _run_backends(args: list[str]) -> None:
 
 def _run_doctor() -> None:
     """Print dependency status for all known components."""
-    from retrain.backend_definitions import get_builtin_backend_definitions
+    from retrain.backends.catalog import get_builtin_backend_definitions
     from retrain.registry import check_environment, probe_backend_runtime
 
     print("retrain doctor — checking component dependencies\n")

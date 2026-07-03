@@ -16,13 +16,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from retrain.logging_utils import JsonlLogger
-from retrain.tinker_runtime import (
+from retrain.backends.tinker_runtime import (
     SamplingClient,
     load_tensor_data,
     load_tinker,
     load_tinker_types,
 )
-from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
+from retrain.backends.tinker_throttle import NoOpThrottle, TinkerThrottle
 
 if TYPE_CHECKING:
     import torch

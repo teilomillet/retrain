@@ -199,7 +199,7 @@ def _assert_lifecycle_calls(helper: _BaseFakeHelper) -> None:
 def test_local_backend_contract(monkeypatch):
     _FakeLocalTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.local_train_helper", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.local", fake_mod)
 
     cfg = TrainConfig(backend="local")
     helper = backend.create("local", cfg)
@@ -252,7 +252,7 @@ def test_local_backend_contract(monkeypatch):
 def test_local_backend_passes_memory_control_options(monkeypatch):
     _FakeLocalTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.local_train_helper", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.local", fake_mod)
 
     cfg = TrainConfig(
         backend="local",
@@ -390,7 +390,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
 def test_unsloth_backend_contract(monkeypatch):
     _FakeUnslothTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(UnslothTrainHelper=_FakeUnslothTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.unsloth", fake_mod)
 
     cfg = TrainConfig(
         backend="unsloth",
@@ -456,7 +456,7 @@ def test_unsloth_backend_contract(monkeypatch):
 def test_unsloth_backend_defaults_max_seq_length_from_max_tokens(monkeypatch):
     _FakeUnslothTrainHelper.init_calls.clear()
     fake_mod = SimpleNamespace(UnslothTrainHelper=_FakeUnslothTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.unsloth_backend", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.unsloth", fake_mod)
 
     cfg = TrainConfig(
         backend="unsloth",
@@ -471,7 +471,7 @@ def test_unsloth_backend_defaults_max_seq_length_from_max_tokens(monkeypatch):
 
 def test_tinker_backend_contract(monkeypatch):
     fake_mod = SimpleNamespace(TinkerTrainHelper=_FakeTinkerTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.tinker_backend", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.tinker", fake_mod)
 
     cfg = TrainConfig(backend="tinker")
     helper = backend.create("tinker", cfg)
@@ -485,7 +485,7 @@ def test_tinker_backend_contract(monkeypatch):
 
 def test_prime_rl_backend_contract(monkeypatch):
     fake_mod = SimpleNamespace(PrimeRLTrainHelper=_FakePrimeRLTrainHelper)
-    monkeypatch.setitem(sys.modules, "retrain.prime_rl_backend", fake_mod)
+    monkeypatch.setitem(sys.modules, "retrain.backends.prime_rl", fake_mod)
 
     cfg = TrainConfig(backend="prime_rl")
     helper = backend.create("prime_rl", cfg)

@@ -28,9 +28,12 @@ retrain
 ├── backpressure.py     # USL+Roofline adaptive batch sizing
 ├── campaign.py         # Sweep orchestrator (conditions x seeds) with auto-squeeze
 ├── squeeze.py          # LoRA-Squeeze rank analysis and compression
-├── local_train_helper.py   # Local GPU backend (PyTorch/PEFT + inference engine)
-├── unsloth_backend.py      # Optional Unsloth-backed local TrainHelper
-├── tinker_backend.py       # Remote GPU backend (Tinker API)
+├── backends/           # Backend protocols, catalog, and implementations
+│   ├── __init__.py     # TrainHelper protocols + shared helper functions
+│   ├── catalog.py      # Backend definitions, capabilities, option schemas
+│   ├── local.py        # Local GPU backend (PyTorch/PEFT + inference engine)
+│   ├── unsloth.py      # Optional Unsloth-backed local TrainHelper
+│   └── tinker.py       # Remote GPU backend (Tinker API)
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
 ├── data.py             # MATH dataset loader
 └── logging_utils.py    # JSONL logger

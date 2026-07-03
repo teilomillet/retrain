@@ -19,7 +19,7 @@ from typing import Protocol
 import torch
 from transformers import AutoTokenizer
 
-from retrain.backend_definitions import get_builtin_backend_definitions
+from retrain.backends.catalog import get_builtin_backend_definitions
 from retrain.config import TrainConfig, load_config
 
 

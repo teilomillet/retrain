@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from peft import get_peft_model
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
-from retrain import local_train_helper as local_mod
+from retrain.backends import local as local_mod
 from retrain.gemma4_text import (
     DEFAULT_LORA_TARGET_MODULES,
     eos_token_ids,
@@ -26,7 +26,7 @@ from retrain.inference_engine.pytorch_engine import (
 )
 from retrain.fast_lora import FastLoRALinearFunction
 from retrain.fast_lora import parse_lora_layers_to_transform
-from retrain.local_train_helper import LocalTrainHelper
+from retrain.backends.local import LocalTrainHelper
 
 
 class _ExistingModel:

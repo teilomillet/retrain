@@ -282,4 +282,4 @@ All engines implement three methods:
 | `retrain/inference_engine/pytorch_engine.py` | Local PyTorch engine |
 | `retrain/inference_engine/max_engine.py` | MAX engine (in-process vs serve) |
 | `retrain/inference_engine/openai_engine.py` | HTTP client for vLLM / SGLang / TensorRT-LLM / MLX-LM / any server |
-| `retrain/local_train_helper.py` | Orchestrates engine + training, weight sync |
+| `retrain/backends/local.py` | Orchestrates engine + training, weight sync |

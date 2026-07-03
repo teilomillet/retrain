@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Callable, Generic, Literal, TypeVar, cast, overload
 
 from retrain.backends import TrainHelper
-from retrain.backend_definitions import (
+from retrain.backends.catalog import (
     get_backend_dependency_map,
     get_builtin_backend_definitions,
 )
@@ -461,7 +461,7 @@ def probe_backend_runtime(config: TrainConfig | None = None) -> list[BackendRunt
     # Unsloth backend: optional import plus torch runtime visibility.
     try:
         unsloth = importlib.import_module("unsloth")
-        from retrain.unsloth_backend import validate_fast_language_model_api
+        from retrain.backends.unsloth import validate_fast_language_model_api
 
         validate_fast_language_model_api(unsloth.FastLanguageModel)
         torch = importlib.import_module("torch")
