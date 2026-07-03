@@ -36,10 +36,6 @@ def _snapshot_metadata_value(value: object) -> object:
     return deepcopy(value)
 
 
-def _snapshot_metrics(metrics: dict[str, object]) -> dict[str, object]:
-    return {key: _snapshot_metadata_value(value) for key, value in metrics.items()}
-
-
 @dataclass(frozen=True)
 class TrainingRunResult:
     """Structured result for a single training/update run."""
@@ -69,7 +65,10 @@ class TrainingRunResult:
             "status": self.status,
             "failure_status": self.failure_status,
             "error_message": self.error_message,
-            "metrics": _snapshot_metrics(self.metrics),
+            "metrics": {
+                key: _snapshot_metadata_value(value)
+                for key, value in self.metrics.items()
+            },
             "artifacts": dict(self.artifacts),
         }
 
