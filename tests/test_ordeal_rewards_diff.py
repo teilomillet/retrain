@@ -1,4 +1,4 @@
-"""Ordeal property tests for retrain.rewards and retrain.diff.
+"""Ordeal property tests for reward extraction and run diffing.
 
 Mined invariants: extract_boxed is idempotent with len(output) <= len(input).
 Fuzz tests for crash safety on diff formatting functions.
@@ -15,7 +15,7 @@ from ordeal.quickcheck import quickcheck
 from retrain.diff.compute import DiffResult
 from retrain.diff.format import _sparkline, _winner, format_diff
 from retrain.status.format import format_time
-from retrain.rewards import extract_boxed
+from retrain.rewards.boxed import extract_boxed
 
 
 # ═══════════════════════════════════════════

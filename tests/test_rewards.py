@@ -1,4 +1,4 @@
-"""Tests for retrain.rewards — extract_boxed, BoxedMathReward, and reward factory."""
+"""Tests for rewards — extract_boxed, BoxedMathReward, and the factory."""
 
 import sys
 import types
@@ -7,13 +7,10 @@ from unittest import mock
 import pytest
 
 from retrain.config import TrainConfig
-from retrain.rewards import (
-    BoxedMathReward,
-    CustomReward,
-    RewardFunction,
-    create_reward,
-    extract_boxed,
-)
+from retrain.rewards.boxed import BoxedMathReward, extract_boxed
+from retrain.rewards.create import create_reward
+from retrain.rewards.custom import CustomReward
+from retrain.rewards.types import RewardFunction
 
 
 class TestExtractBoxed:

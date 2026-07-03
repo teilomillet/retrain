@@ -29,7 +29,7 @@ from retrain.training.backpressure import StepObservation
 from retrain.data import Example
 from retrain.training.flow import build_flow
 from retrain.io.log import JsonlLogger
-from retrain.rewards import RewardFunction
+from retrain.rewards.types import RewardFunction
 from retrain.training.rollouts import (
     TokenTextLookup,
     decode_sequence_groups,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from retrain.rewards import extract_boxed
+from retrain.rewards.boxed import extract_boxed
 from retrain.type_defs import ExampleInfoLike, PromptLike
 
 

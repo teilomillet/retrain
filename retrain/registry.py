@@ -27,7 +27,7 @@ from retrain.config import TrainConfig
 from retrain.data import DataSource
 from retrain.plugins.resolve import resolve_dotted_attribute
 from retrain.planning import PlanningDetector
-from retrain.rewards import RewardFunction
+from retrain.rewards.types import RewardFunction
 from retrain.training.runner import TrainingRunner
 
 
@@ -203,14 +203,14 @@ for _engine_name in ("pytorch", "max", "vllm", "sglang", "trtllm", "mlx", "opena
 
 @reward.register("match")
 def _reward_match(config: TrainConfig) -> RewardFunction:
-    from retrain.rewards import BoxedMathReward
+    from retrain.rewards.boxed import BoxedMathReward
     return BoxedMathReward()
 
 
 @reward.register("math")
 def _reward_math(config: TrainConfig) -> RewardFunction:
     try:
-        from retrain.rewards import VerifiersMathReward
+        from retrain.rewards.verifiers import VerifiersMathReward
         return VerifiersMathReward()
     except ImportError:
         raise ImportError(
@@ -222,7 +222,7 @@ def _reward_math(config: TrainConfig) -> RewardFunction:
 @reward.register("judge")
 def _reward_judge(config: TrainConfig) -> RewardFunction:
     try:
-        from retrain.rewards import VerifiersJudgeReward
+        from retrain.rewards.verifiers import VerifiersJudgeReward
         model = config.reward_judge_model or "gpt-4o-mini"
         return VerifiersJudgeReward(model=model)
     except ImportError:
@@ -234,7 +234,7 @@ def _reward_judge(config: TrainConfig) -> RewardFunction:
 
 @reward.register("custom")
 def _reward_custom(config: TrainConfig) -> RewardFunction:
-    from retrain.rewards import CustomReward
+    from retrain.rewards.custom import CustomReward
     if not config.reward_custom_module:
         raise ValueError(
             "Reward type 'custom' requires [reward] custom_module to be set."
