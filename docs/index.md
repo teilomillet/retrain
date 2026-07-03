@@ -48,6 +48,8 @@ retrain
 ├── io/                 # JSON codec and JSONL log writer
 │   ├── json.py         # JSON loads + compact JSONL encoding
 │   └── log.py          # Buffered JSONL append logger
+├── metrics/            # Metrics JSONL readers and summaries
+│   └── scan.py         # One-pass metrics file scanning
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
 └── data.py             # MATH dataset loader
 ```

@@ -1603,6 +1603,8 @@ ARCHITECTURE
     +-- io/                      JSON codec and JSONL log writer
         +-- json.py              JSON loads and compact JSONL encoding
         +-- log.py               Buffered JSONL append logging
+    +-- metrics/                 Metrics JSONL readers and summaries
+        +-- scan.py              One-pass metrics file scanning
     +-- data.py                  MATH dataset loader
 
 PLUGINS

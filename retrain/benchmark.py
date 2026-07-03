@@ -10,7 +10,7 @@ from statistics import mean, median, pstdev
 from typing import Protocol
 
 from retrain.config import TrainConfig
-from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
+from retrain.metrics.scan import float_or_none, int_or_none, scan_metrics_file
 
 
 class _RunnerLike(Protocol):

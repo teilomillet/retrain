@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
+from retrain.metrics.scan import float_or_none, int_or_none, scan_metrics_file
 from retrain.trainer_state import TRAINER_STATE_FILE
 
 

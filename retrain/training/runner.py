@@ -19,7 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
-from retrain.metrics_scan import scan_metrics_file
+from retrain.metrics.scan import scan_metrics_file
 from retrain.process_metrics import process_max_rss_mb
 
 

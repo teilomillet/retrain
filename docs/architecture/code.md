@@ -28,6 +28,8 @@ retrain/
   io/
     json.py
     log.py
+  metrics/
+    scan.py
 ```
 
 Avoid long top-level compound modules such as `training_step_logging.py`. If the
@@ -47,6 +49,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.
 - `io/json.py`: JSON loading and compact JSONL row encoding.
 - `io/log.py`: buffered JSONL append logging.
+- `metrics/scan.py`: one-pass metrics JSONL readers and aggregates.
 
 Do not split just to hide lines. A private helper is worth keeping only when it
 removes real branching, names a non-obvious invariant, or serves at least three
@@ -76,6 +79,7 @@ from retrain.training.signals import apply_advantage_cap
 from retrain.training.telemetry import build_step_metrics
 from retrain.backends.tinker.runtime import load_tinker
 from retrain.io.log import JsonlLogger
+from retrain.metrics.scan import scan_metrics_file
 ```
 
 Avoid compatibility shims unless an import path is part of a documented plugin

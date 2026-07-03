@@ -9,7 +9,7 @@ from pathlib import Path
 from statistics import pstdev
 from typing import cast
 
-from retrain.metrics_scan import float_or_none, scan_metrics_file
+from retrain.metrics.scan import float_or_none, scan_metrics_file
 
 SUMMARY_JSON_NAME = "delight-summary.json"
 SUMMARY_MD_NAME = "delight-summary.md"

@@ -1,4 +1,4 @@
-"""Shared helpers for scanning retrain metrics JSONL files."""
+"""Metrics JSONL scanning."""
 
 from __future__ import annotations
 

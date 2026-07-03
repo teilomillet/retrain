@@ -10,7 +10,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrain.metrics_scan import float_or_none, int_or_none, iter_jsonl_objects
+from retrain.metrics.scan import float_or_none, int_or_none, iter_jsonl_objects
 from retrain.status import format_time
 
 
