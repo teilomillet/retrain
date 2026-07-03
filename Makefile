@@ -33,7 +33,7 @@ test-mojo:
 	mojo run tests/test_backpressure.mojo
 
 lint:
-	uv run ruff check retrain tests
+	uv run ruff check retrain scripts tests
 
 typecheck:
 	$(TY) check $(TYPECHECK_PATHS) --no-progress --output-format concise
