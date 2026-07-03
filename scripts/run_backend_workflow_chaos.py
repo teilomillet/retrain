@@ -18,7 +18,7 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Run the fixed-budget Ordeal gate for the backend workflow chaos model."
     )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-runs", type=int, default=200)
+    parser.add_argument("--max-runs", type=int, default=240)
     parser.add_argument("--max-time", type=float, default=120.0)
     parser.add_argument("--steps-per-run", type=int, default=80)
     parser.add_argument("--min-edges", type=int, default=800)
