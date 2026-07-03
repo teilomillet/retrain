@@ -49,6 +49,28 @@ class _NonCallableDetector:
     detect = 1
 
 
+def test_runtime_counters_metrics_are_flat_snapshot() -> None:
+    counters = RuntimeCounters(
+        prompt_encode_calls=1,
+        prompt_preview_calls=2,
+        token_lookup_requests=3,
+        token_lookup_convert_calls=4,
+        token_lookup_cache_misses=5,
+        batch_decode_calls=6,
+        batch_decoded_sequences=7,
+    )
+
+    assert counters.metrics() == {
+        "prompt_encode_calls": 1,
+        "prompt_preview_calls": 2,
+        "token_lookup_requests": 3,
+        "token_lookup_convert_calls": 4,
+        "token_lookup_cache_misses": 5,
+        "batch_decode_calls": 6,
+        "batch_decoded_sequences": 7,
+    }
+
+
 def test_token_text_lookup_batches_cache_misses() -> None:
     tokenizer = _FakeTokenizer()
     counters = RuntimeCounters()

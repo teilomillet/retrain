@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 from retrain.type_defs import PromptLike
@@ -65,7 +65,15 @@ class RuntimeCounters:
 
     def metrics(self) -> dict[str, int]:
         """Return a JSON-friendly snapshot of the counters."""
-        return dict(asdict(self))
+        return {
+            "prompt_encode_calls": self.prompt_encode_calls,
+            "prompt_preview_calls": self.prompt_preview_calls,
+            "token_lookup_requests": self.token_lookup_requests,
+            "token_lookup_convert_calls": self.token_lookup_convert_calls,
+            "token_lookup_cache_misses": self.token_lookup_cache_misses,
+            "batch_decode_calls": self.batch_decode_calls,
+            "batch_decoded_sequences": self.batch_decoded_sequences,
+        }
 
 
 class TokenTextLookup:
