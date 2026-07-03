@@ -21,7 +21,7 @@ jobs:
           uv pip install -e ".[docs]" pytest "ruff==0.15.7" "ty==0.0.24" "ordeal==0.3.39"
       - name: Run ruff
         run: .venv/bin/ruff check retrain tests
-      - name: Run staged ty checks
+      - name: Run ty checks
         run: make typecheck TY=.venv/bin/ty
       - name: Manual blocks are synced
         run: .venv/bin/retrain man --check

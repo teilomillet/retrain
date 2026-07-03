@@ -1,47 +1,6 @@
 .PHONY: setup build test test-python test-mojo lint typecheck chaos-backend-workflow run clean all
 
-TYPECHECK_PATHS = \
-	retrain/config.py \
-	retrain/cli.py \
-	retrain/type_defs.py \
-	retrain/data.py \
-	retrain/accelerators.py \
-	retrain/diff.py \
-	retrain/json_utils.py \
-	retrain/metrics_scan.py \
-	retrain/logging_utils.py \
-	retrain/progress_exporter.py \
-	retrain/campaign.py \
-	retrain/delight_campaign_summary.py \
-	retrain/sepa.py \
-	retrain/advantages.py \
-	retrain/planning.py \
-	retrain/tinker_runtime.py \
-	retrain/tinker_backend.py \
-	retrain/squeeze.py \
-	retrain/unsloth_runtime.py \
-	retrain/unsloth_backend.py \
-	retrain/backend_definitions.py \
-	retrain/registry.py \
-	retrain/backends.py \
-	retrain/rewards.py \
-	retrain/inference_engine/max_runtime.py \
-	retrain/inference_engine/max_engine.py \
-	retrain/inference_engine/pytorch_engine.py \
-	retrain/inference_engine/openai_engine.py \
-	retrain/backpressure.py \
-	retrain/fast_lora.py \
-	retrain/selective_logprobs.py \
-	retrain/policy_loss.py \
-	retrain/qwen35_gated_delta.py \
-	retrain/local_train_helper.py \
-	retrain/flow.py \
-	retrain/training_runner.py \
-	retrain/tree.py \
-	retrain/trainer.py \
-	retrain/ttt_discover.py \
-	retrain/prime_rl_backend.py \
-	retrain/verifiers_bridge.py
+TYPECHECK_PATHS = retrain
 
 VENV_PYTHON = .venv/bin/python
 TY ?= uv run ty
