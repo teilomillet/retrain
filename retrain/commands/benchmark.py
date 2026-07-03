@@ -11,14 +11,12 @@ from retrain.commands.doctor.warn import warn_missing
 
 def run(args: list[str]) -> None:
     """Run or summarize a benchmark suite."""
-    from retrain.benchmark import (
+    from retrain.benchmark.format import format_run_summary, format_suite_summary
+    from retrain.benchmark.run import (
         default_benchmark_output_dir,
-        format_run_summary,
-        format_suite_summary,
         run_benchmark_suite,
-        summarize_run,
-        summarize_suite,
     )
+    from retrain.benchmark.summary import summarize_run, summarize_suite
     from retrain.config import load_config, parse_cli_overrides
     from retrain.registry import get_registry
 

@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
-from retrain.benchmark import format_suite_summary, run_benchmark_suite
+from retrain.benchmark.format import format_suite_summary
+from retrain.benchmark.run import run_benchmark_suite
 from retrain.config import TrainConfig, load_config
 from retrain.registry import get_registry
 

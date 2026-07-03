@@ -484,7 +484,7 @@ class TestBenchmarkCommand:
     def test_benchmark_config_dispatches_to_suite_runner(
         self, tmp_path, monkeypatch, capsys
     ):
-        from retrain.benchmark import BenchmarkSuiteSummary
+        from retrain.benchmark.summary import BenchmarkSuiteSummary
         from retrain.config import TrainConfig
 
         config_path = tmp_path / "bench.toml"
@@ -501,7 +501,7 @@ class TestBenchmarkCommand:
         )
         monkeypatch.setattr("retrain.commands.benchmark.warn_missing", lambda config: None)
         monkeypatch.setattr(
-            "retrain.benchmark.run_benchmark_suite",
+            "retrain.benchmark.run.run_benchmark_suite",
             lambda config, *, repeats, output_dir, runner_factory, disable_wandb: recorded.update(
                 {
                     "config": config,

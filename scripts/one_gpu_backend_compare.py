@@ -13,8 +13,9 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from retrain.benchmark import BenchmarkSuiteSummary, format_suite_summary
-from retrain.benchmark import run_benchmark_suite
+from retrain.benchmark.format import format_suite_summary
+from retrain.benchmark.summary import BenchmarkSuiteSummary
+from retrain.benchmark.run import run_benchmark_suite
 from retrain.config import TrainConfig, load_config
 from retrain.registry import get_registry
 

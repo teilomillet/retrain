@@ -1,4 +1,4 @@
-"""Tests for retrain.benchmark helpers."""
+"""Tests for benchmark summaries, execution, and rendering."""
 
 from __future__ import annotations
 
@@ -8,13 +8,12 @@ from typing import cast
 
 import pytest
 
-from retrain.benchmark import (
+from retrain.benchmark.format import format_run_summary, format_suite_summary
+from retrain.benchmark.run import run_benchmark_suite
+from retrain.benchmark.summary import (
     BenchmarkSuiteSummary,
     RunBenchmarkSummary,
     SummaryStat,
-    format_run_summary,
-    format_suite_summary,
-    run_benchmark_suite,
     summarize_run,
     summarize_suite,
 )
