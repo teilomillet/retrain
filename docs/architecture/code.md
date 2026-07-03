@@ -10,6 +10,11 @@ Prefer package-scoped modules with short names:
 
 ```text
 retrain/
+  config/
+    schema.py
+    load.py
+    override.py
+    validate/
   training/
     runner.py
     signals.py
@@ -54,6 +59,11 @@ domain; the file names the local concept.
 
 Split code when it creates a stable place a maintainer would naturally search:
 
+- `config/schema.py`: `TrainConfig` fields and derived parameter maps.
+- `config/load.py`: TOML loading and default overlay.
+- `config/override.py`: CLI override parsing and coercion.
+- `config/validate/`: focused validation passes for bounds, modes, runtime
+  compatibility, defaults, and warnings.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
@@ -96,6 +106,7 @@ Internal imports should use the package path that matches the tree. Prefer:
 ```python
 from retrain.training.signals import apply_advantage_cap
 from retrain.training.telemetry import build_step_metrics
+from retrain.config import TrainConfig, load_config
 from retrain.backends.tinker.runtime import load_tinker
 from retrain.io.log import JsonlLogger
 from retrain.metrics.scan import scan_metrics_file
