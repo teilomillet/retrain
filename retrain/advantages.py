@@ -1,7 +1,4 @@
-"""Advantage computation: GRPO, MaxRL, GTPO, HICRA, SEPA + planning tokens.
-
-Ports the core functions from src/advantages.mojo into pure Python.
-"""
+"""Advantage computation: GRPO, MaxRL, GTPO, HICRA, SEPA + planning tokens."""
 
 from __future__ import annotations
 

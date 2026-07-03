@@ -1,8 +1,4 @@
-"""TrainConfig dataclass and TOML config loader.
-
-Loads training configuration from a TOML file. All defaults match
-src/config.mojo exactly.
-"""
+"""TrainConfig dataclass and TOML config loader."""
 
 from __future__ import annotations
 

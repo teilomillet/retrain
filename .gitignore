@@ -28,10 +28,6 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Mojo
-*.mojopkg
-*.🔥.o
-
 # Training artifacts
 trainer_output/
 wandb/
@@ -39,7 +35,6 @@ wandb/
 .ordeal/
 .hypothesis/
 # Build artifacts
-retrain-tinker
 logs/
 
 # MkDocs

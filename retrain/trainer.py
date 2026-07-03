@@ -1,6 +1,6 @@
-"""Main training loop -- calls LocalTrainHelper directly, no Mojo.
+"""Main training loop: sample rollouts, score, compute advantages, train.
 
-Ports the training loop from src/main.mojo into pure Python.
+Backend-agnostic — drives any TrainHelper (local, Unsloth, Tinker, ...).
 """
 
 from __future__ import annotations

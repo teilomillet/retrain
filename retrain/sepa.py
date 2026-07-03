@@ -1,6 +1,5 @@
 """SEPAController for SEPA scheduling.
 
-Ports the scheduling and state-tracking logic from src/sepa.mojo.
 The actual entropy pooling is done by advantages.apply_sepa_pooling();
 this class handles when and how much to pool.
 """

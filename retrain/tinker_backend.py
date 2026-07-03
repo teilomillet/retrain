@@ -6,8 +6,6 @@ dispatch between local and tinker backends transparently:
   - sample(prompt_ids_list, num_samples, max_tokens, temperature, top_p)
   - train_step(all_tokens, all_logprobs, all_advantages, lr, weight_decay)
   - save_adapter(path, name)
-
-Ports src/tinker_backend.mojo into pure Python.
 """
 
 from __future__ import annotations

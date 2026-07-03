@@ -1,36 +1,17 @@
-.PHONY: setup build test test-python test-mojo lint typecheck chaos-backend-workflow run clean all
+.PHONY: setup test lint typecheck chaos-backend-workflow clean all
 
 TYPECHECK_PATHS = retrain
 
 VENV_PYTHON = .venv/bin/python
 TY ?= uv run ty
 
-all: setup build
+all: setup
 
 setup:
 	uv sync
 
-build:
-	mojo build src/main.mojo -o retrain-tinker
-
-# Run both Python and Mojo tests
-test: test-python test-mojo
-
-test-python:
-	uv run python -m pytest tests/test_*.py -x -q
-
-test-mojo:
-	mojo run tests/test_advantages.mojo
-	mojo run tests/test_sepa.mojo
-	mojo run tests/test_config.mojo
-	mojo run tests/test_logging.mojo
-	mojo run tests/test_pybridge.mojo
-	mojo run tests/test_reward.mojo
-	mojo run tests/test_data.mojo
-	mojo run tests/test_advantage_fns.mojo
-	mojo run tests/test_main.mojo
-	mojo run tests/test_backend.mojo
-	mojo run tests/test_backpressure.mojo
+test:
+	uv run python -m pytest tests/ -x -q
 
 lint:
 	uv run ruff check retrain scripts tests
@@ -41,13 +22,6 @@ typecheck:
 chaos-backend-workflow:
 	UV_CACHE_DIR=$(CURDIR)/.uv-cache $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),uv run python) scripts/run_backend_workflow_chaos.py
 
-run: retrain-tinker
-	./retrain-tinker
-
-retrain-tinker: src/*.mojo
-	mojo build src/main.mojo -o retrain-tinker
-
 clean:
-	rm -f retrain-tinker
 	rm -rf retrain.egg-info/
 	rm -rf retrain/__pycache__/ retrain/inference_engine/__pycache__/
