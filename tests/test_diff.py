@@ -267,7 +267,7 @@ class TestFormatDiff:
 
 class TestDiffCli:
     def test_diff_two_runs(self, tmp_path, capsys):
-        from retrain.cli import _run_diff
+        from retrain.commands.diff import run as _run_diff
 
         _write_metrics(tmp_path / "a", _make_entries(5))
         _write_metrics(tmp_path / "b", _make_entries(5))
@@ -278,7 +278,7 @@ class TestDiffCli:
         assert "correct_rate" in out
 
     def test_diff_json(self, tmp_path, capsys):
-        from retrain.cli import _run_diff
+        from retrain.commands.diff import run as _run_diff
 
         _write_metrics(tmp_path / "a", _make_entries(5))
         _write_metrics(tmp_path / "b", _make_entries(5))
@@ -291,14 +291,14 @@ class TestDiffCli:
         assert payload == diff_runs(tmp_path / "a", tmp_path / "b").to_dict()
 
     def test_diff_bad_args(self, capsys):
-        from retrain.cli import _run_diff
+        from retrain.commands.diff import run as _run_diff
 
         with pytest.raises(SystemExit) as exc_info:
             _run_diff(["only_one_arg"])
         assert exc_info.value.code == 1
 
     def test_diff_unknown_flag(self, capsys):
-        from retrain.cli import _run_diff
+        from retrain.commands.diff import run as _run_diff
 
         with pytest.raises(SystemExit) as exc_info:
             _run_diff(["--bogus", "a", "b"])
@@ -306,7 +306,7 @@ class TestDiffCli:
         assert "Unknown diff flag" in capsys.readouterr().err
 
     def test_diff_missing_run(self, tmp_path, capsys):
-        from retrain.cli import _run_diff
+        from retrain.commands.diff import run as _run_diff
 
         _write_metrics(tmp_path / "a", _make_entries(5))
         with pytest.raises(SystemExit) as exc_info:

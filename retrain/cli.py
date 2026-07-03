@@ -25,8 +25,10 @@ import tomllib
 from pathlib import Path
 
 from retrain.commands import manual as manual_command
+from retrain.commands.benchmark import run as run_benchmark
 from retrain.commands.backends.run import run as run_backends
 from retrain.commands.doctor.run import run as run_doctor
+from retrain.commands.diff import run as run_diff
 from retrain.commands.doctor.warn import warn_missing
 from retrain.commands.explain.run import run as run_explain
 from retrain.commands.init.run import run as run_init
@@ -61,147 +63,6 @@ def _load_dotenv() -> None:
             val = val[1:-1]
         os.environ[key] = val
     print("Loaded .env", file=sys.stderr)
-
-
-def _run_diff(args: list[str]) -> None:
-    """Compare two runs or campaign conditions."""
-    from retrain.diff import diff_conditions, diff_runs, format_diff
-
-    fmt = "text"
-    positional: list[str] = []
-    for arg in args:
-        if arg == "--json":
-            fmt = "json"
-        elif arg.startswith("--"):
-            print(f"Unknown diff flag: {arg}", file=sys.stderr)
-            sys.exit(1)
-        else:
-            positional.append(arg)
-
-    if len(positional) == 2:
-        dir_a, dir_b = Path(positional[0]), Path(positional[1])
-        try:
-            result = diff_runs(dir_a, dir_b)
-        except FileNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
-            sys.exit(1)
-    elif len(positional) == 3:
-        campaign_dir = Path(positional[0])
-        cond_a, cond_b = positional[1], positional[2]
-        try:
-            result = diff_conditions(campaign_dir, cond_a, cond_b)
-        except FileNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
-            sys.exit(1)
-    else:
-        print("Usage:", file=sys.stderr)
-        print("  retrain diff <run_a> <run_b>", file=sys.stderr)
-        print("  retrain diff <campaign_dir> <cond_a> <cond_b>", file=sys.stderr)
-        sys.exit(1)
-
-    if fmt == "json":
-        print(json.dumps(result.to_dict(), indent=2))
-    else:
-        print(format_diff(result))
-
-
-def _run_benchmark(args: list[str]) -> None:
-    """Run or summarize a benchmark suite."""
-    from retrain.benchmark import (
-        default_benchmark_output_dir,
-        format_run_summary,
-        format_suite_summary,
-        run_benchmark_suite,
-        summarize_run,
-        summarize_suite,
-    )
-    from retrain.config import load_config, parse_cli_overrides
-    from retrain.registry import get_registry
-
-    fmt = "text"
-    repeats = 1
-    output_dir: str | None = None
-    passthrough: list[str] = []
-
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--json":
-            fmt = "json"
-        elif arg.startswith("--repeat="):
-            repeats = int(arg.split("=", 1)[1])
-        elif arg == "--repeat":
-            i += 1
-            if i >= len(args):
-                print("Flag --repeat requires a value.", file=sys.stderr)
-                sys.exit(1)
-            repeats = int(args[i])
-        elif arg.startswith("--output-dir="):
-            output_dir = arg.split("=", 1)[1]
-        elif arg == "--output-dir":
-            i += 1
-            if i >= len(args):
-                print("Flag --output-dir requires a value.", file=sys.stderr)
-                sys.exit(1)
-            output_dir = args[i]
-        else:
-            passthrough.append(arg)
-        i += 1
-
-    config_path, overrides = parse_cli_overrides(passthrough)
-    if config_path is None:
-        print("Usage:", file=sys.stderr)
-        print(
-            "  retrain benchmark <config.toml> [--repeat N] [--output-dir DIR] [--json]",
-            file=sys.stderr,
-        )
-        print(
-            "  retrain benchmark <run_dir|suite_dir> [--json]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    target = Path(config_path)
-    if target.is_dir():
-        try:
-            if (target / "metrics.jsonl").is_file():
-                run_summary = summarize_run(target)
-                if fmt == "json":
-                    print(json.dumps(run_summary.to_dict(), indent=2))
-                else:
-                    print(format_run_summary(run_summary))
-                return
-            suite_summary = summarize_suite(target)
-        except FileNotFoundError as exc:
-            print(str(exc), file=sys.stderr)
-            sys.exit(1)
-        if fmt == "json":
-            print(json.dumps(suite_summary.to_dict(), indent=2))
-        else:
-            print(format_suite_summary(suite_summary))
-        return
-
-    if not target.is_file():
-        print(f"File not found: {target}", file=sys.stderr)
-        sys.exit(1)
-
-    config = load_config(str(target), overrides=overrides)
-    warn_missing(config)
-    suite_dir = Path(output_dir) if output_dir else default_benchmark_output_dir(
-        str(target),
-        config,
-    )
-    suite_summary = run_benchmark_suite(
-        config,
-        repeats=repeats,
-        output_dir=suite_dir,
-        runner_factory=lambda cfg: get_registry("trainer").create(cfg.trainer, cfg),
-        disable_wandb=True,
-    )
-    if fmt == "json":
-        print(json.dumps(suite_summary.to_dict(), indent=2))
-    else:
-        print(format_suite_summary(suite_summary))
 
 
 def _run_migrate_config(args: list[str]) -> None:
@@ -713,11 +574,11 @@ def main() -> None:
         sys.exit(0)
 
     if args and args[0] == "diff":
-        _run_diff(args[1:])
+        run_diff(args[1:])
         sys.exit(0)
 
     if args and args[0] == "benchmark":
-        _run_benchmark(args[1:])
+        run_benchmark(args[1:])
         sys.exit(0)
 
     if args and args[0] == "trace":

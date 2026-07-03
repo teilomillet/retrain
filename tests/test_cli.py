@@ -15,7 +15,7 @@ from retrain.commands import manual as manual_command
 from retrain.commands.plugins.run import run as _run_plugins
 from retrain.commands.plugins.scaffold import run as _run_init_plugin
 from retrain.commands.help import print_help
-from retrain.cli import _run_benchmark
+from retrain.commands.benchmark import run as _run_benchmark
 from retrain.commands.explain.run import run as _run_explain
 from retrain.config import parse_cli_overrides
 
@@ -499,7 +499,7 @@ class TestBenchmarkCommand:
                 adapter_path=str(tmp_path / "base-adapter"),
             ),
         )
-        monkeypatch.setattr("retrain.cli.warn_missing", lambda config: None)
+        monkeypatch.setattr("retrain.commands.benchmark.warn_missing", lambda config: None)
         monkeypatch.setattr(
             "retrain.benchmark.run_benchmark_suite",
             lambda config, *, repeats, output_dir, runner_factory, disable_wandb: recorded.update(
