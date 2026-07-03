@@ -29,23 +29,6 @@ def compute_policy_loss(
     denom = mask_sum.clamp(min=1)
     abs_kl = _masked_mean(logprob_delta.abs(), mask_float, denom)
 
-    def _standard_loss():
-        if clip_eps > 0:
-            eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
-            clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high)
-            surr1 = ratio * adv
-            surr2 = clipped_ratio * adv
-            per_token_loss = -torch.min(surr1, surr2)
-            with torch.no_grad():
-                clipped = (
-                    (ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)
-                ).float()
-                frac = (clipped * mask_float).sum().item() / denom.item()
-        else:
-            per_token_loss = -(ratio * adv)
-            frac = 0.0
-        return per_token_loss, frac
-
     if policy_loss_mode == "kl_cov":
         per_token_loss = -(ratio * adv)
         valid = mask > 0
@@ -131,6 +114,18 @@ def compute_policy_loss(
             "policy_loss_mode must be 'standard', 'kl_cov', or 'clip_cov'."
         )
 
-    per_token_loss, frac = _standard_loss()
+    if clip_eps > 0:
+        eps_high = clip_eps_high if clip_eps_high > 0 else clip_eps
+        clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + eps_high)
+        surr1 = ratio * adv
+        surr2 = clipped_ratio * adv
+        per_token_loss = -torch.min(surr1, surr2)
+        with torch.no_grad():
+            clipped = ((ratio < 1.0 - clip_eps) | (ratio > 1.0 + eps_high)).float()
+            frac = (clipped * mask_float).sum().item() / denom.item()
+    else:
+        per_token_loss = -(ratio * adv)
+        frac = 0.0
+
     masked_loss = (per_token_loss * mask_float).sum() / denom
     return masked_loss, frac, 0.0, float(abs_kl.detach().item())

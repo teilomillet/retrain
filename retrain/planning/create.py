@@ -24,7 +24,7 @@ def create_planning_detector(config: TrainConfig) -> PlanningDetector:
     detector_type = config.planning_detector
 
     if detector_type == "regex":
-        # Parse strategic grams from config (same logic as trainer.py)
+        # Parse strategic grams from config (same logic as training/trainer.py)
         if config.strategic_grams:
             raw = config.strategic_grams
             if raw.startswith("["):

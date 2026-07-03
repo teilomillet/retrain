@@ -601,7 +601,7 @@ class TestReinforcePPAlgorithmModes:
 # ---------------------------------------------------------------------------
 
 class TestReinforcePPFlow:
-    """Test flow.py validation works with reinforce_pp modes."""
+    """Test training/flow.py validation works with reinforce_pp modes."""
 
     def test_flow_probe_reinforce_pp_none(self):
         """Flow probing should succeed for reinforce_pp + none."""

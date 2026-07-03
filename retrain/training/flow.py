@@ -35,7 +35,7 @@ from retrain.config import TrainConfig
 from retrain.planning.types import PlanningDetector
 from retrain.training.sepa import SEPAController
 
-# ── Constants moved from trainer.py ──────────────────────────────────────
+# ── Constants moved from training/trainer.py ─────────────────────────────
 
 _SCALAR_BACKEND_DISALLOWED_BUILTIN_TRANSFORM_MODES = frozenset(
     {
