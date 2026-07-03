@@ -91,7 +91,12 @@ retrain
 ├── backends/           # Backend protocols, catalog, and implementations
 │   ├── __init__.py     # TrainHelper protocols + backend contracts
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
-│   ├── create.py       # Built-in backend constructors
+│   ├── create/         # Built-in backend constructors
+│   │   ├── local.py    # Local backend constructor
+│   │   ├── unsloth.py  # Unsloth backend constructor
+│   │   ├── tinker.py   # Tinker backend constructor
+│   │   ├── prime.py    # PRIME-RL backend constructor
+│   │   └── values.py   # Constructor option value coercion
 │   ├── options.py      # Backend option schemas, validation, and coercion
 │   ├── local/          # Local GPU backend package
 │   │   ├── batch.py    # Tensor batch builders for local optimizer steps
