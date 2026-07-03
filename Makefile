@@ -10,6 +10,7 @@ TYPECHECK_PATHS = \
 	retrain/logging_utils.py \
 	retrain/progress_exporter.py \
 	retrain/campaign.py \
+	retrain/delight_campaign_summary.py \
 	retrain/sepa.py \
 	retrain/advantages.py \
 	retrain/backend_definitions.py \

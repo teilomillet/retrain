@@ -10,6 +10,7 @@ import pytest
 from retrain.delight_campaign_summary import (
     SUMMARY_JSON_NAME,
     SUMMARY_MD_NAME,
+    render_delight_summary,
     summarize_delight_campaign,
     write_delight_summary,
 )
@@ -147,3 +148,18 @@ def test_summarize_delight_campaign_skips_bad_lines_and_computes_std(tmp_path):
     assert run_a["peak_correct_rate"] == pytest.approx(0.40)
     assert condition["final_correct_rate_mean"] == pytest.approx(0.50)
     assert condition["final_correct_rate_std"] == pytest.approx(0.10)
+
+
+def test_render_delight_summary_ignores_malformed_rows():
+    text = render_delight_summary(
+        {
+            "campaign_dir": "logs/campaign",
+            "campaign_toml": "campaigns/delight.toml",
+            "conditions": [{"condition_id": "C1"}, "bad-row", 3],
+            "best_final_condition": "bad-leader",
+        }
+    )
+
+    assert "Campaign: `logs/campaign`" in text
+    assert "Leader:" not in text
+    assert "C1" in text

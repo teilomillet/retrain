@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import pstdev
+from typing import cast
 
 from retrain.metrics_scan import float_or_none, scan_metrics_file
 
@@ -24,10 +25,42 @@ _FINAL_EXTRA_FIELDS = (
 def _safe_float(value: object) -> float | None:
     return float_or_none(value)
 
+
+def _required_float(row: dict[str, object], key: str) -> float:
+    value = _safe_float(row.get(key))
+    if value is None:
+        raise ValueError(f"Expected numeric {key!r} in summary row")
+    return value
+
+
+def _string_rows(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _object_rows(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[dict[str, object]] = []
+    for item in value:
+        if isinstance(item, dict) and all(isinstance(key, str) for key in item):
+            rows.append(cast(dict[str, object], item))
+    return rows
+
+
+def _object_row(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        return None
+    return cast(dict[str, object], value)
+
+
 def _std(values: list[float]) -> float:
     if len(values) <= 1:
         return 0.0
     return float(pstdev(values))
+
+
 def _resolve_run_dir(campaign_dir: Path, log_dir: object) -> Path:
     if not isinstance(log_dir, str) or not log_dir:
         return campaign_dir
@@ -55,8 +88,9 @@ def _load_manifest(campaign_dir: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(
             f"Invalid manifest.json in {campaign_dir}: expected JSON object"
-        )
+    )
     return payload
+
 
 def _summarize_run(run_meta: dict[str, object], campaign_dir: Path) -> dict[str, object] | None:
     run_dir = _resolve_run_dir(campaign_dir, run_meta.get("log_dir"))
@@ -106,10 +140,8 @@ def _summarize_run(run_meta: dict[str, object], campaign_dir: Path) -> dict[str,
 def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
     campaign_dir = campaign_dir.resolve()
     manifest = _load_manifest(campaign_dir)
-    raw_conditions = manifest.get("conditions", [])
-    raw_runs = manifest.get("runs", [])
-    conditions = [c for c in raw_conditions if isinstance(c, str)]
-    runs = [r for r in raw_runs if isinstance(r, dict)]
+    conditions = _string_rows(manifest.get("conditions"))
+    runs = _object_rows(manifest.get("runs"))
 
     condition_rows: list[dict[str, object]] = []
     for idx, condition in enumerate(conditions, start=1):
@@ -132,15 +164,15 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
         }
 
         final_correct_rates = [
-            float(run_summary["final_correct_rate"])
+            _required_float(run_summary, "final_correct_rate")
             for run_summary in run_summaries
         ]
         peak_correct_rates = [
-            float(run_summary["peak_correct_rate"])
+            _required_float(run_summary, "peak_correct_rate")
             for run_summary in run_summaries
         ]
         mean_correct_rates = [
-            float(run_summary["mean_correct_rate"])
+            _required_float(run_summary, "mean_correct_rate")
             for run_summary in run_summaries
         ]
         if final_correct_rates:
@@ -156,7 +188,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             )
 
         final_mean_rewards = [
-            float(run_summary["final_mean_reward"])
+            _required_float(run_summary, "final_mean_reward")
             for run_summary in run_summaries
             if "final_mean_reward" in run_summary
         ]
@@ -166,7 +198,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             )
 
         final_losses = [
-            float(run_summary["final_loss"])
+            _required_float(run_summary, "final_loss")
             for run_summary in run_summaries
             if "final_loss" in run_summary
         ]
@@ -175,7 +207,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
 
         for key in _FINAL_EXTRA_FIELDS:
             values = [
-                float(run_summary[f"final_{key}"])
+                _required_float(run_summary, f"final_{key}")
                 for run_summary in run_summaries
                 if f"final_{key}" in run_summary
             ]
@@ -194,12 +226,13 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
 
     completed_rows = [
         row for row in condition_rows
-        if int(row.get("completed_runs", 0)) > 0 and "final_correct_rate_mean" in row
+        if _required_float(row, "completed_runs") > 0
+        and _safe_float(row.get("final_correct_rate_mean")) is not None
     ]
     best_final = (
         max(
             completed_rows,
-            key=lambda row: float(row["final_correct_rate_mean"]),
+            key=lambda row: _required_float(row, "final_correct_rate_mean"),
         )
         if completed_rows
         else None
@@ -246,10 +279,7 @@ def _fmt_float(value: float | None, digits: int = 3) -> str:
 
 
 def render_delight_summary(summary: dict[str, object]) -> str:
-    condition_rows = [
-        row for row in summary.get("conditions", [])
-        if isinstance(row, dict)
-    ]
+    condition_rows = _object_rows(summary.get("conditions"))
     lines = [
         "# Delight Campaign Summary",
         "",
@@ -260,8 +290,8 @@ def render_delight_summary(summary: dict[str, object]) -> str:
     if isinstance(baseline_condition, str) and baseline_condition:
         lines.append(f"Baseline: `{baseline_condition}`")
 
-    best_final = summary.get("best_final_condition")
-    if isinstance(best_final, dict):
+    best_final = _object_row(summary.get("best_final_condition"))
+    if best_final is not None:
         best_rate = _safe_float(best_final.get("final_correct_rate_mean"))
         lines.append(
             "Leader: "
