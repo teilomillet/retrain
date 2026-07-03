@@ -15,6 +15,7 @@ TYPECHECK_PATHS = \
 	retrain/delight_campaign_summary.py \
 	retrain/sepa.py \
 	retrain/advantages.py \
+	retrain/planning.py \
 	retrain/backend_definitions.py \
 	retrain/registry.py \
 	retrain/backends.py \

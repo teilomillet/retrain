@@ -8,10 +8,15 @@ based on centroid distance to math-tuned anchor embeddings.
 
 from __future__ import annotations
 
+import importlib
 import re
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
     from retrain.config import TrainConfig
 
 
@@ -24,6 +29,16 @@ class PlanningDetector(Protocol):
     """Detects which tokens belong to planning/metacognitive spans."""
 
     def detect(self, token_strs: list[str]) -> list[int]: ...
+
+
+class _SentenceEmbeddingModel(Protocol):
+    def encode(
+        self,
+        sentences: Sequence[str],
+        *,
+        normalize_embeddings: bool,
+        batch_size: int = 32,
+    ) -> NDArray[np.float64]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -165,19 +180,23 @@ class SemanticPlanningDetector:
         threshold: float = 0.02,
     ) -> None:
         try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError:
+            sentence_transformers = importlib.import_module("sentence_transformers")
+        except ImportError as exc:
             raise ImportError(
                 "Semantic planning detector requires sentence-transformers.\n"
                 "Install it with:  pip install 'retrain[semantic]'"
-            ) from None
+            ) from exc
 
         import numpy as np
 
         self._np = np
         self._threshold = threshold
 
-        self._model = SentenceTransformer(model_name)
+        sentence_transformer = cast(
+            Callable[[str], _SentenceEmbeddingModel],
+            getattr(sentence_transformers, "SentenceTransformer"),
+        )
+        self._model = sentence_transformer(model_name)
 
         # Pre-compute centroids
         plan_embs = self._model.encode(
