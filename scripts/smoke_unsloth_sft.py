@@ -257,7 +257,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     import torch
 
     from retrain.config import TrainConfig
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     if args.require_cuda and not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for this Unsloth SFT smoke, but unavailable")

@@ -18,7 +18,7 @@ def run(args: list[str]) -> None:
     )
     from retrain.benchmark.summary import summarize_run, summarize_suite
     from retrain.config import load_config, parse_cli_overrides
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     fmt = "text"
     repeats = 1

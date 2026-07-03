@@ -27,7 +27,7 @@ from typing import cast
 from retrain.benchmark.format import format_suite_summary
 from retrain.benchmark.run import run_benchmark_suite
 from retrain.config import TrainConfig, load_config
-from retrain.registry import get_registry
+from retrain.registry.builtin import get_registry
 
 
 def _cleanup_after_condition() -> None:

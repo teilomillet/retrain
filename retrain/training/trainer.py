@@ -43,7 +43,9 @@ from retrain.training.flow import (
 )
 from retrain.io.log import JsonlLogger
 from retrain.process.metrics import max_rss_mb
-from retrain.registry import PlanningDetector, RewardFunction, get_registry
+from retrain.planning.types import PlanningDetector
+from retrain.registry.builtin import get_registry
+from retrain.rewards.types import RewardFunction
 from retrain.training.rollouts import (
     ExamplePromptCache,
     RuntimeCounters,

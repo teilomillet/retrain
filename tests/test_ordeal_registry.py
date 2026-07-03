@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import hypothesis.strategies as st
 from ordeal import ChaosTest, always, invariant, rule
 
-from retrain.registry import Registry
+from retrain.registry.core import Registry
 
 
 # ── Test-scoped helpers ──

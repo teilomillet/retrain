@@ -353,7 +353,7 @@ def _write_discovery_summary(log_dir: Path, archive: DiscoverArchive) -> None:
 def _load_discovery_source(config) -> tuple[Example, object | None, RewardFunction | None]:
     """Load the single problem used by TTT-Discover."""
 
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     verifiers_env = None
     reward_fn = None

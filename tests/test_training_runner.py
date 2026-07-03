@@ -318,7 +318,7 @@ class TestSftRunner:
             "transformers.AutoTokenizer.from_pretrained",
             lambda *args, **kwargs: _FakeTokenizer(),
         )
-        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
 
         config = TrainConfig(
             trainer="sft",
@@ -402,7 +402,7 @@ class TestSftRunner:
             "transformers.AutoTokenizer.from_pretrained",
             lambda *args, **kwargs: _FakeTokenizer(),
         )
-        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
 
         config = TrainConfig(
             trainer="sft",
@@ -443,7 +443,7 @@ class TestSftRunner:
             assert name == "backend"
             return _FakeBackendRegistry(helper)
 
-        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
 
         result = SftRunner().run(
             TrainConfig(
@@ -482,57 +482,57 @@ class TestSftRunner:
 
 class TestTrainerRegistry:
     def test_retrain_resolves(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         reg = get_registry("trainer")
         assert "retrain" in reg.builtin_names
 
     def test_command_resolves(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         reg = get_registry("trainer")
         assert "command" in reg.builtin_names
 
     def test_ttt_discover_resolves(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         reg = get_registry("trainer")
         assert "ttt_discover" in reg.builtin_names
 
     def test_sft_resolves(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         reg = get_registry("trainer")
         assert "sft" in reg.builtin_names
 
     def test_create_retrain_runner(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = TrainConfig()
         runner = get_registry("trainer").create("retrain", config)
         assert isinstance(runner, RetainRunner)
 
     def test_create_command_runner(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = _bare_config(trainer_command="echo ok")
         runner = get_registry("trainer").create("command", config)
         assert isinstance(runner, CommandRunner)
 
     def test_create_ttt_discover_runner(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = _bare_config()
         runner = get_registry("trainer").create("ttt_discover", config)
         assert isinstance(runner, TTTDiscoverRunner)
 
     def test_create_sft_runner(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = _bare_config()
         runner = get_registry("trainer").create("sft", config)
         assert isinstance(runner, SftRunner)
 
     def test_command_without_trainer_command_raises(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = _bare_config(trainer_command="")
         with pytest.raises(ValueError, match="trainer_command"):
             get_registry("trainer").create("command", config)
 
     def test_unknown_trainer_raises(self):
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
         config = TrainConfig()
         with pytest.raises(ValueError, match="Unknown trainer"):
             get_registry("trainer").create("nonexistent", config)

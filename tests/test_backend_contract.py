@@ -14,7 +14,7 @@ from retrain.backends import (
     run_sft_train_step,
 )
 from retrain.config import TrainConfig
-from retrain.registry import backend
+from retrain.registry.builtin import backend
 
 
 class _BaseFakeHelper:

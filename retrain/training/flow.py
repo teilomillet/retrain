@@ -419,7 +419,7 @@ def build_flow(config: TrainConfig, *, gpu: bool = False) -> TrainingFlow:
     sepa_ctrl = None
 
     if gpu:
-        from retrain.registry import get_registry
+        from retrain.registry.builtin import get_registry
 
         backend = get_registry("backend").create(config.backend, config)
         planning_detector = get_registry("planning_detector").create(

@@ -9,18 +9,17 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from retrain.config import TrainConfig
-from retrain.registry import (
-    Registry,
+from retrain.registry.builtin import (
     backend,
     backpressure,
-    check_environment,
     data_source,
     get_registry,
     inference_engine,
     planning_detector,
-    probe_backend_runtime,
     reward,
 )
+from retrain.registry.core import Registry
+from retrain.registry.health import check_environment, probe_backend_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +315,7 @@ class TestRuntimeProbes:
         monkeypatch.setenv("RETRAIN_PRIME_RL_URL", "http://localhost:8000")
 
         monkeypatch.setattr(
-            "retrain.registry._probe_http_endpoint",
+            "retrain.registry.health._probe_http_endpoint",
             lambda base_url, paths, timeout_s=0.8: SimpleNamespace(
                 backend="",
                 probe="http",

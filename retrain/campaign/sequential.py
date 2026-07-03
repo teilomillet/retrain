@@ -23,7 +23,7 @@ def run_sequential(
 
     Returns ``(failed_count, recommended_rank)``.
     """
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     failed = 0
     recommended_rank: int | None = None

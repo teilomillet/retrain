@@ -16,7 +16,7 @@ def run(args: list[str]) -> None:
     )
     from retrain.config import TrainConfig, load_config
     from retrain.plugins.resolve import discover_plugin_modules, get_plugin_runtime
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     fmt = "text"
     config_path: str | None = None

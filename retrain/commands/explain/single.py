@@ -13,7 +13,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
     import warnings
 
     from retrain.config import load_config
-    from retrain.registry import check_environment
+    from retrain.registry.health import check_environment
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

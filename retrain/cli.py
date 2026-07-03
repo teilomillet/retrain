@@ -147,7 +147,7 @@ def main() -> None:
             run_squeeze(config_path)
             return
     from retrain.config import load_config
-    from retrain.registry import get_registry
+    from retrain.registry.builtin import get_registry
 
     config = load_config(config_path, overrides=overrides)
     warn_missing(config)

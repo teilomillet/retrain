@@ -9,7 +9,7 @@ from retrain.commands.backends.capability import summary as capability_summary
 def run() -> None:
     """Print dependency status for all known components."""
     from retrain.backends.catalog import get_builtin_backend_definitions
-    from retrain.registry import check_environment, probe_backend_runtime
+    from retrain.registry.health import check_environment, probe_backend_runtime
 
     print("retrain doctor — checking component dependencies\n")
     results = check_environment(config=None)

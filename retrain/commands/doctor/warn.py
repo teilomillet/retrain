@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 def warn_missing(config: "TrainConfig") -> None:
     """Warn if the config references components whose deps are missing."""
-    from retrain.registry import check_environment
+    from retrain.registry.health import check_environment
 
     results = check_environment(config=config)
     for name, import_name, hint, available in results:
