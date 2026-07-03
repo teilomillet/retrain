@@ -71,7 +71,9 @@ retrain/
     pipeline.py
   backends/
     catalog.py
-    local.py
+    local/
+      train.py
+      lora.py
     tinker/
       train.py
       runtime.py

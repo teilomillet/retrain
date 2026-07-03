@@ -60,7 +60,9 @@ retrain
 ├── backends/           # Backend protocols, catalog, and implementations
 │   ├── __init__.py     # TrainHelper protocols + backend contracts
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
-│   ├── local.py        # Local GPU backend (PyTorch/PEFT + inference engine)
+│   ├── local/          # Local GPU backend package
+│   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
+│   │   └── lora.py     # Local-backend LoRA config, patching, and metrics
 │   ├── prime.py        # PRIME-RL bridge backend
 │   ├── tinker/         # Remote Tinker backend
 │   │   ├── train.py    # Tinker training client implementation

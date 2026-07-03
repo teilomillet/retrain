@@ -1615,7 +1615,9 @@ ARCHITECTURE
     +-- backends/                Backend protocols, catalog, implementations
         +-- __init__.py          TrainHelper protocols and backend contracts
         +-- catalog.py           Backend capabilities and option schemas
-        +-- local.py             Local GPU backend (PyTorch/PEFT)
+        +-- local/               Local GPU backend package
+            +-- train.py         PyTorch/PEFT training and inference orchestration
+            +-- lora.py          Local-backend LoRA setup
         +-- prime.py             PRIME-RL bridge backend
         +-- tinker/              Remote Tinker backend
             +-- train.py         Tinker training client implementation
