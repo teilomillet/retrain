@@ -6,7 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import traceback
-from dataclasses import asdict, replace
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -128,14 +129,14 @@ def _quality_gates(
     min_correct_rate: float,
     require_token_native: bool,
     require_adapter_reload: bool,
-) -> dict[str, object]:
+) -> dict[str, dict[str, object]]:
     final_rates = [
         run.final_correct_rate
         for run in summary.runs
         if run.final_correct_rate is not None
     ]
     final_correct_rate = final_rates[-1] if final_rates else None
-    gates: dict[str, object] = {
+    gates: dict[str, dict[str, object]] = {
         "min_correct_rate": {
             "required": min_correct_rate,
             "observed": final_correct_rate,
@@ -176,9 +177,9 @@ def _quality_gates(
     return gates
 
 
-def _gates_passed(gates: dict[str, object]) -> bool:
+def _gates_passed(gates: Mapping[str, Mapping[str, object]]) -> bool:
     for gate in gates.values():
-        if isinstance(gate, dict) and gate.get("passed") is not True:
+        if gate.get("passed") is not True:
             return False
     return True
 
@@ -328,7 +329,7 @@ def main() -> int:
                 "status": status,
                 "quality_gates": gates,
                 "summary_path": str(condition_dir / "benchmark_summary.json"),
-                "summary": asdict(summary),
+                "summary": summary.to_dict(),
             }
             print(format_suite_summary(summary))
         except Exception as exc:  # Backend comparison failures are data.

@@ -19,10 +19,10 @@ import itertools
 import json
 import multiprocessing as mp
 import traceback
-from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 from retrain.benchmark import format_suite_summary, run_benchmark_suite
 from retrain.config import TrainConfig, load_config
@@ -147,8 +147,8 @@ def _run_condition(
         sample_use_cache=bool(condition["sample_use_cache"]),
         cuda_empty_cache=bool(condition["cuda_empty_cache"]),
         gradient_checkpointing=bool(condition["gradient_checkpointing"]),
-        train_microbatch_size=int(condition["train_microbatch_size"]),
-        group_size=int(condition["group_size"]),
+        train_microbatch_size=cast(int, condition["train_microbatch_size"]),
+        group_size=cast(int, condition["group_size"]),
         max_steps=max_steps,
         rollout_env_workers=rollout_env_workers,
         rollout_buffer_size=rollout_buffer_size,
@@ -168,7 +168,7 @@ def _run_condition(
             **condition,
             "status": "succeeded",
             "summary_path": str(condition_dir / "benchmark_summary.json"),
-            "summary": asdict(summary),
+            "summary": summary.to_dict(),
         }
         print(format_suite_summary(summary))
     except Exception as exc:  # Benchmark failures are data.

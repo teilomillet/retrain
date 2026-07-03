@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import importlib.util
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -139,6 +140,7 @@ def test_unsloth_sft_usl_sweep_fit_recovers_synthetic_curve():
     fit = module._fit_usl(rows)
 
     assert fit is not None
+    assert fit.to_dict() == asdict(fit)
     assert fit.sigma == pytest.approx(0.08, abs=0.02)
     assert fit.kappa == pytest.approx(0.003, abs=0.001)
     assert fit.r2 > 0.99
@@ -167,3 +169,26 @@ def test_unsloth_sft_usl_sweep_detects_15_percent_microbatch_gain():
     assert best["batch_size"] == 4
     assert best["gain_percent"] == pytest.approx(20.0)
     assert best["meets_15_percent"] is True
+
+
+def test_unsloth_sft_usl_sweep_summary_serializes_fit_payload():
+    module = _load_sft_usl_sweep_module()
+    from retrain.backpressure import usl_throughput
+
+    rows = [
+        {
+            "status": "succeeded",
+            "batch_size": batch_size,
+            "train_microbatch_size": 1,
+            "throughput_datums_per_s": 10.0
+            * usl_throughput(float(batch_size), 0.08, 0.003),
+        }
+        for batch_size in [1, 2, 4, 8, 16, 32]
+    ]
+
+    summary = module._summarize(rows)
+
+    fit_payload = summary["fits_by_microbatch_size"]["1"]
+    assert isinstance(fit_payload, dict)
+    assert fit_payload["sigma"] == pytest.approx(0.08, abs=0.02)
+    assert "classification" in fit_payload

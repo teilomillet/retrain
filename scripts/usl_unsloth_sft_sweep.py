@@ -12,7 +12,7 @@ import argparse
 import json
 import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -52,6 +52,22 @@ class UslFit:
     peak_p_predicted: float
     peak_throughput_predicted: float
     classification: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "count": self.count,
+            "sigma": self.sigma,
+            "kappa": self.kappa,
+            "p_star": self.p_star,
+            "fitted_lambda": self.fitted_lambda,
+            "r2": self.r2,
+            "relative_spread": self.relative_spread,
+            "peak_p_observed": self.peak_p_observed,
+            "peak_throughput_observed": self.peak_throughput_observed,
+            "peak_p_predicted": self.peak_p_predicted,
+            "peak_throughput_predicted": self.peak_throughput_predicted,
+            "classification": self.classification,
+        }
 
 
 def _metric_number(metrics: dict[str, object], *keys: str) -> float:
@@ -485,7 +501,7 @@ def _summarize(rows: list[dict[str, object]]) -> dict[str, object]:
     fits: dict[str, object] = {}
     for key, group in by_microbatch.items():
         fit = _fit_usl(group)
-        fits[key] = asdict(fit) if fit is not None else None
+        fits[key] = fit.to_dict() if fit is not None else None
 
     improvements: list[dict[str, object]] = []
     by_batch: dict[int, list[dict[str, object]]] = {}
