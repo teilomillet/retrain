@@ -102,6 +102,28 @@ def _helper() -> TrainHelper:
     return cast(TrainHelper, _DummyHelper())
 
 
+class _RecordingHelper:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):
+        self.calls.append(
+            {
+                "prompt_count": len(prompt_ids_batch),
+                "num_samples": num_samples,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+            }
+        )
+        return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
+
+
+def _recording_helper() -> tuple[TrainHelper, _RecordingHelper]:
+    helper = _RecordingHelper()
+    return cast(TrainHelper, helper), helper
+
+
 class _CleanupTrackingRubric:
     async def score_group(self, states):
         for state in states:
@@ -358,6 +380,72 @@ class TestCoerceFloatList:
 
 
 class TestRunMultiturnGroup:
+    def test_default_temperature_keeps_active_rollouts_batched(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        helper, recorder = _recording_helper()
+
+        rewards, turns, *_ = run_multiturn_group(
+            _CleanupTrackingMultiTurnEnv(),
+            helper=helper,
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=3,
+            max_tokens=4,
+            temperature=0.8,
+            top_p=0.95,
+        )
+
+        assert rewards == [1.0, 1.0, 1.0]
+        assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1]
+        assert recorder.calls == [
+            {
+                "prompt_count": 3,
+                "num_samples": 1,
+                "max_tokens": 4,
+                "temperature": 0.8,
+                "top_p": 0.95,
+            }
+        ]
+
+    def test_temperature_spread_samples_each_rollout_temperature(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        helper, recorder = _recording_helper()
+
+        rewards, turns, *_ = run_multiturn_group(
+            _CleanupTrackingMultiTurnEnv(),
+            helper=helper,
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=3,
+            max_tokens=4,
+            temperature=1.0,
+            top_p=1.0,
+            temperature_spread=0.3,
+        )
+
+        assert rewards == [1.0, 1.0, 1.0]
+        assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1]
+        assert [call["prompt_count"] for call in recorder.calls] == [1, 1, 1]
+        assert [call["temperature"] for call in recorder.calls] == pytest.approx(
+            [0.7, 1.0, 1.3]
+        )
+
     def test_cleans_up_rollout_states_after_scoring(self, monkeypatch):
         monkeypatch.setattr(
             bridge_mod,

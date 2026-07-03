@@ -260,6 +260,76 @@ def _coerce_example_id(raw: object) -> int | str:
     return str(raw)
 
 
+def _rollout_temperatures(
+    *,
+    temperature: float,
+    temperature_spread: float,
+    num_rollouts: int,
+) -> list[float]:
+    """Return one sampling temperature per rollout."""
+    if temperature_spread <= 0.0 or num_rollouts <= 1:
+        return [temperature] * num_rollouts
+    return [
+        max(
+            0.1,
+            temperature + temperature_spread * (2 * i / (num_rollouts - 1) - 1),
+        )
+        for i in range(num_rollouts)
+    ]
+
+
+def _sample_active_rollouts(
+    *,
+    helper: "TrainHelper",
+    active: list[tuple[int, PromptLike, list[int], list[int] | None]],
+    rollout_temps: list[float],
+    max_tokens: int,
+    top_p: float,
+) -> list[list[tuple[list[int], list[float]]]]:
+    """Sample active rollout prompts, batching only equal-temperature prompts."""
+    sampled_groups: list[list[tuple[list[int], list[float]]]] = [
+        [] for _ in active
+    ]
+    batch_positions: list[int] = []
+    batch_prompt_ids: list[list[int]] = []
+    batch_temperature: float | None = None
+
+    def flush_batch() -> None:
+        nonlocal batch_positions, batch_prompt_ids, batch_temperature
+        if batch_temperature is None:
+            return
+        groups = helper.sample(
+            batch_prompt_ids,
+            1,
+            max_tokens,
+            batch_temperature,
+            top_p,
+        )
+        for position, group in zip(batch_positions, groups):
+            sampled_groups[position] = group
+        batch_positions = []
+        batch_prompt_ids = []
+        batch_temperature = None
+
+    for position, (
+        rollout_idx,
+        _messages,
+        prompt_ids,
+        _observation_mask,
+    ) in enumerate(active):
+        rollout_temperature = rollout_temps[rollout_idx]
+        if batch_temperature is None:
+            batch_temperature = rollout_temperature
+        elif rollout_temperature != batch_temperature:
+            flush_batch()
+            batch_temperature = rollout_temperature
+        batch_positions.append(position)
+        batch_prompt_ids.append(prompt_ids)
+    flush_batch()
+
+    return sampled_groups
+
+
 def parse_environment_args(raw: str | JSONObject | None) -> JSONObject:
     """Parse [environment].args from TOML/CLI into a dict."""
     if raw is None:
@@ -1212,14 +1282,11 @@ def run_multiturn_group(
             if cleanup_error is not None and not active_exception:
                 raise cleanup_error
 
-        # Per-rollout temperatures for diversity (temperature_spread > 0)
-        if temperature_spread > 0 and num_rollouts > 1:
-            rollout_temps = [
-                max(0.1, temperature + temperature_spread * (2 * i / (num_rollouts - 1) - 1))
-                for i in range(num_rollouts)
-            ]
-        else:
-            rollout_temps = [temperature] * num_rollouts
+        rollout_temps = _rollout_temperatures(
+            temperature=temperature,
+            temperature_spread=temperature_spread,
+            num_rollouts=num_rollouts,
+        )
 
         try:
             async def init_one(raw_idx: object) -> StateDict:
@@ -1305,14 +1372,13 @@ def run_multiturn_group(
                         states[idx]["stop_condition"] = "retrain_max_turns"
                     break
 
-                prompt_ids_batch = [item[2] for item in active]
                 generation_started = time.perf_counter()
-                sampled_groups = helper.sample(
-                    prompt_ids_batch,
-                    1,
-                    max_tokens,
-                    temperature,
-                    top_p,
+                sampled_groups = _sample_active_rollouts(
+                    helper=helper,
+                    active=active,
+                    rollout_temps=rollout_temps,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
                 )
                 rollout_timing.generation_s += (
                     time.perf_counter() - generation_started
