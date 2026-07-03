@@ -83,6 +83,7 @@ retrain
 │   ├── __init__.py     # TrainHelper protocols + backend contracts
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
 │   ├── local/          # Local GPU backend package
+│   │   ├── batch.py    # Tensor batch builders for local optimizer steps
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
 │   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics

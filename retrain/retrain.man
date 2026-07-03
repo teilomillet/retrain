@@ -1635,6 +1635,7 @@ ARCHITECTURE
         +-- __init__.py          TrainHelper protocols and backend contracts
         +-- catalog.py           Backend capabilities and option schemas
         +-- local/               Local GPU backend package
+            +-- batch.py         Tensor batch builders for optimizer steps
             +-- train.py         PyTorch/PEFT training and inference orchestration
             +-- checkpointing.py Gradient-checkpointing policy and layer metrics
             +-- lora.py          Local-backend LoRA setup

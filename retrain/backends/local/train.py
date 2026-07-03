@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model
 
@@ -40,6 +39,7 @@ from retrain.backends.local.lora import (
     metrics as _lora_metrics,
     patch_fast as _patch_fast_lora,
 )
+from retrain.backends.local import batch as local_batch
 from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import sft as local_sft
 from retrain.backends.local.checkpointing import (
@@ -1925,20 +1925,12 @@ class LocalTrainHelper:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
 
-        # Pad all sequences into a single batch
-        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
-        lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
-        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
-
-        # pad_sequence pads to max length in batch (batch_first=True -> [N, max_len])
-        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
-        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-
-        # Build attention mask: 1 where real tokens, 0 where padding
-        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
-        max_len = input_ids.shape[1]
-        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
+        batch = local_batch.policy(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            device=self.train_device,
+        )
 
         if self.split_mode:
             # Async path: wait for previous training to finish (back pressure)
@@ -1948,14 +1940,23 @@ class LocalTrainHelper:
 
             # Submit training to background thread
             self._train_future = self._train_executor.submit(
-                self._do_train_impl, input_ids, old_logprobs, advantages, attention_mask
+                self._do_train_impl,
+                batch.input_ids,
+                batch.old_logprobs,
+                batch.advantages,
+                batch.attention_mask,
             )
 
             # Return loss from the previously completed training step
             return self._pending_loss
         else:
             # Synchronous path: run training inline, return current loss
-            return self._do_train_impl(input_ids, old_logprobs, advantages, attention_mask)
+            return self._do_train_impl(
+                batch.input_ids,
+                batch.old_logprobs,
+                batch.advantages,
+                batch.attention_mask,
+            )
 
     def sft_train_step(self, all_tokens, all_advantages, lr, weight_decay):
         """Run one SFT/ECHO update.
@@ -2003,17 +2004,16 @@ class LocalTrainHelper:
         if microbatch_size < n or token_budget > 0:
             return self._do_sft_sequence_impl(all_tokens, all_advantages)
 
-        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
-        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
-
-        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
-        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-
-        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
-        max_len = input_ids.shape[1]
-        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
-
-        return self._do_sft_impl(input_ids, advantages, attention_mask)
+        batch = local_batch.sft(
+            all_tokens,
+            all_advantages,
+            device=self.train_device,
+        )
+        return self._do_sft_impl(
+            batch.input_ids,
+            batch.advantages,
+            batch.attention_mask,
+        )
 
     def train_step_with_echo_masks(
         self,
@@ -2066,34 +2066,22 @@ class LocalTrainHelper:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
 
-        token_tensors = [torch.tensor(t, dtype=torch.long) for t in all_tokens]
-        lp_tensors = [torch.tensor(lp, dtype=torch.float32) for lp in all_logprobs]
-        adv_tensors = [torch.tensor(a, dtype=torch.float32) for a in all_advantages]
-        echo_adv_tensors = [
-            torch.tensor(a, dtype=torch.float32) for a in echo_advantages
-        ]
-
-        input_ids = pad_sequence(token_tensors, batch_first=True, padding_value=0).to(self.train_device)
-        old_logprobs = pad_sequence(lp_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        advantages = pad_sequence(adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        echo_advantages_tensor = pad_sequence(echo_adv_tensors, batch_first=True, padding_value=0.0).to(self.train_device)
-        echo_counts = torch.tensor(
-            [float(c) for c in echo_full_observation_counts],
-            dtype=torch.float32,
+        batch = local_batch.echo(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            echo_advantages,
+            echo_full_observation_counts,
             device=self.train_device,
         )
 
-        lengths = torch.tensor([len(t) for t in all_tokens], device=self.train_device)
-        max_len = input_ids.shape[1]
-        attention_mask = torch.arange(max_len, device=self.train_device).unsqueeze(0) < lengths.unsqueeze(1)
-
         return self._do_hybrid_mask_impl(
-            input_ids,
-            old_logprobs,
-            advantages,
-            attention_mask,
-            echo_advantages_tensor,
-            echo_counts,
+            batch.input_ids,
+            batch.old_logprobs,
+            batch.advantages,
+            batch.attention_mask,
+            batch.echo_advantages,
+            batch.echo_counts,
             echo_loss_fn,
         )
 
