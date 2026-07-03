@@ -29,7 +29,7 @@ def auto_squeeze(
     wandb_entity: str = "",
 ) -> int:
     """Run squeeze analysis, print results, log to wandb. Returns recommended rank."""
-    from retrain.squeeze import analyze_adapter
+    from retrain.squeeze.run import analyze_adapter
 
     min_var = float_from_object(
         squeeze_cfg.get("min_variance_retention", 0.95),

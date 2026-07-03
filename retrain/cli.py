@@ -143,7 +143,7 @@ def main() -> None:
             run_campaign(config_path)
             return
         if kind == "squeeze":
-            from retrain.squeeze import run_squeeze
+            from retrain.squeeze.run import run_squeeze
             run_squeeze(config_path)
             return
     from retrain.config import load_config

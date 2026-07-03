@@ -8,13 +8,9 @@ import torch
 from safetensors.torch import save_file
 
 from retrain.config import SqueezeConfig, load_squeeze_config
-from retrain.squeeze import (
-    analyze_adapter,
-    compress_adapter,
-    compress_layer,
-    load_adapter_matrices,
-    squeeze_layer,
-)
+from retrain.squeeze.adapter import load_adapter_matrices
+from retrain.squeeze.rank import compress_layer, squeeze_layer
+from retrain.squeeze.run import analyze_adapter, compress_adapter
 
 
 # ---------------------------------------------------------------------------

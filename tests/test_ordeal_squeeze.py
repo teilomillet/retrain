@@ -1,4 +1,4 @@
-"""Ordeal property tests for retrain.squeeze.
+"""Ordeal property tests for squeeze rank math.
 
 Tests SVD mathematical invariants: singular values non-negative,
 sorted descending, variance monotonic, compression fidelity.
@@ -14,7 +14,7 @@ from hypothesis import given, settings
 
 torch = pytest.importorskip("torch")
 
-from retrain.squeeze import compress_layer, squeeze_layer
+from retrain.squeeze.rank import compress_layer, squeeze_layer
 
 
 # ── Strategies ──
