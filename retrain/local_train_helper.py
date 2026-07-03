@@ -9,8 +9,6 @@ GPU split mode (multi-GPU): separate devices for inference and training.
 - engine on first device (sampling)
 - train_model on last device (gradient updates)
 - checkpoint() syncs LoRA weights train -> engine
-
-The LocalBackend in Mojo calls into this module via Python interop.
 """
 
 import gc
@@ -781,8 +779,8 @@ class LocalTrainHelper:
         """Generate completions with per-token logprobs.
 
         Delegates to the configured InferenceEngine, then converts
-        SampleResult objects to (token_ids, logprobs) tuples for
-        backward compatibility with the Mojo caller.
+        SampleResult objects to the plain (token_ids, logprobs) tuples
+        the trainer consumes.
 
         Args:
             prompt_ids_list: List of lists of token IDs (one per prompt).
@@ -805,7 +803,7 @@ class LocalTrainHelper:
             self._empty_cuda_cache_if_requested()
         self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
 
-        # Convert SampleResult -> tuples for Mojo interop
+        # Convert SampleResult -> (token_ids, logprobs) tuples
         results = []
         for group in engine_results:
             converted = []

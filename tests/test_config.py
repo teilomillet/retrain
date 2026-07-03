@@ -166,7 +166,7 @@ min_prompt_overlap = 0.75
         assert c.echo_min_prompt_overlap == pytest.approx(0.75)
 
     def test_empty_string_ignored(self, tmp_path):
-        """Empty-string TOML values should keep the default (match Mojo behavior)."""
+        """Empty-string TOML values should keep the default."""
         toml = tmp_path / "config.toml"
         toml.write_text('[model]\nmodel = ""\n')
         c = load_config(str(toml))

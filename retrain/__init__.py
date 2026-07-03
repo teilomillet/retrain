@@ -1,4 +1,9 @@
-"""retrain — Python helpers for Mojo training backends."""
+"""retrain — TOML-first RLVR training framework for LLMs.
+
+Public plugin surface: advantage/transform/algorithm/uncertainty specs
+and their registration decorators, plus the TrainingFlow used by
+``retrain trace``.
+"""
 
 from retrain.advantages import (
     AlgorithmContext as AlgorithmContext,

@@ -1396,8 +1396,8 @@ def load_config(
     If path is None, looks for retrain.toml in cwd.
     Returns TrainConfig with TOML values overlaid on defaults.
 
-    Matches Mojo behavior: empty-string TOML values are ignored
-    for string fields (keeps the default).
+    Empty-string TOML values are ignored for string fields
+    (keeps the default).
 
     *overrides* (from CLI flags) are applied after TOML loading
     but before validation.
@@ -1460,7 +1460,7 @@ def load_config(
                     ):
                         setattr(config, field_name, json.dumps(val))
                         continue
-                    # Match Mojo: ignore empty-string values for string fields
+                    # Empty-string values keep the field's default
                     s = str(val)
                     if s:
                         setattr(config, field_name, s)
