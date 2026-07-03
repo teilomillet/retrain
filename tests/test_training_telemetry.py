@@ -59,7 +59,7 @@ class _RuntimeMetricsHelper:
 
 
 def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
-    monkeypatch.setattr(telemetry, "process_max_rss_mb", lambda: 12.34567)
+    monkeypatch.setattr(telemetry, "max_rss_mb", lambda: 12.34567)
     surprisal = summarize_surprisal_stats(
         [
             EntropyStats(

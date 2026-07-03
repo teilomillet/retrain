@@ -42,7 +42,7 @@ from retrain.flow import (
     build_flow,
 )
 from retrain.io.log import JsonlLogger
-from retrain.process_metrics import process_max_rss_mb
+from retrain.process.metrics import max_rss_mb
 from retrain.registry import PlanningDetector, RewardFunction, get_registry
 from retrain.runtime_support import (
     ExamplePromptCache,
@@ -457,7 +457,7 @@ def _run_sft_warmup_step(
         "advantage_mode": config.advantage_mode,
         "lr": effective_lr,
     }
-    rss_mb = process_max_rss_mb()
+    rss_mb = max_rss_mb()
     if rss_mb is not None:
         metrics["process_max_rss_mb"] = round(rss_mb, 3)
     metrics_logger.log(metrics)

@@ -20,7 +20,7 @@ from typing import Protocol, runtime_checkable
 from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
 from retrain.metrics.scan import scan_metrics_file
-from retrain.process_metrics import process_max_rss_mb
+from retrain.process.metrics import max_rss_mb
 
 
 def _snapshot_metadata_value(value: object) -> object:
@@ -344,7 +344,7 @@ class SftRunner:
                     ),
                     "time_s": round(elapsed, 2),
                 }
-                rss_mb = process_max_rss_mb()
+                rss_mb = max_rss_mb()
                 if rss_mb is not None:
                     metrics["process_max_rss_mb"] = round(rss_mb, 3)
                 for key, value in collect_runtime_metrics(helper).items():

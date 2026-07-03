@@ -12,7 +12,7 @@ from retrain.backends import TrainHelper, collect_runtime_metrics
 from retrain.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
 from retrain.echo import EchoBuildStats, EchoLimitStats
-from retrain.process_metrics import process_max_rss_mb
+from retrain.process.metrics import max_rss_mb
 from retrain.runtime_support import RuntimeCounters
 
 
@@ -458,7 +458,7 @@ def build_step_metrics(
         "echo/mode_collapse_guard": int(echo_plan.skipped_entropy_floor),
         "echo/joint_optimizer_step": int(data.echo_joint_optimizer_step),
     }
-    rss_mb = process_max_rss_mb()
+    rss_mb = max_rss_mb()
     if rss_mb is not None:
         metrics["process_max_rss_mb"] = round(rss_mb, 3)
     metrics.update(runtime_counters.metrics())

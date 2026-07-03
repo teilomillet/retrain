@@ -1,11 +1,11 @@
-"""Process-level telemetry helpers."""
+"""Process-level telemetry."""
 
 from __future__ import annotations
 
 import sys
 
 
-def process_max_rss_mb() -> float | None:
+def max_rss_mb() -> float | None:
     """Return best-effort process peak RSS in MiB."""
     try:
         import resource

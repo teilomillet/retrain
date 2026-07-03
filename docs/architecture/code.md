@@ -49,6 +49,8 @@ retrain/
     log.py
   metrics/
     scan.py
+  process/
+    metrics.py
 ```
 
 Avoid long top-level compound modules such as `training_step_logging.py`. If the
@@ -79,6 +81,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `io/json.py`: JSON loading and compact JSONL row encoding.
 - `io/log.py`: buffered JSONL append logging.
 - `metrics/scan.py`: one-pass metrics JSONL readers and aggregates.
+- `process/metrics.py`: process-local runtime measurements such as peak RSS.
 
 Do not split just to hide lines. A private helper is worth keeping only when it
 removes real branching, names a non-obvious invariant, or serves at least three

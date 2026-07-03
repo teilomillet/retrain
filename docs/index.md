@@ -63,6 +63,8 @@ retrain
 │   └── log.py          # Buffered JSONL append logger
 ├── metrics/            # Metrics JSONL readers and summaries
 │   └── scan.py         # One-pass metrics file scanning
+├── process/            # Process-local runtime measurements
+│   └── metrics.py      # Peak RSS and related process telemetry
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
 └── data.py             # MATH dataset loader
 ```
