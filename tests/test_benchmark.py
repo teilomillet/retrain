@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
+from typing import cast
 
 import pytest
 
 from retrain.benchmark import (
+    BenchmarkSuiteSummary,
+    RunBenchmarkSummary,
+    SummaryStat,
     format_run_summary,
     format_suite_summary,
     run_benchmark_suite,
@@ -281,6 +285,18 @@ def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
     assert suite.aggregates["engine_adapter_reload_failures"].mean == 0.0
     assert suite.aggregates["mean_engine_prompt_prefill_s"].mean == 0.2
     assert suite.aggregates["mean_rollout_env_dbt_total_s"].mean == 0.25
+
+    payload = suite.to_dict()
+    summary_json = json.loads((tmp_path / "bench" / "benchmark_summary.json").read_text())
+    runs_payload = cast(list[dict[str, object]], payload["runs"])
+    aggregates_payload = cast(dict[str, dict[str, object]], payload["aggregates"])
+    assert payload == asdict(suite)
+    assert summary_json == payload
+    assert set(payload) == {f.name for f in fields(BenchmarkSuiteSummary)}
+    assert set(runs_payload[0]) == {f.name for f in fields(RunBenchmarkSummary)}
+    assert set(aggregates_payload["mean_step_time_s"]) == {
+        f.name for f in fields(SummaryStat)
+    }
 
 
 def test_run_benchmark_suite_tolerates_non_callable_to_dict(tmp_path) -> None:

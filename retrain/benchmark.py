@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median, pstdev
@@ -23,6 +23,9 @@ class SummaryStat:
     stdev: float
     minimum: float
     maximum: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {field.name: getattr(self, field.name) for field in fields(SummaryStat)}
 
 
 @dataclass
@@ -89,6 +92,12 @@ class RunBenchmarkSummary:
     peak_local_train_gpu_peak_memory_allocated_mb: float | None = None
     peak_local_train_gpu_peak_memory_reserved_mb: float | None = None
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            field.name: getattr(self, field.name)
+            for field in fields(RunBenchmarkSummary)
+        }
+
 
 @dataclass
 class BenchmarkSuiteSummary:
@@ -97,6 +106,19 @@ class BenchmarkSuiteSummary:
     wandb_disabled: bool
     runs: list[RunBenchmarkSummary]
     aggregates: dict[str, SummaryStat]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "repeats": self.repeats,
+            "wandb_disabled": self.wandb_disabled,
+            "runs": [run.to_dict() for run in self.runs],
+            "aggregates": {
+                key: stat.to_dict()
+                for key, stat in self.aggregates.items()
+            },
+        }
+
 
 def _summary_stat(values: list[float]) -> SummaryStat | None:
     if not values:
@@ -448,7 +470,7 @@ def run_benchmark_suite(
     suite = summarize_suite(output_dir)
     suite.wandb_disabled = disable_wandb
     (output_dir / "benchmark_summary.json").write_text(
-        json.dumps(asdict(suite), indent=2),
+        json.dumps(suite.to_dict(), indent=2),
         encoding="utf-8",
     )
     return suite

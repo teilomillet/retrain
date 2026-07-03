@@ -1714,8 +1714,6 @@ def _run_diff(args: list[str]) -> None:
 
 def _run_benchmark(args: list[str]) -> None:
     """Run or summarize a benchmark suite."""
-    from dataclasses import asdict
-
     from retrain.benchmark import (
         default_benchmark_output_dir,
         format_run_summary,
@@ -1776,7 +1774,7 @@ def _run_benchmark(args: list[str]) -> None:
             if (target / "metrics.jsonl").is_file():
                 run_summary = summarize_run(target)
                 if fmt == "json":
-                    print(json.dumps(asdict(run_summary), indent=2))
+                    print(json.dumps(run_summary.to_dict(), indent=2))
                 else:
                     print(format_run_summary(run_summary))
                 return
@@ -1785,7 +1783,7 @@ def _run_benchmark(args: list[str]) -> None:
             print(str(exc), file=sys.stderr)
             sys.exit(1)
         if fmt == "json":
-            print(json.dumps(asdict(suite_summary), indent=2))
+            print(json.dumps(suite_summary.to_dict(), indent=2))
         else:
             print(format_suite_summary(suite_summary))
         return
@@ -1808,7 +1806,7 @@ def _run_benchmark(args: list[str]) -> None:
         disable_wandb=True,
     )
     if fmt == "json":
-        print(json.dumps(asdict(suite_summary), indent=2))
+        print(json.dumps(suite_summary.to_dict(), indent=2))
     else:
         print(format_suite_summary(suite_summary))
 
