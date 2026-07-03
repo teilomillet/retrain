@@ -1,13 +1,9 @@
-"""`retrain doctor` command and dependency warnings."""
+"""`retrain doctor` command."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from retrain.commands.capability import capability_payload, capability_summary
-
-if TYPE_CHECKING:
-    from retrain.config import TrainConfig
+from retrain.commands.backends.capability import payload as capability_payload
+from retrain.commands.backends.capability import summary as capability_summary
 
 
 def run() -> None:
@@ -45,16 +41,3 @@ def run() -> None:
         print("All optional dependencies are installed.")
     else:
         print("Some optional dependencies are missing (see above).")
-
-
-def warn_missing(config: "TrainConfig") -> None:
-    """Warn if the config references components whose deps are missing."""
-    from retrain.registry import check_environment
-
-    results = check_environment(config=config)
-    for name, import_name, hint, available in results:
-        if not available:
-            print(
-                f"WARNING: component '{name}' requires '{import_name}' "
-                f"which is not installed.\n  -> {hint}"
-            )

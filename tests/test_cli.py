@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 
 import retrain.cli as cli
-from retrain.commands.backends import run as _run_backends
-from retrain.commands.doctor import run as _run_doctor
+from retrain.commands.backends.run import run as _run_backends
+from retrain.commands.doctor.run import run as _run_doctor
 from retrain.commands.init.customize import customize as _customize_toml
 from retrain.commands.init.interactive import run as _run_init_interactive
 from retrain.commands.init.run import run as _run_init
 from retrain.commands import manual as manual_command
 from retrain.commands.plugins.run import run as _run_plugins
 from retrain.commands.plugins.scaffold import run as _run_init_plugin
-from retrain.commands.top import print_help
+from retrain.commands.help import print_help
 from retrain.cli import (
     _run_benchmark,
     _run_explain,

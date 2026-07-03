@@ -25,15 +25,18 @@ import tomllib
 from pathlib import Path
 
 from retrain.commands import manual as manual_command
-from retrain.commands.backends import run as run_backends
-from retrain.commands.capability import capability_payload, capability_summary
-from retrain.commands.doctor import run as run_doctor
-from retrain.commands.doctor import warn_missing
+from retrain.commands.backends.capability import payload as capability_payload
+from retrain.commands.backends.capability import summary as capability_summary
+from retrain.commands.backends.run import run as run_backends
+from retrain.commands.doctor.run import run as run_doctor
+from retrain.commands.doctor.warn import warn_missing
 from retrain.commands.init.run import run as run_init
 from retrain.commands.name import resolve as resolve_cli_name
 from retrain.commands.plugins.run import run as run_plugins
 from retrain.commands.plugins.scaffold import run as run_init_plugin
-from retrain.commands.top import print_help
+from retrain.commands.help import print_help
+from retrain.commands.status import run as run_status
+from retrain.commands.status import run_top
 
 
 def _manual_path() -> Path:
@@ -73,118 +76,6 @@ def _is_campaign(path: str) -> bool:
     with open(path, "rb") as f:
         data = tomllib.load(f)
     return "campaign" in data
-
-
-def _run_status(args: list[str]) -> None:
-    """Scan log directories and print run/campaign status."""
-    import time as _time
-
-    from retrain.status import (
-        format_campaign,
-        format_run,
-        format_summary_banner,
-        scan_all,
-    )
-
-    fmt = "text"
-    root = "logs"
-    show_all = False
-    watch = False
-    positional: list[str] = []
-    for arg in args:
-        if arg == "--json":
-            fmt = "json"
-        elif arg == "--all":
-            show_all = True
-        elif arg == "--active":
-            show_all = False
-        elif arg == "--watch":
-            watch = True
-        elif arg.startswith("--"):
-            print(f"Unknown status flag: {arg}", file=sys.stderr)
-            sys.exit(1)
-        else:
-            positional.append(arg)
-
-    if positional:
-        root = positional[0]
-
-    root_path = Path(root)
-    if not root_path.is_dir():
-        print(f"No log directory found: {root}")
-        sys.exit(1)
-
-    _stale_hide_seconds = 86400  # hide dead/stale-partial campaigns after 24h
-
-    while True:
-        now = _time.time()
-        runs, campaigns = scan_all(root_path)
-
-        # Banner uses ALL campaigns (before filtering)
-        banner = format_summary_banner(campaigns)
-
-        if not show_all:
-
-            from retrain.status import CampaignSummary
-
-            def _is_visible(c: CampaignSummary) -> bool:
-                if c.status == "running":
-                    return True
-                if c.status in ("dead", "partial", "done"):
-                    # Show only if there was recent activity
-                    return c.last_activity > now - _stale_hide_seconds
-                return True
-
-            campaigns = [c for c in campaigns if _is_visible(c)]
-
-        if fmt == "json":
-            payload = {
-                "root": str(root_path),
-                "runs": [r.to_dict() for r in runs],
-                "campaigns": [c.to_dict() for c in campaigns],
-            }
-            print(json.dumps(payload, indent=2))
-            if not watch:
-                return
-        else:
-            print(banner)
-            print()
-            if not runs and not campaigns:
-                if show_all:
-                    print(f"No runs or campaigns found in {root}")
-                else:
-                    print(f"No active campaigns in {root}  (use --all to see everything)")
-            else:
-                if campaigns:
-                    for camp in campaigns:
-                        print(format_campaign(camp))
-                        print()
-
-                if runs:
-                    print("Standalone runs:")
-                    for run in runs:
-                        print(format_run(run))
-
-        if not watch:
-            return
-
-        try:
-            _time.sleep(5)
-            # Clear screen for refresh
-            print("\033[2J\033[H", end="")
-        except KeyboardInterrupt:
-            return
-
-
-def _run_top(args: list[str]) -> None:
-    """Live dashboard: alias for ``retrain status --watch --active``."""
-    status_args = ["--watch", "--active"]
-    # Accept optional positional logdir
-    for arg in args:
-        if not arg.startswith("-"):
-            status_args.append(arg)
-            break
-    _run_status(status_args)
 
 
 def _explain_single(config_path: str | None, fmt: str) -> None:
@@ -1078,11 +969,11 @@ def main() -> None:
         sys.exit(0)
 
     if args and args[0] == "status":
-        _run_status(args[1:])
+        run_status(args[1:])
         sys.exit(0)
 
     if args and args[0] == "top":
-        _run_top(args[1:])
+        run_top(args[1:])
         sys.exit(0)
 
     if args and args[0] == "explain":

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def capability_payload(
+def payload(
     backend_name: str,
     backend_options: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -13,10 +13,11 @@ def capability_payload(
         resolve_backend_capabilities,
     )
 
-    caps = resolve_backend_capabilities(backend_name, backend_options or {})
+    options = backend_options or {}
+    caps = resolve_backend_capabilities(backend_name, options)
     return {
         "backend": backend_name,
-        "source": backend_capability_source(backend_name, backend_options or {}),
+        "source": backend_capability_source(backend_name, options),
         "reports_sync_loss": caps.reports_sync_loss,
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
@@ -25,7 +26,7 @@ def capability_payload(
     }
 
 
-def capability_summary(capabilities: dict[str, object]) -> str:
+def summary(capabilities: dict[str, object]) -> str:
     """One-line rendering of a capability payload."""
     return (
         f"source={capabilities['source']}, "
