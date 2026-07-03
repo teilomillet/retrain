@@ -40,6 +40,7 @@ from retrain.backends.local.lora import (
     metrics as _lora_metrics,
     patch_fast as _patch_fast_lora,
 )
+from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import sft as local_sft
 from retrain.backends.local.checkpointing import (
     configure_gradient_checkpointing,
@@ -63,7 +64,6 @@ from retrain.kernels.logprobs import (
 from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 from retrain.backends.torch import (
-    cuda_peak_metrics as _cuda_peak_metrics,
     parse_device_spec as _parse_device,
     reset_cuda_peak as _reset_cuda_peak,
     timer_start as _timer_start,
@@ -607,7 +607,13 @@ class LocalTrainHelper:
                 )
         finally:
             empty_cuda_cache_if_requested(self.cuda_empty_cache)
-        self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
+        local_metrics.record_sample(
+            self,
+            start_s=sample_start,
+            prompt_ids_list=prompt_ids_list,
+            num_samples=num_samples,
+            engine_results=engine_results,
+        )
         return engine_results
 
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
@@ -654,227 +660,7 @@ class LocalTrainHelper:
 
     def runtime_metrics(self):
         """Expose optional engine-level runtime counters to the trainer."""
-        metrics = {
-            "local_gradient_checkpointing_enabled": int(
-                getattr(self, "gradient_checkpointing", False)
-            ),
-            "local_gradient_checkpointing_use_reentrant": str(
-                getattr(self, "gradient_checkpointing_use_reentrant", "auto")
-            ),
-            "local_gradient_checkpointing_skip_last_n": int(
-                getattr(self, "gradient_checkpointing_skip_last_n", 0)
-            ),
-            "local_gradient_checkpointing_layer_count": int(
-                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
-                    "total",
-                    0,
-                )
-            ),
-            "local_gradient_checkpointing_enabled_layers": int(
-                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
-                    "enabled",
-                    0,
-                )
-            ),
-            "local_gradient_checkpointing_skipped_last_layers": int(
-                getattr(self, "_gradient_checkpointing_layer_metrics", {}).get(
-                    "skipped_last_n",
-                    0,
-                )
-            ),
-            "local_cuda_expandable_segments_enabled": int(
-                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
-                    "enabled",
-                    0,
-                )
-            ),
-            "local_cuda_expandable_segments_env_preset": int(
-                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
-                    "env_preset",
-                    0,
-                )
-            ),
-            "local_cuda_expandable_segments_set_failed": int(
-                (getattr(self, "_cuda_allocator_metrics", None) or {}).get(
-                    "set_failed",
-                    0,
-                )
-            ),
-            "local_train_amp_dtype": str(
-                getattr(self, "amp_dtype", "")
-            ).replace("torch.", ""),
-            "local_train_grad_scaler_enabled": int(
-                bool(getattr(self, "scaler", None))
-                and bool(getattr(self.scaler, "is_enabled", lambda: False)())
-            ),
-            "local_sample_use_cache": int(getattr(self, "sample_use_cache", True)),
-            "local_train_microbatch_size": int(
-                getattr(self, "train_microbatch_size", 0)
-            ),
-            "local_train_sft_microbatch_token_budget": int(
-                getattr(self, "train_sft_microbatch_token_budget", 0)
-            ),
-            "local_train_selective_suffix_logits": int(
-                getattr(self, "train_selective_suffix_logits", False)
-            ),
-            "local_train_save_on_cpu": int(
-                getattr(self, "train_save_on_cpu", False)
-            ),
-            "local_train_save_on_cpu_pin_memory": int(
-                getattr(self, "train_save_on_cpu_pin_memory", True)
-            ),
-            "local_train_save_on_cpu_min_numel": int(
-                getattr(self, "train_save_on_cpu_min_numel", 0)
-            ),
-            "local_train_supervised_context_tokens": int(
-                getattr(self, "train_supervised_context_tokens", 0)
-            ),
-            "local_train_logprob_chunk_size": int(
-                getattr(self, "train_logprob_chunk_size", 0)
-            ),
-            "local_train_unsloth_fused_ce_mode": str(
-                getattr(self, "train_unsloth_fused_ce", "off")
-            ),
-            "local_train_unsloth_fused_ce_target_gb": float(
-                getattr(self, "train_unsloth_fused_ce_target_gb", 0.0)
-            ),
-            "local_train_unsloth_fused_ce_effective_target_gb": float(
-                getattr(self, "_last_unsloth_fused_ce_effective_target_gb", 0.0)
-            ),
-            "local_train_unsloth_fused_ce_torch_compile": int(
-                getattr(self, "train_unsloth_fused_ce_torch_compile", True)
-            ),
-            "local_train_compile_selective_ce_mode": str(
-                getattr(self, "train_compile_selective_ce", "off")
-            ),
-            "local_train_compile_selective_ce_min_tokens": int(
-                getattr(self, "train_compile_selective_ce_min_tokens", 0)
-            ),
-            "local_train_compile_selective_ce_available": (
-                self._compiled_selective_ce_available_metric()
-            ),
-            "local_train_compile_selective_ce_fallback_reason": str(
-                getattr(self, "_compiled_selective_ce_fallback_reason", "")
-            ),
-            "local_train_unsloth_fused_ce_available": (
-                self._unsloth_fused_ce_available_metric()
-            ),
-            "local_train_unsloth_fused_ce_unavailable_reason": str(
-                getattr(self, "_unsloth_fused_ce_unavailable_reason", "")
-            ),
-            "local_train_unsloth_fused_ce_fallback_reason": str(
-                getattr(self, "_unsloth_fused_ce_fallback_reason", "")
-            ),
-            "local_train_unsloth_fused_ce_attempts": int(
-                getattr(self, "_unsloth_fused_ce_attempts", 0)
-            ),
-            "local_train_unsloth_fused_ce_batches": int(
-                getattr(self, "_loss_path_counts", {}).get(
-                    "unsloth_fused_ce",
-                    0,
-                )
-            ),
-            "local_train_liger_fused_ce_batches": int(
-                getattr(self, "_loss_path_counts", {}).get("liger_fused_ce", 0)
-            ),
-            "local_train_dense_logprob_batches": int(
-                getattr(self, "_loss_path_counts", {}).get("dense_logprob", 0)
-            ),
-            "local_train_chunked_logprob_batches": int(
-                getattr(self, "_loss_path_counts", {}).get("chunked_logprob", 0)
-            ),
-            "local_train_packed_quantized_lm_head_batches": int(
-                getattr(self, "_loss_path_counts", {}).get(
-                    "packed_quantized_lm_head",
-                    0,
-                )
-            ),
-            "local_train_logits_to_keep_supported": (
-                self._logits_to_keep_supported_metric()
-            ),
-            "local_train_selective_suffix_logprob_batches": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "suffix",
-                    0,
-                )
-            ),
-            "local_train_selective_sparse_suffix_skips": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "sparse_suffix_skip",
-                    0,
-                )
-            ),
-            "local_train_selective_hidden_logprob_batches": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "hidden",
-                    0,
-                )
-            ),
-            "local_train_selective_compiled_ce_batches": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "compiled_ce",
-                    0,
-                )
-            ),
-            "local_train_selective_packed_quantized_lm_head_batches": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "packed_quantized_lm_head",
-                    0,
-                )
-            ),
-            "local_train_selective_fallback_logprob_batches": int(
-                getattr(self, "_selective_logprob_path_counts", {}).get(
-                    "fallback",
-                    0,
-                )
-            ),
-            "local_liger_kernel_enabled": int(
-                getattr(self, "liger_kernel", False)
-            ),
-            "local_liger_fused_linear_ce_enabled": int(
-                getattr(self, "liger_fused_linear_ce", False)
-            ),
-            "local_prefix_caching": int(getattr(self, "prefix_caching", True)),
-        }
-        metrics.update(getattr(self, "_lora_model_metrics", {}))
-        metrics.update(getattr(self, "_accelerator_metrics", {}))
-        engine = getattr(self, "engine", None)
-        if hasattr(engine, "performance_counters"):
-            counters = engine.performance_counters()
-            if isinstance(counters, dict):
-                metrics.update(counters)
-        metrics.update(getattr(self, "_last_context_crop_metrics", {}))
-        metrics.update(getattr(self, "_last_sample_metrics", {}))
-        metrics.update(getattr(self, "_last_train_metrics", {}))
-        metrics.update(getattr(self, "_last_sync_metrics", {}))
-        return metrics
-
-    def _record_sample_metrics(self, start_s, prompt_ids_list, num_samples, engine_results):
-        wall_s = time.perf_counter() - start_s
-        prompt_tokens = sum(len(prompt) for prompt in prompt_ids_list) * int(num_samples)
-        generated_tokens = sum(
-            len(result.token_ids)
-            for group in engine_results
-            for result in group
-        )
-        metrics: dict[str, float | int] = {
-            "local_sample_wall_s": wall_s,
-            "local_sample_prompt_tokens": prompt_tokens,
-            "local_sample_generated_tokens": generated_tokens,
-            "local_sample_generation_tokens_per_s": (
-                generated_tokens / wall_s if wall_s > 0 else 0.0
-            ),
-            "local_sample_gc_disabled_for_cache": int(
-                getattr(self, "_last_sample_gc_disabled_for_cache", 0)
-            ),
-        }
-        metrics.update(
-            _cuda_peak_metrics(
-                "local_sample_gpu",
-                getattr(self, "infer_device", getattr(self, "train_device", "cpu")),
-            )
-        )
-        self._last_sample_metrics = metrics
+        return local_metrics.runtime_metrics(self)
 
     def _snapshot_lora_weights_if_needed(self) -> float:
         if not (self.split_mode or self._external_engine):
@@ -887,35 +673,6 @@ class LocalTrainHelper:
         self._weight_snapshot = snapshot
         self._weights_dirty = True
         return _timer_stop(timer)
-
-    def _record_train_metrics(
-        self,
-        *,
-        kind: str,
-        wall_start_s: float,
-        forward_s: float,
-        backward_s: float,
-        optimizer_s: float,
-        snapshot_s: float,
-        microbatches: int,
-        total_tokens: float,
-        batch_size: int,
-    ) -> None:
-        wall_s = time.perf_counter() - wall_start_s
-        metrics: dict[str, float | int | str] = {
-            "local_train_kind": kind,
-            "local_train_wall_s": wall_s,
-            "local_train_forward_s": forward_s,
-            "local_train_backward_s": backward_s,
-            "local_train_optimizer_s": optimizer_s,
-            "local_train_snapshot_s": snapshot_s,
-            "local_train_microbatches": microbatches,
-            "local_train_tokens": total_tokens,
-            "local_train_batch_size": batch_size,
-            "local_train_tokens_per_s": total_tokens / wall_s if wall_s > 0 else 0.0,
-        }
-        metrics.update(_cuda_peak_metrics("local_train_gpu", self.train_device))
-        self._last_train_metrics = metrics
 
     def _clear_inference_prefix_cache(self):
         engine = getattr(self, "engine", None)
@@ -971,20 +728,6 @@ class LocalTrainHelper:
             except Exception:  # Cleanup must not raise.
                 pass
 
-    def _record_selective_logprob_path(self, path: str) -> None:
-        counts = getattr(self, "_selective_logprob_path_counts", None)
-        if not isinstance(counts, dict):
-            counts = {}
-        counts[path] = int(counts.get(path, 0)) + 1
-        self._selective_logprob_path_counts = counts
-
-    def _record_loss_path(self, path: str) -> None:
-        counts = getattr(self, "_loss_path_counts", None)
-        if not isinstance(counts, dict):
-            counts = {}
-        counts[path] = int(counts.get(path, 0)) + 1
-        self._loss_path_counts = counts
-
     @staticmethod
     def _normalize_compile_mode(raw, *, option_name: str) -> str:
         if isinstance(raw, bool):
@@ -1030,24 +773,6 @@ class LocalTrainHelper:
                 "train_unsloth_fused_ce must be 'off', 'auto', or 'require'."
             )
         return text
-
-    def _logits_to_keep_supported_metric(self) -> int:
-        supported = getattr(self, "_train_logits_to_keep_supported", None)
-        if supported is None:
-            return -1
-        return int(bool(supported))
-
-    def _unsloth_fused_ce_available_metric(self) -> int:
-        available = getattr(self, "_unsloth_fused_ce_available", None)
-        if available is None:
-            return -1
-        return int(bool(available))
-
-    def _compiled_selective_ce_available_metric(self) -> int:
-        available = getattr(self, "_compiled_selective_ce_available", None)
-        if available is None:
-            return -1
-        return int(bool(available))
 
     def _reject_compiled_selective_ce(self, reason: str):
         self._compiled_selective_ce_fallback_reason = reason
@@ -1304,7 +1029,7 @@ class LocalTrainHelper:
             reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
             return reject(reason)
         self._unsloth_fused_ce_fallback_reason = ""
-        self._record_loss_path("unsloth_fused_ce")
+        local_metrics.record_loss_path(self, "unsloth_fused_ce")
         return loss * weight_scale.to(loss.device)
 
     def _supports_train_logits_to_keep(self, input_ids, attention_mask) -> bool:
@@ -1377,7 +1102,7 @@ class LocalTrainHelper:
             suffix_target_slots > 2048
             and selected_tokens / suffix_target_slots < 0.25
         ):
-            self._record_selective_logprob_path("sparse_suffix_skip")
+            local_metrics.record_selective_logprob_path(self, "sparse_suffix_skip")
             return None
         if not self._supports_train_logits_to_keep(input_ids, attention_mask):
             return None
@@ -1411,7 +1136,7 @@ class LocalTrainHelper:
         full[:, logits_start : logits_start + suffix_logprobs.shape[1]] = (
             suffix_logprobs
         )
-        self._record_selective_logprob_path("suffix")
+        local_metrics.record_selective_logprob_path(self, "suffix")
         return full
 
     def _selective_hidden_token_logprobs(self, input_ids, attention_mask, target_mask):
@@ -1477,11 +1202,14 @@ class LocalTrainHelper:
             return None
         full = selected_logprobs.new_zeros((input_ids.shape[0], shifted_len))
         full[selected[:, 0], selected[:, 1]] = selected_logprobs
-        self._record_selective_logprob_path("hidden")
+        local_metrics.record_selective_logprob_path(self, "hidden")
         if used_compiled_ce:
-            self._record_selective_logprob_path("compiled_ce")
+            local_metrics.record_selective_logprob_path(self, "compiled_ce")
         if used_packed_quantized:
-            self._record_selective_logprob_path("packed_quantized_lm_head")
+            local_metrics.record_selective_logprob_path(
+                self,
+                "packed_quantized_lm_head",
+            )
         return full
 
     def _shifted_token_logprobs(self, input_ids, attention_mask, target_mask=None):
@@ -1505,7 +1233,7 @@ class LocalTrainHelper:
             )
             if selective is not None:
                 return selective
-            self._record_selective_logprob_path("fallback")
+            local_metrics.record_selective_logprob_path(self, "fallback")
 
         liger_loss = self._liger_fused_linear_ce_loss()
         if liger_loss is not None:
@@ -1526,14 +1254,17 @@ class LocalTrainHelper:
                     flat_target_ids,
                 )
                 if packed_logprobs is not None:
-                    self._record_loss_path("packed_quantized_lm_head")
+                    local_metrics.record_loss_path(
+                        self,
+                        "packed_quantized_lm_head",
+                    )
                     return packed_logprobs.reshape_as(target_ids)
                 weight = getattr(lm_head, "weight")
                 try:
                     nll = liger_loss(weight, flat_hidden, flat_target_ids)
                 except TypeError:
                     nll = liger_loss(flat_hidden, weight, flat_target_ids)
-                self._record_loss_path("liger_fused_ce")
+                local_metrics.record_loss_path(self, "liger_fused_ce")
                 return -nll.reshape_as(target_ids)
 
         chunk_size = int(getattr(self, "train_logprob_chunk_size", 0))
@@ -1541,7 +1272,7 @@ class LocalTrainHelper:
             logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
             target_ids = input_ids[:, 1:]
-            self._record_loss_path("dense_logprob")
+            local_metrics.record_loss_path(self, "dense_logprob")
             return new_logprobs.gather(2, target_ids.unsqueeze(2)).squeeze(2)
 
         hidden_and_head = forward_hidden_states_and_lm_head(
@@ -1553,7 +1284,7 @@ class LocalTrainHelper:
             logits = forward_logits(self.train_model, input_ids, attention_mask)[:, :-1]
             new_logprobs = F.log_softmax(logits.float(), dim=-1)
             target_ids = input_ids[:, 1:]
-            self._record_loss_path("dense_logprob")
+            local_metrics.record_loss_path(self, "dense_logprob")
             return new_logprobs.gather(2, target_ids.unsqueeze(2)).squeeze(2)
 
         hidden_states, lm_head = hidden_and_head
@@ -1565,7 +1296,7 @@ class LocalTrainHelper:
             target_ids,
         )
         if packed_logprobs is not None:
-            self._record_loss_path("packed_quantized_lm_head")
+            local_metrics.record_loss_path(self, "packed_quantized_lm_head")
             return packed_logprobs
 
         chunks = []
@@ -1581,7 +1312,7 @@ class LocalTrainHelper:
             )
         if not chunks:
             return shifted_hidden.new_empty((shifted_hidden.shape[0], 0))
-        self._record_loss_path("chunked_logprob")
+        local_metrics.record_loss_path(self, "chunked_logprob")
         return torch.cat(chunks, dim=1)
 
     def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
@@ -1791,7 +1522,8 @@ class LocalTrainHelper:
 
             # Snapshot LoRA weights for safe cross-thread sync
             snapshot_s = self._snapshot_lora_weights_if_needed()
-            self._record_train_metrics(
+            local_metrics.record_train(
+                self,
                 kind="rl",
                 wall_start_s=wall_start,
                 forward_s=forward_s,
@@ -1850,7 +1582,8 @@ class LocalTrainHelper:
             loss_val = loss_sum / total_tokens_value
 
             snapshot_s = self._snapshot_lora_weights_if_needed()
-            self._record_train_metrics(
+            local_metrics.record_train(
+                self,
                 kind="sft",
                 wall_start_s=wall_start,
                 forward_s=forward_s,
@@ -1939,7 +1672,8 @@ class LocalTrainHelper:
             loss_val = loss_sum / total_tokens_value
 
             snapshot_s = self._snapshot_lora_weights_if_needed()
-            self._record_train_metrics(
+            local_metrics.record_train(
+                self,
                 kind="sft",
                 wall_start_s=wall_start,
                 forward_s=forward_s,
@@ -2111,7 +1845,8 @@ class LocalTrainHelper:
             echo_loss_val = echo_loss_sum / max(batch_size, 1)
 
             snapshot_s = self._snapshot_lora_weights_if_needed()
-            self._record_train_metrics(
+            local_metrics.record_train(
+                self,
                 kind="hybrid_echo",
                 wall_start_s=wall_start,
                 forward_s=forward_s,

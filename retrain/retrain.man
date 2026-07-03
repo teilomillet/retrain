@@ -1616,6 +1616,7 @@ ARCHITECTURE
         +-- planning.py          Strategic planning-token detection
         +-- pipeline.py          Composable advantage pipeline
     +-- environments/            Training environment integrations
+        +-- prompt.py            Prompt previews, tokenization, observation masks
         +-- verifiers.py         Verifiers bridge: loading, rollouts, scoring
     +-- rewards/                 match, math, judge, custom rewards
     +-- planning/                Planning-token detectors
@@ -1635,6 +1636,7 @@ ARCHITECTURE
             +-- train.py         PyTorch/PEFT training and inference orchestration
             +-- checkpointing.py Gradient-checkpointing policy and layer metrics
             +-- lora.py          Local-backend LoRA setup
+            +-- metrics.py       Local backend runtime telemetry and counters
             +-- memory.py        CUDA allocator, cache, and saved-tensor policy
             +-- sft.py           SFT row shaping, padding, and context cropping
         +-- prime.py             PRIME-RL bridge backend

@@ -82,6 +82,7 @@ retrain/
     planning.py
     pipeline.py
   environments/
+    prompt.py
     verifiers.py
   rewards/
     boxed.py
@@ -145,6 +146,7 @@ retrain/
       train.py
       checkpointing.py
       lora.py
+      metrics.py
       memory.py
       sft.py
     tinker/
@@ -218,11 +220,13 @@ Split code when it creates a stable place a maintainer would naturally search:
   Prometheus, JSON, server, and snapshot-type modules.
 - `tree/`, `diff/`, and `benchmark/`: command-domain packages for experiment
   trees, comparisons, and repeated runs.
+- `environments/prompt.py`: prompt preview, tokenizer encoding, and observation
+  token masks.
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.
 - `backends/local/`: local PyTorch backend orchestration, checkpointing policy,
-  LoRA setup, GPU memory policy, and SFT row shaping.
+  LoRA setup, runtime metrics, GPU memory policy, and SFT row shaping.
 - `models/`: model-specific compatibility and kernel selection.
 - `kernels/`: GPU-kernel adapters and selected-token logprob math.
 - `data/`: example shape, data-source protocol, and built-in datasets.

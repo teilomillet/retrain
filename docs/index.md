@@ -64,7 +64,8 @@ retrain
 │   ├── planning.py     # Strategic planning-token detection
 │   └── pipeline.py     # Composable advantage pipeline
 ├── environments/       # Training environment integrations
-│   └── verifiers.py    # Verifiers bridge: loading, prompts, rollouts, scoring
+│   ├── prompt.py       # Prompt previews, tokenization, observation masks
+│   └── verifiers.py    # Verifiers bridge: loading, rollouts, scoring
 ├── rewards/            # match, math, judge, custom reward functions
 ├── planning/           # Planning-token detectors (regex, semantic)
 ├── registry/           # Component registries, builtins, dependency health
@@ -83,6 +84,7 @@ retrain
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
 │   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics
+│   │   ├── metrics.py  # Local backend runtime telemetry and counters
 │   │   ├── memory.py   # CUDA allocator, cache, and saved-tensor policy
 │   │   └── sft.py      # SFT row shaping, padding, and context cropping
 │   ├── prime.py        # PRIME-RL bridge backend

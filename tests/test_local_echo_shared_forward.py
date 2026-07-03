@@ -7,6 +7,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import train as local_mod
 from retrain.backends.local import LocalTrainHelper
 from retrain.kernels.logprobs import (
@@ -711,7 +712,7 @@ def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch)
         calls += 1
         if calls == 1:
             helper._unsloth_fused_ce_attempts = 1
-            helper._record_loss_path("unsloth_fused_ce")
+            local_metrics.record_loss_path(helper, "unsloth_fused_ce")
             raise RuntimeError("Hard failure due to fullgraph=True")
         token_count = (advantages[:, 1:] > 0).sum().clamp(min=1)
         return helper.train_model.bias * 0.0 + torch.tensor(0.5), token_count
@@ -754,7 +755,7 @@ def test_sft_sequence_train_step_auto_retries_after_fused_ce_runtime_failure(
         calls += 1
         if calls == 1:
             helper._unsloth_fused_ce_attempts = 1
-            helper._record_loss_path("unsloth_fused_ce")
+            local_metrics.record_loss_path(helper, "unsloth_fused_ce")
             raise RuntimeError("Hard failure due to fullgraph=True")
         token_count = (advantages[:, 1:] > 0).sum().clamp(min=1)
         return helper.train_model.bias * 0.0 + torch.tensor(0.5), token_count
