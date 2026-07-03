@@ -138,6 +138,7 @@ retrain/
     local/
       train.py
       lora.py
+      memory.py
     tinker/
       train.py
       runtime.py
@@ -209,7 +210,8 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.
-- `backends/local/`: local PyTorch backend orchestration and LoRA-specific setup.
+- `backends/local/`: local PyTorch backend orchestration, LoRA setup, and GPU
+  memory policy.
 - `models/`: model-specific compatibility and kernel selection.
 - `kernels/`: GPU-kernel adapters and selected-token logprob math.
 - `data/`: example shape, data-source protocol, and built-in datasets.

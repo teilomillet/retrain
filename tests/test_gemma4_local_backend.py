@@ -11,6 +11,7 @@ from peft import get_peft_model
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
 from retrain.backends.local import lora as local_lora
+from retrain.backends.local import memory as local_memory
 from retrain.backends.local import train as local_mod
 from retrain.models.gemma4 import (
     DEFAULT_LORA_TARGET_MODULES,
@@ -1123,7 +1124,7 @@ def _allocator_helper(mode: str, skip_last_n: int = 0) -> LocalTrainHelper:
 
 
 def test_expandable_segments_mode_normalization_accepts_aliases():
-    normalize = LocalTrainHelper._normalize_expandable_segments_mode
+    normalize = local_memory.normalize_expandable_segments_mode
     assert normalize(True) == "on"
     assert normalize(False) == "off"
     assert normalize("True") == "on"
@@ -1137,9 +1138,9 @@ def test_expandable_segments_mode_normalization_accepts_aliases():
 
 def test_configure_cuda_allocator_auto_requires_skipped_checkpoint_layers(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(local_mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(local_memory.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        local_mod.torch._C,
+        local_memory.torch._C,
         "_accelerator_setAllocatorSettings",
         lambda conf: calls.append(conf),
         raising=False,
@@ -1147,19 +1148,27 @@ def test_configure_cuda_allocator_auto_requires_skipped_checkpoint_layers(monkey
     monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
     monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
 
-    idle = _allocator_helper("auto", skip_last_n=0)
-    idle._configure_cuda_allocator()
+    idle_metrics = local_memory.configure_cuda_allocator(
+        mode="auto",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=0,
+    )
     assert calls == []
-    assert idle._cuda_allocator_metrics == {
+    assert idle_metrics == {
         "enabled": 0,
         "env_preset": 0,
         "set_failed": 0,
     }
 
-    active = _allocator_helper("auto", skip_last_n=3)
-    active._configure_cuda_allocator()
+    active_metrics = local_memory.configure_cuda_allocator(
+        mode="auto",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=3,
+    )
     assert calls == ["expandable_segments:True"]
-    assert active._cuda_allocator_metrics["enabled"] == 1
+    assert active_metrics["enabled"] == 1
+    active = _allocator_helper("auto", skip_last_n=3)
+    active._cuda_allocator_metrics = active_metrics
     metrics = active.runtime_metrics()
     assert metrics["local_cuda_expandable_segments_enabled"] == 1
     assert metrics["local_cuda_expandable_segments_env_preset"] == 0
@@ -1168,9 +1177,9 @@ def test_configure_cuda_allocator_auto_requires_skipped_checkpoint_layers(monkey
 
 def test_configure_cuda_allocator_on_mode_does_not_need_skip(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(local_mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(local_memory.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        local_mod.torch._C,
+        local_memory.torch._C,
         "_accelerator_setAllocatorSettings",
         lambda conf: calls.append(conf),
         raising=False,
@@ -1178,22 +1187,28 @@ def test_configure_cuda_allocator_on_mode_does_not_need_skip(monkeypatch):
     monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
     monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
 
-    helper = _allocator_helper("on", skip_last_n=0)
-    helper._configure_cuda_allocator()
+    metrics = local_memory.configure_cuda_allocator(
+        mode="on",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=0,
+    )
     assert calls == ["expandable_segments:True"]
-    assert helper._cuda_allocator_metrics["enabled"] == 1
+    assert metrics["enabled"] == 1
 
-    off = _allocator_helper("off", skip_last_n=3)
-    off._configure_cuda_allocator()
+    off_metrics = local_memory.configure_cuda_allocator(
+        mode="off",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=3,
+    )
     assert calls == ["expandable_segments:True"]
-    assert off._cuda_allocator_metrics["enabled"] == 0
+    assert off_metrics["enabled"] == 0
 
 
 def test_configure_cuda_allocator_respects_operator_env(monkeypatch):
     calls: list[str] = []
-    monkeypatch.setattr(local_mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(local_memory.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        local_mod.torch._C,
+        local_memory.torch._C,
         "_accelerator_setAllocatorSettings",
         lambda conf: calls.append(conf),
         raising=False,
@@ -1201,20 +1216,26 @@ def test_configure_cuda_allocator_respects_operator_env(monkeypatch):
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
 
-    helper = _allocator_helper("on", skip_last_n=3)
-    helper._configure_cuda_allocator()
+    metrics = local_memory.configure_cuda_allocator(
+        mode="on",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=3,
+    )
     assert calls == []
-    assert helper._cuda_allocator_metrics == {
+    assert metrics == {
         "enabled": 1,
         "env_preset": 1,
         "set_failed": 0,
     }
 
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
-    disabled = _allocator_helper("auto", skip_last_n=3)
-    disabled._configure_cuda_allocator()
+    disabled = local_memory.configure_cuda_allocator(
+        mode="auto",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=3,
+    )
     assert calls == []
-    assert disabled._cuda_allocator_metrics == {
+    assert disabled == {
         "enabled": 0,
         "env_preset": 1,
         "set_failed": 0,
@@ -1225,9 +1246,9 @@ def test_configure_cuda_allocator_records_setter_failure(monkeypatch):
     def _boom(_conf: str) -> None:
         raise RuntimeError("allocator rejected setting")
 
-    monkeypatch.setattr(local_mod.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(local_memory.torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        local_mod.torch._C,
+        local_memory.torch._C,
         "_accelerator_setAllocatorSettings",
         _boom,
         raising=False,
@@ -1235,9 +1256,12 @@ def test_configure_cuda_allocator_records_setter_failure(monkeypatch):
     monkeypatch.delenv("PYTORCH_CUDA_ALLOC_CONF", raising=False)
     monkeypatch.delenv("PYTORCH_ALLOC_CONF", raising=False)
 
-    helper = _allocator_helper("on", skip_last_n=0)
-    helper._configure_cuda_allocator()
-    assert helper._cuda_allocator_metrics == {
+    metrics = local_memory.configure_cuda_allocator(
+        mode="on",
+        train_device="cuda:0",
+        gradient_checkpointing_skip_last_n=0,
+    )
+    assert metrics == {
         "enabled": 0,
         "env_preset": 0,
         "set_failed": 1,

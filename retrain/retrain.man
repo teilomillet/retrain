@@ -1633,6 +1633,7 @@ ARCHITECTURE
         +-- local/               Local GPU backend package
             +-- train.py         PyTorch/PEFT training and inference orchestration
             +-- lora.py          Local-backend LoRA setup
+            +-- memory.py        CUDA allocator, cache, and saved-tensor policy
         +-- prime.py             PRIME-RL bridge backend
         +-- tinker/              Remote Tinker backend
             +-- train.py         Tinker training client implementation

@@ -40,6 +40,12 @@ from retrain.backends.local.lora import (
     metrics as _lora_metrics,
     patch_fast as _patch_fast_lora,
 )
+from retrain.backends.local.memory import (
+    configure_cuda_allocator,
+    empty_cuda_cache_if_requested,
+    normalize_expandable_segments_mode,
+    saved_tensors_context,
+)
 from retrain.models.gemma4 import (
     forward_hidden_states_and_lm_head,
     forward_logits,
@@ -54,7 +60,6 @@ from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 from retrain.backends.torch import (
     cuda_peak_metrics as _cuda_peak_metrics,
-    is_cuda_device as _is_cuda_device,
     parse_device_spec as _parse_device,
     reset_cuda_peak as _reset_cuda_peak,
     timer_start as _timer_start,
@@ -133,7 +138,7 @@ class LocalTrainHelper:
         self.liger_fused_linear_ce = bool(liger_fused_linear_ce)
         self.attention_kernel = str(attention_kernel or "default")
         self.cuda_empty_cache = bool(cuda_empty_cache)
-        self.cuda_expandable_segments = self._normalize_expandable_segments_mode(
+        self.cuda_expandable_segments = normalize_expandable_segments_mode(
             cuda_expandable_segments
         )
         self._cuda_allocator_metrics = {
@@ -265,7 +270,11 @@ class LocalTrainHelper:
 
         # Configure the allocator before the first training-model allocation so
         # every training segment can use the expandable policy.
-        self._configure_cuda_allocator()
+        self._cuda_allocator_metrics = configure_cuda_allocator(
+            mode=self.cuda_expandable_segments,
+            train_device=self.train_device,
+            gradient_checkpointing_skip_last_n=self.gradient_checkpointing_skip_last_n,
+        )
 
         self._accelerator_metrics = install_cudnn_causal_conv1d_shim(
             enabled=self.cudnn_causal_conv1d_shim,
@@ -435,69 +444,6 @@ class LocalTrainHelper:
 
     def _move_train_model_to_device(self):
         self.train_model.to(self.train_device)
-
-    @staticmethod
-    def _normalize_expandable_segments_mode(raw) -> str:
-        if isinstance(raw, bool):
-            return "on" if raw else "off"
-        text = str(raw or "auto").strip().lower()
-        aliases = {
-            "0": "off",
-            "false": "off",
-            "no": "off",
-            "none": "off",
-            "disabled": "off",
-            "1": "on",
-            "true": "on",
-            "yes": "on",
-            "enabled": "on",
-        }
-        text = aliases.get(text, text)
-        if text not in {"off", "auto", "on"}:
-            raise ValueError(
-                "cuda_expandable_segments must be 'off', 'auto', or 'on'."
-            )
-        return text
-
-    def _configure_cuda_allocator(self):
-        """Enable expandable CUDA segments in-process when the run needs them.
-
-        The measured fast-LoRA + skip-last-N path OOMs from allocator
-        fragmentation unless ``PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True``
-        is exported before launch (docs: qwen35 no-offload gate, 2026-07-02).
-        Setting the allocator here removes that env footgun. An operator who
-        already mentions ``expandable_segments`` in ``PYTORCH_CUDA_ALLOC_CONF``
-        or ``PYTORCH_ALLOC_CONF`` keeps their explicit choice.
-        """
-        metrics = {"enabled": 0, "env_preset": 0, "set_failed": 0}
-        self._cuda_allocator_metrics = metrics
-        mode = getattr(self, "cuda_expandable_segments", "off")
-        if mode == "off" or not _is_cuda_device(self.train_device):
-            return
-        for env_name in ("PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"):
-            env_conf = os.environ.get(env_name, "")
-            if "expandable_segments" in env_conf:
-                metrics["env_preset"] = 1
-                metrics["enabled"] = int(
-                    "expandable_segments:true" in env_conf.lower()
-                )
-                return
-        if (
-            mode == "auto"
-            and getattr(self, "gradient_checkpointing_skip_last_n", 0) <= 0
-        ):
-            return
-        try:
-            setter = getattr(torch._C, "_accelerator_setAllocatorSettings", None)
-            if setter is None:
-                memory = getattr(torch.cuda, "memory")
-                setter = getattr(memory, "_set_allocator_settings")
-            setter("expandable_segments:True")
-        except Exception as exc:  # Allocator tuning must not kill runs.
-            metrics["set_failed"] = 1
-            print(f"cuda_expandable_segments setup failed: {exc}")
-            return
-        metrics["enabled"] = 1
 
     def _enable_gradient_checkpointing(self, model):
         mode = getattr(self, "gradient_checkpointing_use_reentrant", "auto")
@@ -695,7 +641,7 @@ class LocalTrainHelper:
                     compute_entropy=compute_entropy,
                 )
         finally:
-            self._empty_cuda_cache_if_requested()
+            empty_cuda_cache_if_requested(self.cuda_empty_cache)
         self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
         return engine_results
 
@@ -1005,10 +951,6 @@ class LocalTrainHelper:
         }
         metrics.update(_cuda_peak_metrics("local_train_gpu", self.train_device))
         self._last_train_metrics = metrics
-
-    def _empty_cuda_cache_if_requested(self):
-        if self.cuda_empty_cache and torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
     def _clear_inference_prefix_cache(self):
         engine = getattr(self, "engine", None)
@@ -1677,47 +1619,6 @@ class LocalTrainHelper:
         self._record_loss_path("chunked_logprob")
         return torch.cat(chunks, dim=1)
 
-    @contextmanager
-    def _saved_tensors_context(self):
-        if (
-            getattr(self, "train_save_on_cpu", False)
-            and self.train_device.startswith("cuda")
-            and torch.cuda.is_available()
-        ):
-            min_numel = int(getattr(self, "train_save_on_cpu_min_numel", 0))
-            if min_numel > 0:
-                pin_memory = bool(getattr(self, "train_save_on_cpu_pin_memory", True))
-
-                def pack(tensor):
-                    if not tensor.is_cuda or tensor.numel() < min_numel:
-                        return tensor
-                    if not pin_memory:
-                        return tensor.device, tensor.to("cpu")
-                    cpu_tensor = torch.empty_like(
-                        tensor,
-                        device="cpu",
-                        pin_memory=True,
-                    )
-                    cpu_tensor.copy_(tensor, non_blocking=True)
-                    return tensor.device, cpu_tensor
-
-                def unpack(packed):
-                    if isinstance(packed, tuple) and len(packed) == 2:
-                        device, cpu_tensor = packed
-                        return cpu_tensor.to(device, non_blocking=pin_memory)
-                    return packed
-
-                with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
-                    yield
-                return
-
-            with torch.autograd.graph.save_on_cpu(
-                pin_memory=getattr(self, "train_save_on_cpu_pin_memory", True)
-            ):
-                yield
-        else:
-            yield
-
     def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
         """Compute masked policy loss for one already-padded microbatch."""
         with self._autocast_context():
@@ -1806,7 +1707,14 @@ class LocalTrainHelper:
             fused_ce_batches_before = int(loss_counts.get("unsloth_fused_ce", 0))
             timer = _timer_start(self.train_device)
             try:
-                with self._saved_tensors_context():
+                with saved_tensors_context(
+                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
+                    train_device=self.train_device,
+                    pin_memory=bool(
+                        getattr(self, "train_save_on_cpu_pin_memory", True)
+                    ),
+                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
+                ):
                     masked_loss, token_count = self._compute_sft_loss(
                         input_ids,
                         advantages,
@@ -1879,7 +1787,14 @@ class LocalTrainHelper:
                 stop = min(start + microbatch_size, batch_size)
                 microbatches += 1
                 timer = _timer_start(self.train_device)
-                with self._saved_tensors_context():
+                with saved_tensors_context(
+                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
+                    train_device=self.train_device,
+                    pin_memory=bool(
+                        getattr(self, "train_save_on_cpu_pin_memory", True)
+                    ),
+                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
+                ):
                     masked_loss, token_count, clip_frac, cov_frac, abs_kl = (
                         self._compute_train_loss(
                             input_ids[start:stop],
@@ -1926,7 +1841,7 @@ class LocalTrainHelper:
             return loss_val
         finally:
             self.optimizer.zero_grad()
-            self._empty_cuda_cache_if_requested()
+            empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
     def _do_sft_impl(self, input_ids, advantages, attention_mask):
         """Execute weighted cross-entropy SFT/ECHO update synchronously."""
@@ -1985,7 +1900,7 @@ class LocalTrainHelper:
             return loss_val
         finally:
             self.optimizer.zero_grad()
-            self._empty_cuda_cache_if_requested()
+            empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
     @staticmethod
     def _sft_microbatch_ranges(lengths, microbatch_size, token_budget=0):
@@ -2172,7 +2087,7 @@ class LocalTrainHelper:
             return loss_val
         finally:
             self.optimizer.zero_grad()
-            self._empty_cuda_cache_if_requested()
+            empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
     def _do_hybrid_mask_impl(
         self,
@@ -2224,7 +2139,14 @@ class LocalTrainHelper:
                 mb_echo_counts = echo_full_observation_counts[start:stop]
 
                 timer = _timer_start(self.train_device)
-                with self._saved_tensors_context():
+                with saved_tensors_context(
+                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
+                    train_device=self.train_device,
+                    pin_memory=bool(
+                        getattr(self, "train_save_on_cpu_pin_memory", True)
+                    ),
+                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
+                ):
                     with self._autocast_context():
                         old_lp = mb_old_logprobs[:, 1:]
                         adv = mb_advantages[:, 1:]
@@ -2319,7 +2241,7 @@ class LocalTrainHelper:
             return loss_val, echo_loss_val
         finally:
             self.optimizer.zero_grad()
-            self._empty_cuda_cache_if_requested()
+            empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
     @staticmethod
     def _first_supervised_token_index(*rows) -> int | None:
