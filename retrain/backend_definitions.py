@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import difflib
 import importlib
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1136,8 +1135,3 @@ def normalize_backend_options(
         normalized[key] = _coerce_option_value(backend, key, raw, spec)
 
     return normalized
-
-
-def backend_options_to_json(raw_options: Mapping[str, object]) -> str:
-    """Serialize backend options for CLI override transport."""
-    return json.dumps(dict(raw_options), sort_keys=True)
