@@ -16,6 +16,7 @@ from typing import NotRequired, Protocol, TypedDict, cast
 from transformers import AutoTokenizer
 
 from retrain.advantages import (
+    AdvantageResult,
     EntropyStats,
     apply_batch_advantage_normalization,
     compute_algorithm_advantages,
@@ -429,6 +430,51 @@ def _prepare_algorithm_params_for_step(
         delight_eta_prev=delight_eta_prev,
     )
     return prepared
+
+
+def _compute_group_advantages(
+    config: TrainConfig,
+    rewards_G: list[float],
+    logprobs_G: list[list[float]],
+    planning_masks_G: list[list[int]],
+    *,
+    step: int,
+    sepa_lambda: float,
+    algorithm_params: Mapping[str, object],
+    transform_params: Mapping[str, object],
+    precomputed_entropies_G: list[list[float]] | None = None,
+) -> AdvantageResult:
+    """Dispatch one group to the full-algorithm or composable advantage path."""
+    if config.algorithm_mode:
+        return compute_algorithm_advantages(
+            rewards_G,
+            logprobs_G,
+            planning_masks_G,
+            algorithm_mode=config.algorithm_mode,
+            params=algorithm_params,
+            gtpo_beta=config.gtpo_beta,
+            hicra_alpha=config.hicra_alpha,
+            sepa_lambda=sepa_lambda,
+            step=step,
+            token_distributions_G=None,
+            precomputed_entropies_G=precomputed_entropies_G,
+        )
+    return compute_composable_advantages(
+        rewards_G,
+        logprobs_G,
+        planning_masks_G,
+        advantage_mode=config.advantage_mode,
+        transform_mode=config.transform_mode,
+        gtpo_beta=config.gtpo_beta,
+        hicra_alpha=config.hicra_alpha,
+        sepa_lambda=sepa_lambda,
+        advantage_params=config.effective_advantage_params,
+        transform_params=transform_params,
+        step=step,
+        post_process_params=config.post_process_params,
+        token_distributions_G=None,
+        precomputed_entropies_G=precomputed_entropies_G,
+    )
 
 
 def _print_config_summary(config: TrainConfig) -> None:
@@ -1297,35 +1343,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
                             continue
 
-                    if config.algorithm_mode:
-                        adv_result = compute_algorithm_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            algorithm_mode=config.algorithm_mode,
-                            params=step_algorithm_params,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            step=batch_idx,
-                            token_distributions_G=None,
-                        )
-                    else:
-                        adv_result = compute_composable_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            advantage_mode=config.advantage_mode,
-                            transform_mode=config.transform_mode,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            advantage_params=config.effective_advantage_params,
-                            transform_params=step_transform_params,
-                            step=batch_idx,
-                            post_process_params=config.post_process_params,
-                            token_distributions_G=None,
-                        )
+                    adv_result = _compute_group_advantages(
+                        config,
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        step=batch_idx,
+                        sepa_lambda=sepa_lambda_val,
+                        algorithm_params=step_algorithm_params,
+                        transform_params=step_transform_params,
+                    )
                     all_token_advs_G = adv_result.token_advs
                     if adv_result.has_stats:
                         batch_surprisal_stats.append(adv_result.stats)
@@ -1629,37 +1656,17 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     if precomputed_entropies_batch is not None:
                         group_entropies_G = precomputed_entropies_batch[f_idx]
 
-                    if config.algorithm_mode:
-                        adv_result = compute_algorithm_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            algorithm_mode=config.algorithm_mode,
-                            params=step_algorithm_params,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            step=batch_idx,
-                            token_distributions_G=None,
-                            precomputed_entropies_G=group_entropies_G,
-                        )
-                    else:
-                        adv_result = compute_composable_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            advantage_mode=config.advantage_mode,
-                            transform_mode=config.transform_mode,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            advantage_params=config.effective_advantage_params,
-                            transform_params=step_transform_params,
-                            step=batch_idx,
-                            post_process_params=config.post_process_params,
-                            token_distributions_G=None,
-                            precomputed_entropies_G=group_entropies_G,
-                        )
+                    adv_result = _compute_group_advantages(
+                        config,
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        step=batch_idx,
+                        sepa_lambda=sepa_lambda_val,
+                        algorithm_params=step_algorithm_params,
+                        transform_params=step_transform_params,
+                        precomputed_entropies_G=group_entropies_G,
+                    )
                     all_token_advs_G = adv_result.token_advs
                     if adv_result.has_stats:
                         batch_surprisal_stats.append(adv_result.stats)
