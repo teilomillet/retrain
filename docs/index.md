@@ -54,7 +54,7 @@ retrain
 │   ├── warmup.py       # Supervised warmup phase for the RL trainer
 │   ├── state.py        # Checkpoint state serialization
 │   ├── sepa.py         # SEPA scheduler (linear / auto)
-│   ├── echo.py         # ECHO observation-token datums
+│   ├── echo.py         # ECHO datums, caps, and shared-step helpers
 │   ├── rollouts.py     # Prompt caching and decoded rollout batches
 │   ├── loss.py         # Policy-gradient loss variants
 │   ├── backpressure.py # USL+Roofline adaptive batch sizing

@@ -60,6 +60,27 @@ class EchoLimitStats:
     truncated_tokens: int = 0
 
 
+def merge_echo_build_stats(
+    left: EchoBuildStats,
+    right: EchoBuildStats,
+) -> EchoBuildStats:
+    """Combine ECHO extraction counters across rollout groups."""
+
+    return EchoBuildStats(
+        candidate_datums=left.candidate_datums + right.candidate_datums,
+        candidate_tokens=left.candidate_tokens + right.candidate_tokens,
+        observation_mask_datums=(
+            left.observation_mask_datums + right.observation_mask_datums
+        ),
+        skipped_first_turns=left.skipped_first_turns + right.skipped_first_turns,
+        skipped_no_suffix=left.skipped_no_suffix + right.skipped_no_suffix,
+        skipped_low_overlap=left.skipped_low_overlap + right.skipped_low_overlap,
+        skipped_bad_observation_mask=(
+            left.skipped_bad_observation_mask + right.skipped_bad_observation_mask
+        ),
+    )
+
+
 def common_prefix_len(left: list[int], right: list[int]) -> int:
     """Return the length of the exact token prefix shared by two sequences."""
 
@@ -248,3 +269,60 @@ def limit_echo_masks(
         kept_tokens=kept_tokens,
         truncated_tokens=truncated,
     )
+
+
+def run_rl_echo_train_step(
+    helper: object,
+    all_tokens: list[list[int]],
+    all_logprobs: list[list[float]],
+    all_advantages: list[list[float]],
+    echo_advantages: list[list[float]],
+    echo_full_observation_counts: list[int],
+    *,
+    echo_loss_fn: str,
+    lr: float,
+    weight_decay: float,
+) -> tuple[float, float, bool]:
+    """Run one RL update, optionally with ECHO in the same optimizer step.
+
+    ECHO is independent of the chosen RL algorithm: algorithms produce the
+    sampled-token advantages above, while ECHO adds a same-rollout
+    environment-token mask. Paper-faithful RL+ECHO requires a backend
+    ``train_step_with_echo_masks`` implementation that computes both losses
+    from the same actor forward/backward pass over those rollout rows.
+    """
+
+    if not all_tokens:
+        return 0.0, 0.0, False
+
+    if echo_advantages:
+        train_step_with_echo_masks = getattr(helper, "train_step_with_echo_masks", None)
+        if callable(train_step_with_echo_masks):
+            rl_loss, echo_loss = train_step_with_echo_masks(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                echo_advantages,
+                echo_full_observation_counts,
+                echo_loss_fn,
+                lr,
+                weight_decay,
+            )
+            return float(rl_loss), float(echo_loss), True
+        raise RuntimeError(
+            "ECHO requires a backend train_step_with_echo_masks implementation "
+            "so RL and environment-token losses are computed from the same "
+            "rollout rows in one actor forward/backward pass."
+        )
+
+    train_step = getattr(helper, "train_step")
+    rl_loss = float(
+        train_step(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            lr,
+            weight_decay,
+        )
+    )
+    return rl_loss, 0.0, False

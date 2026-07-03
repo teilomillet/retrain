@@ -228,6 +228,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/generations.py`: generation log selection and top-surprisal
   payloads.
 - `training/prompts.py`: prompt batch selection for training steps.
+- `training/echo.py`: ECHO datums, caps, and shared-step helpers.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.

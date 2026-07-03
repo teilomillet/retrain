@@ -20,9 +20,6 @@ from retrain.training.state import (
     load_trainer_state,
     save_trainer_state,
 )
-from retrain.training.trainer import (
-    _run_rl_echo_train_step,
-)
 
 
 class TestSaveTrainerState:
@@ -165,82 +162,6 @@ class TestLossDisplaySemantics:
         out = capsys.readouterr().out
         assert "Training flow warning [compat]: backend caveat" in out
         assert "fatal" not in out
-
-
-class TestEchoStepSemantics:
-    def test_echo_treats_rl_advantages_as_opaque_algorithm_output(self):
-        class Helper:
-            def __init__(self) -> None:
-                self.calls: list[dict[str, object]] = []
-
-            def train_step_with_echo_masks(
-                self,
-                all_tokens,
-                all_logprobs,
-                all_advantages,
-                echo_advantages,
-                echo_full_observation_counts,
-                echo_loss_fn,
-                lr,
-                weight_decay,
-            ):
-                self.calls.append(
-                    {
-                        "tokens": all_tokens,
-                        "logprobs": all_logprobs,
-                        "advantages": all_advantages,
-                        "echo_advantages": echo_advantages,
-                        "echo_full_observation_counts": echo_full_observation_counts,
-                        "echo_loss_fn": echo_loss_fn,
-                        "lr": lr,
-                        "weight_decay": weight_decay,
-                    }
-                )
-                return 0.25, 0.125
-
-        helper = Helper()
-        algorithm_advantages = [[0.7, -0.2, 0.4], [-0.5, -0.5]]
-
-        rl_loss, echo_loss, joint = _run_rl_echo_train_step(
-            helper,
-            all_tokens=[[10, 11, 12], [20, 21]],
-            all_logprobs=[[-0.1, -0.2, -0.3], [-0.4, -0.5]],
-            all_advantages=algorithm_advantages,
-            echo_advantages=[
-                [0.0, 0.0, 0.3],
-                [0.0, 0.0],
-            ],
-            echo_full_observation_counts=[1, 0],
-            echo_loss_fn="cross_entropy",
-            lr=1e-4,
-            weight_decay=0.01,
-        )
-
-        assert (rl_loss, echo_loss, joint) == (0.25, 0.125, True)
-        assert helper.calls[0]["advantages"] is algorithm_advantages
-        assert helper.calls[0]["echo_advantages"] == [
-            [0.0, 0.0, 0.3],
-            [0.0, 0.0],
-        ]
-        assert helper.calls[0]["echo_full_observation_counts"] == [1, 0]
-
-    def test_echo_rejects_helper_without_shared_forward_step(self):
-        class Helper:
-            def train_step(self, *args, **kwargs):
-                raise AssertionError("separate RL step must not run")
-
-        with pytest.raises(RuntimeError, match="same rollout rows"):
-            _run_rl_echo_train_step(
-                Helper(),
-                all_tokens=[[10, 11]],
-                all_logprobs=[[-0.1, -0.2]],
-                all_advantages=[[0.5, -0.5]],
-                echo_advantages=[[0.0, 0.0, 0.3]],
-                echo_full_observation_counts=[1],
-                echo_loss_fn="cross_entropy",
-                lr=1e-4,
-                weight_decay=0.0,
-            )
 
 
 class TestBackendAdvantageFlowGuard:
