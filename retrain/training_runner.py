@@ -266,12 +266,13 @@ class SftRunner:
         print(f"SFT loss: {loss_fn}")
 
         if config.resume_from:
-            if not hasattr(helper, "load_state"):
+            load_state = getattr(helper, "load_state", None)
+            if not callable(load_state):
                 raise RuntimeError(
                     "trainer='sft' resume_from requires a backend with load_state()."
                 )
             print(f"Loading SFT initial adapter from {config.resume_from} ...")
-            helper.load_state(config.resume_from)
+            load_state(config.resume_from)
 
         print(f"Loading tokenizer for {config.model} ...")
         tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)

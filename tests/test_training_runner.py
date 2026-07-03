@@ -226,6 +226,10 @@ class _FakeSftHelper:
         self.shutdown_called = True
 
 
+class _NonCallableLoadStateSftHelper(_FakeSftHelper):
+    load_state = 1
+
+
 class _FakeBackendRegistry:
     def __init__(self, helper):
         self.helper = helper
@@ -364,6 +368,46 @@ class TestSftRunner:
         assert result.ok
         assert helper.loaded == [str(resume_from)]
         assert len(helper.calls) == 1
+
+    def test_sft_resume_requires_callable_load_state(self, tmp_path, monkeypatch):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": "prompt"},
+                        {"role": "assistant", "content": "answer"},
+                    ]
+                }
+            )
+            + "\n"
+        )
+        helper = _NonCallableLoadStateSftHelper()
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setattr("retrain.registry.get_registry", fake_get_registry)
+
+        result = SftRunner().run(
+            TrainConfig(
+                trainer="sft",
+                backend="unsloth",
+                sft_data_path=str(data_path),
+                max_steps=1,
+                batch_size=1,
+                model="fake-model",
+                adapter_path=str(tmp_path / "adapter"),
+                resume_from=str(tmp_path / "previous" / "final"),
+                log_dir=str(tmp_path / "logs"),
+            )
+        )
+
+        assert not result.ok
+        assert result.failure_status == "exception:RuntimeError"
+        assert "requires a backend with load_state()" in result.error_message
+        assert helper.calls == []
 
     def test_missing_dataset_returns_failed_result(self, tmp_path):
         config = _bare_config(
