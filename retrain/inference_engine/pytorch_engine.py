@@ -12,7 +12,6 @@ Supports two weight-sync modes:
 import time
 
 import torch
-import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model
 
@@ -23,83 +22,16 @@ from retrain.kernels.accelerators import (
 )
 from retrain.models.gemma4 import is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+from retrain.inference_engine.pytorch.sample import (
+    sample_next_token as _sample_next_token,
+    shannon_entropy_from_probs_logprobs as _shannon_entropy_from_probs_logprobs,
+)
+from retrain.inference_engine.pytorch.timing import TimingAccumulator
 from retrain.tokens.ids import model_eos_token_ids
 from retrain.backends.torch import (
-    is_cuda_device,
     timer_start as _timer_start,
     timer_stop as _timer_stop,
 )
-
-
-def _shannon_entropy_from_probs_logprobs(probs, log_probs):
-    safe_log_probs = log_probs.masked_fill(probs == 0, 0.0)
-    return -(probs * safe_log_probs).sum(dim=-1)
-
-
-def _sample_next_token(logits, temperature, top_p, compute_entropy=False):
-    scaled = logits / max(float(temperature), 1e-7)
-    probs = F.softmax(scaled.float(), dim=-1)
-    entropy = None
-    if compute_entropy:
-        entropy = _shannon_entropy_from_probs_logprobs(
-            probs,
-            probs.clamp_min(1e-12).log(),
-        )
-
-    if top_p < 1.0:
-        sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
-        cumulative = torch.cumsum(sorted_probs, dim=-1)
-        remove = cumulative - sorted_probs > top_p
-        filtered = sorted_probs.masked_fill(remove, 0.0)
-        filtered = filtered / filtered.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-        sampled_sorted = torch.multinomial(filtered, num_samples=1)
-        next_token = sorted_indices.gather(1, sampled_sorted)
-        next_prob = filtered.gather(1, sampled_sorted).squeeze(1)
-    else:
-        next_token = torch.multinomial(probs, num_samples=1)
-        next_prob = probs.gather(1, next_token).squeeze(1)
-
-    return next_token, next_prob.clamp_min(1e-12).log(), entropy
-
-
-class _TimingAccumulator:
-    """Accumulate CUDA timings without synchronizing every generated token."""
-
-    def __init__(self, device):
-        self.device = device
-        self._cuda = is_cuda_device(device)
-        self._events: list[tuple[str, torch.cuda.Event, torch.cuda.Event]] = []
-        self._totals = {"prefill": 0.0, "decode": 0.0}
-
-    def start(self):
-        if self._cuda:
-            with torch.cuda.device(torch.device(self.device)):
-                event = torch.cuda.Event(enable_timing=True)
-                event.record()
-            return event
-        return time.perf_counter()
-
-    def stop(self, start, bucket: str) -> None:
-        if self._cuda:
-            with torch.cuda.device(torch.device(self.device)):
-                end = torch.cuda.Event(enable_timing=True)
-                end.record()
-            self._events.append((bucket, start, end))
-            return
-        self._totals[bucket] = self._totals.get(bucket, 0.0) + (
-            time.perf_counter() - start
-        )
-
-    def totals(self) -> dict[str, float]:
-        if self._cuda and self._events:
-            with torch.cuda.device(torch.device(self.device)):
-                torch.cuda.synchronize()
-            for bucket, start, end in self._events:
-                self._totals[bucket] = self._totals.get(bucket, 0.0) + (
-                    start.elapsed_time(end) / 1000.0
-                )
-            self._events.clear()
-        return dict(self._totals)
 
 
 class PyTorchEngine(InferenceEngine):
@@ -188,7 +120,7 @@ class PyTorchEngine(InferenceEngine):
 
         results = []
         generation_start = time.perf_counter()
-        timings = _TimingAccumulator(self.device)
+        timings = TimingAccumulator(self.device)
         eos_ids = model_eos_token_ids(self.model, unwrap_model=unwrap_peft_model)
 
         with torch.no_grad():
@@ -662,6 +594,7 @@ class PyTorchEngine(InferenceEngine):
                         generated_tokens[i].append(token)
                         generated_logprobs[i].append(float(logprob[i].item()))
                         if generated_entropies is not None:
+                            assert entropy is not None
                             generated_entropies[i].append(float(entropy[i].item()))
                         if token in eos_ids:
                             finished[i] = True
