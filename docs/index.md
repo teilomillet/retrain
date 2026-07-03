@@ -46,7 +46,12 @@ retrain
 │   │   ├── archive.py  # Candidate archive ranking, pruning, and selection
 │   │   ├── prompt.py   # Discovery memory prompt rendering
 │   │   └── summary.py  # Discovery archive JSON summary export
-│   ├── runner.py       # TrainingRunner protocol + built-in runners
+│   ├── runner/         # TrainingRunner protocol + built-in runners
+│   │   ├── result.py   # Run results, metrics, and artifacts
+│   │   ├── protocol.py # Runner protocol
+│   │   ├── retain.py   # Built-in retrain loop runner
+│   │   ├── command.py  # Shell-command runner
+│   │   └── sft.py      # Standalone SFT runner
 │   ├── flow.py         # Construct-and-trace of the training flow
 │   ├── generations.py  # Generation log selection and surprisal payloads
 │   ├── prompts.py      # Prompt batch selection for training steps
