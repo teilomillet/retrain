@@ -23,6 +23,11 @@ from retrain.accelerators import (
 )
 from retrain.gemma4_text import eos_token_ids, is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+from retrain.torch_runtime import (
+    is_cuda_device,
+    timer_start as _timer_start,
+    timer_stop as _timer_stop,
+)
 
 
 def _shannon_entropy_from_probs_logprobs(probs, log_probs):
@@ -61,7 +66,7 @@ class _TimingAccumulator:
 
     def __init__(self, device):
         self.device = device
-        self._cuda = _is_cuda_device(device)
+        self._cuda = is_cuda_device(device)
         self._events: list[tuple[str, torch.cuda.Event, torch.cuda.Event]] = []
         self._totals = {"prefill": 0.0, "decode": 0.0}
 
@@ -94,30 +99,6 @@ class _TimingAccumulator:
                 )
             self._events.clear()
         return dict(self._totals)
-
-
-def _is_cuda_device(device) -> bool:
-    return isinstance(device, str) and device.startswith("cuda") and torch.cuda.is_available()
-
-
-def _timer_start(device):
-    if _is_cuda_device(device):
-        with torch.cuda.device(torch.device(device)):
-            event = torch.cuda.Event(enable_timing=True)
-            event.record()
-        return ("cuda", device, event)
-    return ("cpu", device, time.perf_counter())
-
-
-def _timer_stop(start) -> float:
-    kind, device, marker = start
-    if kind == "cuda":
-        with torch.cuda.device(torch.device(device)):
-            end = torch.cuda.Event(enable_timing=True)
-            end.record()
-            end.synchronize()
-        return marker.elapsed_time(end) / 1000.0
-    return time.perf_counter() - marker
 
 
 def _coerce_eos_ids(raw) -> set[int]:

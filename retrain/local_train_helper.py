@@ -51,68 +51,15 @@ from retrain.selective_logprobs import (
 )
 from retrain.policy_loss import compute_policy_loss as _compute_policy_loss
 from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
-
-
-def _parse_device(device_str):
-    """Convert a device spec like 'gpu:0' to a torch device string like 'cuda:0'."""
-    device_str = device_str.strip()
-    if device_str.startswith("gpu:"):
-        return device_str.replace("gpu:", "cuda:")
-    elif device_str == "cpu":
-        return "cpu"
-    else:
-        return "cuda:0"
-
-
-def _pad_to_width(tensor, width, value):
-    """Right-pad a batch-major tensor to ``width`` columns."""
-    if tensor.shape[1] >= width:
-        return tensor
-    pad = tensor.new_full((tensor.shape[0], width - tensor.shape[1]), value)
-    return torch.cat([tensor, pad], dim=1)
-
-
-def _is_cuda_device(device) -> bool:
-    return isinstance(device, str) and device.startswith("cuda") and torch.cuda.is_available()
-
-
-def _timer_start(device):
-    if _is_cuda_device(device):
-        with torch.cuda.device(torch.device(device)):
-            event = torch.cuda.Event(enable_timing=True)
-            event.record()
-        return ("cuda", device, event)
-    return ("cpu", device, time.perf_counter())
-
-
-def _timer_stop(start) -> float:
-    kind, device, marker = start
-    if kind == "cuda":
-        with torch.cuda.device(torch.device(device)):
-            end = torch.cuda.Event(enable_timing=True)
-            end.record()
-            end.synchronize()
-        return marker.elapsed_time(end) / 1000.0
-    return time.perf_counter() - marker
-
-
-def _reset_cuda_peak(device) -> None:
-    if _is_cuda_device(device):
-        torch.cuda.reset_peak_memory_stats(torch.device(device))
-
-
-def _cuda_peak_metrics(prefix: str, device) -> dict[str, float]:
-    if not _is_cuda_device(device):
-        return {}
-    torch_device = torch.device(device)
-    return {
-        f"{prefix}_peak_memory_allocated_mb": (
-            torch.cuda.max_memory_allocated(torch_device) / (1024.0 * 1024.0)
-        ),
-        f"{prefix}_peak_memory_reserved_mb": (
-            torch.cuda.max_memory_reserved(torch_device) / (1024.0 * 1024.0)
-        ),
-    }
+from retrain.torch_runtime import (
+    cuda_peak_metrics as _cuda_peak_metrics,
+    is_cuda_device as _is_cuda_device,
+    pad_to_width as _pad_to_width,
+    parse_device_spec as _parse_device,
+    reset_cuda_peak as _reset_cuda_peak,
+    timer_start as _timer_start,
+    timer_stop as _timer_stop,
+)
 
 
 class LocalTrainHelper:
