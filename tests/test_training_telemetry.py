@@ -17,6 +17,7 @@ from retrain.training_telemetry import (
     build_emergence_step_entry,
     build_step_metrics,
     build_wandb_metrics,
+    format_step_log_summary,
     summarize_surprisal_stats,
 )
 
@@ -224,6 +225,15 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     assert emergence["total_count"] == 2
     assert emergence["dg_eta"] == pytest.approx(0.3)
     assert emergence["post_plan_surprisal_var"] == pytest.approx(0.9)
+    assert format_step_log_summary(
+        step,
+        backend_caps=backend_caps,
+        rollout=rollout,
+    ) == (
+        "Step 3 [grpo+none] | loss=0.1250 | reward=0.750"
+        " | correct=50.0% | datums=5 | bs=2 | gs=4"
+        " | tie_g=50.0% | sepa_l=0.1000 | time=10.0s"
+    )
 
 
 def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:

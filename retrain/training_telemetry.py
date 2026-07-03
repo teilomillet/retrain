@@ -220,6 +220,37 @@ class StepLogData:
     surprisal: SurprisalSummary
 
 
+def format_loss_for_display(loss_value: float, reports_sync_loss: bool) -> str:
+    """Format loss consistently, including async placeholder semantics."""
+    formatted = f"{loss_value:.4f}"
+    if reports_sync_loss:
+        return formatted
+    return f"{formatted} (placeholder)"
+
+
+def format_step_log_summary(
+    data: StepLogData,
+    *,
+    backend_caps: BackendCapabilities,
+    rollout: RolloutTelemetry,
+) -> str:
+    loss_display = format_loss_for_display(
+        data.loss_value,
+        backend_caps.reports_sync_loss,
+    )
+    return (
+        f"Step {data.step} [{data.condition_label}] | loss={loss_display}"
+        f" | reward={data.mean_reward:.3f}"
+        f" | correct={data.correct_rate * 100:.1f}%"
+        f" | datums={data.num_datums}"
+        f" | bs={data.batch_size}"
+        f" | gs={data.group_size}"
+        f" | tie_g={rollout.ties.tie_group_rate * 100:.1f}%"
+        f" | sepa_l={data.sepa_lambda:.4f}"
+        f" | time={data.step_time:.1f}s"
+    )
+
+
 def summarize_surprisal_stats(
     stats: Sequence[EntropyStats],
 ) -> SurprisalSummary:

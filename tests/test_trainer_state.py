@@ -10,10 +10,10 @@ import json
 import pytest
 
 from retrain.flow import TraceIssue, TraceResult, build_flow
+from retrain.training_telemetry import format_loss_for_display
 from retrain.trainer import (
     _TRAINER_STATE_FILE,
     _assert_uniform_completion_advantages_for_non_preserving_backend,
-    _format_loss_for_display,
     _load_trainer_state,
     _print_flow_warnings,
     _run_rl_echo_train_step,
@@ -143,10 +143,10 @@ class TestLoadTrainerState:
 
 class TestLossDisplaySemantics:
     def test_sync_loss_display_is_plain_value(self):
-        assert _format_loss_for_display(0.125, True) == "0.1250"
+        assert format_loss_for_display(0.125, True) == "0.1250"
 
     def test_placeholder_loss_display_is_annotated(self):
-        assert _format_loss_for_display(0.0, False) == "0.0000 (placeholder)"
+        assert format_loss_for_display(0.0, False) == "0.0000 (placeholder)"
 
     def test_print_flow_warnings_outputs_nonfatal_issues(self, capsys):
         result = TraceResult(

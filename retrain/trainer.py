@@ -73,6 +73,7 @@ from retrain.training_telemetry import (
     build_emergence_step_entry,
     build_step_metrics,
     build_wandb_metrics,
+    format_step_log_summary,
     summarize_surprisal_stats,
 )
 from retrain.verifiers_bridge import (
@@ -507,14 +508,6 @@ def _print_backend_capability_summary(
     )
     if not reports_sync_loss:
         print("Backend note: loss is reported as placeholder by backend design.")
-
-
-def _format_loss_for_display(loss_value: float, reports_sync_loss: bool) -> str:
-    """Format loss consistently, including async placeholder semantics."""
-    formatted = f"{loss_value:.4f}"
-    if reports_sync_loss:
-        return formatted
-    return f"{formatted} (placeholder)"
 
 
 def _print_flow_warnings(trace_result: object) -> None:
@@ -1032,29 +1025,6 @@ class _RolloutAccumulator:
     rollout_timing_metrics: dict[str, float] = field(default_factory=dict)
     sample_time_s: float = 0.0
     tl_grpo_ema: float | None = None
-
-def _print_step_log_summary(
-    data: StepLogData,
-    *,
-    backend_caps: BackendCapabilities,
-    acc: _RolloutAccumulator,
-) -> None:
-    loss_display = _format_loss_for_display(
-        data.loss_value,
-        backend_caps.reports_sync_loss,
-    )
-    print(
-        f"Step {data.step} [{data.condition_label}] | loss={loss_display}"
-        f" | reward={data.mean_reward:.3f}"
-        f" | correct={data.correct_rate * 100:.1f}%"
-        f" | datums={data.num_datums}"
-        f" | bs={data.batch_size}"
-        f" | gs={data.group_size}"
-        f" | tie_g={acc.ties.tie_group_rate * 100:.1f}%"
-        f" | sepa_l={data.sepa_lambda:.4f}"
-        f" | time={data.step_time:.1f}s"
-    )
-
 
 def _prepare_echo_step_plan(
     config: TrainConfig,
@@ -2101,10 +2071,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 delight_eta_ema = float(metrics["dg_eta"])
 
             metrics_logger.log(metrics)
-            _print_step_log_summary(
-                step_log,
-                backend_caps=backend_caps,
-                acc=acc,
+            print(
+                format_step_log_summary(
+                    step_log,
+                    backend_caps=backend_caps,
+                    rollout=rollout_log,
+                )
             )
 
             if wandb_run is not None:

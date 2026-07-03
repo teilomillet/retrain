@@ -40,13 +40,13 @@ from retrain.trainer import (
     _apply_advantage_cap,
     _assert_uniform_completion_advantages_for_non_preserving_backend,
     _compute_group_advantages,
-    _format_loss_for_display,
     _prepare_algorithm_params_for_step,
     _prepare_transform_params_for_step,
     _print_backend_capability_summary,
     _print_config_summary,
     _summarize_reward_ties,
 )
+from retrain.training_telemetry import format_loss_for_display
 from retrain.training_runner import (
     TrainingRunResult,
     build_run_result,
@@ -861,7 +861,7 @@ class TTTDiscoverRunner:
                 steps_logger.log(metric_entry)
 
                 print(
-                    f"Step {step} | loss={_format_loss_for_display(loss_value, backend_caps.reports_sync_loss)}"
+                    f"Step {step} | loss={format_loss_for_display(loss_value, backend_caps.reports_sync_loss)}"
                     f" | reward={mean_reward:.4f} | best={best_reward:.4f}"
                     f" | archive={len(archive)} | bs={current_batch_size} | gs={current_group_size}"
                 )
