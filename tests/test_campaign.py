@@ -106,6 +106,32 @@ class TestParseCampaignConditions:
                 "campaign.toml",
             )
 
+    def test_unknown_override_raises(self):
+        with pytest.raises(ValueError, match="unknown TrainConfig field"):
+            _parse_campaign_conditions(
+                [
+                    {
+                        "advantage_mode": "grpo",
+                        "transform_mode": "none",
+                        "not_a_config_field": 1,
+                    }
+                ],
+                "campaign.toml",
+            )
+
+    def test_invalid_override_type_raises(self):
+        with pytest.raises(ValueError, match="Invalid campaign condition at index 0"):
+            _parse_campaign_conditions(
+                [
+                    {
+                        "advantage_mode": "grpo",
+                        "transform_mode": "none",
+                        "max_steps": "soon",
+                    }
+                ],
+                "campaign.toml",
+            )
+
     def test_delight_gate_campaign_matrix_stays_in_sync(self):
         campaign_path = (
             Path(__file__).resolve().parents[1]

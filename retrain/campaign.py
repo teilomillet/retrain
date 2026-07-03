@@ -38,9 +38,11 @@ import subprocess
 import sys
 import time
 import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO, NotRequired, Protocol, TypedDict, cast
 
 from retrain.config import TrainConfig, _TOML_MAP, load_config
 
@@ -105,6 +107,34 @@ def _config_to_toml(cfg: TrainConfig) -> str:
 
 
 _CONDITION_EXTRA_KEYS = frozenset({"advantage_mode", "transform_mode"})
+_TRAIN_CONFIG_FIELDS = frozenset(f.name for f in fields(TrainConfig))
+
+
+class CampaignRun(TypedDict):
+    """Manifest record for one condition/seed run."""
+
+    condition: str
+    advantage_mode: str
+    transform_mode: str
+    overrides: dict[str, object]
+    seed: int
+    run_name: str
+    log_dir: str
+    config_path: NotRequired[str]
+    returncode: NotRequired[int]
+
+
+class _SqueezeLayerLike(Protocol):
+    source_rank: int
+    variance_at_rank: Mapping[int, float]
+
+
+class _SqueezeAnalysisLike(Protocol):
+    layers: Sequence[_SqueezeLayerLike]
+    target_ranks: Sequence[int]
+    mean_variance: Mapping[int, float]
+    recommended_rank: int
+    min_variance_retention: float
 
 
 @dataclass(frozen=True)
@@ -134,6 +164,81 @@ def _write_manifest(path: Path, manifest: dict[str, object]) -> None:
     path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
+def _object_dict(value: object, name: str) -> dict[str, object]:
+    """Return a typed object mapping for TOML tables."""
+    if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
+        raise ValueError(f"{name} must be a TOML table")
+    return cast(dict[str, object], value)
+
+
+def _optional_object_dict(value: object, name: str) -> dict[str, object] | None:
+    if value is None:
+        return None
+    return _object_dict(value, name)
+
+
+def _int_from_object(raw: object, name: str) -> int:
+    if isinstance(raw, (str, bytes, bytearray, int, float)):
+        return int(raw)
+    raise ValueError(f"{name} must be int-coercible")
+
+
+def _float_from_object(raw: object, name: str) -> float:
+    if isinstance(raw, (str, bytes, bytearray, int, float)):
+        return float(raw)
+    raise ValueError(f"{name} must be float-coercible")
+
+
+def _campaign_int(campaign: Mapping[str, object], key: str, default: int) -> int:
+    raw = campaign.get(key, default)
+    try:
+        return _int_from_object(raw, f"campaign.{key}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"campaign.{key} must be int-coercible") from exc
+
+
+def _campaign_float(campaign: Mapping[str, object], key: str, default: float) -> float:
+    raw = campaign.get(key, default)
+    try:
+        return _float_from_object(raw, f"campaign.{key}")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"campaign.{key} must be float-coercible") from exc
+
+
+def _campaign_seeds(campaign: Mapping[str, object]) -> list[int]:
+    raw = campaign.get("seeds")
+    if raw is None:
+        return list(DEFAULT_SEEDS)
+    if not isinstance(raw, list):
+        raise ValueError("campaign.seeds must be a list of integers")
+    seeds: list[int] = []
+    for idx, seed in enumerate(raw):
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise ValueError(f"campaign.seeds[{idx}] must be an integer")
+        seeds.append(seed)
+    return seeds
+
+
+def _validate_condition_config(
+    *,
+    advantage_mode: str,
+    transform_mode: str,
+    overrides: Mapping[str, object],
+) -> None:
+    unknown = sorted(set(overrides) - _TRAIN_CONFIG_FIELDS)
+    if unknown:
+        joined = ", ".join(unknown)
+        raise ValueError(f"unknown TrainConfig field(s): {joined}")
+
+    cfg = TrainConfig(
+        advantage_mode=advantage_mode,
+        transform_mode=transform_mode,
+    )
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    cfg.__post_init__()
+
+
 def _run_campaign_summary(
     campaign_cfg: dict[str, object],
     campaign_dir: Path,
@@ -157,6 +262,7 @@ def _run_campaign_summary(
         raw_args = []
     if not isinstance(raw_args, list) or not all(isinstance(a, str) for a in raw_args):
         raise ValueError("campaign.summary_args must be a list of strings")
+    summary_args = cast(list[str], raw_args)
 
     script_path = Path(raw_script)
     if not script_path.is_absolute():
@@ -166,12 +272,12 @@ def _run_campaign_summary(
             f"campaign.summary_script does not exist: {script_path}"
         )
 
-    cmd = [sys.executable, str(script_path), str(campaign_dir), *raw_args]
+    cmd = [sys.executable, str(script_path), str(campaign_dir), *summary_args]
     print(f"Running summary: {' '.join(cmd)}")
     proc = subprocess.run(cmd)
     return {
         "script": str(script_path),
-        "args": list(raw_args),
+        "args": list(summary_args),
         "returncode": proc.returncode,
     }
 
@@ -191,11 +297,15 @@ def _parse_campaign_conditions(
         )
 
     conditions: list[CampaignCondition] = []
-    for idx, condition in enumerate(raw_conditions):
-        if not isinstance(condition, dict):
+    for idx, raw_condition in enumerate(raw_conditions):
+        if not isinstance(raw_condition, dict):
             raise ValueError(
                 f"campaign.conditions[{idx}] must be a table in {campaign_path}"
             )
+        condition = _object_dict(
+            raw_condition,
+            f"campaign.conditions[{idx}]",
+        )
 
         adv_mode = condition.get("advantage_mode")
         tx_mode = condition.get("transform_mode")
@@ -214,12 +324,12 @@ def _parse_campaign_conditions(
         }
 
         try:
-            TrainConfig(
+            _validate_condition_config(
                 advantage_mode=adv_mode,
                 transform_mode=tx_mode,
-                **overrides,
+                overrides=overrides,
             )
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             raise ValueError(
                 f"Invalid campaign condition at index {idx} in {campaign_path}: {exc}"
             ) from exc
@@ -237,7 +347,7 @@ def _parse_campaign_conditions(
 
 def _auto_squeeze(
     adapter_path: str,
-    squeeze_cfg: dict,
+    squeeze_cfg: Mapping[str, object],
     lora_rank: int,
     wandb_project: str = "",
     wandb_entity: str = "",
@@ -245,8 +355,14 @@ def _auto_squeeze(
     """Run squeeze analysis, print results, log to wandb. Returns recommended rank."""
     from retrain.squeeze import analyze_adapter
 
-    min_var = float(squeeze_cfg.get("min_variance_retention", 0.95))
-    source_rank = int(squeeze_cfg.get("source_rank", 0)) or lora_rank
+    min_var = _float_from_object(
+        squeeze_cfg.get("min_variance_retention", 0.95),
+        "squeeze.min_variance_retention",
+    )
+    source_rank = _int_from_object(
+        squeeze_cfg.get("source_rank", 0),
+        "squeeze.source_rank",
+    ) or lora_rank
 
     print(f"\n{'=' * 60}")
     print(f"Auto-squeeze: analyzing {adapter_path}")
@@ -284,13 +400,17 @@ def _auto_squeeze(
 
     # Log to wandb
     if wandb_project:
-        _log_squeeze_to_wandb(analysis, wandb_project, wandb_entity)
+        _log_squeeze_to_wandb(
+            cast(_SqueezeAnalysisLike, analysis),
+            wandb_project,
+            wandb_entity,
+        )
 
     return analysis.recommended_rank
 
 
 def _log_squeeze_to_wandb(
-    analysis: "SqueezeAnalysis",  # noqa: F821
+    analysis: _SqueezeAnalysisLike,
     wandb_project: str,
     wandb_entity: str = "",
 ) -> None:
@@ -301,7 +421,7 @@ def _log_squeeze_to_wandb(
         print("wandb not installed, skipping squeeze logging")
         return
 
-    wandb_kwargs: dict = {
+    wandb_kwargs: dict[str, object] = {
         "project": wandb_project,
         "name": "squeeze-analysis",
         "job_type": "squeeze",
@@ -352,7 +472,7 @@ def _log_squeeze_to_wandb(
 
 
 def _write_run_configs(
-    runs: list[dict],
+    runs: list[CampaignRun],
     base_config: TrainConfig,
     max_steps: int,
     config_dir: Path,
@@ -384,11 +504,11 @@ def _write_run_configs(
 
 
 def _run_parallel(
-    runs: list[dict],
+    runs: list[CampaignRun],
     config_dir: Path,
     max_workers: int,
     stagger_seconds: float = 0.0,
-) -> list[dict]:
+) -> list[CampaignRun]:
     """Execute runs as parallel subprocesses.
 
     ``max_workers`` limits concurrency **within this campaign only**.
@@ -404,7 +524,9 @@ def _run_parallel(
     """
     total = len(runs)
     pending = list(runs)
-    active: list[tuple[subprocess.Popen, dict, float, "IO", "IO"]] = []  # type: ignore[name-defined]
+    active: list[
+        tuple[subprocess.Popen[bytes], CampaignRun, float, IO[str], IO[str]]
+    ] = []
     finished = 0
 
     try:
@@ -417,8 +539,11 @@ def _run_parallel(
                 log_path.mkdir(parents=True, exist_ok=True)
                 stdout_f = open(log_path / "stdout.log", "w")
                 stderr_f = open(log_path / "stderr.log", "w")
+                config_path = run.get("config_path")
+                if not config_path:
+                    raise ValueError(f"{run['run_name']} is missing config_path")
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "retrain.cli", run["config_path"]],
+                    [sys.executable, "-m", "retrain.cli", config_path],
                     stdout=stdout_f,
                     stderr=stderr_f,
                 )
@@ -462,10 +587,10 @@ def _run_parallel(
 
 
 def _run_sequential(
-    runs: list[dict],
+    runs: list[CampaignRun],
     base_config: TrainConfig,
     max_steps: int,
-    squeeze_cfg: dict | None,
+    squeeze_cfg: Mapping[str, object] | None,
 ) -> tuple[int, int | None]:
     """Execute runs sequentially in-process.
 
@@ -508,12 +633,12 @@ def _run_sequential(
             )
             runner = get_registry("trainer").create(cfg.trainer, cfg)
             result = runner.run(cfg)
-            meta = {"trainer": cfg.trainer}
+            meta: dict[str, object] = {"trainer": cfg.trainer}
             meta.update(result.to_dict())
             meta_path.write_text(json.dumps(meta))
             if result.ok:
                 run["returncode"] = 0
-                print(f"  OK")
+                print("  OK")
             else:
                 run["returncode"] = 1
                 failed += 1
@@ -553,14 +678,14 @@ def run_campaign(campaign_path: str) -> str:
     with open(campaign_path, "rb") as f:
         data = tomllib.load(f)
 
-    campaign = data.get("campaign", {})
+    campaign = _optional_object_dict(data.get("campaign"), "campaign") or {}
 
     # Campaign-level settings
-    seeds = campaign.get("seeds", DEFAULT_SEEDS)
-    max_steps = campaign.get("max_steps", TrainConfig().max_steps)
+    seeds = _campaign_seeds(campaign)
+    max_steps = _campaign_int(campaign, "max_steps", TrainConfig().max_steps)
     parallel = bool(campaign.get("parallel", False))
-    max_workers = int(campaign.get("max_workers", 0))
-    stagger_seconds = float(campaign.get("stagger_seconds", 0))
+    max_workers = _campaign_int(campaign, "max_workers", 0)
+    stagger_seconds = _campaign_float(campaign, "stagger_seconds", 0.0)
 
     # Conditions
     raw_conditions = campaign.get("conditions", None)
@@ -575,7 +700,7 @@ def run_campaign(campaign_path: str) -> str:
     campaign_dir.mkdir(parents=True, exist_ok=True)
 
     # Build run list
-    runs: list[dict] = []
+    runs: list[CampaignRun] = []
     for cond in conditions:
         condition = cond.label
         for seed in seeds:
@@ -592,7 +717,7 @@ def run_campaign(campaign_path: str) -> str:
             })
 
     # Write manifest
-    manifest = {
+    manifest: dict[str, object] = {
         "timestamp": timestamp,
         "campaign_toml": campaign_path,
         "conditions": [c.label for c in conditions],
@@ -619,7 +744,7 @@ def run_campaign(campaign_path: str) -> str:
     print()
 
     # Squeeze config (optional)
-    squeeze_cfg = data.get("squeeze", None)
+    squeeze_cfg = _optional_object_dict(data.get("squeeze"), "squeeze")
 
     # Execute
     failed = 0
