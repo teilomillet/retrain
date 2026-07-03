@@ -27,7 +27,7 @@ from retrain.advantages import (
     compute_algorithm_advantages,
     compute_composable_advantages,
 )
-from retrain.backpressure import StepObservation
+from retrain.backpressure import BackPressure, StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
 from retrain.logging_utils import JsonlLogger
@@ -451,8 +451,8 @@ class TTTDiscoverRunner:
             detector = flow.planning_detector
             sepa_controller = flow.sepa_controller
             assert sepa_controller is not None
-            backpressure = flow.backpressure
-            assert backpressure is not None
+            assert flow.backpressure is not None
+            backpressure = cast(BackPressure, flow.backpressure)
             backend_caps = flow.backend_capabilities
             _print_backend_capability_summary(
                 config.backend,

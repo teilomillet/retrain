@@ -31,6 +31,7 @@ TYPECHECK_PATHS = \
 	retrain/training_runner.py \
 	retrain/tree.py \
 	retrain/trainer.py \
+	retrain/ttt_discover.py \
 	retrain/prime_rl_backend.py \
 	retrain/verifiers_bridge.py
 
