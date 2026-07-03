@@ -57,28 +57,6 @@ class TestLoadConfig:
         # Other defaults preserved
         assert c.batch_size == 8
 
-
-class TestConfigKind:
-    def test_single_config(self, tmp_path):
-        path = tmp_path / "retrain.toml"
-        path.write_text("[training]\nmax_steps = 1\n")
-        assert config_kind(str(path)) == "single"
-
-    def test_campaign_config(self, tmp_path):
-        path = tmp_path / "campaign.toml"
-        path.write_text("[campaign]\nmax_steps = 1\n")
-        assert config_kind(str(path)) == "campaign"
-
-    def test_squeeze_config(self, tmp_path):
-        path = tmp_path / "squeeze.toml"
-        path.write_text("[squeeze]\nadapter_path = 'adapter'\n")
-        assert config_kind(str(path)) == "squeeze"
-
-    def test_campaign_wins_over_squeeze(self, tmp_path):
-        path = tmp_path / "combined.toml"
-        path.write_text("[campaign]\nmax_steps = 1\n\n[squeeze]\nadapter_path = 'adapter'\n")
-        assert config_kind(str(path)) == "campaign"
-
     def test_all_sections(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text("""\
@@ -456,6 +434,28 @@ min_prompt_overlap = 0.75
         c = load_config(str(toml))
         assert c.plugins_search_paths == ["plugins", "lab_plugins"]
         assert c.plugins_strict is False
+
+
+class TestConfigKind:
+    def test_single_config(self, tmp_path):
+        path = tmp_path / "retrain.toml"
+        path.write_text("[training]\nmax_steps = 1\n")
+        assert config_kind(str(path)) == "single"
+
+    def test_campaign_config(self, tmp_path):
+        path = tmp_path / "campaign.toml"
+        path.write_text("[campaign]\nmax_steps = 1\n")
+        assert config_kind(str(path)) == "campaign"
+
+    def test_squeeze_config(self, tmp_path):
+        path = tmp_path / "squeeze.toml"
+        path.write_text("[squeeze]\nadapter_path = 'adapter'\n")
+        assert config_kind(str(path)) == "squeeze"
+
+    def test_campaign_wins_over_squeeze(self, tmp_path):
+        path = tmp_path / "combined.toml"
+        path.write_text("[campaign]\nmax_steps = 1\n\n[squeeze]\nadapter_path = 'adapter'\n")
+        assert config_kind(str(path)) == "campaign"
 
 
 # ---------------------------------------------------------------------------
