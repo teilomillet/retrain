@@ -94,7 +94,7 @@ class _NonPrefixRoleTemplateTokenizer(_RoleTemplateTokenizer):
 
 
 class _DummyHelper:
-    def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):  # noqa: ARG002
+    def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):
         return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
 
 
@@ -109,7 +109,7 @@ class _CleanupTrackingRubric:
 
 
 class _FailingRubric:
-    async def score_group(self, states):  # noqa: ARG002
+    async def score_group(self, states):
         raise RuntimeError("score failed")
 
 
@@ -120,7 +120,7 @@ class _CleanupTrackingMultiTurnEnv:
         self.rubric = _CleanupTrackingRubric()
         self.cleaned: list[int] = []
 
-    async def init_state(self, *, input, client, model, sampling_args):  # noqa: A002, ARG002
+    async def init_state(self, *, input, client, model, sampling_args):
         return {
             "prompt": input["prompt"],
             "trajectory": [],
@@ -189,7 +189,7 @@ class _ConcurrentInitTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
         self.active_init = 0
         self.max_active_init = 0
 
-    async def init_state(self, *, input, client, model, sampling_args):  # noqa: A002, ARG002
+    async def init_state(self, *, input, client, model, sampling_args):
         self.active_init += 1
         self.max_active_init = max(self.max_active_init, self.active_init)
         await asyncio.sleep(0)

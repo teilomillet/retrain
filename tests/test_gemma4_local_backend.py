@@ -802,7 +802,7 @@ def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
     create_engine_calls = []
     fake_engine = object()
 
-    def fake_from_pretrained(model_name, torch_dtype=None, **kwargs):  # noqa: ANN001
+    def fake_from_pretrained(model_name, torch_dtype=None, **kwargs):
         from_pretrained_calls.append(
             {
                 "model_name": model_name,
@@ -812,10 +812,10 @@ def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
         )
         return _ConstructorFakeModel()
 
-    def fake_get_peft_model(_model, _peft_config):  # noqa: ANN001
+    def fake_get_peft_model(_model, _peft_config):
         return train_model
 
-    def fake_create_engine(**kwargs):  # noqa: ANN001
+    def fake_create_engine(**kwargs):
         create_engine_calls.append(kwargs)
         return fake_engine
 

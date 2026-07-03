@@ -44,7 +44,7 @@ def test_mlx_reload_uses_adapters_payload(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3):
         calls.append((endpoint, dict(payload)))
         return {
             "choices": [
@@ -86,7 +86,7 @@ def test_vllm_reload_calls_lora_endpoint(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         return {}
 
@@ -120,7 +120,7 @@ def test_sglang_reload_calls_lora_endpoint(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         return {}
 
@@ -153,7 +153,7 @@ def test_sglang_reload_unloads_existing_adapter_before_reloading(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         return {}
 
@@ -195,7 +195,7 @@ def test_trtllm_reload_sets_per_request_lora_without_http_reload(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         return {"choices": []}
 
@@ -245,7 +245,7 @@ def test_vllm_generate_uses_token_prompt_without_decode(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3):
         calls.append((endpoint, dict(payload)))
         return {"choices": []}
 
@@ -282,7 +282,7 @@ def test_openai_generate_reuses_cached_prompt_decode(monkeypatch):
         engine_type="openai",
     )
 
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: {"choices": []})  # noqa: ARG005
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: {"choices": []})
 
     engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
     engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
@@ -311,7 +311,7 @@ def test_token_prompt_rejection_falls_back_to_text(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3):
         calls.append((endpoint, dict(payload)))
         if len(calls) == 1:
             raise RuntimeError("HTTP error from server: 422 Client Error")
@@ -343,7 +343,7 @@ def test_vllm_reload_same_live_adapter_path_still_posts(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         return {}
 
@@ -406,7 +406,7 @@ def test_vllm_generate_uses_loaded_lora_model_name_after_reload(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         if endpoint == "/v1/load_lora_adapter":
             return {}
@@ -435,7 +435,7 @@ def test_sglang_generate_uses_model_adapter_suffix_after_reload(monkeypatch):
 
     calls = []
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         calls.append((endpoint, dict(payload)))
         if endpoint == "/load_lora_adapter":
             return {}
@@ -462,7 +462,7 @@ def test_vllm_reload_failure_is_counted(monkeypatch):
         engine_type="vllm",
     )
 
-    def _fake_post(endpoint, payload, max_retries=3, **kwargs):  # noqa: ARG001
+    def _fake_post(endpoint, payload, max_retries=3, **kwargs):
         raise RuntimeError("HTTP error from server: 404 Client Error")
 
     monkeypatch.setattr(engine, "_post", _fake_post)
@@ -498,7 +498,7 @@ def test_direct_token_ids_payload_is_used(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)  # noqa: ARG005
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
 
     results = engine.generate(
         [[1, 2, 3]],
@@ -536,7 +536,7 @@ def test_null_choice_token_ids_with_unconvertible_tokens_reencodes_text(monkeypa
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)  # noqa: ARG005
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
 
     results = engine.generate(
         [[1, 2, 3]],
@@ -575,7 +575,7 @@ def test_content_logprobs_with_token_ids_use_content_path(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)  # noqa: ARG005
+    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
 
     results = engine.generate(
         [[1, 2, 3]],
@@ -603,7 +603,7 @@ def test_malformed_choices_response_raises(monkeypatch):
     monkeypatch.setattr(
         engine,
         "_post",
-        lambda endpoint, payload, max_retries=3: {"choices": {"text": "bad"}},  # noqa: ARG005
+        lambda endpoint, payload, max_retries=3: {"choices": {"text": "bad"}},
     )
 
     with pytest.raises(RuntimeError, match="'choices' must be a list"):

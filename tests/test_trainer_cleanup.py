@@ -14,12 +14,12 @@ from retrain.flow import TraceIssue, TraceResult
 class _FakeLogger:
     instances: list["_FakeLogger"] = []
 
-    def __init__(self, path: str, *args, **kwargs) -> None:  # noqa: ARG002
+    def __init__(self, path: str, *args, **kwargs) -> None:
         self.path = path
         self.closed = False
         _FakeLogger.instances.append(self)
 
-    def log(self, payload) -> None:  # noqa: ANN001, D401
+    def log(self, payload) -> None:
         _ = payload
 
     def close(self) -> None:
@@ -43,7 +43,7 @@ class _FakeExample:
 
 
 class _FakeRegistry:
-    def create(self, *args, **kwargs):  # noqa: ANN002, ANN003
+    def create(self, *args, **kwargs):
         _ = args, kwargs
         return SimpleNamespace(load=lambda: [_FakeExample()])
 
@@ -102,13 +102,13 @@ def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -
     monkeypatch.setattr(
         trainer_mod.AutoTokenizer,
         "from_pretrained",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),  # noqa: ARG005
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(trainer_mod, "_print_config_summary", lambda config: None)
     monkeypatch.setattr(
         trainer_mod,
         "_print_backend_capability_summary",
-        lambda *args, **kwargs: None,  # noqa: ARG005
+        lambda *args, **kwargs: None,
     )
 
     backend = _FakeBackend()

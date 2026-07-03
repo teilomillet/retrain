@@ -21,7 +21,7 @@ class _TinyLM(torch.nn.Module):
         self.embed = torch.nn.Embedding(16, 8)
         self.lm_head = torch.nn.Linear(8, 16)
 
-    def forward(self, input_ids, attention_mask=None):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None):
         _ = attention_mask
         return SimpleNamespace(logits=self.lm_head(self.embed(input_ids)))
 
@@ -31,7 +31,7 @@ class _TinyBackbone(torch.nn.Module):
         super().__init__()
         self.embed = embed
 
-    def forward(self, input_ids, attention_mask=None, use_cache=False):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None, use_cache=False):
         _ = attention_mask, use_cache
         return SimpleNamespace(last_hidden_state=self.embed(input_ids))
 
@@ -43,7 +43,7 @@ class _TinyHiddenLM(torch.nn.Module):
         self.model = _TinyBackbone(self.embed)
         self.lm_head = torch.nn.Linear(8, 16)
 
-    def forward(self, input_ids, attention_mask=None, **kwargs):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None, **kwargs):
         _ = kwargs
         hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state
         return SimpleNamespace(logits=self.lm_head(hidden))
@@ -100,7 +100,7 @@ class _TinyPackedHiddenLM(torch.nn.Module):
         self.model = _TinyBackbone(self.embed)
         self.lm_head = _FakePackedQuantizedHead(8, 16)
 
-    def forward(self, input_ids, attention_mask=None, **kwargs):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None, **kwargs):
         _ = kwargs
         hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state
         return SimpleNamespace(logits=self.lm_head(hidden))
@@ -143,7 +143,7 @@ def test_local_echo_hybrid_masks_use_one_forward_and_full_observation_denominato
     helper = _helper(_ScalarLM())
     forward_calls = 0
 
-    def counted_forward_logits(model, input_ids, attention_mask):  # noqa: ANN001
+    def counted_forward_logits(model, input_ids, attention_mask):
         _ = attention_mask
         nonlocal forward_calls
         forward_calls += 1
@@ -193,7 +193,7 @@ def test_local_echo_mask_train_step_updates_model_with_real_logits(monkeypatch) 
     forward_calls = 0
     real_forward_logits = local_mod.forward_logits
 
-    def counted_forward_logits(model, input_ids, attention_mask):  # noqa: ANN001
+    def counted_forward_logits(model, input_ids, attention_mask):
         nonlocal forward_calls
         forward_calls += 1
         return real_forward_logits(model, input_ids, attention_mask)
@@ -389,7 +389,7 @@ def test_selective_compiled_path_scatter_and_metrics(monkeypatch) -> None:
     helper._compiled_selective_ce_fallback_reason = ""
     helper._compiled_selective_ce_available = None
 
-    def fake_compiled(self, selected_hidden, lm_head, target_ids):  # noqa: ANN001
+    def fake_compiled(self, selected_hidden, lm_head, target_ids):
         _ = selected_hidden, lm_head, target_ids
         return torch.tensor([-1.0, -2.0], dtype=torch.float32)
 
@@ -499,7 +499,7 @@ def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch
     captured: dict[str, torch.Tensor | object] = {}
 
     def fake_fused_ce(
-        trainer,  # noqa: ANN001
+        trainer,
         hidden_states: torch.Tensor,
         lm_head_weight: torch.Tensor,
         lm_head_bias: torch.Tensor | None,
@@ -508,7 +508,7 @@ def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch
         mask: torch.Tensor | None = None,
         n_items: torch.Tensor | None = None,
         shift_labels: bool = True,
-        **kwargs,  # noqa: ANN003
+        **kwargs,
     ) -> torch.Tensor:
         _ = trainer, kwargs
         assert shift_labels is True
@@ -569,7 +569,7 @@ def test_unsloth_fused_sft_loss_auto_falls_back_on_runtime_failure(monkeypatch) 
     helper.train_unsloth_fused_ce_torch_compile = False
     helper._loss_path_counts = {}
 
-    def failing_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+    def failing_fused_ce(*args, **kwargs):
         _ = args, kwargs
         raise RuntimeError("Hard failure due to fullgraph=True")
 
@@ -579,7 +579,7 @@ def test_unsloth_fused_sft_loss_auto_falls_back_on_runtime_failure(monkeypatch) 
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
 
-    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+    def shifted_logprobs(*args, **kwargs):
         _ = args, kwargs
         return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
 
@@ -609,7 +609,7 @@ def test_unsloth_fused_sft_loss_auto_falls_back_on_hidden_runtime_failure(monkey
     helper.train_unsloth_fused_ce_torch_compile = False
     helper._loss_path_counts = {}
 
-    def failing_hidden(*args, **kwargs):  # noqa: ANN002, ANN003
+    def failing_hidden(*args, **kwargs):
         _ = args, kwargs
         raise RuntimeError("Hard failure due to fullgraph=True")
 
@@ -620,7 +620,7 @@ def test_unsloth_fused_sft_loss_auto_falls_back_on_hidden_runtime_failure(monkey
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     advantages = torch.tensor([[0.0, 0.0, 1.0, 1.0]], dtype=torch.float32)
 
-    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+    def shifted_logprobs(*args, **kwargs):
         _ = args, kwargs
         return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
 
@@ -649,7 +649,7 @@ def test_unsloth_fused_sft_loss_require_raises_on_runtime_failure(monkeypatch) -
     helper.train_unsloth_fused_ce_torch_compile = False
     helper._loss_path_counts = {}
 
-    def failing_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+    def failing_fused_ce(*args, **kwargs):
         _ = args, kwargs
         raise RuntimeError("Hard failure due to fullgraph=True")
 
@@ -678,7 +678,7 @@ def test_unsloth_fused_sft_loss_auto_reraises_cuda_oom(monkeypatch) -> None:
     helper.train_unsloth_fused_ce_torch_compile = False
     helper._loss_path_counts = {}
 
-    def oom_fused_ce(*args, **kwargs):  # noqa: ANN002, ANN003
+    def oom_fused_ce(*args, **kwargs):
         _ = args, kwargs
         raise RuntimeError("CUDA out of memory. Tried to allocate 1.00 GiB")
 
@@ -705,7 +705,7 @@ def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch)
     helper._unsloth_fused_ce_runtime_disabled = False
     calls = 0
 
-    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):
         _ = input_ids, advantages, attention_mask
         nonlocal calls
         calls += 1
@@ -748,7 +748,7 @@ def test_sft_sequence_train_step_auto_retries_after_fused_ce_runtime_failure(
     helper._unsloth_fused_ce_runtime_disabled = False
     calls = 0
 
-    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):
         _ = input_ids, advantages, attention_mask
         nonlocal calls
         calls += 1
@@ -784,7 +784,7 @@ def test_sft_train_step_auto_does_not_retry_unrelated_runtime_failure(monkeypatc
     helper._unsloth_fused_ce_runtime_disabled = False
     calls = 0
 
-    def fake_compute_sft_loss(input_ids, advantages, attention_mask):  # noqa: ANN001
+    def fake_compute_sft_loss(input_ids, advantages, attention_mask):
         _ = input_ids, advantages, attention_mask
         nonlocal calls
         calls += 1
@@ -815,7 +815,7 @@ def test_unsloth_fused_sft_loss_falls_back_for_nonconstant_weights() -> None:
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     advantages = torch.tensor([[0.0, 0.0, 0.5, 1.0]], dtype=torch.float32)
 
-    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+    def shifted_logprobs(*args, **kwargs):
         _ = args, kwargs
         return torch.tensor([[-0.1, -0.2, -0.3]], dtype=torch.float32)
 
@@ -845,7 +845,7 @@ def test_unsloth_fused_sft_loss_falls_back_for_long_sparse_targets() -> None:
     advantages = torch.zeros_like(input_ids, dtype=torch.float32)
     advantages[:, -2:] = 1.0
 
-    def shifted_logprobs(*args, **kwargs):  # noqa: ANN002, ANN003
+    def shifted_logprobs(*args, **kwargs):
         _ = args, kwargs
         return torch.full((1, input_ids.shape[1] - 1), -0.25, dtype=torch.float32)
 
