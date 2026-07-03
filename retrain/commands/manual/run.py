@@ -110,7 +110,7 @@ def run(args: list[str], *, cli_name: str, manual_path: ManualPath) -> None:
             sys.exit(1)
 
     if fmt in ("troff", "html"):
-        from retrain.man_export import parse_manual, to_html, to_troff
+        from retrain.commands.manual.export import parse_manual, to_html, to_troff
 
         source = section_text if section_text is not None else manual_text
         sections = parse_manual(source)

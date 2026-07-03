@@ -1,6 +1,6 @@
-"""Tests for retrain.man_export — manual parser and troff/HTML formatters."""
+"""Tests for manual export — parser and troff/HTML formatters."""
 
-from retrain.man_export import (
+from retrain.commands.manual.export import (
     ManualSection,
     _escape_troff,
     _make_anchor,
