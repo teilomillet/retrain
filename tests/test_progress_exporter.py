@@ -132,6 +132,19 @@ def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> Non
     assert "soma_retrain_latest_tokens_per_second" in text
 
 
+def test_collect_run_snapshots_keeps_last_valid_metrics_row(tmp_path: Path) -> None:
+    run_dir = tmp_path / "partial-write"
+    run_dir.mkdir()
+    metrics_path = run_dir / "metrics.jsonl"
+    metrics_path.write_text('{"step": 7, "loss": 0.125}\n{"step":', encoding="utf-8")
+
+    [snapshot] = collect_run_snapshots(tmp_path)
+
+    assert snapshot.metrics_present is True
+    assert snapshot.latest_step == 7
+    assert snapshot.latest_loss == 0.125
+
+
 def test_collect_run_snapshots_ignores_malformed_completion_tokens(tmp_path: Path) -> None:
     run_dir = tmp_path / "bad-tokens"
     run_dir.mkdir()

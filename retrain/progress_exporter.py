@@ -24,6 +24,7 @@ from retrain.metrics_scan import JsonObject, float_or_none, int_or_none
 
 
 _RECENT_DIAG_LIMIT = 256
+_LATEST_JSONL_ENTRY_SEARCH_LIMIT = 16
 _ACTIVE_AGE_SECONDS = 10 * 60
 
 
@@ -112,7 +113,7 @@ def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
 
 
 def _latest_jsonl_entry(path: Path) -> JsonObject | None:
-    rows = _tail_jsonl(path, 1)
+    rows = _tail_jsonl(path, _LATEST_JSONL_ENTRY_SEARCH_LIMIT)
     return rows[-1] if rows else None
 
 
