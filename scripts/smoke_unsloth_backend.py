@@ -110,7 +110,7 @@ def _parse_args() -> argparse.Namespace:
 def _torch_status() -> dict[str, object]:
     try:
         torch = importlib.import_module("torch")
-    except Exception as exc:  # noqa: BLE001 - diagnostic path.
+    except Exception as exc:  # Diagnostic path.
         return {
             "torch_version": "unavailable",
             "cuda_available": False,
@@ -251,7 +251,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         if helper is not None:
             try:
                 setattr(exc, "_smoke_runtime_metrics", helper.runtime_metrics())
-            except Exception:  # noqa: BLE001 - diagnostic best effort.
+            except Exception:  # Diagnostic best effort.
                 pass
         raise
 
@@ -320,7 +320,7 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         if helper is not None:
             try:
                 setattr(exc, "_smoke_runtime_metrics", helper.runtime_metrics())
-            except Exception:  # noqa: BLE001 - diagnostic best effort.
+            except Exception:  # Diagnostic best effort.
                 pass
         raise
     finally:
@@ -332,7 +332,7 @@ def main() -> int:
     started = time.perf_counter()
     try:
         payload = _run(args)
-    except Exception as exc:  # noqa: BLE001 - this script reports evidence JSON.
+    except Exception as exc:  # This script reports evidence JSON.
         payload = {
             "ok": False,
             "error_type": type(exc).__name__,

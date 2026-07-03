@@ -73,7 +73,7 @@ def _check_server(engine: str, base_url: str, timeout_s: float) -> None:
     for suffix in ("/health", "/v1/models"):
         url = f"{root}{suffix}"
         try:
-            with urlopen(url, timeout=timeout_s) as response:  # noqa: S310 - user URL.
+            with urlopen(url, timeout=timeout_s) as response:
                 status = int(getattr(response, "status", 0))
                 if 200 <= status < 300:
                     return
@@ -331,7 +331,7 @@ def main() -> int:
                 "summary": asdict(summary),
             }
             print(format_suite_summary(summary))
-        except Exception as exc:  # noqa: BLE001 - backend comparison failures are data.
+        except Exception as exc:  # Backend comparison failures are data.
             condition_dir.mkdir(parents=True, exist_ok=True)
             result = {
                 **condition,

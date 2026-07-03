@@ -34,18 +34,18 @@ def _cleanup_after_condition() -> None:
     gc.collect()
     try:
         import torch
-    except Exception:  # noqa: BLE001 - torch import is optional for dry-run/help.
+    except Exception:  # Torch import is optional for dry-run/help.
         return
     if not torch.cuda.is_available():
         return
     try:
         torch.cuda.synchronize()
-    except Exception:  # noqa: BLE001 - after OOM the context can be mid-recovery.
+    except Exception:  # After OOM the context can be mid-recovery.
         pass
     try:
         torch.cuda.empty_cache()
         torch.cuda.ipc_collect()
-    except Exception:  # noqa: BLE001 - cleanup must not hide the benchmark failure.
+    except Exception:  # Cleanup must not hide the benchmark failure.
         pass
 
 
@@ -171,7 +171,7 @@ def _run_condition(
             "summary": asdict(summary),
         }
         print(format_suite_summary(summary))
-    except Exception as exc:  # noqa: BLE001 - benchmark failures are data.
+    except Exception as exc:  # Benchmark failures are data.
         result = {
             **condition,
             "status": "failed",

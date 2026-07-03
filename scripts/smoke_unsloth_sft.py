@@ -107,7 +107,7 @@ def _parse_args() -> argparse.Namespace:
 def _torch_status() -> dict[str, object]:
     try:
         import torch
-    except Exception as exc:  # noqa: BLE001 - diagnostic path.
+    except Exception as exc:  # Diagnostic path.
         return {
             "torch_version": "unavailable",
             "cuda_available": False,
@@ -359,7 +359,7 @@ def main() -> int:
     payload: dict[str, object]
     try:
         payload = _run(args)
-    except Exception as exc:  # noqa: BLE001 - this script reports evidence JSON.
+    except Exception as exc:  # This script reports evidence JSON.
         payload = {
             "ok": False,
             "error_type": type(exc).__name__,

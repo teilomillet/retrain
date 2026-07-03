@@ -28,7 +28,7 @@ import torch.nn.functional as F
 from retrain.local_train_helper import LocalTrainHelper
 
 
-def _selected_linear_ce_logprobs(hidden, weight, target_ids):  # noqa: ANN001
+def _selected_linear_ce_logprobs(hidden, weight, target_ids):
     logits = hidden @ weight.T
     return -F.cross_entropy(logits.float(), target_ids, reduction="none")
 
@@ -38,7 +38,7 @@ class _BenchBackbone(torch.nn.Module):
         super().__init__()
         self.embed = embed
 
-    def forward(self, input_ids, attention_mask=None, use_cache=False):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None, use_cache=False):
         _ = attention_mask, use_cache
         return SimpleNamespace(last_hidden_state=self.embed(input_ids))
 
@@ -50,7 +50,7 @@ class _BenchLM(torch.nn.Module):
         self.model = _BenchBackbone(self.embed)
         self.lm_head = torch.nn.Linear(hidden_size, vocab_size, bias=False)
 
-    def forward(self, input_ids, attention_mask=None, **kwargs):  # noqa: ANN001
+    def forward(self, input_ids, attention_mask=None, **kwargs):
         hidden = self.model(input_ids, attention_mask=attention_mask).last_hidden_state
         logits_to_keep = kwargs.get("logits_to_keep")
         if logits_to_keep is not None:
@@ -90,7 +90,7 @@ def _synchronize(device: torch.device) -> None:
         torch.cuda.synchronize(device)
 
 
-def _measure(fn, device: torch.device, repeats: int) -> dict[str, object]:  # noqa: ANN001
+def _measure(fn, device: torch.device, repeats: int) -> dict[str, object]:
     times: list[float] = []
     peaks: list[dict[str, float]] = []
     values: list[float] = []
@@ -219,7 +219,7 @@ def _region_benchmark(args: argparse.Namespace, device: torch.device, dtype: tor
                     mode="reduce-overhead",
                     fullgraph=True,
                 )
-            except Exception as exc:  # noqa: BLE001 - optional benchmark path.
+            except Exception as exc:  # Optional benchmark path.
                 compiled_selected_error = type(exc).__name__
                 if args.compile_selective_ce == "require":
                     raise
