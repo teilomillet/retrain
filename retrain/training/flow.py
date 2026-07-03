@@ -32,7 +32,7 @@ from retrain.backends.catalog import (
 from retrain.backends import TrainHelper
 from retrain.training.backpressure import BackPressure
 from retrain.config import TrainConfig
-from retrain.planning import PlanningDetector
+from retrain.planning.types import PlanningDetector
 from retrain.training.sepa import SEPAController
 
 # ── Constants moved from trainer.py ──────────────────────────────────────

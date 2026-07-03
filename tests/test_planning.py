@@ -1,11 +1,12 @@
-"""Tests for retrain.planning detectors."""
+"""Tests for planning detectors."""
 
 import importlib
 
 import pytest
 
 from retrain.advantages import identify_planning_tokens
-from retrain.planning import RegexPlanningDetector, SemanticPlanningDetector
+from retrain.planning.regex import RegexPlanningDetector
+from retrain.planning.semantic import SemanticPlanningDetector
 
 
 def test_regex_planning_detector_matches_identify_helper() -> None:

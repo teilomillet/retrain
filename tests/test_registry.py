@@ -479,10 +479,10 @@ class TestBackwardCompat:
 
     def test_create_reward_still_importable(self):
         """create_reward remains importable for external code."""
-        from retrain.rewards.create import create_reward
+        from retrain.rewards import create_reward
         assert callable(create_reward)
 
     def test_create_planning_detector_still_importable(self):
         """create_planning_detector remains importable for external code."""
-        from retrain.planning import create_planning_detector
+        from retrain.planning.create import create_planning_detector
         assert callable(create_planning_detector)

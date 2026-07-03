@@ -26,7 +26,7 @@ from retrain.training.backpressure import BackPressure
 from retrain.config import TrainConfig
 from retrain.data import DataSource
 from retrain.plugins.resolve import resolve_dotted_attribute
-from retrain.planning import PlanningDetector
+from retrain.planning.types import PlanningDetector
 from retrain.rewards.types import RewardFunction
 from retrain.training.runner import TrainingRunner
 
@@ -249,14 +249,14 @@ def _reward_custom(config: TrainConfig) -> RewardFunction:
 
 @planning_detector.register("regex")
 def _detector_regex(config: TrainConfig) -> PlanningDetector:
-    from retrain.planning import create_planning_detector
+    from retrain.planning.create import create_planning_detector
     # Reuse existing factory for regex — it handles strategic_grams parsing
     return create_planning_detector(config)
 
 
 @planning_detector.register("semantic")
 def _detector_semantic(config: TrainConfig) -> PlanningDetector:
-    from retrain.planning import SemanticPlanningDetector
+    from retrain.planning.semantic import SemanticPlanningDetector
     return SemanticPlanningDetector(
         model_name=config.planning_model,
         threshold=config.planning_threshold,

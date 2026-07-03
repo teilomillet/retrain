@@ -1,34 +1,16 @@
-"""Planning token detection: regex and semantic embedding-based detectors.
-
-Provides a ``PlanningDetector`` protocol and factory function following
-the same pattern as ``rewards.py``.  The semantic detector uses
-sentence-transformers to classify token windows as planning vs execution
-based on centroid distance to math-tuned anchor embeddings.
-"""
+"""Embedding-based planning detector using sentence-transformers."""
 
 from __future__ import annotations
 
 import importlib
-import re
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast
+
+from retrain.planning.tokens import clean_fragment
 
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
-
-    from retrain.config import TrainConfig
-
-
-# ---------------------------------------------------------------------------
-# Protocol
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class PlanningDetector(Protocol):
-    """Detects which tokens belong to planning/metacognitive spans."""
-
-    def detect(self, token_strs: list[str]) -> list[int]: ...
 
 
 class _SentenceEmbeddingModel(Protocol):
@@ -40,75 +22,6 @@ class _SentenceEmbeddingModel(Protocol):
         batch_size: int = 32,
     ) -> NDArray[np.float64]: ...
 
-
-# ---------------------------------------------------------------------------
-# Regex detector — wraps existing identify_planning_tokens()
-# ---------------------------------------------------------------------------
-
-class RegexPlanningDetector:
-    """Backward-compatible regex/strategic-gram detector."""
-
-    def __init__(self, strategic_grams: list[str]) -> None:
-        self._grams = strategic_grams
-        self._pattern = (
-            re.compile(
-                "(?:"
-                + "|".join(
-                    r"\b" + re.escape(gram) + r"\b"
-                    for gram in strategic_grams
-                )
-                + ")",
-                re.IGNORECASE,
-            )
-            if strategic_grams
-            else None
-        )
-        self._effective_window = (
-            max(5, max(len(gram.split()) for gram in strategic_grams))
-            if strategic_grams
-            else 5
-        )
-        self._clean_cache: dict[str, str] = {}
-
-    def detect(self, token_strs: list[str]) -> list[int]:
-        n_tokens = len(token_strs)
-        if n_tokens == 0:
-            return []
-        if self._pattern is None:
-            return [0] * n_tokens
-
-        cleaned: list[str] = []
-        clean_cache = self._clean_cache
-        for token in token_strs:
-            cleaned_token = clean_cache.get(token)
-            if cleaned_token is None:
-                cleaned_token = _clean_fragment(token)
-                if len(clean_cache) < 8192:
-                    clean_cache[token] = cleaned_token
-            cleaned.append(cleaned_token)
-
-        mask = [0] * n_tokens
-        pattern = self._pattern
-        effective_window = self._effective_window
-        for start in range(n_tokens):
-            window_text = ""
-            window_end = min(start + effective_window, n_tokens)
-            for end in range(start, window_end):
-                if cleaned[end]:
-                    if window_text:
-                        window_text += " " + cleaned[end]
-                    else:
-                        window_text = cleaned[end]
-                if pattern.search(window_text):
-                    for idx in range(start, end + 1):
-                        mask[idx] = 1
-                    break
-        return mask
-
-
-# ---------------------------------------------------------------------------
-# Semantic detector — sentence-transformer embeddings
-# ---------------------------------------------------------------------------
 
 # Math-tuned anchor phrases discovered in the v2 diagnostic.
 # These define the planning/execution centroids in embedding space.
@@ -156,15 +69,6 @@ _EXECUTION_ANCHORS = [
     "cross-multiplying gives us",
     "collecting like terms on the left",
 ]
-
-# Subword markers used by common tokenizers
-_SUBWORD_RE = re.compile(r"[\u2581\u0120]")
-
-
-def _clean_fragment(fragment: str) -> str:
-    """Clean a tokenizer fragment: replace subword markers with space."""
-    return _SUBWORD_RE.sub(" ", fragment).strip()
-
 
 class SemanticPlanningDetector:
     """Embedding-based planning detector using sentence-transformers.
@@ -258,7 +162,7 @@ class SemanticPlanningDetector:
         (start_token_idx, end_token_idx) exclusive.
         """
         # Clean all fragments and build a word-to-token index
-        cleaned = [_clean_fragment(t) for t in token_strs]
+        cleaned = [clean_fragment(t) for t in token_strs]
 
         # Accumulate into a flat word list with token provenance
         words: list[str] = []
@@ -294,42 +198,3 @@ class SemanticPlanningDetector:
                 break
 
         return windows, spans
-
-
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
-
-_VALID_DETECTORS = {"regex", "semantic"}
-
-
-def create_planning_detector(config: TrainConfig) -> PlanningDetector:
-    """Create the planning detector specified by config."""
-    import json
-
-    from retrain.advantages import DEFAULT_STRATEGIC_GRAMS
-
-    detector_type = config.planning_detector
-
-    if detector_type == "regex":
-        # Parse strategic grams from config (same logic as trainer.py)
-        if config.strategic_grams:
-            raw = config.strategic_grams
-            if raw.startswith("["):
-                grams = [g.strip() for g in json.loads(raw) if g.strip()]
-            else:
-                grams = [g.strip() for g in raw.split(",") if g.strip()]
-        else:
-            grams = list(DEFAULT_STRATEGIC_GRAMS)
-        return RegexPlanningDetector(grams)
-
-    if detector_type == "semantic":
-        return SemanticPlanningDetector(
-            model_name=config.planning_model,
-            threshold=config.planning_threshold,
-        )
-
-    raise ValueError(
-        f"Unknown planning_detector '{detector_type}'. "
-        f"Choose from: {sorted(_VALID_DETECTORS)}"
-    )
