@@ -203,10 +203,10 @@ def install_cudnn_causal_conv1d_shim(*, enabled: bool) -> dict[str, object]:
         return out.squeeze(-1) if unsqueeze else out
 
     module = types.ModuleType("causal_conv1d")
-    module.__version__ = "cudnn-shim"
+    setattr(module, "__version__", "cudnn-shim")
     module.__spec__ = importlib.machinery.ModuleSpec("causal_conv1d", loader=None)
-    module.causal_conv1d_fn = causal_conv1d_fn
-    module.causal_conv1d_update = causal_conv1d_update
+    setattr(module, "causal_conv1d_fn", causal_conv1d_fn)
+    setattr(module, "causal_conv1d_update", causal_conv1d_update)
     sys.modules["causal_conv1d"] = module
     report["cudnn_causal_conv1d_shim_installed"] = 1
     return report

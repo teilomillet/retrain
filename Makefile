@@ -4,6 +4,7 @@ TYPECHECK_PATHS = \
 	retrain/config.py \
 	retrain/type_defs.py \
 	retrain/data.py \
+	retrain/accelerators.py \
 	retrain/diff.py \
 	retrain/json_utils.py \
 	retrain/metrics_scan.py \
