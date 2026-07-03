@@ -2,6 +2,7 @@
 
 TYPECHECK_PATHS = \
 	retrain/config.py \
+	retrain/cli.py \
 	retrain/type_defs.py \
 	retrain/data.py \
 	retrain/accelerators.py \

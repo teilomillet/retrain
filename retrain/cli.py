@@ -24,6 +24,10 @@ import re
 import sys
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from retrain.config import TrainConfig
 
 
 _STARTER_TOML = """\
@@ -847,6 +851,27 @@ _PLUGIN_KINDS = {
 }
 
 
+def _object_dict(value: object, name: str) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"Invalid {name}: expected object mapping")
+    return cast(dict[str, object], value)
+
+
+def _object_list(value: object, name: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError(f"Invalid {name}: expected list")
+    rows: list[dict[str, object]] = []
+    for idx, item in enumerate(value):
+        rows.append(_object_dict(item, f"{name}[{idx}]"))
+    return rows
+
+
+def _string_list(value: object, name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"Invalid {name}: expected list of strings")
+    return cast(list[str], value)
+
+
 def _sanitize_identifier(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", name.strip())
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
@@ -1091,22 +1116,24 @@ def _run_plugins(args: list[str]) -> None:
             status = f"error: {exc.__class__.__name__}"
         discovered_entries.append({"module": module_name, "status": status})
 
+    builtins: dict[str, list[str]] = {
+        "algorithm_mode": get_builtin_algorithm_modes(),
+        "advantage_mode": get_builtin_advantage_modes(),
+        "transform_mode": get_builtin_transform_modes(),
+        "backend": get_registry("backend").builtin_names,
+        "inference_engine": get_registry("inference_engine").builtin_names,
+        "reward": get_registry("reward").builtin_names,
+        "planning_detector": get_registry("planning_detector").builtin_names,
+        "data_source": get_registry("data_source").builtin_names,
+        "backpressure": get_registry("backpressure").builtin_names,
+    }
+
     payload: dict[str, object] = {
         "runtime": {
             "search_paths": list(runtime.search_paths),
             "strict": runtime.strict,
         },
-        "builtins": {
-            "algorithm_mode": get_builtin_algorithm_modes(),
-            "advantage_mode": get_builtin_advantage_modes(),
-            "transform_mode": get_builtin_transform_modes(),
-            "backend": get_registry("backend").builtin_names,
-            "inference_engine": get_registry("inference_engine").builtin_names,
-            "reward": get_registry("reward").builtin_names,
-            "planning_detector": get_registry("planning_detector").builtin_names,
-            "data_source": get_registry("data_source").builtin_names,
-            "backpressure": get_registry("backpressure").builtin_names,
-        },
+        "builtins": builtins,
         "discovered": discovered_entries,
     }
 
@@ -1118,7 +1145,7 @@ def _run_plugins(args: list[str]) -> None:
     print(f"  search_paths: {', '.join(runtime.search_paths)}")
     print(f"  strict      : {runtime.strict}")
     print("\nBuilt-ins:")
-    for key, values in payload["builtins"].items():  # type: ignore[index]
+    for key, values in builtins.items():
         print(f"  {key}: {', '.join(values)}")
     print("\nDiscovered modules:")
     if discovered_entries:
@@ -1215,38 +1242,49 @@ def _run_backends(args: list[str]) -> None:
         return
 
     print("Built-in backends:")
-    for backend_item in payload["builtins"]:
-        name = backend_item["name"]
-        dep = backend_item["dependency"]
-        caps = backend_item["capabilities"]
+    for backend_item in _object_list(payload.get("builtins"), "backends.builtins"):
+        name = str(backend_item.get("name", ""))
+        dep = _object_dict(backend_item.get("dependency"), "backend.dependency")
+        caps = _object_dict(backend_item.get("capabilities"), "backend.capabilities")
         print(f"  {name}")
-        print(f"    dependency: {dep['import']} ({dep['hint']})")
+        print(f"    dependency: {dep.get('import', '')} ({dep.get('hint', '')})")
         print(
             "    capabilities: "
-            f"reports_sync_loss={caps['reports_sync_loss']}, "
-            f"preserves_token_advantages={caps['preserves_token_advantages']}, "
-            f"supports_checkpoint_resume={caps['supports_checkpoint_resume']}, "
-            f"resume_runtime_dependent={caps['resume_runtime_dependent']}, "
-            f"supports_echo_shared_forward={caps['supports_echo_shared_forward']}"
+            f"reports_sync_loss={caps.get('reports_sync_loss')}, "
+            f"preserves_token_advantages={caps.get('preserves_token_advantages')}, "
+            f"supports_checkpoint_resume={caps.get('supports_checkpoint_resume')}, "
+            f"resume_runtime_dependent={caps.get('resume_runtime_dependent')}, "
+            f"supports_echo_shared_forward={caps.get('supports_echo_shared_forward')}"
         )
-        option_schema = backend_item["option_schema"]
+        option_schema = _object_dict(
+            backend_item.get("option_schema"),
+            "backend.option_schema",
+        )
         if option_schema:
             print("    options:")
-            for key, spec in sorted(option_schema.items()):
+            for key, raw_spec in sorted(option_schema.items()):
+                spec = _object_dict(raw_spec, f"backend.option_schema.{key}")
                 choices = spec.get("choices")
                 choice_text = f" choices={choices}" if choices else ""
                 print(
-                    f"      {key}: type={spec['type']} default={spec['default']!r}{choice_text}"
+                    f"      {key}: type={spec.get('type')} "
+                    f"default={spec.get('default')!r}{choice_text}"
                 )
         else:
             print("    options: none")
 
-    plugin = payload["plugin"]
+    plugin = _object_dict(payload.get("plugin"), "backends.plugin")
     print("\nPlugin metadata hooks:")
-    print(f"  dotted_path_supported: {plugin['dotted_path_supported']}")
-    print(f"  capability_hooks     : {', '.join(plugin['capability_hooks'])}")
-    print(f"  option_schema_hooks  : {', '.join(plugin['option_schema_hooks'])}")
-    print(f"  schema_format        : {plugin['option_schema_format']}")
+    print(f"  dotted_path_supported: {plugin.get('dotted_path_supported')}")
+    print(
+        "  capability_hooks     : "
+        f"{', '.join(_string_list(plugin.get('capability_hooks'), 'plugin.capability_hooks'))}"
+    )
+    print(
+        "  option_schema_hooks  : "
+        f"{', '.join(_string_list(plugin.get('option_schema_hooks'), 'plugin.option_schema_hooks'))}"
+    )
+    print(f"  schema_format        : {plugin.get('option_schema_format', '')}")
 
 
 def _run_doctor() -> None:
@@ -1286,7 +1324,7 @@ def _run_doctor() -> None:
         print("Some optional dependencies are missing (see above).")
 
 
-def _check_environment(config: "TrainConfig") -> None:  # noqa: F821
+def _check_environment(config: "TrainConfig") -> None:
     """Warn if the config references components whose deps are missing."""
     from retrain.registry import check_environment
 
@@ -1349,7 +1387,9 @@ def _run_status(args: list[str]) -> None:
 
         if not show_all:
 
-            def _is_visible(c: type(campaigns[0])) -> bool:
+            from retrain.status import CampaignSummary
+
+            def _is_visible(c: CampaignSummary) -> bool:
                 if c.status == "running":
                     return True
                 if c.status in ("dead", "partial", "done"):
@@ -2389,7 +2429,7 @@ def main() -> None:
         )
         runner = get_registry("trainer").create(config.trainer, config)
         result = runner.run(config)
-        meta = {"trainer": config.trainer}
+        meta: dict[str, object] = {"trainer": config.trainer}
         meta.update(result.to_dict())
         meta_path.write_text(json.dumps(meta))
         if not result.ok:
