@@ -11,13 +11,13 @@ Goal: run your first retrain experiment quickly, then scale it safely.
     !!! tip "Low VRAM?"
         Start with `retrain init --template quickstart` (smoke-test profile with `max_tokens=1024`), then move to the standard training defaults (`max_tokens=10240`) once your run is stable.
 
-    **Software:** Python 3.11+, CUDA 12.x, internet access for the first run (downloads model weights from HuggingFace and the MATH dataset).
+    **Software:** Python 3.12+, CUDA 12.x, internet access for the first run (downloads model weights from HuggingFace and the MATH dataset).
 
 === "Tinker backend"
 
     **Hardware:** No local GPU required. All model loading, inference, and training run on the Tinker remote GPU service.
 
-    **Software:** Python 3.11+, internet access, a Tinker service URL.
+    **Software:** Python 3.12+, internet access, a Tinker service URL.
 
     **Access:** You need access to a running Tinker service. Set the URL in your config or ask your team for the endpoint.
 
@@ -26,10 +26,10 @@ Goal: run your first retrain experiment quickly, then scale it safely.
 === "Local backend"
 
     ```bash
-    pip install -e .
+    pip install -e ".[local]"
     ```
 
-    This installs retrain and its dependencies (PyTorch, Transformers, PEFT, wandb, verifiers).
+    This installs retrain with the local PyTorch backend.
 
 === "Tinker backend"
 

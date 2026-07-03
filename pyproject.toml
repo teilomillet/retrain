@@ -33,7 +33,13 @@ semantic = ["sentence-transformers>=5.2.3"]
 wandb = ["wandb>=0.17.0"]
 docs = ["mkdocs>=1.6,<2.0", "mkdocs-material>=9.5,<10.0"]
 all = ["retrain[local,tinker,mlx,verifiers,semantic,wandb]"]
-dev = ["retrain[all]", "pytest>=8.0.0", "ruff>=0.9.0", "ty>=0.0.14"]
+dev = [
+    "retrain[all,docs]",
+    "pytest>=8.0.0",
+    "ruff>=0.9.0",
+    "ty>=0.0.14",
+    "ordeal==0.3.39",
+]
 
 [project.scripts]
 retrain = "retrain.cli:main"
@@ -54,10 +60,12 @@ select = ["ANN401", "TID251"]
 [tool.ty.analysis]
 allowed-unresolved-imports = ["prime_rl.configs.shared", "prime_rl.transport", "wandb"]
 
-[tool.uv.sources]
-ordeal = { path = "../ordeal", editable = true }
-
 [dependency-groups]
 dev = [
-    "ordeal",
+    "mkdocs>=1.6,<2.0",
+    "mkdocs-material>=9.5,<10.0",
+    "ordeal==0.3.39",
+    "pytest>=8.0.0",
+    "ruff>=0.9.0",
+    "ty>=0.0.14",
 ]

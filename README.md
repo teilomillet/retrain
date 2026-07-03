@@ -6,7 +6,7 @@ If you are new, start with install -> explore commands -> run a tiny config.
 
 ## Install
 
-Requires Python 3.11+.
+Requires Python 3.12+.
 
 ```bash
 # CLI + docs exploration

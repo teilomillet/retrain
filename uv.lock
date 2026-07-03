@@ -1973,32 +1973,15 @@ wheels = [
 [[package]]
 name = "ordeal"
 version = "0.3.39"
-source = { editable = "../ordeal" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "coverage" },
     { name = "hypothesis" },
     { name = "pytest" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "atheris", marker = "extra == 'all'", specifier = ">=2.3.0" },
-    { name = "atheris", marker = "extra == 'atheris'", specifier = ">=2.3.0" },
-    { name = "coverage", specifier = ">=7.6.0" },
-    { name = "hypothesis", specifier = ">=6.100.0" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0.0" },
-    { name = "numpy", marker = "extra == 'all'", specifier = ">=1.26.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
-]
-provides-extras = ["atheris", "all", "dev", "docs"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "numpy", marker = "python_full_version >= '3.11'", specifier = ">=1.26.0" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/ce/67/57bbaaefb3688a7a79733cadfcdde6922e4b341e380f9566ecedc6c9f088/ordeal-0.3.39.tar.gz", hash = "sha256:9b3276ca12b7e4f6552c3e7bcabd9fde6ada1d66e4fda3abf4cd01d2c7e5e37c", size = 664656, upload-time = "2026-04-10T09:01:29.815Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/8f/cefb5ba052c8bd2d7c719df33f6c81735dca2f8a26a7c538ea7b28a253da/ordeal-0.3.39-py3-none-any.whl", hash = "sha256:b3bf5c2472a7755563f321dfd0c62a8c682602a06b6a9507600d66fa4bcf5b5d", size = 492791, upload-time = "2026-04-10T09:01:28.173Z" },
 ]
 
 [[package]]
@@ -2869,7 +2852,10 @@ cuda-accelerated = [
     { name = "torch" },
 ]
 dev = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
     { name = "mlx-lm", marker = "sys_platform == 'darwin'" },
+    { name = "ordeal" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "sentence-transformers" },
@@ -2904,7 +2890,12 @@ wandb = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mkdocs" },
+    { name = "mkdocs-material" },
     { name = "ordeal" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
 ]
 
 [package.metadata]
@@ -2917,11 +2908,12 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6,<2.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5,<10.0" },
     { name = "mlx-lm", marker = "sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.20.0" },
+    { name = "ordeal", marker = "extra == 'dev'", specifier = "==0.3.39" },
     { name = "orjson", specifier = ">=3.11.8" },
     { name = "peft", specifier = ">=0.12.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
-    { name = "retrain", extras = ["all"], marker = "extra == 'dev'" },
+    { name = "retrain", extras = ["all", "docs"], marker = "extra == 'dev'" },
     { name = "retrain", extras = ["local", "tinker", "mlx", "verifiers", "semantic", "wandb"], marker = "extra == 'all'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
     { name = "safetensors", specifier = ">=0.4.0" },
@@ -2937,7 +2929,14 @@ requires-dist = [
 provides-extras = ["local", "cuda-accelerated", "tinker", "mlx", "verifiers", "semantic", "wandb", "docs", "all", "dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ordeal", editable = "../ordeal" }]
+dev = [
+    { name = "mkdocs", specifier = ">=1.6,<2.0" },
+    { name = "mkdocs-material", specifier = ">=9.5,<10.0" },
+    { name = "ordeal", specifier = "==0.3.39" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "ruff", specifier = ">=0.9.0" },
+    { name = "ty", specifier = ">=0.0.14" },
+]
 
 [[package]]
 name = "rich"

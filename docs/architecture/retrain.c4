@@ -52,7 +52,7 @@ model {
     description 'TOML-first RLVR trainer for LLMs'
 
     cli = container 'retrain CLI / Trainer' {
-      technology 'Python 3.11+ (Typer-style CLI, single process)'
+      technology 'Python 3.12+ (Typer-style CLI, single process)'
       description 'Single Python process: parses TOML, runs the RL training loop, orchestrates backends, rewards, logging'
 
       entry = component 'CLI Entrypoint' {
