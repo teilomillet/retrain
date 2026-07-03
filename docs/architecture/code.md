@@ -57,6 +57,7 @@ retrain/
     runner.py
     flow.py
     sft.py
+    warmup.py
     state.py
     sepa.py
     echo.py
@@ -197,6 +198,7 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
+- `training/warmup.py`: supervised warmup data loading, stepping, and logging.
 - `training/trainer.py`: the main RL orchestration path.
 - `training/discover.py`: test-time training over a single problem.
 - `advantages/episode.py`: episode-level GRPO, MaxRL, and REINFORCE++ modes.

@@ -44,6 +44,7 @@ retrain
 │   ├── runner.py       # TrainingRunner protocol + built-in runners
 │   ├── flow.py         # Construct-and-trace of the training flow
 │   ├── sft.py          # SFT dataset and tokenization helpers
+│   ├── warmup.py       # Supervised warmup phase for the RL trainer
 │   ├── state.py        # Checkpoint state serialization
 │   ├── sepa.py         # SEPA scheduler (linear / auto)
 │   ├── echo.py         # ECHO observation-token datums
