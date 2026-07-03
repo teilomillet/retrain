@@ -171,7 +171,6 @@ class SftRunner:
         from transformers import AutoTokenizer
 
         from retrain.backends.catalog import (
-            _effective_sft_loss_fn,
             backend_capability_source,
             resolve_backend_capabilities,
         )
@@ -181,6 +180,7 @@ class SftRunner:
             build_sft_tokenized_batch,
             build_sft_artifact_manifest,
             build_sft_example_order,
+            effective_sft_loss_fn,
             load_sft_jsonl,
             select_sft_batch_indices,
             tokenize_sft_dataset,
@@ -231,7 +231,7 @@ class SftRunner:
         print(f"  adapter_path  : {config.adapter_path}")
 
         helper = get_registry("backend").create(config.backend, config)
-        loss_fn = _effective_sft_loss_fn(config)
+        loss_fn = effective_sft_loss_fn(config)
         setattr(helper, "sft_loss_fn", loss_fn)
 
         backend_caps = resolve_backend_capabilities(

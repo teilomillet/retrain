@@ -56,6 +56,16 @@ class SftTokenizedExample:
         return sum(1 for value in self.advantages if value > 0.0)
 
 
+def effective_sft_loss_fn(config: "TrainConfig") -> str:
+    """Resolve SFT loss without changing legacy warmup defaults."""
+
+    if config.sft_loss_fn != "auto":
+        return config.sft_loss_fn
+    if config.trainer == "sft":
+        return "cross_entropy"
+    return "importance_sampling"
+
+
 def _row_error(path: Path, line_no: int, message: str) -> ValueError:
     return ValueError(f"Invalid SFT JSONL row in {path}:{line_no}: {message}")
 
