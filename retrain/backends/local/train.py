@@ -12,7 +12,6 @@ GPU split mode (multi-GPU): separate devices for inference and training.
 """
 
 import gc
-import importlib
 import os
 import time
 from contextlib import contextmanager
@@ -41,6 +40,7 @@ from retrain.backends.local.lora import (
 )
 from retrain.backends.local import batch as local_batch
 from retrain.backends.local import device as local_device
+from retrain.backends.local import loss as local_loss
 from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import sft as local_sft
 from retrain.backends.local.checkpointing import (
@@ -59,8 +59,6 @@ from retrain.models.gemma4 import (
 )
 from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs as _packed_quantized_linear_target_logprobs,
-    selected_linear_ce_logprobs_no_bias as _selected_linear_ce_logprobs_no_bias,
-    selected_linear_ce_logprobs_with_bias as _selected_linear_ce_logprobs_with_bias,
 )
 from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
@@ -689,200 +687,42 @@ class LocalTrainHelper:
 
     @staticmethod
     def _normalize_compile_mode(raw, *, option_name: str) -> str:
-        if isinstance(raw, bool):
-            return "auto" if raw else "off"
-        text = str(raw or "off").strip().lower()
-        aliases = {
-            "0": "off",
-            "false": "off",
-            "no": "off",
-            "none": "off",
-            "disabled": "off",
-            "1": "auto",
-            "true": "auto",
-            "yes": "auto",
-            "on": "auto",
-            "required": "require",
-        }
-        text = aliases.get(text, text)
-        if text not in {"off", "auto", "require"}:
-            raise ValueError(f"{option_name} must be 'off', 'auto', or 'require'.")
-        return text
+        return local_loss.normalize_compile_mode(raw, option_name=option_name)
 
     @staticmethod
     def _normalize_unsloth_fused_ce_mode(raw) -> str:
-        if isinstance(raw, bool):
-            return "require" if raw else "off"
-        text = str(raw or "off").strip().lower()
-        aliases = {
-            "0": "off",
-            "false": "off",
-            "no": "off",
-            "none": "off",
-            "disabled": "off",
-            "1": "require",
-            "true": "require",
-            "yes": "require",
-            "on": "require",
-            "required": "require",
-        }
-        text = aliases.get(text, text)
-        if text not in {"off", "auto", "require"}:
-            raise ValueError(
-                "train_unsloth_fused_ce must be 'off', 'auto', or 'require'."
-            )
-        return text
+        return local_loss.normalize_unsloth_fused_ce_mode(raw)
 
     def _reject_compiled_selective_ce(self, reason: str):
-        self._compiled_selective_ce_fallback_reason = reason
-        if getattr(self, "train_compile_selective_ce", "off") == "require":
-            raise RuntimeError(
-                "train_compile_selective_ce=require but the compiled selected "
-                f"CE path cannot be used: {reason}"
-            )
-        return None
+        return local_loss.reject_compiled_selective_ce(self, reason)
 
     def _compiled_selective_ce_logprobs(self, selected_hidden, lm_head, target_ids):
-        mode = getattr(self, "train_compile_selective_ce", "off")
-        if mode == "off":
-            return None
-        if int(selected_hidden.shape[0]) < int(
-            getattr(self, "train_compile_selective_ce_min_tokens", 0)
-        ):
-            return self._reject_compiled_selective_ce("below_min_tokens")
-        if selected_hidden.device.type != "cuda":
-            return self._reject_compiled_selective_ce("non_cuda")
-        if not hasattr(torch, "compile"):
-            self._compiled_selective_ce_available = False
-            return self._reject_compiled_selective_ce("torch_compile_unavailable")
-
-        if type(lm_head) is not torch.nn.Linear:
-            return self._reject_compiled_selective_ce("lm_head_not_plain_linear")
-        weight = getattr(lm_head, "weight", None)
-        if weight is None:
-            return self._reject_compiled_selective_ce("lm_head_weight_unavailable")
-        bias = getattr(lm_head, "bias", None)
-
-        try:
-            if bias is None:
-                compiled = getattr(
-                    self,
-                    "_compiled_selective_ce_no_bias",
-                    None,
-                )
-                if compiled is None:
-                    compiled = torch.compile(
-                        _selected_linear_ce_logprobs_no_bias,
-                        mode="reduce-overhead",
-                        fullgraph=True,
-                    )
-                    self._compiled_selective_ce_no_bias = compiled
-                selected_logprobs = compiled(selected_hidden, weight, target_ids)
-            else:
-                compiled = getattr(
-                    self,
-                    "_compiled_selective_ce_with_bias",
-                    None,
-                )
-                if compiled is None:
-                    compiled = torch.compile(
-                        _selected_linear_ce_logprobs_with_bias,
-                        mode="reduce-overhead",
-                        fullgraph=True,
-                    )
-                    self._compiled_selective_ce_with_bias = compiled
-                selected_logprobs = compiled(
-                    selected_hidden,
-                    weight,
-                    bias,
-                    target_ids,
-                )
-        except Exception as exc:  # Optional compiler path.
-            self._compiled_selective_ce_available = False
-            return self._reject_compiled_selective_ce(type(exc).__name__)
-
-        self._compiled_selective_ce_available = True
-        self._compiled_selective_ce_fallback_reason = ""
-        return selected_logprobs
+        return local_loss.compiled_selective_ce_logprobs(
+            self,
+            selected_hidden,
+            lm_head,
+            target_ids,
+        )
 
     def _unsloth_fused_ce_loss(self):
-        if bool(getattr(self, "_unsloth_fused_ce_runtime_disabled", False)):
-            return None
-        cached = getattr(self, "_unsloth_fused_ce_loss_fn", None)
-        if cached is not None:
-            return cached
-        try:
-            try:
-                importlib.import_module("unsloth")
-            except Exception:
-                pass
-            from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
-                HAS_CUT_CROSS_ENTROPY,
-            )
-            from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
-                unsloth_fused_ce_loss,
-            )
-        except Exception as exc:  # Optional accelerator path.
-            self._unsloth_fused_ce_available = False
-            self._unsloth_fused_ce_unavailable_reason = type(exc).__name__
-            return None
-        if not HAS_CUT_CROSS_ENTROPY:
-            self._unsloth_fused_ce_available = False
-            self._unsloth_fused_ce_unavailable_reason = "cut_cross_entropy_unavailable"
-            return None
-        self._unsloth_fused_ce_available = True
-        self._unsloth_fused_ce_unavailable_reason = ""
-        self._unsloth_fused_ce_loss_fn = unsloth_fused_ce_loss
-        return unsloth_fused_ce_loss
+        return local_loss.unsloth_fused_ce_loss(self)
 
     def _effective_unsloth_fused_ce_target_gb(self) -> float:
-        configured = float(getattr(self, "train_unsloth_fused_ce_target_gb", 0.0))
-        if configured > 0:
-            return configured
-        device = str(getattr(self, "train_device", ""))
-        if not device.startswith("cuda") or not torch.cuda.is_available():
-            return 0.0
-        try:
-            total_gb = torch.cuda.get_device_properties(device).total_memory / (
-                1024**3
-            )
-        except Exception:  # Diagnostic/tuning fallback only.
-            return 0.0
-        if total_gb <= 16:
-            return 0.25
-        if total_gb <= 24:
-            return 0.5
-        return 0.0
+        return local_loss.effective_unsloth_fused_ce_target_gb(self)
 
     @staticmethod
     def _is_cuda_oom_exception(exc: BaseException) -> bool:
-        message = str(exc).lower()
-        return "cuda" in message and "out of memory" in message
+        return local_loss.is_cuda_oom_exception(exc)
 
     def _disable_unsloth_fused_ce_after_runtime_failure(
         self,
         exc: BaseException,
     ) -> str:
-        reason = f"runtime_{type(exc).__name__}"
-        self._unsloth_fused_ce_available = False
-        self._unsloth_fused_ce_unavailable_reason = reason
-        self._unsloth_fused_ce_fallback_reason = reason
-        self._unsloth_fused_ce_runtime_disabled = True
-        try:
-            torch._dynamo.reset()
-        except Exception:  # Best-effort compiler cleanup.
-            pass
-        return reason
+        return local_loss.disable_unsloth_fused_ce_after_runtime_failure(self, exc)
 
     @staticmethod
     def _constant_positive_weight(weights, target_mask):
-        selected = weights[target_mask]
-        if selected.numel() == 0:
-            return None
-        first = selected[:1]
-        if torch.allclose(selected, first.expand_as(selected)):
-            return first.squeeze()
-        return None
+        return local_loss.constant_positive_weight(weights, target_mask)
 
     def _maybe_compute_unsloth_fused_sft_loss(
         self,
@@ -892,104 +732,15 @@ class LocalTrainHelper:
         target_mask,
         token_count,
     ):
-        mode = getattr(self, "train_unsloth_fused_ce", "off")
-        if mode == "off":
-            return None
-
-        def reject(reason: str):
-            self._unsloth_fused_ce_fallback_reason = reason
-            if mode == "require":
-                raise RuntimeError(
-                    "train_unsloth_fused_ce=require but the fused CE path "
-                    f"cannot be used: {reason}"
-                )
-            return None
-
-        if target_mask is None or not bool(target_mask.any().item()):
-            return reject("no_supervised_tokens")
-
-        supervised_tokens = target_mask.float().sum()
-        shifted_tokens = attention_mask[:, 1:].float().sum().clamp(min=1)
-        if (
-            int(target_mask.shape[1]) > 2048
-            and float((supervised_tokens / shifted_tokens).detach().item()) < 0.25
-        ):
-            return reject("sparse_supervised_tokens")
-
-        weight_scale = self._constant_positive_weight(weights, target_mask)
-        if weight_scale is None:
-            return reject("non_constant_token_weights")
-        if bool(getattr(self, "train_save_on_cpu", False)):
-            return reject("saved_tensor_hooks_incompatible")
-
-        loss_fn = self._unsloth_fused_ce_loss()
-        if loss_fn is None:
-            reason = getattr(
-                self,
-                "_unsloth_fused_ce_unavailable_reason",
-                "unavailable",
-            )
-            return reject(reason)
-        self._unsloth_fused_ce_attempts = (
-            int(getattr(self, "_unsloth_fused_ce_attempts", 0)) + 1
-        )
-
-        try:
-            hidden_and_head = forward_hidden_states_and_lm_head(
-                self.train_model,
-                input_ids,
-                attention_mask,
-            )
-        except Exception as exc:  # Optional accelerator path.
-            if self._is_cuda_oom_exception(exc):
-                raise
-            reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
-            return reject(reason)
-        if hidden_and_head is None:
-            return reject("hidden_states_unavailable")
-
-        hidden_states, lm_head = hidden_and_head
-        weight = getattr(lm_head, "weight", None)
-        if weight is None:
-            return reject("lm_head_weight_unavailable")
-        bias = getattr(lm_head, "bias", None)
-
-        labels = input_ids.clone()
-        ignore_index = -100
-        labels[:, 0] = ignore_index
-        labels[:, 1:] = torch.where(
+        return local_loss.maybe_compute_unsloth_fused_sft_loss(
+            self,
+            input_ids,
+            attention_mask,
+            weights,
             target_mask,
-            labels[:, 1:],
-            torch.full_like(labels[:, 1:], ignore_index),
+            token_count,
+            hidden_and_head_fn=forward_hidden_states_and_lm_head,
         )
-        label_mask = torch.zeros_like(attention_mask, dtype=torch.bool)
-        label_mask[:, 1:] = target_mask
-        target_gb = self._effective_unsloth_fused_ce_target_gb()
-        self._last_unsloth_fused_ce_effective_target_gb = target_gb
-        try:
-            loss = loss_fn(
-                None,
-                hidden_states,
-                weight,
-                bias,
-                labels,
-                mask=label_mask,
-                n_items=token_count,
-                target_gb=target_gb if target_gb > 0 else None,
-                torch_compile=bool(
-                    getattr(self, "train_unsloth_fused_ce_torch_compile", True)
-                ),
-                shift_labels=True,
-                ignore_index=ignore_index,
-            )
-        except Exception as exc:  # Optional accelerator path.
-            if self._is_cuda_oom_exception(exc):
-                raise
-            reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
-            return reject(reason)
-        self._unsloth_fused_ce_fallback_reason = ""
-        local_metrics.record_loss_path(self, "unsloth_fused_ce")
-        return loss * weight_scale.to(loss.device)
 
     def _supports_train_logits_to_keep(self, input_ids, attention_mask) -> bool:
         cached = getattr(self, "_train_logits_to_keep_supported", None)

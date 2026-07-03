@@ -86,6 +86,7 @@ retrain
 │   ├── local/          # Local GPU backend package
 │   │   ├── batch.py    # Tensor batch builders for local optimizer steps
 │   │   ├── device.py   # Device planning for local train/inference placement
+│   │   ├── loss.py     # CE accelerator policy and fallback decisions
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
 │   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics

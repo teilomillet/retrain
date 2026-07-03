@@ -1638,6 +1638,7 @@ ARCHITECTURE
         +-- local/               Local GPU backend package
             +-- batch.py         Tensor batch builders for optimizer steps
             +-- device.py        Device planning for train/inference placement
+            +-- loss.py          CE accelerator policy and fallback decisions
             +-- train.py         PyTorch/PEFT training and inference orchestration
             +-- checkpointing.py Gradient-checkpointing policy and layer metrics
             +-- lora.py          Local-backend LoRA setup
