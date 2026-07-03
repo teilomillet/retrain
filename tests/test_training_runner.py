@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import MISSING, fields
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -47,6 +48,34 @@ class TestProtocol:
 
     def test_sft_runner_is_training_runner(self):
         assert isinstance(SftRunner(), TrainingRunner)
+
+
+class TestTrainingRunResult:
+    def test_to_dict_exports_all_dataclass_fields(self):
+        result = TrainingRunResult(policy_ref="/tmp/adapter", run_id="run-1")
+
+        assert set(result.to_dict()) == {f.name for f in fields(TrainingRunResult)}
+
+    def test_to_dict_snapshots_mutable_payloads(self):
+        result = TrainingRunResult(
+            metrics={"loss": 0.5, "nested": {"values": [1, 2]}},
+            artifacts={"metrics.jsonl": "/tmp/metrics.jsonl"},
+        )
+
+        payload = result.to_dict()
+        metrics = cast(dict[str, object], payload["metrics"])
+        artifacts = cast(dict[str, str], payload["artifacts"])
+        nested = cast(dict[str, object], metrics["nested"])
+        values = cast(list[int], nested["values"])
+        assert isinstance(metrics, dict)
+        assert isinstance(artifacts, dict)
+
+        metrics["loss"] = 0.0
+        values.append(3)
+        artifacts["metrics.jsonl"] = "changed"
+
+        assert result.metrics == {"loss": 0.5, "nested": {"values": [1, 2]}}
+        assert result.artifacts == {"metrics.jsonl": "/tmp/metrics.jsonl"}
 
 
 # ---------------------------------------------------------------------------

@@ -12,12 +12,31 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field, fields
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
+
+
+def _snapshot_metadata_value(value: object) -> object:
+    """Copy JSON-shaped metadata without paying generic deepcopy everywhere."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {key: _snapshot_metadata_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_snapshot_metadata_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_snapshot_metadata_value(item) for item in value)
+    return deepcopy(value)
+
+
+def _snapshot_metrics(metrics: dict[str, object]) -> dict[str, object]:
+    return {key: _snapshot_metadata_value(value) for key, value in metrics.items()}
 
 
 @dataclass(frozen=True)
@@ -43,7 +62,15 @@ class TrainingRunResult:
 
     def to_dict(self) -> dict[str, object]:
         """JSON-serializable representation for run metadata."""
-        return asdict(self)
+        return {
+            "policy_ref": self.policy_ref,
+            "run_id": self.run_id,
+            "status": self.status,
+            "failure_status": self.failure_status,
+            "error_message": self.error_message,
+            "metrics": _snapshot_metrics(self.metrics),
+            "artifacts": dict(self.artifacts),
+        }
 
 
 def _run_id_for(config: TrainConfig) -> str:
