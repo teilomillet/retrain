@@ -6,7 +6,6 @@ Backend-agnostic — drives any TrainHelper (local, Unsloth, Tinker, ...).
 from __future__ import annotations
 
 import json
-import sys
 import time
 from dataclasses import dataclass, field
 from heapq import nlargest
@@ -47,6 +46,7 @@ from retrain.flow import (
     build_flow,
 )
 from retrain.logging_utils import JsonlLogger
+from retrain.process_metrics import process_max_rss_mb
 from retrain.registry import PlanningDetector, RewardFunction, get_registry
 from retrain.runtime_support import (
     ExamplePromptCache,
@@ -112,21 +112,6 @@ class WandbModuleLike(Protocol):
         group: str | None = None,
         tags: list[str] | None = None,
     ) -> WandbRunLike: ...
-
-
-def _process_max_rss_mb() -> float | None:
-    """Best-effort process peak RSS in MiB."""
-    try:
-        import resource
-    except ImportError:
-        return None
-
-    raw_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if raw_rss <= 0:
-        return 0.0
-    if sys.platform == "darwin":
-        return raw_rss / (1024.0 * 1024.0)
-    return raw_rss / 1024.0
 
 
 def _generation_log_indices(
@@ -800,7 +785,7 @@ def _run_sft_warmup_step(
         "advantage_mode": config.advantage_mode,
         "lr": effective_lr,
     }
-    rss_mb = _process_max_rss_mb()
+    rss_mb = process_max_rss_mb()
     if rss_mb is not None:
         metrics["process_max_rss_mb"] = round(rss_mb, 3)
     metrics_logger.log(metrics)
@@ -2124,7 +2109,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/entropy_floor"] = config.echo_entropy_floor
             metrics["echo/mode_collapse_guard"] = int(echo_skipped_entropy_floor)
             metrics["echo/joint_optimizer_step"] = int(echo_joint_optimizer_step)
-            rss_mb = _process_max_rss_mb()
+            rss_mb = process_max_rss_mb()
             if rss_mb is not None:
                 metrics["process_max_rss_mb"] = round(rss_mb, 3)
             metrics.update(runtime_counters.metrics())

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import time
 from collections.abc import Mapping
 from copy import deepcopy
@@ -20,6 +19,7 @@ from typing import Protocol, runtime_checkable
 
 from retrain.backends import collect_runtime_metrics, run_sft_train_step
 from retrain.config import TrainConfig
+from retrain.process_metrics import process_max_rss_mb
 
 
 def _snapshot_metadata_value(value: object) -> object:
@@ -112,21 +112,6 @@ def _artifact_map(log_dir: Path, policy_ref: str = "") -> dict[str, str]:
     if policy_ref:
         artifacts.setdefault("policy_ref", policy_ref)
     return artifacts
-
-
-def _process_max_rss_mb() -> float | None:
-    """Best-effort process peak RSS in MiB."""
-    try:
-        import resource
-    except ImportError:
-        return None
-
-    raw_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if raw_rss <= 0:
-        return 0.0
-    if sys.platform == "darwin":
-        return raw_rss / (1024.0 * 1024.0)
-    return raw_rss / 1024.0
 
 
 def build_run_result(
@@ -373,7 +358,7 @@ class SftRunner:
                     ),
                     "time_s": round(elapsed, 2),
                 }
-                rss_mb = _process_max_rss_mb()
+                rss_mb = process_max_rss_mb()
                 if rss_mb is not None:
                     metrics["process_max_rss_mb"] = round(rss_mb, 3)
                 for key, value in collect_runtime_metrics(helper).items():
