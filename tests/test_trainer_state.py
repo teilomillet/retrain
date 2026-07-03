@@ -14,18 +14,20 @@ from retrain.training_signals import (
     assert_uniform_completion_advantages_for_non_preserving_backend,
 )
 from retrain.training_telemetry import format_loss_for_display
+from retrain.trainer_state import (
+    TRAINER_STATE_FILE,
+    load_trainer_state,
+    save_trainer_state,
+)
 from retrain.trainer import (
-    _TRAINER_STATE_FILE,
-    _load_trainer_state,
     _print_flow_warnings,
     _run_rl_echo_train_step,
-    _save_trainer_state,
 )
 
 
 class TestSaveTrainerState:
     def test_writes_json(self, tmp_path):
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path,
             step=39,
             example_idx=320,
@@ -36,7 +38,7 @@ class TestSaveTrainerState:
             checkpoint_name="checkpoint_step_40",
             sepa_state={"var_ema": 0.5, "gate_open": True},
         )
-        state_file = tmp_path / _TRAINER_STATE_FILE
+        state_file = tmp_path / TRAINER_STATE_FILE
         assert state_file.is_file()
         state = json.loads(state_file.read_text())
         assert state["step"] == 39
@@ -51,37 +53,37 @@ class TestSaveTrainerState:
 
     def test_atomic_overwrite(self, tmp_path):
         """Second save overwrites the first (always latest)."""
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=10, example_idx=80,
             total_correct=20, total_completions=160,
             current_batch_size=8, current_group_size=16,
             checkpoint_name="checkpoint_step_10",
             sepa_state={},
         )
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=20, example_idx=160,
             total_correct=45, total_completions=320,
             current_batch_size=8, current_group_size=16,
             checkpoint_name="checkpoint_step_20",
             sepa_state={},
         )
-        state = json.loads((tmp_path / _TRAINER_STATE_FILE).read_text())
+        state = json.loads((tmp_path / TRAINER_STATE_FILE).read_text())
         assert state["step"] == 20
         assert state["checkpoint_name"] == "checkpoint_step_20"
 
     def test_no_tmp_file_left(self, tmp_path):
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=5, example_idx=40,
             total_correct=10, total_completions=80,
             current_batch_size=8, current_group_size=16,
             checkpoint_name="ckpt", sepa_state={},
         )
-        tmp_file = tmp_path / f"{_TRAINER_STATE_FILE}.tmp"
+        tmp_file = tmp_path / f"{TRAINER_STATE_FILE}.tmp"
         assert not tmp_file.exists()
 
     def test_creates_missing_parent_directory(self, tmp_path):
         checkpoint_dir = tmp_path / "nested" / "checkpoint"
-        _save_trainer_state(
+        save_trainer_state(
             checkpoint_dir,
             step=5,
             example_idx=40,
@@ -92,19 +94,19 @@ class TestSaveTrainerState:
             checkpoint_name="ckpt",
             sepa_state={},
         )
-        assert (checkpoint_dir / _TRAINER_STATE_FILE).is_file()
+        assert (checkpoint_dir / TRAINER_STATE_FILE).is_file()
 
 
 class TestLoadTrainerState:
     def test_roundtrip(self, tmp_path):
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=39, example_idx=320,
             total_correct=95, total_completions=640,
             current_batch_size=8, current_group_size=16,
             checkpoint_name="checkpoint_step_40",
             sepa_state={"var_ema": 1.2, "gate_open": False},
         )
-        state = _load_trainer_state(str(tmp_path))
+        state = load_trainer_state(str(tmp_path))
         assert state["step"] == 39
         assert state["example_idx"] == 320
         assert state["checkpoint_name"] == "checkpoint_step_40"
@@ -112,7 +114,7 @@ class TestLoadTrainerState:
         assert state["sepa"]["gate_open"] is False
 
     def test_roundtrip_optional_ema_fields(self, tmp_path):
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=39, example_idx=320,
             total_correct=95, total_completions=640,
             current_batch_size=8, current_group_size=16,
@@ -121,24 +123,24 @@ class TestLoadTrainerState:
             tl_grpo_ema=0.4,
             delight_eta_ema=1.25,
         )
-        state = _load_trainer_state(str(tmp_path))
+        state = load_trainer_state(str(tmp_path))
         assert state["tl_grpo_ema"] == pytest.approx(0.4)
         assert state["delight_eta_ema"] == pytest.approx(1.25)
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="trainer_state.json"):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_resume_step_is_next(self, tmp_path):
         """Resume should start from saved step + 1."""
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=19, example_idx=160,
             total_correct=40, total_completions=320,
             current_batch_size=8, current_group_size=16,
             checkpoint_name="checkpoint_step_20",
             sepa_state={},
         )
-        state = _load_trainer_state(str(tmp_path))
+        state = load_trainer_state(str(tmp_path))
         start_step = state["step"] + 1
         assert start_step == 20
 
@@ -479,7 +481,7 @@ class TestSEPAStateRoundtripViaTrainer:
         lam_before = ctrl.resolve_lambda(step=100.0)
 
         # Save via trainer
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=99, example_idx=800,
             total_correct=200, total_completions=1600,
             current_batch_size=8, current_group_size=16,
@@ -488,7 +490,7 @@ class TestSEPAStateRoundtripViaTrainer:
         )
 
         # Load and restore
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         ctrl2 = SEPAController(
             sepa_steps=500, sepa_schedule="auto",
             sepa_warmup=2, sepa_ema_decay=0.5,
@@ -542,7 +544,7 @@ class TestResumeIntegration:
         # Split: 20 steps → save → restore → 20 more steps
         first_half = SEPAController(**kwargs)
         self._simulate_sepa_steps(first_half, 20)
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=19, example_idx=160,
             total_correct=40, total_completions=320,
             current_batch_size=8, current_group_size=16,
@@ -551,7 +553,7 @@ class TestResumeIntegration:
         )
 
         # Resume
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         second_half = SEPAController(**kwargs)
         second_half.load_state_dict(saved["sepa"])
         self._simulate_sepa_steps(second_half, 20, start=20)
@@ -575,7 +577,7 @@ class TestResumeIntegration:
             total_correct += batch_correct
             total_completions += batch_size * group_size
 
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=19, example_idx=example_idx,
             total_correct=total_correct, total_completions=total_completions,
             current_batch_size=batch_size, current_group_size=group_size,
@@ -584,7 +586,7 @@ class TestResumeIntegration:
         )
 
         # Resume and simulate 20 more steps
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         r_example_idx = saved["example_idx"]
         r_total_correct = saved["total_correct"]
         r_total_completions = saved["total_completions"]
@@ -616,7 +618,7 @@ class TestResumeIntegration:
         # Simulate periodic saves
         for batch_idx in range(max_steps):
             if save_every > 0 and (batch_idx + 1) % save_every == 0:
-                _save_trainer_state(
+                save_trainer_state(
                     tmp_path, step=batch_idx, example_idx=batch_idx * 8,
                     total_correct=batch_idx, total_completions=batch_idx * 16,
                     current_batch_size=8, current_group_size=16,
@@ -625,7 +627,7 @@ class TestResumeIntegration:
                 )
 
         # Resume from latest checkpoint
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         start_step = saved["step"] + 1
 
         # Last checkpoint was at batch_idx=99 (step 100)
@@ -641,7 +643,7 @@ class TestResumeIntegration:
         """Resume from mid-run checkpoint leaves correct remaining steps."""
         max_steps = 100
         # Simulate crash at step 45 — last checkpoint was step 39
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path, step=39, example_idx=320,
             total_correct=80, total_completions=640,
             current_batch_size=8, current_group_size=16,
@@ -649,7 +651,7 @@ class TestResumeIntegration:
             sepa_state={},
         )
 
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         start_step = saved["step"] + 1
         remaining_steps = list(range(start_step, max_steps))
 
@@ -691,7 +693,7 @@ class TestResumeIntegration:
         for batch_idx in range(60):
             if save_every > 0 and (batch_idx + 1) % save_every == 0:
                 ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-                _save_trainer_state(
+                save_trainer_state(
                     tmp_path, step=batch_idx, example_idx=batch_idx * 8,
                     total_correct=0, total_completions=0,
                     current_batch_size=8, current_group_size=16,
@@ -699,7 +701,7 @@ class TestResumeIntegration:
                     sepa_state={},
                 )
 
-        saved = _load_trainer_state(str(tmp_path))
+        saved = load_trainer_state(str(tmp_path))
         # Last save was at batch_idx=59 → checkpoint_step_60
         assert saved["step"] == 59
         assert saved["checkpoint_name"] == "checkpoint_step_60"

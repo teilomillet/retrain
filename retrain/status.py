@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
+from retrain.trainer_state import TRAINER_STATE_FILE
 
 
 _STALE_SECONDS = 300  # 5 minutes without progress → stale
@@ -262,7 +263,7 @@ def scan_run(run_dir: Path) -> RunSummary | None:
     summary.wall_time_s = metrics.wall_time_s
 
     # Check trainer_state.json for completion
-    state_path = run_dir / "trainer_state.json"
+    state_path = run_dir / TRAINER_STATE_FILE
     if state_path.is_file():
         try:
             state = json.loads(state_path.read_text())

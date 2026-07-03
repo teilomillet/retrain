@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from heapq import nlargest
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NotRequired, Protocol, TypedDict, cast
+from typing import Protocol, cast
 
 from transformers import AutoTokenizer
 
@@ -52,7 +52,6 @@ from retrain.runtime_support import (
     decode_sequence_groups,
     top_surprisal_entries,
 )
-from retrain.sepa import SEPAStateDict
 from retrain.sft import (
     SftExample,
     SftTokenizedExample,
@@ -82,6 +81,7 @@ from retrain.training_signals import (
     prepare_algorithm_params_for_step,
     prepare_transform_params_for_step,
 )
+from retrain.trainer_state import load_trainer_state, save_trainer_state
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
@@ -93,7 +93,6 @@ from retrain.verifiers_bridge import (
 )
 
 
-_TRAINER_STATE_FILE = "trainer_state.json"
 def _accumulate_metric_totals(
     totals: dict[str, float],
     metrics: Mapping[str, float],
@@ -268,52 +267,6 @@ def _add_echo_build_stats(
             left.skipped_bad_observation_mask + right.skipped_bad_observation_mask
         ),
     )
-
-
-class TrainerState(TypedDict):
-    """Serialized trainer state stored in checkpoint directories."""
-
-    step: int
-    example_idx: int
-    total_correct: int
-    total_completions: int
-    current_batch_size: int
-    current_group_size: int
-    checkpoint_name: str
-    checkpoint_path: NotRequired[str]
-    sepa: SEPAStateDict
-    tl_grpo_ema: NotRequired[float]
-    delight_eta_ema: NotRequired[float]
-
-
-def _require_int_field(payload: Mapping[str, object], key: str) -> int:
-    value = payload.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"Trainer state field '{key}' must be an integer.")
-    return value
-
-
-def _optional_str_field(payload: Mapping[str, object], key: str) -> str:
-    value = payload.get(key, "")
-    if not isinstance(value, str):
-        raise ValueError(f"Trainer state field '{key}' must be a string.")
-    return value
-
-
-def _optional_sepa_state(payload: Mapping[str, object]) -> SEPAStateDict:
-    value = payload.get("sepa", {})
-    if not isinstance(value, dict):
-        raise ValueError("Trainer state field 'sepa' must be an object.")
-    return cast(SEPAStateDict, value)
-
-
-def _optional_float_field(payload: Mapping[str, object], key: str) -> float | None:
-    value = payload.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        raise ValueError(f"Trainer state field '{key}' must be a number.")
-    return float(value)
 
 
 def _print_config_summary(config: TrainConfig) -> None:
@@ -619,91 +572,6 @@ def _init_wandb(config: TrainConfig) -> WandbRunLike | None:
     )
     print(f"Wandb initialized: {config.wandb_project}/{run_name}")
     return run
-
-
-def _save_trainer_state(
-    path: Path,
-    *,
-    step: int,
-    example_idx: int,
-    total_correct: int,
-    total_completions: int,
-    current_batch_size: int,
-    current_group_size: int,
-    checkpoint_name: str,
-    checkpoint_path: str | None = None,
-    sepa_state: SEPAStateDict,
-    tl_grpo_ema: float | None = None,
-    delight_eta_ema: float | None = None,
-) -> None:
-    """Write trainer-side state to JSON for checkpoint resume."""
-    path.mkdir(parents=True, exist_ok=True)
-    state: dict[str, object] = {
-        "step": step,
-        "example_idx": example_idx,
-        "total_correct": total_correct,
-        "total_completions": total_completions,
-        "current_batch_size": current_batch_size,
-        "current_group_size": current_group_size,
-        "checkpoint_name": checkpoint_name,
-        "sepa": sepa_state,
-    }
-    if checkpoint_path:
-        state["checkpoint_path"] = checkpoint_path
-    if tl_grpo_ema is not None:
-        state["tl_grpo_ema"] = tl_grpo_ema
-    if delight_eta_ema is not None:
-        state["delight_eta_ema"] = delight_eta_ema
-    tmp = path / f"{_TRAINER_STATE_FILE}.tmp"
-    tmp.write_text(json.dumps(state, indent=2) + "\n")
-    tmp.replace(path / _TRAINER_STATE_FILE)
-    if checkpoint_path:
-        latest_tmp = path / "latest_sampler_path.txt.tmp"
-        latest_tmp.write_text(f"{checkpoint_path}\n")
-        latest_tmp.replace(path / "latest_sampler_path.txt")
-
-
-def _load_trainer_state(resume_dir: str) -> TrainerState:
-    """Load trainer state from a checkpoint directory."""
-    p = Path(resume_dir)
-    state_file = p / _TRAINER_STATE_FILE
-    if not state_file.is_file():
-        raise FileNotFoundError(
-            f"No {_TRAINER_STATE_FILE} found in {resume_dir}. "
-            f"Cannot resume without trainer state."
-        )
-    payload = json.loads(state_file.read_text())
-    if not isinstance(payload, dict):
-        raise ValueError(
-            f"Invalid trainer state file {state_file}: expected JSON object."
-        )
-    payload_map = cast(Mapping[str, object], payload)
-    state: TrainerState = {
-        "step": _require_int_field(payload_map, "step"),
-        "example_idx": _require_int_field(payload_map, "example_idx"),
-        "total_correct": _require_int_field(payload_map, "total_correct"),
-        "total_completions": _require_int_field(payload_map, "total_completions"),
-        "current_batch_size": _require_int_field(payload_map, "current_batch_size"),
-        "current_group_size": _require_int_field(payload_map, "current_group_size"),
-        "checkpoint_name": _optional_str_field(payload_map, "checkpoint_name"),
-        "sepa": _optional_sepa_state(payload_map),
-    }
-    checkpoint_path = _optional_str_field(payload_map, "checkpoint_path")
-    if checkpoint_path:
-        state["checkpoint_path"] = checkpoint_path
-    else:
-        latest_sampler_path = p / "latest_sampler_path.txt"
-        if latest_sampler_path.is_file():
-            fallback_path = latest_sampler_path.read_text().strip()
-            if fallback_path:
-                state["checkpoint_path"] = fallback_path
-    tl_grpo_ema = _optional_float_field(payload_map, "tl_grpo_ema")
-    if tl_grpo_ema is not None:
-        state["tl_grpo_ema"] = tl_grpo_ema
-    delight_eta_ema = _optional_float_field(payload_map, "delight_eta_ema")
-    if delight_eta_ema is not None:
-        state["delight_eta_ema"] = delight_eta_ema
-    return state
 
 
 @dataclass
@@ -1512,7 +1380,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # 10b. Resume from checkpoint (if requested)
         # -----------------------------------------------------------------------
         if config.resume_from:
-            saved = _load_trainer_state(config.resume_from)
+            saved = load_trainer_state(config.resume_from)
             start_step = saved["step"] + 1
             example_idx = saved["example_idx"]
             total_correct = saved["total_correct"]
@@ -1852,7 +1720,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     config.adapter_path,
                     ckpt_name,
                 )
-                _save_trainer_state(
+                save_trainer_state(
                     log_path,
                     step=batch_idx,
                     example_idx=example_idx,
@@ -1872,7 +1740,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # Final
         # -----------------------------------------------------------------------
         final_path = helper.save_adapter(config.adapter_path, "final")
-        _save_trainer_state(
+        save_trainer_state(
             log_path,
             step=config.max_steps - 1,
             example_idx=example_idx,

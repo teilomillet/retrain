@@ -200,7 +200,7 @@ class SftRunner:
             tokenize_sft_dataset,
             write_sft_artifact_manifest,
         )
-        from retrain.trainer import _save_trainer_state
+        from retrain.trainer_state import save_trainer_state
 
         if not config.sft_data_path:
             raise ValueError(
@@ -366,7 +366,7 @@ class SftRunner:
                         config.adapter_path,
                         checkpoint_name,
                     )
-                    _save_trainer_state(
+                    save_trainer_state(
                         log_dir,
                         step=step,
                         example_idx=(step + 1) * batch_size,
@@ -384,7 +384,7 @@ class SftRunner:
                 config.adapter_path,
                 "final",
             )
-            _save_trainer_state(
+            save_trainer_state(
                 log_dir,
                 step=config.max_steps - 1,
                 example_idx=config.max_steps * batch_size,

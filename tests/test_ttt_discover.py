@@ -253,11 +253,18 @@ class TestTTTDiscoverRunner:
         assert len(helper.train_calls) == 1
 
         metrics_path = tmp_path / "logs" / "metrics.jsonl"
+        state_path = tmp_path / "logs" / "trainer_state.json"
+        latest_sampler_path = tmp_path / "logs" / "latest_sampler_path.txt"
         summary_path = tmp_path / "logs" / "ttt_discover.json"
         assert metrics_path.exists()
+        assert state_path.exists()
+        assert latest_sampler_path.read_text().strip() == str(tmp_path / "adapter")
         assert summary_path.exists()
 
         metrics = [json.loads(line) for line in metrics_path.read_text().splitlines()]
         assert metrics[0]["archive_size"] >= 3
+        state = json.loads(state_path.read_text())
+        assert state["checkpoint_name"] == "final"
+        assert state["checkpoint_path"] == str(tmp_path / "adapter")
         summary = json.loads(summary_path.read_text())
         assert summary["best_reward"] == pytest.approx(2.0)

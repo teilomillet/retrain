@@ -35,10 +35,10 @@ from retrain.runtime_support import (
     decode_sequence_groups,
 )
 from retrain.trainer import (
-    _TRAINER_STATE_FILE,
     _print_backend_capability_summary,
     _print_config_summary,
 )
+from retrain.trainer_state import save_trainer_state
 from retrain.training_signals import (
     CORRECT_THRESHOLD,
     apply_advantage_cap,
@@ -879,23 +879,17 @@ class TTTDiscoverRunner:
                 "final",
             )
             _write_discovery_summary(log_dir, archive)
-            state_file = log_dir / _TRAINER_STATE_FILE
-            state_file.write_text(
-                json.dumps(
-                    {
-                        "step": config.max_steps - 1,
-                        "example_idx": 1,
-                        "total_correct": total_correct,
-                        "total_completions": total_completions,
-                        "current_batch_size": current_batch_size,
-                        "current_group_size": current_group_size,
-                        "checkpoint_name": "final",
-                        "sepa": sepa_controller.state_dict(),
-                        "trainer": "ttt_discover",
-                    },
-                    indent=2,
-                )
-                + "\n"
+            save_trainer_state(
+                log_dir,
+                step=config.max_steps - 1,
+                example_idx=1,
+                total_correct=total_correct,
+                total_completions=total_completions,
+                current_batch_size=current_batch_size,
+                current_group_size=current_group_size,
+                checkpoint_name="final",
+                checkpoint_path=final_path,
+                sepa_state=sepa_controller.state_dict(),
             )
 
             best = archive.best_entry()

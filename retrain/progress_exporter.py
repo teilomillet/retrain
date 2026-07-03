@@ -21,6 +21,7 @@ from typing import cast
 
 from retrain.json_utils import JSONDecodeError, loads
 from retrain.metrics_scan import JsonObject, float_or_none, int_or_none
+from retrain.trainer_state import TRAINER_STATE_FILE
 
 
 _RECENT_DIAG_LIMIT = 256
@@ -137,7 +138,7 @@ def _infer_phase(run_name: str, metrics_entry: JsonObject | None) -> str:
 
 
 def _completed_from_state(path: Path) -> bool:
-    state_path = path / "trainer_state.json"
+    state_path = path / TRAINER_STATE_FILE
     if not state_path.is_file():
         return False
     try:

@@ -16,7 +16,7 @@ from hypothesis import given
 from ordeal import ChaosTest, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
-from retrain.trainer import _load_trainer_state, _save_trainer_state
+from retrain.trainer_state import load_trainer_state, save_trainer_state
 
 valid_number = no_nan & no_inf
 
@@ -59,7 +59,7 @@ class TestStateRoundtrip:
 
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
-            _save_trainer_state(
+            save_trainer_state(
                 p,
                 step=step,
                 example_idx=example_idx,
@@ -70,7 +70,7 @@ class TestStateRoundtrip:
                 checkpoint_name=f"ckpt_{step}",
                 sepa_state={},
             )
-            loaded = _load_trainer_state(str(p))
+            loaded = load_trainer_state(str(p))
         assert loaded["step"] == step
         assert loaded["example_idx"] == example_idx
         assert loaded["total_correct"] == total_correct
@@ -88,7 +88,7 @@ class TestStateRoundtrip:
 
         with tempfile.TemporaryDirectory() as td:
             p = Path(td)
-            _save_trainer_state(
+            save_trainer_state(
                 p,
                 step=10,
                 example_idx=100,
@@ -101,7 +101,7 @@ class TestStateRoundtrip:
                 tl_grpo_ema=tl_ema,
                 delight_eta_ema=delight_ema,
             )
-            loaded = _load_trainer_state(str(p))
+            loaded = load_trainer_state(str(p))
         assert math.isclose(loaded["tl_grpo_ema"], tl_ema, abs_tol=1e-10)
         assert math.isclose(loaded["delight_eta_ema"], delight_ema, abs_tol=1e-10)
 
@@ -113,7 +113,7 @@ class TestStateRoundtrip:
             "warmup_seen": 10,
             "gate_open": True,
         }
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path,
             step=5,
             example_idx=50,
@@ -124,7 +124,7 @@ class TestStateRoundtrip:
             checkpoint_name="ckpt_5",
             sepa_state=sepa,
         )
-        loaded = _load_trainer_state(str(tmp_path))
+        loaded = load_trainer_state(str(tmp_path))
         assert loaded["sepa"]["var_ema"] == 0.5
         assert loaded["sepa"]["gate_open"] is True
 
@@ -137,23 +137,23 @@ class TestStateRoundtrip:
 class TestLoadErrors:
     def test_missing_file(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError, match="trainer_state.json"):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_invalid_json(self, tmp_path: Path) -> None:
         (tmp_path / "trainer_state.json").write_text("{not valid json")
         with pytest.raises((json.JSONDecodeError, ValueError)):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_json_array_not_object(self, tmp_path: Path) -> None:
         (tmp_path / "trainer_state.json").write_text("[1, 2, 3]")
         with pytest.raises(ValueError, match="expected JSON object"):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_missing_required_field(self, tmp_path: Path) -> None:
         state = {"step": 1}  # Missing all other required fields
         (tmp_path / "trainer_state.json").write_text(json.dumps(state))
         with pytest.raises(ValueError):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_wrong_type_for_step(self, tmp_path: Path) -> None:
         state = {
@@ -167,18 +167,18 @@ class TestLoadErrors:
         }
         (tmp_path / "trainer_state.json").write_text(json.dumps(state))
         with pytest.raises(ValueError):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_truncated_json(self, tmp_path: Path) -> None:
         """Truncated JSON file (simulating crash during write)."""
         (tmp_path / "trainer_state.json").write_text('{"step": 1, "example')
         with pytest.raises((json.JSONDecodeError, ValueError)):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
     def test_empty_file(self, tmp_path: Path) -> None:
         (tmp_path / "trainer_state.json").write_text("")
         with pytest.raises((json.JSONDecodeError, ValueError)):
-            _load_trainer_state(str(tmp_path))
+            load_trainer_state(str(tmp_path))
 
 
 # ═══════════════════════════════════════════
@@ -189,7 +189,7 @@ class TestLoadErrors:
 class TestAtomicWrite:
     def test_no_tmp_file_after_save(self, tmp_path: Path) -> None:
         """Temp file is cleaned up after atomic rename."""
-        _save_trainer_state(
+        save_trainer_state(
             tmp_path,
             step=1,
             example_idx=10,
@@ -206,7 +206,7 @@ class TestAtomicWrite:
     def test_overwrite_preserves_latest(self, tmp_path: Path) -> None:
         """Second save overwrites first — latest state wins."""
         for step in [1, 2, 3]:
-            _save_trainer_state(
+            save_trainer_state(
                 tmp_path,
                 step=step,
                 example_idx=step * 10,
@@ -217,7 +217,7 @@ class TestAtomicWrite:
                 checkpoint_name=f"ckpt_{step}",
                 sepa_state={},
             )
-        loaded = _load_trainer_state(str(tmp_path))
+        loaded = load_trainer_state(str(tmp_path))
         assert loaded["step"] == 3
         assert loaded["example_idx"] == 30
 
@@ -261,7 +261,7 @@ class TrainerStateChaos(ChaosTest):
     @rule()
     def save(self) -> None:
         """Save current state."""
-        _save_trainer_state(
+        save_trainer_state(
             self._path,
             step=self._step,
             example_idx=self._example_idx,
@@ -282,7 +282,7 @@ class TrainerStateChaos(ChaosTest):
         """Load state and verify it matches last save point."""
         if not self._saved:
             return
-        loaded = _load_trainer_state(str(self._path))
+        loaded = load_trainer_state(str(self._path))
         always(
             loaded["step"] == self._saved_step,
             "loaded step matches last saved step",
@@ -299,7 +299,7 @@ class TrainerStateChaos(ChaosTest):
     @rule()
     def save_then_load_is_consistent(self) -> None:
         """Save then immediately load — must match current state."""
-        _save_trainer_state(
+        save_trainer_state(
             self._path,
             step=self._step,
             example_idx=self._example_idx,
@@ -314,7 +314,7 @@ class TrainerStateChaos(ChaosTest):
         self._saved_step = self._step
         self._saved_correct = self._total_correct
         self._saved_completions = self._total_completions
-        loaded = _load_trainer_state(str(self._path))
+        loaded = load_trainer_state(str(self._path))
         always(loaded["step"] == self._step, "immediate load matches save")
 
     @invariant()
