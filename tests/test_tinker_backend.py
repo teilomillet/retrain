@@ -1,4 +1,4 @@
-"""Tests for Tinker backend helpers that do not need the optional SDK."""
+"""Tests for Tinker backend support that does not need the optional SDK."""
 
 from __future__ import annotations
 

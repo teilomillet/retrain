@@ -28,7 +28,7 @@ from retrain.backends import EntropySamplingHelper
 from retrain.backpressure import StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
-from retrain.logging_utils import JsonlLogger
+from retrain.io.log import JsonlLogger
 from retrain.rewards import RewardFunction
 from retrain.runtime_support import (
     TokenTextLookup,

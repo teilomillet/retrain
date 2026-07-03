@@ -1,4 +1,4 @@
-"""JSON helpers with optional orjson acceleration for hot paths."""
+"""JSON codec boundary with optional orjson acceleration."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Tests for shared PyTorch runtime helpers."""
+"""Tests for shared PyTorch runtime support."""
 
 from __future__ import annotations
 

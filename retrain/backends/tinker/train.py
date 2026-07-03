@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from retrain.logging_utils import JsonlLogger
+from retrain.io.log import JsonlLogger
 from retrain.backends.tinker.runtime import (
     SamplingClient,
     load_tensor_data,

@@ -1,9 +1,8 @@
-"""Tests for retrain.logging_utils — JsonlLogger."""
+"""Tests for retrain.io.log - JsonlLogger."""
 
 import json
 
-
-from retrain.logging_utils import JsonlLogger
+from retrain.io.log import JsonlLogger
 
 
 class TestJsonlLogger:

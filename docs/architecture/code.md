@@ -19,9 +19,15 @@ retrain/
     catalog.py
     local.py
     tinker/
-      helper.py
+      train.py
       runtime.py
       throttle.py
+    unsloth/
+      train.py
+      runtime.py
+  io/
+    json.py
+    log.py
 ```
 
 Avoid long top-level compound modules such as `training_step_logging.py`. If the
@@ -36,11 +42,15 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
+- `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
+- `backends/unsloth/train.py`: Unsloth-backed local training implementation.
+- `io/json.py`: JSON loading and compact JSONL row encoding.
+- `io/log.py`: buffered JSONL append logging.
 
 Do not split just to hide lines. A private helper is worth keeping only when it
-removes real branching, names a non-obvious invariant, or serves more than one
-call site. Otherwise, keep the logic local.
+removes real branching, names a non-obvious invariant, or serves at least three
+call sites across different concerns. Otherwise, keep the logic local.
 
 ## Trainer Boundary
 
@@ -65,6 +75,7 @@ Internal imports should use the package path that matches the tree. Prefer:
 from retrain.training.signals import apply_advantage_cap
 from retrain.training.telemetry import build_step_metrics
 from retrain.backends.tinker.runtime import load_tinker
+from retrain.io.log import JsonlLogger
 ```
 
 Avoid compatibility shims unless an import path is part of a documented plugin

@@ -1,4 +1,4 @@
-"""Small PyTorch runtime helpers shared by local training and inference."""
+"""Small PyTorch runtime support shared by local training and inference."""
 
 from __future__ import annotations
 

@@ -34,15 +34,22 @@ retrain
 ├── campaign.py         # Sweep orchestrator (conditions x seeds) with auto-squeeze
 ├── squeeze.py          # LoRA-Squeeze rank analysis and compression
 ├── backends/           # Backend protocols, catalog, and implementations
-│   ├── __init__.py     # TrainHelper protocols + shared helper functions
+│   ├── __init__.py     # TrainHelper protocols + backend contracts
 │   ├── catalog.py      # Backend definitions, capabilities, option schemas
 │   ├── local.py        # Local GPU backend (PyTorch/PEFT + inference engine)
 │   ├── prime.py        # PRIME-RL bridge backend
-│   ├── tinker/         # Remote Tinker backend + runtime helpers
-│   └── unsloth/        # Optional Unsloth backend + runtime helpers
+│   ├── tinker/         # Remote Tinker backend
+│   │   ├── train.py    # Tinker training client implementation
+│   │   ├── runtime.py  # Tinker SDK loading and type access
+│   │   └── throttle.py # Optional multi-process Tinker throttle
+│   └── unsloth/        # Optional Unsloth backend
+│       ├── train.py    # Unsloth-backed local training implementation
+│       └── runtime.py  # Unsloth import boundary
+├── io/                 # JSON codec and JSONL log writer
+│   ├── json.py         # JSON loads + compact JSONL encoding
+│   └── log.py          # Buffered JSONL append logger
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
-├── data.py             # MATH dataset loader
-└── logging_utils.py    # JSONL logger
+└── data.py             # MATH dataset loader
 ```
 
 ## Features

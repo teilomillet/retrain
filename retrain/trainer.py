@@ -41,7 +41,7 @@ from retrain.flow import (
     _condition_label,
     build_flow,
 )
-from retrain.logging_utils import JsonlLogger
+from retrain.io.log import JsonlLogger
 from retrain.process_metrics import process_max_rss_mb
 from retrain.registry import PlanningDetector, RewardFunction, get_registry
 from retrain.runtime_support import (

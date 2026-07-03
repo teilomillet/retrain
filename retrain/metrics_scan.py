@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-from retrain.json_utils import JSONDecodeError, loads
+from retrain.io.json import JSONDecodeError, loads
 
 
 JsonObject = dict[str, object]

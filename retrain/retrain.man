@@ -1589,14 +1589,21 @@ ARCHITECTURE
     +-- diff.py                  Run comparison and sparkline rendering
     +-- status.py                Log scanning and status reporting
     +-- backends/                Backend protocols, catalog, implementations
-        +-- __init__.py          TrainHelper protocols and shared helpers
+        +-- __init__.py          TrainHelper protocols and backend contracts
         +-- catalog.py           Backend capabilities and option schemas
         +-- local.py             Local GPU backend (PyTorch/PEFT)
         +-- prime.py             PRIME-RL bridge backend
-        +-- tinker/              Remote Tinker backend and runtime helpers
-        +-- unsloth/             Optional Unsloth backend and runtime helpers
+        +-- tinker/              Remote Tinker backend
+            +-- train.py         Tinker training client implementation
+            +-- runtime.py       Tinker SDK loading and type access
+            +-- throttle.py      Optional multi-process Tinker throttle
+        +-- unsloth/             Optional Unsloth backend
+            +-- train.py         Unsloth-backed local training implementation
+            +-- runtime.py       Unsloth import boundary
+    +-- io/                      JSON codec and JSONL log writer
+        +-- json.py              JSON loads and compact JSONL encoding
+        +-- log.py               Buffered JSONL append logging
     +-- data.py                  MATH dataset loader
-    +-- logging_utils.py         JSONL logger
 
 PLUGINS
     retrain supports seven plugin types. Each is specified as a dotted

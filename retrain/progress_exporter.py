@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import cast
 
-from retrain.json_utils import JSONDecodeError, loads
+from retrain.io.json import JSONDecodeError, loads
 from retrain.metrics_scan import JsonObject, float_or_none, int_or_none
 from retrain.trainer_state import TRAINER_STATE_FILE
 

@@ -189,7 +189,7 @@ class SftRunner:
             backend_capability_source,
             resolve_backend_capabilities,
         )
-        from retrain.logging_utils import JsonlLogger
+        from retrain.io.log import JsonlLogger
         from retrain.registry import get_registry
         from retrain.sft import (
             build_sft_tokenized_batch,

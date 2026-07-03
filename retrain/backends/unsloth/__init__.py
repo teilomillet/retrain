@@ -1,6 +1,6 @@
-"""Unsloth backend helper and support modules."""
+"""Unsloth backend training implementation and support modules."""
 
-from retrain.backends.unsloth.helper import (
+from retrain.backends.unsloth.train import (
     UnslothTrainHelper,
     validate_fast_language_model_api,
 )
