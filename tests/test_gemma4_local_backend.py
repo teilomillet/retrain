@@ -124,6 +124,7 @@ class _CheckpointLayer(torch.nn.Module):
 class _LayerCheckpointModel(torch.nn.Module):
     def __init__(self, layer_count: int) -> None:
         super().__init__()
+        self.config = SimpleNamespace(use_cache=False)
         self.layers = torch.nn.ModuleList(
             _CheckpointLayer() for _ in range(layer_count)
         )
@@ -163,6 +164,19 @@ class _AssertingCacheEngine:
     def generate(self, *_args, **_kwargs):
         self.saw_cache_enabled = (
             self.model.checkpointing_enabled is False
+            and self.model.config.use_cache is True
+        )
+        return [[SimpleNamespace(token_ids=[1, 2], logprobs=[0.0, 0.0])]]
+
+
+class _LayerCheckpointCacheEngine:
+    def __init__(self, model: _LayerCheckpointModel) -> None:
+        self.model = model
+        self.saw_cache_enabled = False
+
+    def generate(self, *_args, **_kwargs):
+        self.saw_cache_enabled = (
+            all(not layer.gradient_checkpointing for layer in self.model.layers)
             and self.model.config.use_cache is True
         )
         return [[SimpleNamespace(token_ids=[1, 2], logprobs=[0.0, 0.0])]]
@@ -788,6 +802,47 @@ def test_shared_model_sampling_restores_checkpointing_mode_kwargs():
     assert model.enable_kwargs == [
         {"gradient_checkpointing_kwargs": {"use_reentrant": False}}
     ]
+
+
+def test_shared_model_sampling_restores_checkpointing_layer_skip_policy():
+    model = _LayerCheckpointModel(layer_count=4)
+    engine = _LayerCheckpointCacheEngine(model)
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper.gradient_checkpointing = True
+    helper.gradient_checkpointing_use_reentrant = "auto"
+    helper.gradient_checkpointing_skip_last_n = 2
+    helper.sample_use_cache = True
+    helper._external_engine = False
+    helper.split_mode = False
+    helper.train_model = model
+    helper.engine = engine
+    helper.cuda_empty_cache = False
+    helper.infer_device = "cpu"
+    helper.train_device = "cpu"
+    helper._last_sample_metrics = {}
+    helper._gradient_checkpointing_layer_metrics = (
+        local_checkpointing.configure_gradient_checkpointing(
+            model,
+            enabled=True,
+            use_reentrant="auto",
+            skip_last_n=2,
+        )
+    )
+
+    helper.sample([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+
+    assert engine.saw_cache_enabled is True
+    assert [layer.gradient_checkpointing for layer in model.layers] == [
+        True,
+        True,
+        False,
+        False,
+    ]
+    assert helper._gradient_checkpointing_layer_metrics == {
+        "total": 4,
+        "enabled": 2,
+        "skipped_last_n": 2,
+    }
 
 
 def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):

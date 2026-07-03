@@ -42,7 +42,6 @@ from retrain.backends.local.lora import (
 )
 from retrain.backends.local.checkpointing import (
     configure_gradient_checkpointing,
-    enable_gradient_checkpointing,
 )
 from retrain.backends.local.memory import (
     configure_cuda_allocator,
@@ -575,15 +574,22 @@ class LocalTrainHelper:
         finally:
             if toggled:
                 model = self.train_model
-                if hasattr(model, "gradient_checkpointing_enable"):
-                    enable_gradient_checkpointing(
+                self._gradient_checkpointing_layer_metrics = (
+                    configure_gradient_checkpointing(
                         model,
-                        getattr(
+                        enabled=True,
+                        use_reentrant=getattr(
                             self,
                             "gradient_checkpointing_use_reentrant",
                             "auto",
                         ),
+                        skip_last_n=getattr(
+                            self,
+                            "gradient_checkpointing_skip_last_n",
+                            0,
+                        ),
                     )
+                )
                 if config is not None and previous_use_cache is not None:
                     config.use_cache = previous_use_cache
 
