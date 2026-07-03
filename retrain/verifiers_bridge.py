@@ -42,6 +42,7 @@ _ECHO_OBSERVATION_ROLES = frozenset({"tool", "environment", "observation"})
 
 
 StateDict = dict[str, object]
+ForkExecute = Callable[[list[object]], Mapping[str, object]]
 
 
 class _Rubric(Protocol):
@@ -971,7 +972,7 @@ def _compute_tl_grpo_advantages(
 
 
 def _fork_and_measure(
-    fork_execute: object,
+    fork_execute: ForkExecute,
     ops_before: list[object],
     alt_op: object,
     pre_cumulative: float,
@@ -986,12 +987,12 @@ def _fork_and_measure(
     ops = ops_before + [alt_op]
     if continuation:
         ops = ops + list(continuation)
-    alt_snapshot = cast(object, fork_execute)(ops)  # type: ignore[call-non-callable]
-    alt_cum = float(
-        cast(dict[str, object], alt_snapshot.get("run", {})).get(  # type: ignore[invalid-argument-type]
-            "cumulative_reward", 0.0
-        )
+    alt_snapshot = fork_execute(ops)
+    run = alt_snapshot.get("run")
+    run_map: Mapping[str, object] = (
+        cast(Mapping[str, object], run) if isinstance(run, Mapping) else {}
     )
+    alt_cum = _coerce_reward(run_map.get("cumulative_reward", 0.0))
     return alt_cum - pre_cumulative
 
 
@@ -1006,7 +1007,7 @@ _FALLBACK_ACTION_SPACE: list[dict[str, object]] = [
 
 
 def _get_legal_actions_at_turn(
-    fork_execute: object,
+    fork_execute: ForkExecute,
     ops_before: list[object],
 ) -> list[dict[str, object]]:
     """Get the kernel's legal actions at the state before a turn.
@@ -1015,16 +1016,45 @@ def _get_legal_actions_at_turn(
     doesn't include legal_actions.
     """
     try:
-        snapshot = cast(object, fork_execute)(ops_before)  # type: ignore[call-non-callable]
+        snapshot = fork_execute(ops_before)
         # legal_actions can be at top level or nested in model_view
-        legal = snapshot.get("legal_actions") or snapshot.get(
-            "model_view", {}
-        ).get("legal_actions", [])
+        model_view = snapshot.get("model_view")
+        model_view_map: Mapping[str, object] = (
+            cast(Mapping[str, object], model_view)
+            if isinstance(model_view, Mapping)
+            else {}
+        )
+        legal = snapshot.get("legal_actions")
+        if not legal:
+            legal = model_view_map.get("legal_actions")
         if legal:
-            return [{"kind": "act", "action": a} for a in legal] + [{"kind": "wait"}]
+            legal_actions = (
+                list(legal)
+                if isinstance(legal, Sequence) and not isinstance(legal, (str, bytes))
+                else []
+            )
+            if legal_actions:
+                actions: list[dict[str, object]] = [
+                    {"kind": "act", "action": a} for a in legal_actions
+                ]
+                actions.append({"kind": "wait"})
+                return actions
     except (ValueError, RuntimeError):
         pass
     return list(_FALLBACK_ACTION_SPACE)
+
+
+def _resolve_fork_execute(env_obj: object) -> ForkExecute | None:
+    fork_execute = getattr(env_obj, "fork_execute", None)
+    if callable(fork_execute):
+        return cast(ForkExecute, fork_execute)
+
+    client = getattr(env_obj, "client", None)
+    client_execute = getattr(client, "execute", None)
+    if callable(client_execute):
+        return cast(ForkExecute, client_execute)
+
+    return None
 
 
 def _run_tl_grpo_branching(
@@ -1071,12 +1101,7 @@ def _run_tl_grpo_branching(
 
     # fork_execute: replay an operation sequence from scratch without
     # mutating the primary rollout.  Works with both subprocess and HTTP envs.
-    fork_execute = getattr(env_obj, "fork_execute", None)
-    if fork_execute is None:
-        client = getattr(env_obj, "client", None)
-        if client is not None:
-            fork_execute = client.execute
-
+    fork_execute = _resolve_fork_execute(env_obj)
     if fork_execute is None:
         return []
 

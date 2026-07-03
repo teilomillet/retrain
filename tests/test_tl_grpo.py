@@ -386,6 +386,51 @@ class TestRunTlGrpoBranching:
         )
         assert result == []
 
+    def test_non_callable_fork_execute_without_client_returns_empty(self):
+        """Malformed fork providers are ignored instead of called."""
+        state: dict[str, object] = {
+            "env": type("E", (), {"fork_execute": 1})(),
+            "turn_log": [{"turn": 1, "valid": True, "operation": {"kind": "wait"},
+                          "reward_delta": 1.0, "cumulative_reward": 1.0}],
+        }
+
+        result = _run_tl_grpo_branching(
+            state, [], _FakeEnv(), _FakeHelper([""]), _FakeTokenizer(),
+        )
+
+        assert result == []
+
+    def test_non_callable_fork_execute_falls_back_to_client_execute(self):
+        """A callable client.execute remains usable when env.fork_execute is bad."""
+        turn_log = [
+            {
+                "turn": 1,
+                "operation": {"kind": "wait"},
+                "reward_delta": 1.0,
+                "cumulative_reward": 1.0,
+                "valid": True,
+            },
+        ]
+        client = _FakeClient(cumulative_rewards={1: 0.25})
+        env_obj = type("E", (), {"fork_execute": 1, "client": client})()
+        state = {"env": env_obj, "turn_log": turn_log}
+        turns = [
+            VerifiersTurnSample(
+                prompt_ids=[1],
+                completion_ids=[2],
+                completion_logprobs=[0.0],
+                completion_text='{"kind":"wait"}',
+            ),
+        ]
+
+        result = _run_tl_grpo_branching(
+            state, turns, _FakeEnv(), _FakeHelper(['{"kind":"wait"}']),
+            _FakeTokenizer(), branch_mode="llm", branch_size=2,
+        )
+
+        assert result == [[1.0, 0.25]]
+        assert client.calls == [[{"kind": "wait"}]]
+
     def test_ops_before_accumulates(self):
         """Each subsequent turn includes prior valid operations in replay."""
         turn_log = [
