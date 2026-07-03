@@ -775,6 +775,22 @@ class LocalTrainHelper:
                 if config is not None and previous_use_cache is not None:
                     config.use_cache = previous_use_cache
 
+    def _sample_groups(self, prompt_ids_list, num_samples, max_tokens,
+                       temperature, top_p, *, compute_entropy):
+        """Run the engine once and return raw SampleResult groups."""
+        sample_start = time.perf_counter()
+        _reset_cuda_peak(getattr(self, "infer_device", getattr(self, "train_device", "cpu")))
+        try:
+            with self._shared_model_sampling_cache_context():
+                engine_results = self.engine.generate(
+                    prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+                    compute_entropy=compute_entropy,
+                )
+        finally:
+            self._empty_cuda_cache_if_requested()
+        self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
+        return engine_results
+
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
         """Generate completions with per-token logprobs.
 
@@ -792,62 +808,30 @@ class LocalTrainHelper:
         Returns:
             List of lists of (token_ids, logprobs) tuples.
         """
-        sample_start = time.perf_counter()
-        _reset_cuda_peak(getattr(self, "infer_device", getattr(self, "train_device", "cpu")))
-        try:
-            with self._shared_model_sampling_cache_context():
-                engine_results = self.engine.generate(
-                    prompt_ids_list, num_samples, max_tokens, temperature, top_p
-                )
-        finally:
-            self._empty_cuda_cache_if_requested()
-        self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
-
-        # Convert SampleResult -> (token_ids, logprobs) tuples
-        results = []
-        for group in engine_results:
-            converted = []
-            for sr in group:
-                converted.append((sr.token_ids, sr.logprobs))
-            results.append(converted)
-        return results
+        engine_results = self._sample_groups(
+            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+            compute_entropy=False,
+        )
+        return [
+            [(sr.token_ids, sr.logprobs) for sr in group]
+            for group in engine_results
+        ]
 
     def sample_with_entropy(self, prompt_ids_list, num_samples, max_tokens,
                             temperature, top_p):
         """Generate completions with per-token logprobs and Shannon entropy.
 
-        Like sample(), but requests per-token entropy from the engine.
-        Returns 3-tuples (token_ids, logprobs, token_entropies).
-
-        Args:
-            prompt_ids_list: List of lists of token IDs (one per prompt).
-            num_samples: Number of completions per prompt.
-            max_tokens: Maximum new tokens per completion.
-            temperature: Sampling temperature.
-            top_p: Nucleus sampling threshold.
-
-        Returns:
-            List of lists of (token_ids, logprobs, token_entropies) tuples.
+        Like sample(), but requests per-token entropy from the engine and
+        returns 3-tuples (token_ids, logprobs, token_entropies).
         """
-        sample_start = time.perf_counter()
-        _reset_cuda_peak(getattr(self, "infer_device", getattr(self, "train_device", "cpu")))
-        try:
-            with self._shared_model_sampling_cache_context():
-                engine_results = self.engine.generate(
-                    prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                    compute_entropy=True,
-                )
-        finally:
-            self._empty_cuda_cache_if_requested()
-        self._record_sample_metrics(sample_start, prompt_ids_list, num_samples, engine_results)
-
-        results = []
-        for group in engine_results:
-            converted = []
-            for sr in group:
-                converted.append((sr.token_ids, sr.logprobs, sr.token_entropies))
-            results.append(converted)
-        return results
+        engine_results = self._sample_groups(
+            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+            compute_entropy=True,
+        )
+        return [
+            [(sr.token_ids, sr.logprobs, sr.token_entropies) for sr in group]
+            for group in engine_results
+        ]
 
     def runtime_metrics(self):
         """Expose optional engine-level runtime counters to the trainer."""
