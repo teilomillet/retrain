@@ -12,7 +12,9 @@ from hypothesis import given
 from ordeal.auto import fuzz
 from ordeal.quickcheck import quickcheck
 
-from retrain.diff import DiffResult, format_diff, format_time
+from retrain.diff.compute import DiffResult
+from retrain.diff.format import _sparkline, _winner, format_diff
+from retrain.status.format import format_time
 from retrain.rewards import extract_boxed
 
 

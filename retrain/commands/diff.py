@@ -9,7 +9,8 @@ from pathlib import Path
 
 def run(args: list[str]) -> None:
     """Compare two runs or campaign conditions."""
-    from retrain.diff import diff_conditions, diff_runs, format_diff
+    from retrain.diff.compute import diff_conditions, diff_runs
+    from retrain.diff.format import format_diff
 
     fmt = "text"
     positional: list[str] = []

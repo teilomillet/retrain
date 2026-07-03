@@ -7,14 +7,12 @@ from typing import cast
 
 import pytest
 
-from retrain.diff import (
-    _sparkline,
-    _winner,
+from retrain.diff.compute import (
     diff_conditions,
     diff_runs,
-    format_diff,
     load_metrics,
 )
+from retrain.diff.format import _sparkline, _winner, format_diff
 
 
 def _write_metrics(run_dir: Path, entries: list[dict]) -> None:
