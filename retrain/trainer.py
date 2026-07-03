@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import dataclass
 from heapq import nlargest
 from collections.abc import Mapping
 from pathlib import Path
@@ -625,6 +626,82 @@ def _summarize_reward_ties(
     }
 
 
+@dataclass
+class _RewardTieAccumulator:
+    """Per-step aggregate of group-level reward-tie diagnostics."""
+
+    eligible_groups: int = 0
+    tie_groups: int = 0
+    uniform_groups: int = 0
+    tied_pairs: int = 0
+    total_pairs: int = 0
+    unique_fraction_sum: float = 0.0
+
+    def observe(self, rewards: list[float]) -> RewardTieStats:
+        stats = _summarize_reward_ties(rewards)
+        if stats["eligible"]:
+            self.eligible_groups += 1
+            self.tie_groups += int(stats["has_tie"])
+            self.uniform_groups += int(stats["is_uniform"])
+            self.tied_pairs += stats["tied_pairs"]
+            self.total_pairs += stats["total_pairs"]
+            self.unique_fraction_sum += stats["unique_count"] / len(rewards)
+        return stats
+
+    @property
+    def tie_group_rate(self) -> float:
+        return self.tie_groups / self.eligible_groups if self.eligible_groups else 0.0
+
+    @property
+    def uniform_group_rate(self) -> float:
+        return (
+            self.uniform_groups / self.eligible_groups if self.eligible_groups else 0.0
+        )
+
+    @property
+    def tie_pair_rate(self) -> float:
+        return self.tied_pairs / self.total_pairs if self.total_pairs else 0.0
+
+    @property
+    def unique_fraction_mean(self) -> float:
+        return (
+            self.unique_fraction_sum / self.eligible_groups
+            if self.eligible_groups
+            else 0.0
+        )
+
+
+def _print_group_summary(rewards: list[float], answer: str) -> None:
+    correct = sum(1 for r in rewards if r > _CORRECT_THRESHOLD)
+    print(f"  group: {correct}/{len(rewards)} correct | answer={answer[:40]}")
+
+
+def _keep_uniform_group(
+    rewards: list[float],
+    *,
+    batch_advantage_norm: bool,
+    keep_for_echo: bool,
+) -> bool:
+    """Print the disposition of an all-same-reward group; False → skip it.
+
+    With batch_advantage_norm, uniform groups are kept — cross-group
+    reward differences still provide signal after batch normalization.
+    ECHO keeps them too: its datums come from observation tokens, not
+    reward contrast.
+    """
+    if batch_advantage_norm:
+        print(f"    -> uniform (reward={rewards[0]:.3f}, kept for batch norm)")
+        return True
+    if keep_for_echo:
+        print(f"    -> uniform (reward={rewards[0]:.3f}, kept for ECHO)")
+        return True
+    if rewards[0] > _CORRECT_THRESHOLD:
+        print("    -> skipped (all correct)")
+    else:
+        print(f"    -> skipped (all same, reward={rewards[0]:.3f})")
+    return False
+
+
 def _save_trainer_state(
     path: Path,
     *,
@@ -1165,12 +1242,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             batch_correct = 0
             batch_max_token_hits = 0
             batch_total_completions = 0
-            batch_reward_tie_eligible_groups = 0
-            batch_reward_tie_groups = 0
-            batch_reward_uniform_groups = 0
-            batch_reward_tied_pairs = 0
-            batch_reward_total_pairs = 0
-            batch_reward_unique_fraction_sum = 0.0
+            reward_ties = _RewardTieAccumulator()
             batch_surprisal_stats: list[EntropyStats] = []
             batch_adv_results: list = []
             all_logprobs_sepa: list[list[float]] = []
@@ -1308,39 +1380,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                                 + (1 - config.tl_grpo_ema_decay) * r
                             )
 
-                    group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
-                    answer_preview = answer[:40] if len(answer) > 40 else answer
-                    print(
-                        f"  group: {group_correct}/{len(rewards_G)} correct "
-                        f"| answer={answer_preview}"
-                    )
-
-                    reward_tie_stats = _summarize_reward_ties(rewards_G)
-                    if reward_tie_stats["eligible"]:
-                        batch_reward_tie_eligible_groups += 1
-                        batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
-                        batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
-                        batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
-                        batch_reward_total_pairs += reward_tie_stats["total_pairs"]
-                        batch_reward_unique_fraction_sum += (
-                            reward_tie_stats["unique_count"] / len(rewards_G)
-                        )
-
+                    _print_group_summary(rewards_G, answer)
+                    reward_tie_stats = reward_ties.observe(rewards_G)
                     if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-                        # With batch_advantage_norm, keep uniform groups — cross-group
-                        # reward differences provide signal after batch normalization.
-                        if config.batch_advantage_norm:
-                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
-                        elif config.echo_enabled:
-                            print(
-                                f"    -> uniform (reward={rewards_G[0]:.3f}, "
-                                "kept for ECHO)"
-                            )
-                        elif rewards_G[0] > _CORRECT_THRESHOLD:
-                            print("    -> skipped (all correct)")
-                            continue
-                        else:
-                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                        if not _keep_uniform_group(
+                            rewards_G,
+                            batch_advantage_norm=config.batch_advantage_norm,
+                            keep_for_echo=config.echo_enabled,
+                        ):
                             continue
 
                     adv_result = _compute_group_advantages(
@@ -1623,32 +1670,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         if len(sample.token_ids) >= config.max_tokens:
                             batch_max_token_hits += 1
 
-                    group_correct = sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
-                    answer_preview = answer[:40] if len(answer) > 40 else answer
-                    print(
-                        f"  group: {group_correct}/{len(rewards_G)} correct "
-                        f"| answer={answer_preview}"
-                    )
-
-                    reward_tie_stats = _summarize_reward_ties(rewards_G)
-                    if reward_tie_stats["eligible"]:
-                        batch_reward_tie_eligible_groups += 1
-                        batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
-                        batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
-                        batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
-                        batch_reward_total_pairs += reward_tie_stats["total_pairs"]
-                        batch_reward_unique_fraction_sum += (
-                            reward_tie_stats["unique_count"] / len(rewards_G)
-                        )
-
+                    _print_group_summary(rewards_G, answer)
+                    reward_tie_stats = reward_ties.observe(rewards_G)
                     if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-                        if config.batch_advantage_norm:
-                            print(f"    -> uniform (reward={rewards_G[0]:.3f}, kept for batch norm)")
-                        elif rewards_G[0] > _CORRECT_THRESHOLD:
-                            print("    -> skipped (all correct)")
-                            continue
-                        else:
-                            print(f"    -> skipped (all same, reward={rewards_G[0]:.3f})")
+                        if not _keep_uniform_group(
+                            rewards_G,
+                            batch_advantage_norm=config.batch_advantage_norm,
+                            keep_for_echo=False,
+                        ):
                             continue
 
                     # Resolve per-group precomputed entropies
@@ -1875,26 +1904,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 if batch_total_completions > 0
                 else 0.0
             )
-            reward_tie_group_rate = (
-                batch_reward_tie_groups / batch_reward_tie_eligible_groups
-                if batch_reward_tie_eligible_groups > 0
-                else 0.0
-            )
-            reward_uniform_group_rate = (
-                batch_reward_uniform_groups / batch_reward_tie_eligible_groups
-                if batch_reward_tie_eligible_groups > 0
-                else 0.0
-            )
-            reward_tie_pair_rate = (
-                batch_reward_tied_pairs / batch_reward_total_pairs
-                if batch_reward_total_pairs > 0
-                else 0.0
-            )
-            reward_unique_fraction_mean = (
-                batch_reward_unique_fraction_sum / batch_reward_tie_eligible_groups
-                if batch_reward_tie_eligible_groups > 0
-                else 0.0
-            )
 
             # Aggregate entropy stats
             step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
@@ -1933,13 +1942,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 "mean_reward": mean_reward,
                 "correct_rate": correct_rate,
                 "running_correct_rate": running_correct_rate,
-                "reward_tie_eligible_groups": batch_reward_tie_eligible_groups,
-                "reward_tie_groups": batch_reward_tie_groups,
-                "reward_uniform_groups": batch_reward_uniform_groups,
-                "reward_tie_group_rate": reward_tie_group_rate,
-                "reward_uniform_group_rate": reward_uniform_group_rate,
-                "reward_tie_pair_rate": reward_tie_pair_rate,
-                "reward_unique_fraction_mean": reward_unique_fraction_mean,
+                "reward_tie_eligible_groups": reward_ties.eligible_groups,
+                "reward_tie_groups": reward_ties.tie_groups,
+                "reward_uniform_groups": reward_ties.uniform_groups,
+                "reward_tie_group_rate": reward_ties.tie_group_rate,
+                "reward_uniform_group_rate": reward_ties.uniform_group_rate,
+                "reward_tie_pair_rate": reward_ties.tie_pair_rate,
+                "reward_unique_fraction_mean": reward_ties.unique_fraction_mean,
                 "sepa_lambda": sepa_lambda_val,
                 "sepa_gate_open": sepa_gate,
                 "num_datums": num_datums,
@@ -2083,7 +2092,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 f" | datums={num_datums}"
                 f" | bs={current_batch_size}"
                 f" | gs={current_group_size}"
-                f" | tie_g={reward_tie_group_rate * 100:.1f}%"
+                f" | tie_g={reward_ties.tie_group_rate * 100:.1f}%"
                 f" | sepa_l={sepa_lambda_val:.4f}"
                 f" | time={step_time:.1f}s"
             )
@@ -2098,13 +2107,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     "train/rewards/mean_reward": mean_reward,
                     "train/rewards/correct_rate": correct_rate,
                     "train/rewards/running_correct_rate": running_correct_rate,
-                    "train/rewards/tie_eligible_groups": batch_reward_tie_eligible_groups,
-                    "train/rewards/tie_groups": batch_reward_tie_groups,
-                    "train/rewards/uniform_groups": batch_reward_uniform_groups,
-                    "train/rewards/tie_group_rate": reward_tie_group_rate,
-                    "train/rewards/uniform_group_rate": reward_uniform_group_rate,
-                    "train/rewards/tie_pair_rate": reward_tie_pair_rate,
-                    "train/rewards/unique_fraction_mean": reward_unique_fraction_mean,
+                    "train/rewards/tie_eligible_groups": reward_ties.eligible_groups,
+                    "train/rewards/tie_groups": reward_ties.tie_groups,
+                    "train/rewards/uniform_groups": reward_ties.uniform_groups,
+                    "train/rewards/tie_group_rate": reward_ties.tie_group_rate,
+                    "train/rewards/uniform_group_rate": reward_ties.uniform_group_rate,
+                    "train/rewards/tie_pair_rate": reward_ties.tie_pair_rate,
+                    "train/rewards/unique_fraction_mean": reward_ties.unique_fraction_mean,
                     "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
                     "train/backend/preserves_token_advantages": int(
                         backend_caps.preserves_token_advantages
