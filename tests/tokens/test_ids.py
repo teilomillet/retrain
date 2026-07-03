@@ -44,7 +44,7 @@ def test_model_eos_token_ids_uses_unwrapped_config_for_peft_models() -> None:
     assert eos_token_ids(wrapped) == {11}
 
 
-def test_legacy_token_ids_module_reexports_helpers() -> None:
+def test_legacy_token_ids_module_reexports_token_parsers() -> None:
     from retrain.token_ids import coerce_token_id_set as legacy_coerce
     from retrain.token_ids import model_eos_token_ids as legacy_model_eos
 

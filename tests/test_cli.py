@@ -5,9 +5,11 @@ from pathlib import Path
 
 import pytest
 
+import retrain.cli as cli
+from retrain.commands import manual as manual_command
+from retrain.commands.top import print_help
 from retrain.cli import (
     _customize_toml,
-    _print_top_help,
     _run_benchmark,
     _run_backends,
     _run_doctor,
@@ -15,10 +17,13 @@ from retrain.cli import (
     _run_init,
     _run_init_plugin,
     _run_init_interactive,
-    _run_man,
     _run_plugins,
 )
 from retrain.config import parse_cli_overrides
+
+
+def run_man(args: list[str]) -> None:
+    manual_command.run(args, cli_name="retrain", manual_path=cli._manual_path)
 
 
 class TestInit:
@@ -51,7 +56,7 @@ class TestFlagSuggestion:
 
 class TestTopHelp:
     def test_help_mentions_manual(self, capsys):
-        _print_top_help("retrain")
+        print_help("retrain")
         captured = capsys.readouterr()
         assert "retrain man" in captured.out
         assert "retrain migrate-config" in captured.out
@@ -104,14 +109,14 @@ class TestDoctor:
 
 class TestManCommand:
     def test_man_text_default(self, capsys):
-        _run_man([])
+        run_man([])
         captured = capsys.readouterr()
         assert "RETRAIN(1)" in captured.out
         assert "COMMANDS" in captured.out
         assert "CONFIGURATION" in captured.out
 
     def test_man_json_format(self, capsys):
-        _run_man(["--json"])
+        run_man(["--json"])
         captured = capsys.readouterr()
         payload = json.loads(captured.out)
         assert payload["tool"] == "retrain"
@@ -119,7 +124,7 @@ class TestManCommand:
         assert "manual" in payload
 
     def test_man_topic_json(self, capsys):
-        _run_man(["--json", "--topic", "environments"])
+        run_man(["--json", "--topic", "environments"])
         captured = capsys.readouterr()
         payload = json.loads(captured.out)
         assert payload["topic"] == "environments"
@@ -127,12 +132,12 @@ class TestManCommand:
         assert "primeintellect/gsm8k" in payload["content"]
 
     def test_man_path(self, capsys):
-        _run_man(["--path"])
+        run_man(["--path"])
         captured = capsys.readouterr()
         assert captured.out.strip().endswith("retrain/retrain.man")
 
     def test_man_list_topics(self, capsys):
-        _run_man(["--list-topics"])
+        run_man(["--list-topics"])
         captured = capsys.readouterr()
         assert "benchmark" in captured.out
         assert "environments" in captured.out
@@ -147,14 +152,14 @@ class TestManCommand:
         assert "glossary" in captured.out
 
     def test_man_topic_configuration(self, capsys):
-        _run_man(["--topic", "configuration"])
+        run_man(["--topic", "configuration"])
         captured = capsys.readouterr()
         assert "batch_size" in captured.out
         assert "transform_mode" in captured.out
         assert "[algorithm]" in captured.out
 
     def test_man_topic_benchmark(self, capsys):
-        _run_man(["--topic", "benchmark"])
+        run_man(["--topic", "benchmark"])
         captured = capsys.readouterr()
         assert "BENCHMARKING" in captured.out
         assert "retrain benchmark config.toml --repeat 3" in captured.out
@@ -162,15 +167,13 @@ class TestManCommand:
 
     def test_man_invalid_topic_exits(self):
         with pytest.raises(SystemExit):
-            _run_man(["--topic", "nope"])
+            run_man(["--topic", "nope"])
 
     def test_man_invalid_format_exits(self):
         with pytest.raises(SystemExit):
-            _run_man(["--format", "yaml"])
+            run_man(["--format", "yaml"])
 
     def test_man_sync_updates_auto_blocks(self, tmp_path, monkeypatch, capsys):
-        import retrain.cli as cli
-
         manual = tmp_path / "retrain.man"
         manual.write_text(
             "RETRAIN(1)\n\n"
@@ -185,7 +188,7 @@ class TestManCommand:
         )
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
 
-        _run_man(["--sync"])
+        run_man(["--sync"])
         captured = capsys.readouterr()
         assert str(manual) in captured.out
 
@@ -196,8 +199,6 @@ class TestManCommand:
         assert "primeintellect/gsm8k" in synced
 
     def test_man_check_passes_when_up_to_date(self, tmp_path, monkeypatch, capsys):
-        import retrain.cli as cli
-
         manual = tmp_path / "retrain.man"
         manual.write_text(
             "RETRAIN(1)\n\n"
@@ -212,14 +213,12 @@ class TestManCommand:
         )
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
 
-        _run_man(["--sync"])
-        _run_man(["--check"])
+        run_man(["--sync"])
+        run_man(["--check"])
         captured = capsys.readouterr()
         assert "(up to date)" in captured.out
 
     def test_man_check_fails_when_outdated(self, tmp_path, monkeypatch, capsys):
-        import retrain.cli as cli
-
         manual = tmp_path / "retrain.man"
         manual.write_text(
             "RETRAIN(1)\n\n"
@@ -235,7 +234,7 @@ class TestManCommand:
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
 
         with pytest.raises(SystemExit) as exc_info:
-            _run_man(["--check"])
+            run_man(["--check"])
         assert exc_info.value.code == 1
 
         captured = capsys.readouterr()
@@ -244,14 +243,12 @@ class TestManCommand:
     def test_man_sync_fails_when_markers_missing(
         self, tmp_path, monkeypatch, capsys
     ):
-        import retrain.cli as cli
-
         manual = tmp_path / "retrain.man"
         manual.write_text("RETRAIN(1)\n\nCOMMANDS\nno auto markers\n")
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
 
         with pytest.raises(SystemExit) as exc_info:
-            _run_man(["--sync"])
+            run_man(["--sync"])
         assert exc_info.value.code == 1
 
         captured = capsys.readouterr()
@@ -261,14 +258,12 @@ class TestManCommand:
     def test_man_check_fails_when_markers_missing(
         self, tmp_path, monkeypatch, capsys
     ):
-        import retrain.cli as cli
-
         manual = tmp_path / "retrain.man"
         manual.write_text("RETRAIN(1)\n\nCOMMANDS\nno auto markers\n")
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
 
         with pytest.raises(SystemExit) as exc_info:
-            _run_man(["--check"])
+            run_man(["--check"])
         assert exc_info.value.code == 1
 
         captured = capsys.readouterr()
@@ -276,31 +271,31 @@ class TestManCommand:
         assert "Missing block markers for COMMANDS" in captured.err
 
     def test_man_troff_format(self, capsys):
-        _run_man(["--format", "troff"])
+        run_man(["--format", "troff"])
         out = capsys.readouterr().out
         assert ".TH" in out
         assert ".SH" in out
 
     def test_man_html_format(self, capsys):
-        _run_man(["--format", "html"])
+        run_man(["--format", "html"])
         out = capsys.readouterr().out
         assert "<!DOCTYPE html>" in out
         assert "<h2" in out
 
     def test_man_topic_html(self, capsys):
-        _run_man(["--format", "html", "--topic", "quickstart"])
+        run_man(["--format", "html", "--topic", "quickstart"])
         out = capsys.readouterr().out
         assert "<!DOCTYPE html>" in out
         assert "QUICKSTART" in out
 
     def test_man_topic_plugins(self, capsys):
-        _run_man(["--topic", "plugins"])
+        run_man(["--topic", "plugins"])
         out = capsys.readouterr().out
         assert "PLUGINS" in out
         assert "TransformSpec" in out
 
     def test_man_topic_glossary(self, capsys):
-        _run_man(["--topic", "glossary"])
+        run_man(["--topic", "glossary"])
         out = capsys.readouterr().out
         assert "GLOSSARY" in out
         assert "RLVR" in out
@@ -308,7 +303,7 @@ class TestManCommand:
 
     def test_man_sync_and_check_together_exits(self):
         with pytest.raises(SystemExit) as exc_info:
-            _run_man(["--sync", "--check"])
+            run_man(["--sync", "--check"])
         assert exc_info.value.code == 1
 
 

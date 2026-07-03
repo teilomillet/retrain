@@ -1,4 +1,4 @@
-"""Compatibility exports for token id helpers."""
+"""Compatibility exports for token id parsing."""
 
 from __future__ import annotations
 

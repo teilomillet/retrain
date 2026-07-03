@@ -26,9 +26,9 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from retrain.commands import manual as _man_command
-from retrain.commands.name import resolve as _resolve_cli_name
-from retrain.commands.top import print_help as _print_top_help
+from retrain.commands import manual as manual_command
+from retrain.commands.name import resolve as resolve_cli_name
+from retrain.commands.top import print_help
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
@@ -184,50 +184,6 @@ def _manual_path() -> Path:
     return Path(__file__).with_name("retrain.man")
 
 
-def _load_manual_text(cli_name: str) -> str:
-    return _man_command.load_text(cli_name, _manual_path)
-
-
-def _is_manual_heading(line: str) -> bool:
-    return _man_command.is_heading(line)
-
-
-def _extract_manual_section(manual_text: str, heading: str) -> str | None:
-    return _man_command.extract_section(manual_text, heading)
-
-
-def _render_commands_block(cli_name: str) -> list[str]:
-    return _man_command.render_commands(cli_name)
-
-
-def _render_options_block() -> list[str]:
-    return _man_command.render_options()
-
-
-def _render_quickstart_block(cli_name: str) -> list[str]:
-    return _man_command.render_quickstart(cli_name)
-
-
-def _render_environment_block(cli_name: str) -> list[str]:
-    return _man_command.render_environment(cli_name)
-
-
-def _replace_auto_block(text: str, name: str, rendered_lines: list[str]) -> str:
-    return _man_command.replace_auto_block(text, name, rendered_lines)
-
-
-def _sync_manual_file(cli_name: str) -> tuple[Path, bool]:
-    return _man_command.sync_file(cli_name, _manual_path)
-
-
-def _check_manual_file(cli_name: str) -> tuple[Path, bool]:
-    return _man_command.check_file(cli_name, _manual_path)
-
-
-def _run_man(args: list[str]) -> None:
-    _man_command.run(args, cli_name=_resolve_cli_name(), manual_path=_manual_path)
-
-
 def _customize_toml(
     content: str,
     max_steps: int | None = None,
@@ -324,7 +280,7 @@ def _run_init_interactive(cli_name: str) -> None:
 def _run_init(args: list[str] | None = None, cli_name: str | None = None) -> None:
     """Generate a starter config file in the current directory."""
     if not cli_name:
-        cli_name = _resolve_cli_name()
+        cli_name = resolve_cli_name()
     args = args or []
 
     template_name = "default"
@@ -535,7 +491,7 @@ def _plugin_template(kind: str, fn_name: str) -> tuple[str, str]:
 def _run_init_plugin(args: list[str], cli_name: str | None = None) -> None:
     """Scaffold a plugin module for students."""
     if not cli_name:
-        cli_name = _resolve_cli_name()
+        cli_name = resolve_cli_name()
     kind = ""
     name = ""
     output_dir = "plugins"
@@ -1847,14 +1803,14 @@ def main() -> None:
     _load_dotenv()
 
     args = sys.argv[1:]
-    cli_name = _resolve_cli_name()
+    cli_name = resolve_cli_name()
 
     if args and args[0] in ("-h", "--help", "help"):
-        _print_top_help(cli_name)
+        print_help(cli_name)
         sys.exit(0)
 
     if args and args[0] in ("man", "manual"):
-        _run_man(args[1:])
+        manual_command.run(args[1:], cli_name=cli_name, manual_path=_manual_path)
         sys.exit(0)
 
     if args and args[0] == "backends":
