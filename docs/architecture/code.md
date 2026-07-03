@@ -59,6 +59,7 @@ retrain/
       archive.py
       prompt.py
       summary.py
+    examples.py
     runner/
       result.py
       protocol.py
@@ -175,6 +176,8 @@ retrain/
       batch.py
       device.py
       loss.py
+      sampling.py
+      sync.py
       train.py
       checkpointing.py
       lora.py
@@ -182,6 +185,11 @@ retrain/
       memory.py
       state.py
       sft.py
+      steps/
+        rl.py
+        sft.py
+        hybrid.py
+        shared.py
     tinker/
       train.py
       runtime.py

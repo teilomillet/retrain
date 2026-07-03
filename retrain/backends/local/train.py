@@ -12,9 +12,6 @@ GPU split mode (multi-GPU): separate devices for inference and training.
 """
 
 import gc
-import os
-import time
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
@@ -42,29 +39,26 @@ from retrain.backends.local import device as local_device
 from retrain.backends.local import logprobs as local_logprobs
 from retrain.backends.local import loss as local_loss
 from retrain.backends.local import metrics as local_metrics
+from retrain.backends.local import sampling as local_sampling
 from retrain.backends.local import sft as local_sft
 from retrain.backends.local import state as local_state
+from retrain.backends.local import sync as local_sync
+from retrain.backends.local.steps import hybrid as local_hybrid_step
+from retrain.backends.local.steps import rl as local_rl_step
+from retrain.backends.local.steps import sft as local_sft_step
 from retrain.backends.local.checkpointing import (
     configure_gradient_checkpointing,
 )
 from retrain.backends.local.memory import (
     configure_cuda_allocator,
-    empty_cuda_cache_if_requested,
     normalize_expandable_segments_mode,
-    saved_tensors_context,
 )
 from retrain.models.gemma4 import (
     forward_hidden_states_and_lm_head,
     forward_logits,
     parse_lora_target_module_suffixes,
 )
-from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
-from retrain.backends.torch import (
-    reset_cuda_peak as _reset_cuda_peak,
-    timer_start as _timer_start,
-    timer_stop as _timer_stop,
-)
 
 
 class LocalTrainHelper:
@@ -430,63 +424,10 @@ class LocalTrainHelper:
         return loss
 
     def _do_initial_sync(self):
-        """Copy LoRA weights from train_model to engine at init time.
-
-        Used once during __init__ before any training has occurred (no snapshot
-        exists yet). After this, all syncs go through _sync_lora_weights which
-        reads from the weight snapshot.
-        """
-        self.engine.sync_from_state_dict(
-            local_state.lora_state_dict(self.train_model, clone=False)
-        )
+        local_sync.initial_sync(self)
 
     def _sync_lora_weights(self):
-        """Copy LoRA weights from snapshot to engine.
-
-        In split mode: copies from _weight_snapshot (created after each completed
-        training step) rather than live train_model weights. This is safe to call
-        while training is running on GPU 1 — reads snapshot, not live weights.
-
-        For external engines (MAX, server-based): saves adapter to disk and
-        tells engine to reload.
-
-        No-op when split_mode is False (engine shares train_model) or when
-        no training has completed yet (_weight_snapshot is None).
-        """
-        sync_start = time.perf_counter()
-        save_s = 0.0
-        reload_s = 0.0
-        copied = 0
-        try:
-            if self._external_engine:
-                if self._weights_dirty and self._weight_snapshot is not None:
-                    # Save adapter to disk, then tell engine to reload
-                    save_dir = os.path.join(self.adapter_path, "_live_adapter")
-                    os.makedirs(save_dir, exist_ok=True)
-                    save_start = time.perf_counter()
-                    self.train_model.save_pretrained(save_dir)
-                    save_s = time.perf_counter() - save_start
-                    reload_start = time.perf_counter()
-                    self.engine.reload_weights(save_dir)
-                    reload_s = time.perf_counter() - reload_start
-                    self._weights_dirty = False
-                    copied = 1
-                return
-
-            if not self.split_mode:
-                return
-            if self._weight_snapshot is None:
-                return
-
-            self.engine.sync_from_state_dict(self._weight_snapshot)
-            copied = 1
-        finally:
-            self._last_sync_metrics = {
-                "local_adapter_sync_s": time.perf_counter() - sync_start,
-                "local_adapter_save_s": save_s,
-                "local_adapter_reload_s": reload_s,
-                "local_adapter_sync_copied": copied,
-            }
+        local_sync.sync_lora_weights(self)
 
     def checkpoint(self, name):
         """Prepare for sampling by syncing LoRA weights from snapshot -> engine.
@@ -499,74 +440,22 @@ class LocalTrainHelper:
             self._pending_loss = self._train_future.result()
             self._train_future = None
         self._sync_lora_weights()
-        if hasattr(self.engine, "clear_prefix_cache"):
-            self.engine.clear_prefix_cache()
+        self._clear_inference_prefix_cache()
 
-    @contextmanager
     def _shared_model_sampling_cache_context(self):
-        toggled = False
-        config = None
-        previous_use_cache = None
-        if (
-            getattr(self, "gradient_checkpointing", False)
-            and getattr(self, "sample_use_cache", True)
-            and not getattr(self, "_external_engine", False)
-            and not getattr(self, "split_mode", False)
-        ):
-            model = self.train_model
-            config = getattr(model, "config", None)
-            previous_use_cache = getattr(config, "use_cache", None)
-            if hasattr(model, "gradient_checkpointing_disable"):
-                model.gradient_checkpointing_disable()
-                toggled = True
-            if config is not None and previous_use_cache is not None:
-                config.use_cache = True
-        self._last_sample_gc_disabled_for_cache = int(toggled)
-        try:
-            yield
-        finally:
-            if toggled:
-                model = self.train_model
-                self._gradient_checkpointing_layer_metrics = (
-                    configure_gradient_checkpointing(
-                        model,
-                        enabled=True,
-                        use_reentrant=getattr(
-                            self,
-                            "gradient_checkpointing_use_reentrant",
-                            "auto",
-                        ),
-                        skip_last_n=getattr(
-                            self,
-                            "gradient_checkpointing_skip_last_n",
-                            0,
-                        ),
-                    )
-                )
-                if config is not None and previous_use_cache is not None:
-                    config.use_cache = previous_use_cache
+        return local_sampling.shared_model_cache_context(self)
 
     def _sample_groups(self, prompt_ids_list, num_samples, max_tokens,
                        temperature, top_p, *, compute_entropy):
-        """Run the engine once and return raw SampleResult groups."""
-        sample_start = time.perf_counter()
-        _reset_cuda_peak(getattr(self, "infer_device", getattr(self, "train_device", "cpu")))
-        try:
-            with self._shared_model_sampling_cache_context():
-                engine_results = self.engine.generate(
-                    prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                    compute_entropy=compute_entropy,
-                )
-        finally:
-            empty_cuda_cache_if_requested(self.cuda_empty_cache)
-        local_metrics.record_sample(
+        return local_sampling.sample_groups(
             self,
-            start_s=sample_start,
             prompt_ids_list=prompt_ids_list,
             num_samples=num_samples,
-            engine_results=engine_results,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            compute_entropy=compute_entropy,
         )
-        return engine_results
 
     def sample(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p):
         """Generate completions with per-token logprobs.
@@ -615,20 +504,10 @@ class LocalTrainHelper:
         return local_metrics.runtime_metrics(self)
 
     def _snapshot_lora_weights_if_needed(self) -> float:
-        if not (self.split_mode or self._external_engine):
-            return 0.0
-        timer = _timer_start(self.train_device)
-        self._weight_snapshot = local_state.lora_state_dict(
-            self.train_model,
-            clone=True,
-        )
-        self._weights_dirty = True
-        return _timer_stop(timer)
+        return local_sync.snapshot_lora_weights_if_needed(self)
 
     def _clear_inference_prefix_cache(self):
-        engine = getattr(self, "engine", None)
-        if engine is not None and hasattr(engine, "clear_prefix_cache"):
-            engine.clear_prefix_cache()
+        local_sync.clear_inference_prefix_cache(self)
 
     def shutdown(self) -> None:
         """Release model, optimizer, executor, and CUDA allocator state."""
@@ -771,73 +650,16 @@ class LocalTrainHelper:
         )
 
     def _compute_train_loss(self, input_ids, old_logprobs, advantages, attention_mask):
-        """Compute masked policy loss for one already-padded microbatch."""
-        with self._autocast_context():
-            old_lp = old_logprobs[:, 1:]  # [N, max_len-1]
-            adv = advantages[:, 1:]       # [N, max_len-1]
-            mask = attention_mask[:, 1:]   # [N, max_len-1] — exclude padding
-            loss_mask = mask
-            target_mask = None
-            if getattr(self, "train_selective_suffix_logits", False):
-                target_mask = (mask > 0) & (adv != 0)
-                loss_mask = target_mask.to(mask.dtype)
-
-            new_logprobs = self._shifted_token_logprobs(
-                input_ids,
-                attention_mask,
-                target_mask=target_mask,
-            )
-
-            masked_loss, clip_frac, cov_frac, abs_kl = _compute_policy_loss(
-                old_lp,
-                new_logprobs,
-                adv,
-                loss_mask,
-                self.clip_eps,
-                self.clip_eps_high,
-                getattr(self, "policy_loss_mode", "standard"),
-                getattr(self, "kl_cov_percent", 0.2),
-                getattr(self, "kl_cov_coef", 1.0),
-                getattr(self, "clip_cov_ratio", 0.0002),
-                getattr(self, "clip_cov_min", 1.0),
-                getattr(self, "clip_cov_max", 5.0),
-            )
-            token_count = loss_mask.sum().clamp(min=1)
-
-        return masked_loss, token_count, clip_frac, cov_frac, abs_kl
+        return local_rl_step.compute_loss(
+            self,
+            input_ids,
+            old_logprobs,
+            advantages,
+            attention_mask,
+        )
 
     def _compute_sft_loss(self, input_ids, advantages, attention_mask):
-        """Compute weighted next-token cross-entropy for SFT/ECHO datums."""
-        with self._autocast_context():
-            weights = torch.clamp(advantages[:, 1:], min=0.0)
-            weights = weights * attention_mask[:, 1:].float()
-            sft_target_mask = weights > 0
-            target_mask = None
-            if getattr(self, "train_selective_suffix_logits", False):
-                target_mask = sft_target_mask
-
-            fused_loss = self._maybe_compute_unsloth_fused_sft_loss(
-                input_ids,
-                attention_mask,
-                weights,
-                sft_target_mask,
-                sft_target_mask.float().sum().clamp(min=1),
-            )
-            if fused_loss is not None:
-                token_count = sft_target_mask.float().sum().clamp(min=1)
-                return fused_loss, token_count
-
-            new_logprobs = self._shifted_token_logprobs(
-                input_ids,
-                attention_mask,
-                target_mask=target_mask,
-            )
-
-            token_mask = (weights > 0).float()
-            token_count = token_mask.sum().clamp(min=1)
-            loss = (-new_logprobs * weights).sum() / token_count
-
-        return loss, token_count
+        return local_sft_step.compute_loss(self, input_ids, advantages, attention_mask)
 
     def _backward_sft_microbatch(
         self,
@@ -846,322 +668,28 @@ class LocalTrainHelper:
         attention_mask,
         total_tokens,
     ):
-        """Backward one SFT microbatch with the optional fused-CE retry policy."""
-        retried_fused_ce_runtime_failure = False
-        forward_s_total = 0.0
-        backward_s_total = 0.0
-        while True:
-            fused_ce_attempts_before = int(
-                getattr(self, "_unsloth_fused_ce_attempts", 0)
-            )
-            loss_counts = getattr(self, "_loss_path_counts", {})
-            fused_ce_batches_before = int(loss_counts.get("unsloth_fused_ce", 0))
-            timer = _timer_start(self.train_device)
-            try:
-                with saved_tensors_context(
-                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
-                    train_device=self.train_device,
-                    pin_memory=bool(
-                        getattr(self, "train_save_on_cpu_pin_memory", True)
-                    ),
-                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
-                ):
-                    masked_loss, token_count = self._compute_sft_loss(
-                        input_ids,
-                        advantages,
-                        attention_mask,
-                    )
-                    forward_s_total += _timer_stop(timer)
-                    token_count_value = float(token_count.item())
-                    scaled_loss = masked_loss * (token_count / total_tokens)
-                    timer = _timer_start(self.train_device)
-                    self.scaler.scale(scaled_loss).backward()
-                    backward_s_total += _timer_stop(timer)
-            except Exception as exc:
-                fused_ce_attempted = (
-                    int(getattr(self, "_unsloth_fused_ce_attempts", 0))
-                    > fused_ce_attempts_before
-                )
-                if (
-                    self._is_cuda_oom_exception(exc)
-                    or not fused_ce_attempted
-                    or getattr(self, "train_unsloth_fused_ce", "off") != "auto"
-                    or retried_fused_ce_runtime_failure
-                ):
-                    raise
-                loss_counts = getattr(self, "_loss_path_counts", {})
-                if int(loss_counts.get("unsloth_fused_ce", 0)) > fused_ce_batches_before:
-                    loss_counts["unsloth_fused_ce"] = fused_ce_batches_before
-                self._disable_unsloth_fused_ce_after_runtime_failure(exc)
-                self.optimizer.zero_grad()
-                retried_fused_ce_runtime_failure = True
-                continue
-            return masked_loss, token_count_value, forward_s_total, backward_s_total
+        return local_sft_step.backward_microbatch(
+            self,
+            input_ids,
+            advantages,
+            attention_mask,
+            total_tokens,
+        )
 
     def _do_train_impl(self, input_ids, old_logprobs, advantages, attention_mask):
-        """Execute training forward/backward/step on pre-prepared tensors.
-
-        After the optimizer step, clones LoRA params into _weight_snapshot
-        for safe cross-thread syncing. Runs on background thread in split mode.
-
-        Returns:
-            Scalar loss value.
-        """
-        self.train_model.train()
-        self.optimizer.zero_grad()
-        wall_start = time.perf_counter()
-        _reset_cuda_peak(self.train_device)
-        forward_s = 0.0
-        backward_s = 0.0
-        optimizer_s = 0.0
-        snapshot_s = 0.0
-        microbatches = 0
-
-        try:
-            batch_size = int(input_ids.shape[0])
-            microbatch_size = self.train_microbatch_size or batch_size
-            if getattr(self, "train_selective_suffix_logits", False):
-                total_tokens = (
-                    ((attention_mask[:, 1:] > 0) & (advantages[:, 1:] != 0))
-                    .sum()
-                    .clamp(min=1)
-                )
-            else:
-                total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
-            total_tokens_value = float(total_tokens.item())
-            loss_sum = 0.0
-            clip_count = 0.0
-            cov_count = 0.0
-            abs_kl_sum = 0.0
-
-            for start in range(0, batch_size, microbatch_size):
-                stop = min(start + microbatch_size, batch_size)
-                microbatches += 1
-                timer = _timer_start(self.train_device)
-                with saved_tensors_context(
-                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
-                    train_device=self.train_device,
-                    pin_memory=bool(
-                        getattr(self, "train_save_on_cpu_pin_memory", True)
-                    ),
-                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
-                ):
-                    masked_loss, token_count, clip_frac, cov_frac, abs_kl = (
-                        self._compute_train_loss(
-                            input_ids[start:stop],
-                            old_logprobs[start:stop],
-                            advantages[start:stop],
-                            attention_mask[start:stop],
-                        )
-                    )
-                    forward_s += _timer_stop(timer)
-                    token_count_value = float(token_count.item())
-                    scaled_loss = masked_loss * (token_count / total_tokens)
-                    timer = _timer_start(self.train_device)
-                    self.scaler.scale(scaled_loss).backward()
-                    backward_s += _timer_stop(timer)
-                loss_sum += float(masked_loss.detach().item()) * token_count_value
-                clip_count += clip_frac * token_count_value
-                cov_count += cov_frac * token_count_value
-                abs_kl_sum += abs_kl * token_count_value
-
-            timer = _timer_start(self.train_device)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            optimizer_s += _timer_stop(timer)
-
-            self._clip_fraction = clip_count / total_tokens_value
-            self._policy_cov_fraction = cov_count / total_tokens_value
-            self._policy_abs_kl = abs_kl_sum / total_tokens_value
-            loss_val = loss_sum / total_tokens_value
-
-            # Snapshot LoRA weights for safe cross-thread sync
-            snapshot_s = self._snapshot_lora_weights_if_needed()
-            local_metrics.record_train(
-                self,
-                kind="rl",
-                wall_start_s=wall_start,
-                forward_s=forward_s,
-                backward_s=backward_s,
-                optimizer_s=optimizer_s,
-                snapshot_s=snapshot_s,
-                microbatches=microbatches,
-                total_tokens=total_tokens_value,
-                batch_size=batch_size,
-            )
-
-            return loss_val
-        finally:
-            self.optimizer.zero_grad()
-            empty_cuda_cache_if_requested(self.cuda_empty_cache)
+        return local_rl_step.run(
+            self,
+            input_ids,
+            old_logprobs,
+            advantages,
+            attention_mask,
+        )
 
     def _do_sft_impl(self, input_ids, advantages, attention_mask):
-        """Execute weighted cross-entropy SFT/ECHO update synchronously."""
-        self.train_model.train()
-        self.optimizer.zero_grad()
-        wall_start = time.perf_counter()
-        _reset_cuda_peak(self.train_device)
-        forward_s = 0.0
-        backward_s = 0.0
-        optimizer_s = 0.0
-        snapshot_s = 0.0
-        microbatches = 0
-
-        try:
-            batch_size = int(input_ids.shape[0])
-            microbatch_size = self.train_microbatch_size or batch_size
-            weights = torch.clamp(advantages[:, 1:], min=0.0)
-            total_tokens = (weights * attention_mask[:, 1:].float() > 0).sum().clamp(min=1)
-            total_tokens_value = float(total_tokens.item())
-            loss_sum = 0.0
-
-            for start in range(0, batch_size, microbatch_size):
-                stop = min(start + microbatch_size, batch_size)
-                microbatches += 1
-                masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
-                    self._backward_sft_microbatch(
-                        input_ids[start:stop],
-                        advantages[start:stop],
-                        attention_mask[start:stop],
-                        total_tokens,
-                    )
-                )
-                forward_s += mb_forward_s
-                backward_s += mb_backward_s
-                loss_sum += float(masked_loss.detach().item()) * token_count_value
-
-            timer = _timer_start(self.train_device)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            optimizer_s += _timer_stop(timer)
-            loss_val = loss_sum / total_tokens_value
-
-            snapshot_s = self._snapshot_lora_weights_if_needed()
-            local_metrics.record_train(
-                self,
-                kind="sft",
-                wall_start_s=wall_start,
-                forward_s=forward_s,
-                backward_s=backward_s,
-                optimizer_s=optimizer_s,
-                snapshot_s=snapshot_s,
-                microbatches=microbatches,
-                total_tokens=total_tokens_value,
-                batch_size=batch_size,
-            )
-
-            return loss_val
-        finally:
-            self.optimizer.zero_grad()
-            empty_cuda_cache_if_requested(self.cuda_empty_cache)
+        return local_sft_step.run_padded(self, input_ids, advantages, attention_mask)
 
     def _do_sft_sequence_impl(self, all_tokens, all_advantages):
-        """Execute one SFT update while padding only each microbatch.
-
-        This preserves the logical batch and optimizer-step semantics of
-        ``_do_sft_impl`` but avoids allocating ``[batch, global_max_len]`` on the
-        training device before microbatching. It targets long-context SFT rows
-        where a single outlier otherwise forces every row to the same width.
-        """
-        self.train_model.train()
-        self.optimizer.zero_grad()
-        wall_start = time.perf_counter()
-        _reset_cuda_peak(self.train_device)
-        forward_s = 0.0
-        backward_s = 0.0
-        optimizer_s = 0.0
-        snapshot_s = 0.0
-        microbatches = 0
-        batch_size = len(all_tokens)
-        microbatch_size = self.train_microbatch_size or batch_size
-        token_budget = getattr(self, "train_sft_microbatch_token_budget", 0)
-        lengths = [len(row) for row in all_tokens]
-        global_padded, microbatch_padded = local_sft.padding_stats(
-            lengths,
-            microbatch_size,
-            token_budget,
-        )
-        microbatch_ranges = local_sft.microbatch_ranges(
-            lengths,
-            microbatch_size,
-            token_budget,
-        )
-
-        try:
-            total_tokens_value = float(
-                sum(
-                    1
-                    for row in all_advantages
-                    for value in row[1:]
-                    if value > 0.0
-                )
-                or 1
-            )
-            loss_sum = 0.0
-
-            for start, stop in microbatch_ranges:
-                microbatches += 1
-                input_ids, advantages, attention_mask = local_sft.pad_microbatch(
-                    all_tokens,
-                    all_advantages,
-                    start,
-                    stop,
-                    device=self.train_device,
-                )
-                masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
-                    self._backward_sft_microbatch(
-                        input_ids,
-                        advantages,
-                        attention_mask,
-                        total_tokens_value,
-                    )
-                )
-                forward_s += mb_forward_s
-                backward_s += mb_backward_s
-                loss_sum += float(masked_loss.detach().item()) * token_count_value
-
-            timer = _timer_start(self.train_device)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            optimizer_s += _timer_stop(timer)
-            loss_val = loss_sum / total_tokens_value
-
-            snapshot_s = self._snapshot_lora_weights_if_needed()
-            local_metrics.record_train(
-                self,
-                kind="sft",
-                wall_start_s=wall_start,
-                forward_s=forward_s,
-                backward_s=backward_s,
-                optimizer_s=optimizer_s,
-                snapshot_s=snapshot_s,
-                microbatches=microbatches,
-                total_tokens=total_tokens_value,
-                batch_size=batch_size,
-            )
-            metrics = getattr(self, "_last_train_metrics", {})
-            if isinstance(metrics, dict):
-                avoided = max(0, global_padded - microbatch_padded)
-                metrics.update(
-                    {
-                        "local_train_microbatch_local_padding": 1,
-                        "local_train_global_padded_tokens": global_padded,
-                        "local_train_microbatch_padded_tokens": microbatch_padded,
-                        "local_train_padding_tokens_avoided": avoided,
-                        "local_train_padding_avoidance_fraction": (
-                            avoided / global_padded if global_padded else 0.0
-                        ),
-                        "local_train_sft_microbatch_token_budget": int(token_budget),
-                    }
-                )
-                if microbatches:
-                    metrics["local_train_sft_avg_microbatch_examples"] = (
-                        batch_size / microbatches
-                    )
-            return loss_val
-        finally:
-            self.optimizer.zero_grad()
-            empty_cuda_cache_if_requested(self.cuda_empty_cache)
+        return local_sft_step.run_sequence(self, all_tokens, all_advantages)
 
     def _do_hybrid_mask_impl(
         self,
@@ -1173,150 +701,16 @@ class LocalTrainHelper:
         echo_full_observation_counts,
         echo_loss_fn,
     ):
-        """Execute RL + ECHO on the same rollout rows in one optimizer step."""
-        self.train_model.train()
-        self.optimizer.zero_grad()
-        wall_start = time.perf_counter()
-        _reset_cuda_peak(self.train_device)
-        forward_s = 0.0
-        backward_s = 0.0
-        optimizer_s = 0.0
-        snapshot_s = 0.0
-        microbatches = 0
-
-        try:
-            batch_size = int(input_ids.shape[0])
-            microbatch_size = self.train_microbatch_size or batch_size
-            if getattr(self, "train_selective_suffix_logits", False):
-                total_tokens = (
-                    ((attention_mask[:, 1:] > 0) & (advantages[:, 1:] != 0))
-                    .sum()
-                    .clamp(min=1)
-                )
-            else:
-                total_tokens = attention_mask[:, 1:].sum().clamp(min=1)
-            total_tokens_value = float(total_tokens.item())
-            loss_sum = 0.0
-            clip_count = 0.0
-            cov_count = 0.0
-            abs_kl_sum = 0.0
-            echo_loss_sum = 0.0
-
-            for start in range(0, batch_size, microbatch_size):
-                stop = min(start + microbatch_size, batch_size)
-                microbatches += 1
-                mb_input_ids = input_ids[start:stop]
-                mb_old_logprobs = old_logprobs[start:stop]
-                mb_advantages = advantages[start:stop]
-                mb_attention_mask = attention_mask[start:stop]
-                mb_echo_advantages = echo_advantages[start:stop]
-                mb_echo_counts = echo_full_observation_counts[start:stop]
-
-                timer = _timer_start(self.train_device)
-                with saved_tensors_context(
-                    enabled=bool(getattr(self, "train_save_on_cpu", False)),
-                    train_device=self.train_device,
-                    pin_memory=bool(
-                        getattr(self, "train_save_on_cpu_pin_memory", True)
-                    ),
-                    min_numel=int(getattr(self, "train_save_on_cpu_min_numel", 0)),
-                ):
-                    with self._autocast_context():
-                        old_lp = mb_old_logprobs[:, 1:]
-                        adv = mb_advantages[:, 1:]
-                        mask = mb_attention_mask[:, 1:]
-                        echo_weights = torch.clamp(
-                            mb_echo_advantages[:, 1:],
-                            min=0.0,
-                        )
-                        echo_weights = echo_weights * mask.float()
-                        loss_mask = mask
-                        target_mask = None
-                        if getattr(self, "train_selective_suffix_logits", False):
-                            target_mask = (mask > 0) & (
-                                (adv != 0) | (echo_weights > 0.0)
-                            )
-                            loss_mask = ((mask > 0) & (adv != 0)).to(mask.dtype)
-                        token_logprobs = self._shifted_token_logprobs(
-                            mb_input_ids,
-                            mb_attention_mask,
-                            target_mask=target_mask,
-                        )
-                        masked_loss, clip_frac, cov_frac, abs_kl = (
-                            _compute_policy_loss(
-                                old_lp,
-                                token_logprobs,
-                                adv,
-                                loss_mask,
-                                self.clip_eps,
-                                self.clip_eps_high,
-                                getattr(self, "policy_loss_mode", "standard"),
-                                getattr(self, "kl_cov_percent", 0.2),
-                                getattr(self, "kl_cov_coef", 1.0),
-                                getattr(self, "clip_cov_ratio", 0.0002),
-                                getattr(self, "clip_cov_min", 1.0),
-                                getattr(self, "clip_cov_max", 5.0),
-                            )
-                        )
-                        token_count = loss_mask.sum().clamp(min=1)
-                        token_count_value = float(token_count.item())
-                        scaled_loss = masked_loss * (token_count / total_tokens)
-
-                        if echo_loss_fn != "cross_entropy":
-                            raise ValueError(
-                                "echo_loss_fn must be 'cross_entropy' for "
-                                "paper-faithful ECHO."
-                            )
-                        echo_selected = (echo_weights > 0.0).float()
-                        if echo_selected.sum() > 0:
-                            denom = mb_echo_counts.float().clamp(min=1e-3).unsqueeze(1)
-                            echo_loss = (
-                                (-token_logprobs * echo_weights) / denom
-                            ).sum()
-                        else:
-                            echo_loss = token_logprobs.sum() * 0.0
-
-                        scaled_loss = scaled_loss + echo_loss / max(batch_size, 1)
-                    forward_s += _timer_stop(timer)
-
-                    timer = _timer_start(self.train_device)
-                    self.scaler.scale(scaled_loss).backward()
-                    backward_s += _timer_stop(timer)
-                loss_sum += float(masked_loss.detach().item()) * token_count_value
-                clip_count += clip_frac * token_count_value
-                cov_count += cov_frac * token_count_value
-                abs_kl_sum += abs_kl * token_count_value
-                echo_loss_sum += float(echo_loss.detach().item())
-
-            timer = _timer_start(self.train_device)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            optimizer_s += _timer_stop(timer)
-
-            self._clip_fraction = clip_count / total_tokens_value
-            self._policy_cov_fraction = cov_count / total_tokens_value
-            self._policy_abs_kl = abs_kl_sum / total_tokens_value
-            loss_val = loss_sum / total_tokens_value
-            echo_loss_val = echo_loss_sum / max(batch_size, 1)
-
-            snapshot_s = self._snapshot_lora_weights_if_needed()
-            local_metrics.record_train(
-                self,
-                kind="hybrid_echo",
-                wall_start_s=wall_start,
-                forward_s=forward_s,
-                backward_s=backward_s,
-                optimizer_s=optimizer_s,
-                snapshot_s=snapshot_s,
-                microbatches=microbatches,
-                total_tokens=total_tokens_value,
-                batch_size=batch_size,
-            )
-
-            return loss_val, echo_loss_val
-        finally:
-            self.optimizer.zero_grad()
-            empty_cuda_cache_if_requested(self.cuda_empty_cache)
+        return local_hybrid_step.run(
+            self,
+            input_ids,
+            old_logprobs,
+            advantages,
+            attention_mask,
+            echo_advantages,
+            echo_full_observation_counts,
+            echo_loss_fn,
+        )
 
     def _maybe_crop_supervised_context(
         self,

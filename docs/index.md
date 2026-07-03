@@ -46,6 +46,7 @@ retrain
 │   │   ├── archive.py  # Candidate archive ranking, pruning, and selection
 │   │   ├── prompt.py   # Discovery memory prompt rendering
 │   │   └── summary.py  # Discovery archive JSON summary export
+│   ├── examples.py     # Training example loading across providers
 │   ├── runner/         # TrainingRunner protocol + built-in runners
 │   │   ├── result.py   # Run results, metrics, and artifacts
 │   │   ├── protocol.py # Runner protocol
@@ -114,13 +115,16 @@ retrain
 │   │   ├── device.py   # Device planning for local train/inference placement
 │   │   ├── logprobs.py # Token log-probability paths for local training
 │   │   ├── loss.py     # CE accelerator policy and fallback decisions
+│   │   ├── sampling.py # Local sampling dispatch and cache policy
+│   │   ├── sync.py     # LoRA snapshot sync between trainer and engine
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
 │   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics
 │   │   ├── metrics.py  # Local backend runtime telemetry and counters
 │   │   ├── memory.py   # CUDA allocator, cache, and saved-tensor policy
 │   │   ├── state.py    # Adapter state load/save and LoRA snapshots
-│   │   └── sft.py      # SFT row shaping, padding, and context cropping
+│   │   ├── sft.py      # SFT row shaping, padding, and context cropping
+│   │   └── steps/      # Local optimizer-step implementations
 │   ├── prime.py        # PRIME-RL bridge backend
 │   ├── tinker/         # Remote Tinker backend
 │   │   ├── train.py    # Tinker training client implementation
