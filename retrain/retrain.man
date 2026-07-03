@@ -1627,6 +1627,7 @@ ARCHITECTURE
         +-- load.py              Verifiers args, loading, dataset conversion
         +-- prompt.py            Prompt previews, tokenization, observation masks
         +-- rollout.py           Multi-turn rollout samples, timing, scheduling
+        +-- timing.py            Environment observation timing extraction
         +-- verifiers.py         Verifiers bridge: loading, scoring, rollouts
     +-- rewards/                 match, math, judge, custom rewards
     +-- planning/                Planning-token detectors

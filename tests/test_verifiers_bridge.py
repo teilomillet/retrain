@@ -11,10 +11,8 @@ from retrain.environments import verifiers as bridge_mod
 from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
 from retrain.environments.verifiers import (
-    StateDict,
     VerifiersRolloutTiming,
     _coerce_float_list,
-    _collect_observation_timing,
     encode_prompt_for_sampling,
     load_examples_from_environment,
     observation_mask_for_prompt,
@@ -587,57 +585,6 @@ class TestRunMultiturnGroup:
         assert timing.env_workers == 2
         assert timing.buffer_size == 2
         assert timing.scheduler_worker_s >= 0.0
-
-
-def test_collect_observation_timing_from_trajectory_extras():
-    state = cast(
-        StateDict,
-        {
-            "trajectory": [
-                {
-                    "extras": {
-                        "openenv_info": {
-                            "timing": {
-                                "dbt_total_s": 1.25,
-                                "step_total_s": 1.5,
-                                "dbt_target_scoped": True,
-                                "action": "Dbt",
-                            }
-                        }
-                    }
-                }
-            ]
-        },
-    )
-    totals: dict[str, float] = {}
-
-    _collect_observation_timing(state, totals)
-
-    assert totals == {"dbt_total_s": 1.25, "step_total_s": 1.5}
-
-
-def test_collect_observation_timing_from_direct_step_timing():
-    state = cast(
-        StateDict,
-        {
-            "trajectory": [
-                _FakeTrajectoryStep(
-                    timing={
-                        "env_step_s": 0.25,
-                        "nan_step_s": float("nan"),
-                        "inf_step_s": float("inf"),
-                        "flag": True,
-                        "action": "Dbt",
-                    }
-                )
-            ]
-        },
-    )
-    totals: dict[str, float] = {}
-
-    _collect_observation_timing(state, totals)
-
-    assert totals == {"env_step_s": 0.25}
 
 
 def test_verifiers_rollout_timing_as_metrics_includes_env_timing():

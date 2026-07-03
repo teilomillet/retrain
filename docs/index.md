@@ -75,6 +75,7 @@ retrain
 │   ├── load.py         # Verifiers args, loading, dataset conversion
 │   ├── prompt.py       # Prompt previews, tokenization, observation masks
 │   ├── rollout.py      # Multi-turn rollout samples, timing, and scheduling
+│   ├── timing.py       # Environment observation timing extraction
 │   └── verifiers.py    # Verifiers bridge: loading, scoring, and rollouts
 ├── rewards/            # match, math, judge, custom reward functions
 ├── planning/           # Planning-token detectors (regex, semantic)

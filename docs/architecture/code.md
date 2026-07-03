@@ -217,6 +217,7 @@ Split code when it creates a stable place a maintainer would naturally search:
   token masks.
 - `environments/rollout.py`: multi-turn rollout samples, timing, temperature
   scheduling, and bounded async environment work.
+- `environments/timing.py`: environment observation timing extraction.
 - `environments/verifiers.py`: verifiers bridge loading, single-turn scoring,
   and multi-turn rollout orchestration.
 - `registry/`: registry core, built-in factories, and dependency health probes.

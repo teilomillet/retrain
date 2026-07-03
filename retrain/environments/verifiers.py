@@ -13,7 +13,6 @@ Supports:
 from __future__ import annotations
 
 import asyncio
-import math
 import sys
 from collections.abc import Mapping
 import time
@@ -30,6 +29,7 @@ from retrain.environments.rollout import (
     rollout_temperatures,
     sample_active_rollouts,
 )
+from retrain.environments.timing import collect_observation_timing
 from retrain.types import ExampleInfoLike, JSONObject, PromptLike
 
 if TYPE_CHECKING:
@@ -156,59 +156,6 @@ def _coerce_reward(raw: object) -> float:
         return float(cast(int | float | str, raw))
     except (TypeError, ValueError):
         return 0.0
-
-
-def _object_field(obj: object, key: str) -> object:
-    if isinstance(obj, Mapping):
-        return cast(Mapping[str, object], obj).get(key)
-    return getattr(obj, key, None)
-
-
-def _collect_observation_timing(
-    state: StateDict,
-    totals: dict[str, float] | None,
-) -> None:
-    if totals is None:
-        return
-    trajectory = state.get("trajectory")
-    if not isinstance(trajectory, list) or not trajectory:
-        return
-    step = trajectory[-1]
-    extras = _object_field(step, "extras")
-    candidates: list[tuple[object, bool]] = []
-    if isinstance(extras, Mapping):
-        extras_map = cast(Mapping[str, object], extras)
-        candidates.extend(
-            [
-                (extras_map.get("openenv_info"), False),
-                (extras_map.get("info"), False),
-                (extras_map, False),
-            ]
-        )
-    candidates.append((_object_field(step, "timing"), True))
-
-    for candidate, direct_timing in candidates:
-        if not isinstance(candidate, Mapping):
-            continue
-        candidate_map = cast(Mapping[str, object], candidate)
-        timing = candidate_map.get("timing")
-        if isinstance(timing, Mapping):
-            _accumulate_numeric_timing(cast(Mapping[object, object], timing), totals)
-        elif direct_timing:
-            _accumulate_numeric_timing(cast(Mapping[object, object], candidate_map), totals)
-
-
-def _accumulate_numeric_timing(
-    timing: Mapping[object, object],
-    totals: dict[str, float],
-) -> None:
-    for raw_key, raw_value in timing.items():
-        if isinstance(raw_value, bool) or not isinstance(raw_value, int | float):
-            continue
-        if not math.isfinite(raw_value):
-            continue
-        key = str(raw_key)
-        totals[key] = totals.get(key, 0.0) + float(raw_value)
 
 
 def parse_environment_args(raw: str | JSONObject | None) -> JSONObject:
@@ -462,7 +409,7 @@ def run_multiturn_group(
                     )
                     # OpenEnvEnv applies the prior action while rendering the next
                     # prompt, so collect observation timings before appending a step.
-                    _collect_observation_timing(state, rollout_timing.env_timing_s)
+                    collect_observation_timing(state, rollout_timing.env_timing_s)
                     if state.get("final_env_response") is not None:
                         return None
                     encode_started = time.perf_counter()
@@ -583,7 +530,10 @@ def run_multiturn_group(
                     rollout_timing.trajectory_step_s += (
                         time.perf_counter() - step_started
                     )
-                    _collect_observation_timing(states[idx], rollout_timing.env_timing_s)
+                    collect_observation_timing(
+                        states[idx],
+                        rollout_timing.env_timing_s,
+                    )
                     turn_sample = VerifiersTurnSample(
                         prompt_ids=list(prompt_ids),
                         completion_ids=list(completion_ids),
