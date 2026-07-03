@@ -121,3 +121,30 @@ def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> Non
     assert "soma_retrain_recent_completion_tokens_max" in text
     assert "soma_retrain_sample_result_age_seconds" in text
     assert "soma_retrain_latest_tokens_per_second" in text
+
+
+def test_collect_run_snapshots_ignores_malformed_completion_tokens(tmp_path: Path) -> None:
+    run_dir = tmp_path / "bad-tokens"
+    run_dir.mkdir()
+    _write_jsonl(
+        run_dir / "tinker_sample_diagnostics.jsonl",
+        [
+            {
+                "event": "result",
+                "completion_tokens": "bad",
+                "status": "ok",
+                "ts": time.time(),
+            },
+            {
+                "event": "result",
+                "completion_tokens": [True, 128],
+                "status": "ok",
+                "ts": time.time(),
+            },
+        ],
+    )
+
+    [snapshot] = collect_run_snapshots(tmp_path)
+    assert snapshot.recent_result_count == 2
+    assert snapshot.recent_completion_tokens_last == 128
+    assert snapshot.recent_completion_tokens_max == 128

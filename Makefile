@@ -8,6 +8,7 @@ TYPECHECK_PATHS = \
 	retrain/json_utils.py \
 	retrain/metrics_scan.py \
 	retrain/logging_utils.py \
+	retrain/progress_exporter.py \
 	retrain/sepa.py \
 	retrain/advantages.py \
 	retrain/backend_definitions.py \

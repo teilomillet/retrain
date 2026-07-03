@@ -12,10 +12,12 @@ import json
 import math
 import time
 from collections import Counter, deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import cast
 
 from retrain.json_utils import JSONDecodeError, loads
 
@@ -60,6 +62,9 @@ class RunSnapshot:
     recent_result_latency_max_s: float | None
 
 
+MetricGetter = Callable[[RunSnapshot], float | int | None]
+
+
 def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
     if not path.is_file():
         return []
@@ -97,7 +102,7 @@ def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
         except JSONDecodeError:
             continue
         if isinstance(payload, dict):
-            rows.append(payload)
+            rows.append(cast(JsonObject, payload))
     return list(rows)
 
 
@@ -116,6 +121,12 @@ def _int_or_none(value: object) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
+
+
+def _int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int) and not isinstance(item, bool)]
 
 
 def _infer_phase(run_name: str, metrics_entry: JsonObject | None) -> str:
@@ -207,11 +218,7 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
     completion_tokens = [
         max(seq_tokens)
         for seq_tokens in (
-            [
-                token
-                for token in row.get("completion_tokens", [])
-                if isinstance(token, int) and not isinstance(token, bool)
-            ]
+            _int_list(row.get("completion_tokens"))
             for row in result_rows
         )
         if seq_tokens
@@ -301,7 +308,7 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
         }
         lines.append(_metric_line("soma_retrain_run_info", 1, labels))
 
-    metric_map: list[tuple[str, str, str, callable[[RunSnapshot], float | int | None]]] = [
+    metric_map: list[tuple[str, str, str, MetricGetter]] = [
         ("soma_retrain_run_active", "Whether the run appears active.", "gauge", lambda s: 1 if s.active else 0),
         ("soma_retrain_run_completed", "Whether the run finished with a final checkpoint.", "gauge", lambda s: 1 if s.completed else 0),
         ("soma_retrain_metrics_present", "Whether metrics.jsonl exists for the run.", "gauge", lambda s: 1 if s.metrics_present else 0),
