@@ -33,6 +33,7 @@ trainer_output/
 wandb/
 *.db
 .ordeal/
+ordeal-report.json
 .hypothesis/
 # Build artifacts
 logs/
