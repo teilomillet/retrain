@@ -10,9 +10,9 @@ from typing import Protocol, cast
 from retrain.advantages import EntropyStats
 from retrain.backends import TrainHelper
 from retrain.backends.catalog import BackendCapabilities
-from retrain.backpressure import BackPressureDecision
+from retrain.training.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
-from retrain.runtime_support import RuntimeCounters
+from retrain.training.rollouts import RuntimeCounters
 from retrain.training.telemetry import (
     EchoStepPlan,
     MetricValue,

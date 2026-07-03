@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from retrain.metrics.scan import float_or_none, int_or_none, scan_metrics_file
-from retrain.trainer_state import TRAINER_STATE_FILE
+from retrain.training.state import TRAINER_STATE_FILE
 
 
 _STALE_SECONDS = 300  # 5 minutes without progress → stale

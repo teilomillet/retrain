@@ -25,12 +25,12 @@ from retrain.backends import (
     run_sft_train_step,
 )
 from retrain.backends.catalog import BackendCapabilities
-from retrain.backpressure import (
+from retrain.training.backpressure import (
     StepObservation,
 )
 from retrain.config import TrainConfig
 from retrain.data import Example
-from retrain.echo import (
+from retrain.training.echo import (
     EchoBuildStats,
     EchoLimitStats,
     build_rollout_echo_datum,
@@ -44,14 +44,14 @@ from retrain.flow import (
 from retrain.io.log import JsonlLogger
 from retrain.process.metrics import max_rss_mb
 from retrain.registry import PlanningDetector, RewardFunction, get_registry
-from retrain.runtime_support import (
+from retrain.training.rollouts import (
     ExamplePromptCache,
     RuntimeCounters,
     TokenTextLookup,
     decode_sequence_groups,
     top_surprisal_entries,
 )
-from retrain.sft import (
+from retrain.training.sft import (
     SftExample,
     SftTokenizedExample,
     build_sft_example_order,
@@ -77,7 +77,7 @@ from retrain.training.signals import (
     prepare_algorithm_params_for_step,
     prepare_transform_params_for_step,
 )
-from retrain.trainer_state import load_trainer_state, save_trainer_state
+from retrain.training.state import load_trainer_state, save_trainer_state
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
     is_multiturn_environment,

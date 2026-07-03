@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from retrain.sft import build_sft_example_order as build_tokenized_sft_order
-from retrain.sft import build_sft_example_order, select_sft_batch_indices
+from retrain.training.sft import build_sft_example_order as build_tokenized_sft_order
+from retrain.training.sft import build_sft_example_order, select_sft_batch_indices
 
 
 def test_build_sft_example_order_is_deterministic_permutation() -> None:

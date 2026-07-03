@@ -21,7 +21,7 @@ from typing import cast
 
 from retrain.io.json import JSONDecodeError, loads
 from retrain.metrics.scan import JsonObject, float_or_none, int_or_none
-from retrain.trainer_state import TRAINER_STATE_FILE
+from retrain.training.state import TRAINER_STATE_FILE
 
 
 _RECENT_DIAG_LIMIT = 256

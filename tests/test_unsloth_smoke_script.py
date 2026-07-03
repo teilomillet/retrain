@@ -124,7 +124,7 @@ def test_unsloth_sft_smoke_comparison_reports_equal_peak_as_not_above():
 
 def test_unsloth_sft_usl_sweep_fit_recovers_synthetic_curve():
     module = _load_sft_usl_sweep_module()
-    from retrain.backpressure import usl_throughput
+    from retrain.training.backpressure import usl_throughput
 
     rows = []
     for batch_size in [1, 2, 4, 8, 16, 32]:
@@ -173,7 +173,7 @@ def test_unsloth_sft_usl_sweep_detects_15_percent_microbatch_gain():
 
 def test_unsloth_sft_usl_sweep_summary_serializes_fit_payload():
     module = _load_sft_usl_sweep_module()
-    from retrain.backpressure import usl_throughput
+    from retrain.training.backpressure import usl_throughput
 
     rows = [
         {

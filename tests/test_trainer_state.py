@@ -14,7 +14,7 @@ from retrain.training.signals import (
     assert_uniform_completion_advantages_for_non_preserving_backend,
 )
 from retrain.training.telemetry import format_loss_for_display
-from retrain.trainer_state import (
+from retrain.training.state import (
     TRAINER_STATE_FILE,
     load_trainer_state,
     save_trainer_state,
@@ -467,7 +467,7 @@ class TestSEPAStateRoundtripViaTrainer:
     """End-to-end: save SEPA state via trainer, reload into controller."""
 
     def test_sepa_state_survives_trainer_roundtrip(self, tmp_path):
-        from retrain.sepa import SEPAController
+        from retrain.training.sepa import SEPAController
 
         # Original controller with accumulated state
         ctrl = SEPAController(
@@ -528,7 +528,7 @@ class TestResumeIntegration:
 
     def test_split_run_sepa_consistency(self, tmp_path):
         """A continuous 40-step run and a 20+20 split run produce the same SEPA lambda."""
-        from retrain.sepa import SEPAController
+        from retrain.training.sepa import SEPAController
 
         kwargs = dict(
             sepa_steps=100, sepa_schedule="auto",
@@ -662,7 +662,7 @@ class TestResumeIntegration:
 
     def test_backpressure_graceful_on_resume(self):
         """USL controller starts cold on resume but batch_size is preserved."""
-        from retrain.backpressure import USLBackPressure, StepObservation
+        from retrain.training.backpressure import USLBackPressure, StepObservation
 
         # Fresh USL controller (as happens on resume)
         bp = USLBackPressure(warmup_steps=5)

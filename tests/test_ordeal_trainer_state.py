@@ -16,7 +16,7 @@ from hypothesis import given
 from ordeal import ChaosTest, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
-from retrain.trainer_state import load_trainer_state, save_trainer_state
+from retrain.training.state import load_trainer_state, save_trainer_state
 
 valid_number = no_nan & no_inf
 

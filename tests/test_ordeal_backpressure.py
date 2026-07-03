@@ -1,4 +1,4 @@
-"""Ordeal property tests for retrain.backpressure.
+"""Ordeal property tests for retrain.training.backpressure.
 
 Tests USL math invariants, BackPressure protocol compliance,
 and USLBackPressure state machine via ChaosTest.
@@ -13,7 +13,7 @@ from hypothesis import given
 from ordeal import ChaosTest, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
-from retrain.backpressure import (
+from retrain.training.backpressure import (
     NoOpBackPressure,
     StepObservation,
     USLBackPressure,

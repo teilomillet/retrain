@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from retrain.policy_loss import compute_policy_loss
+from retrain.training.loss import compute_policy_loss
 
 
 def _loss_from_ratio(ratio, adv, mask, *, clip_eps, clip_eps_high):

@@ -25,12 +25,12 @@ from retrain.advantages import (
     apply_batch_advantage_normalization,
 )
 from retrain.backends import EntropySamplingHelper
-from retrain.backpressure import StepObservation
+from retrain.training.backpressure import StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
 from retrain.io.log import JsonlLogger
 from retrain.rewards import RewardFunction
-from retrain.runtime_support import (
+from retrain.training.rollouts import (
     TokenTextLookup,
     decode_sequence_groups,
 )
@@ -38,7 +38,7 @@ from retrain.trainer import (
     _print_backend_capability_summary,
     _print_config_summary,
 )
-from retrain.trainer_state import save_trainer_state
+from retrain.training.state import save_trainer_state
 from retrain.training.signals import (
     CORRECT_THRESHOLD,
     apply_advantage_cap,

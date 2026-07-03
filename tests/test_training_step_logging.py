@@ -6,10 +6,10 @@ import pytest
 
 from retrain.advantages import AdvantageResult
 from retrain.backends.catalog import BackendCapabilities
-from retrain.backpressure import BackPressureDecision
+from retrain.training.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
-from retrain.echo import EchoBuildStats, EchoLimitStats
-from retrain.runtime_support import RuntimeCounters
+from retrain.training.echo import EchoBuildStats, EchoLimitStats
+from retrain.training.rollouts import RuntimeCounters
 from retrain.training.log import (
     StepLoggingContext,
     init_wandb,

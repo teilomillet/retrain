@@ -1,10 +1,10 @@
-"""Tests for retrain.runtime_support helper abstractions."""
+"""Tests for retrain.training.rollouts helper abstractions."""
 
 from __future__ import annotations
 
 import pytest
 
-from retrain.runtime_support import (
+from retrain.training.rollouts import (
     DecodedSequence,
     ExamplePromptCache,
     RuntimeCounters,

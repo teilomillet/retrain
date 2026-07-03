@@ -1,10 +1,10 @@
-"""Tests for retrain.sepa — SEPAController scheduling."""
+"""Tests for retrain.training.sepa — SEPAController scheduling."""
 
 import math
 
 import pytest
 
-from retrain.sepa import SEPAController
+from retrain.training.sepa import SEPAController
 
 
 class TestLinearSchedule:

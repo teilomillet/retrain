@@ -9,11 +9,11 @@ from typing import Protocol
 from retrain.advantages import AdvantageResult, EntropyStats
 from retrain.backends.catalog import BackendCapabilities
 from retrain.backends import TrainHelper, collect_runtime_metrics
-from retrain.backpressure import BackPressureDecision
+from retrain.training.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
-from retrain.echo import EchoBuildStats, EchoLimitStats
+from retrain.training.echo import EchoBuildStats, EchoLimitStats
 from retrain.process.metrics import max_rss_mb
-from retrain.runtime_support import RuntimeCounters
+from retrain.training.rollouts import RuntimeCounters
 
 
 MetricValue = bool | int | float | str

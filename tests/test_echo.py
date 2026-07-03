@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from retrain.echo import (
+from retrain.training.echo import (
     build_rollout_echo_datum,
     common_prefix_len,
     limit_echo_masks,

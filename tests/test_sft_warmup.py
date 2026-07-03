@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-import retrain.sft as sft_module
+import retrain.training.sft as sft_module
 from retrain.config import TrainConfig, load_config
-from retrain.sft import SftExample, load_sft_jsonl, tokenize_sft_batch
+from retrain.training.sft import SftExample, load_sft_jsonl, tokenize_sft_batch
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import pytest
 from retrain import trainer as trainer_mod
 from retrain.training import signals as signal_mod
 from retrain.advantages import AdvantageResult
-from retrain.backpressure import NoOpBackPressure
+from retrain.training.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig
 from retrain.data import Example
 from retrain.flow import build_flow
@@ -180,7 +180,7 @@ class _EchoRecordingFakeHelper(_FakeHelper):
 
 def _make_fake_flow(cfg, helper):
     """Build a Tier-1 flow, then inject fake Tier-2 objects."""
-    from retrain.sepa import SEPAController
+    from retrain.training.sepa import SEPAController
 
     flow = build_flow(cfg, gpu=False)
     flow.backend = helper

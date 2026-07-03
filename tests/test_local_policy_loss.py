@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from retrain.policy_loss import compute_policy_loss
+from retrain.training.loss import compute_policy_loss
 
 
 def test_standard_policy_loss_matches_importance_sampling() -> None:

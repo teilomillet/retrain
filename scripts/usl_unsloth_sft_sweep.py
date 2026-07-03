@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
-from retrain.backpressure import StepObservation, USLBackPressure, usl_throughput
+from retrain.training.backpressure import StepObservation, USLBackPressure, usl_throughput
 
 
 def _parse_int_list(raw: str) -> list[int]:

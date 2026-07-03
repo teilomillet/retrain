@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
 
-from retrain.sepa import SEPAStateDict
+from retrain.training.sepa import SEPAStateDict
 
 
 TRAINER_STATE_FILE = "trainer_state.json"

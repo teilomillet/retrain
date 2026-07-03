@@ -22,7 +22,7 @@ from retrain.backends.catalog import (
     get_backend_dependency_map,
     get_builtin_backend_definitions,
 )
-from retrain.backpressure import BackPressure
+from retrain.training.backpressure import BackPressure
 from retrain.config import TrainConfig
 from retrain.data import DataSource
 from retrain.plugins.resolve import resolve_dotted_attribute
@@ -275,13 +275,13 @@ def _data_math(config: TrainConfig) -> DataSource:
 
 @backpressure.register("noop")
 def _bp_noop(config: TrainConfig) -> BackPressure:
-    from retrain.backpressure import NoOpBackPressure
+    from retrain.training.backpressure import NoOpBackPressure
     return NoOpBackPressure()
 
 
 @backpressure.register("usl")
 def _bp_usl(config: TrainConfig) -> BackPressure:
-    from retrain.backpressure import USLBackPressure
+    from retrain.training.backpressure import USLBackPressure
     return USLBackPressure(
         warmup_steps=config.bp_warmup_steps,
         ema_decay=config.bp_ema_decay,

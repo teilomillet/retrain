@@ -48,7 +48,7 @@ from retrain.kernels.logprobs import (
     selected_linear_ce_logprobs_no_bias as _selected_linear_ce_logprobs_no_bias,
     selected_linear_ce_logprobs_with_bias as _selected_linear_ce_logprobs_with_bias,
 )
-from retrain.policy_loss import compute_policy_loss as _compute_policy_loss
+from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 from retrain.backends.torch import (
     cuda_peak_metrics as _cuda_peak_metrics,

@@ -1,4 +1,4 @@
-"""Tests for retrain.backpressure — USL formula, Cramer's rule, regime, actions."""
+"""Tests for retrain.training.backpressure — USL formula, Cramer's rule, regime, actions."""
 
 import math
 import random
@@ -6,7 +6,7 @@ from collections import deque
 
 import pytest
 
-from retrain.backpressure import (
+from retrain.training.backpressure import (
     NoOpBackPressure,
     StepObservation,
     USLBackPressure,

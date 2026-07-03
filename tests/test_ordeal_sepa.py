@@ -1,4 +1,4 @@
-"""Ordeal ChaosTest for retrain.sepa.
+"""Ordeal ChaosTest for retrain.training.sepa.
 
 Stateful testing of the SEPAController: step progression, correctness
 gating, EMA tracking, state save/load, and mode transitions.
@@ -11,7 +11,7 @@ import math
 import hypothesis.strategies as st
 from ordeal import ChaosTest, always, invariant, rule, sometimes
 
-from retrain.sepa import SEPAController
+from retrain.training.sepa import SEPAController
 
 
 class SEPAControllerChaos(ChaosTest):
