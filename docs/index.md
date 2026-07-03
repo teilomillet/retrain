@@ -27,7 +27,15 @@ retrain
 │   ├── signals.py      # Advantage caps, ties, and algorithm params
 │   ├── telemetry.py    # Step metrics, wandb payloads, emergence logs
 │   └── log.py          # Side effects for recording one RL step
-├── advantages.py       # GRPO, MaxRL, GTPO, HICRA, SEPA, planning tokens
+├── advantages/         # Advantage algorithms, transforms, and token credit
+│   ├── episode.py      # GRPO, MaxRL, REINFORCE++ episode advantages
+│   ├── algorithm.py    # Full algorithm registry
+│   ├── transform.py    # Transform mode registry
+│   ├── credit.py       # GTPO, HICRA, SEPA, masking token transforms
+│   ├── delight/        # Delight gates, eta, metrics, transforms
+│   ├── uncertainty.py  # Token uncertainty signals
+│   ├── planning.py     # Strategic planning-token detection
+│   └── pipeline.py     # Composable advantage pipeline
 ├── sepa.py             # SEPA scheduler (linear / auto)
 ├── rewards.py          # match, math, judge, custom reward functions
 ├── backpressure.py     # USL+Roofline adaptive batch sizing

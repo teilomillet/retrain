@@ -15,6 +15,20 @@ retrain/
     signals.py
     telemetry.py
     log.py
+  advantages/
+    episode.py
+    algorithm.py
+    transform.py
+    credit.py
+    delight/
+      gate.py
+      scale.py
+      eta.py
+      metric.py
+      transform.py
+    uncertainty.py
+    planning.py
+    pipeline.py
   backends/
     catalog.py
     local.py
@@ -44,6 +58,11 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
+- `advantages/episode.py`: episode-level GRPO, MaxRL, and REINFORCE++ modes.
+- `advantages/credit.py`: token-credit transforms such as GTPO, HICRA, SEPA,
+  and masking.
+- `advantages/delight/`: Delight gates, eta resolution, metrics, and transforms.
+- `advantages/pipeline.py`: the composable advantage computation path.
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.

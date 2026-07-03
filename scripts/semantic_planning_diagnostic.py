@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# 1. Current hardcoded grams (copied from retrain/advantages.py)
+# 1. Current hardcoded grams (copied from retrain/advantages/planning.py)
 # ---------------------------------------------------------------------------
 
 DEFAULT_STRATEGIC_GRAMS = [
