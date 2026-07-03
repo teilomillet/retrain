@@ -350,8 +350,7 @@ class SftRunner:
                 if rss_mb is not None:
                     metrics["process_max_rss_mb"] = round(rss_mb, 3)
                 for key, value in collect_runtime_metrics(helper).items():
-                    if isinstance(value, (int, float, str)):
-                        metrics[f"backend/{key}"] = value
+                    metrics[f"backend/{key}"] = value
 
                 metrics_logger.log(metrics)
                 steps_logger.log(metrics)

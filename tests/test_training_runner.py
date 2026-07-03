@@ -220,7 +220,12 @@ class _FakeSftHelper:
         self.loaded.append(ref)
 
     def runtime_metrics(self):
-        return {"fake_metric": 1}
+        return {
+            "fake_metric": 1,
+            "none_metric": None,
+            "object_metric": object(),
+            123: "bad_key",
+        }
 
     def shutdown(self):
         self.shutdown_called = True
@@ -301,6 +306,9 @@ class TestSftRunner:
         assert metrics[-1]["backend"] == "unsloth"
         assert metrics[-1]["sft_loss_fn"] == "cross_entropy"
         assert metrics[-1]["backend/fake_metric"] == 1
+        assert "backend/none_metric" not in metrics[-1]
+        assert "backend/object_metric" not in metrics[-1]
+        assert "backend/123" not in metrics[-1]
 
         state = json.loads((log_dir / "trainer_state.json").read_text())
         assert state["checkpoint_name"] == "final"
