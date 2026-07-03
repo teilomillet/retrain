@@ -5,6 +5,9 @@ TYPECHECK_PATHS = \
 	retrain/type_defs.py \
 	retrain/data.py \
 	retrain/diff.py \
+	retrain/json_utils.py \
+	retrain/metrics_scan.py \
+	retrain/logging_utils.py \
 	retrain/sepa.py \
 	retrain/advantages.py \
 	retrain/backend_definitions.py \

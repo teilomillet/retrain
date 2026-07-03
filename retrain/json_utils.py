@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import json as _json
+from typing import Protocol
+
+
+class _OrjsonModule(Protocol):
+    JSONDecodeError: type[ValueError]
+    OPT_APPEND_NEWLINE: int
+
+    def loads(self, data: str | bytes | bytearray | memoryview) -> object: ...
+    def dumps(self, entry: object, *, option: int = 0) -> bytes: ...
+
 
 try:
-    import orjson as _orjson
+    import orjson as _orjson_import
 except ImportError:  # pragma: no cover - exercised only without orjson installed
-    _orjson = None
+    _orjson: _OrjsonModule | None = None
+else:
+    _orjson = _orjson_import
 
 
-JSONDecodeError = (
+JSONDecodeError: type[ValueError] = (
     _orjson.JSONDecodeError if _orjson is not None else _json.JSONDecodeError
 )
 
