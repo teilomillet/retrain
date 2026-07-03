@@ -21,7 +21,7 @@ from retrain.accelerators import (
     apply_liger_kernel_if_available,
     from_pretrained_attention_kwargs,
 )
-from retrain.gemma4_text import is_gemma4_text_model, unwrap_peft_model
+from retrain.models.gemma4 import is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
 from retrain.tokens.ids import model_eos_token_ids
 from retrain.backends.torch import (

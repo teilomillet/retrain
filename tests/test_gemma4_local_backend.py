@@ -11,7 +11,7 @@ from peft import get_peft_model
 from transformers import Qwen2Config, Qwen2ForCausalLM
 
 from retrain.backends import local as local_mod
-from retrain.gemma4_text import (
+from retrain.models.gemma4 import (
     DEFAULT_LORA_TARGET_MODULES,
     eos_token_ids,
     forward_logits,

@@ -4,7 +4,7 @@ import types
 import pytest
 import torch
 
-from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
+from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 
 
 def torch_chunk_gated_delta_rule(*args, **kwargs):

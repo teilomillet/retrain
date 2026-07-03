@@ -21,7 +21,7 @@ except ImportError:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = None
 
 from retrain.backends.local import LocalTrainHelper
-from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
+from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 
 REQUIRED_FROM_PRETRAINED_PARAMS = frozenset(
     {

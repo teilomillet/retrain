@@ -31,7 +31,7 @@ from retrain.accelerators import (
     install_cudnn_causal_conv1d_shim,
     module_available,
 )
-from retrain.gemma4_text import (
+from retrain.models.gemma4 import (
     forward_hidden_states_and_lm_head,
     forward_logits,
     parse_lora_target_module_suffixes,
@@ -49,7 +49,7 @@ from retrain.selective_logprobs import (
     selected_linear_ce_logprobs_with_bias as _selected_linear_ce_logprobs_with_bias,
 )
 from retrain.policy_loss import compute_policy_loss as _compute_policy_loss
-from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
+from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 from retrain.backends.torch import (
     cuda_peak_metrics as _cuda_peak_metrics,
     is_cuda_device as _is_cuda_device,

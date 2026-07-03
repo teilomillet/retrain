@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from retrain.gemma4_text import eos_token_ids
+from retrain.models.gemma4 import eos_token_ids
 from retrain.tokens.ids import coerce_token_id_set, model_eos_token_ids
 
 
