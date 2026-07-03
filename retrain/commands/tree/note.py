@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 
 def add_note(tree, node_id: str, text: str) -> None:
     """Add an annotation to a node."""
-    from retrain.tree import Annotation, NodeState, save_state
+    from retrain.tree.model import Annotation, NodeState
+    from retrain.tree.state import save_state
 
     if node_id not in tree.node_map:
         print(f"Error: unknown node {node_id!r}")

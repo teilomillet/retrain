@@ -7,21 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from retrain.tree import (
-    Annotation,
-    NodeState,
-    _state_path,
-    effective_status,
-    evaluate_node,
+from retrain.tree.eval import evaluate_node
+from retrain.tree.format import (
     format_next,
     format_show,
     format_tree,
     format_tree_json,
-    load_tree,
-    parse_success_condition,
-    reset_node,
-    save_state,
 )
+from retrain.tree.load import load_tree
+from retrain.tree.model import Annotation, NodeState, parse_success_condition
+from retrain.tree.state import _state_path, reset_node, save_state
+from retrain.tree.status import effective_status
 
 
 # ---------------------------------------------------------------------------

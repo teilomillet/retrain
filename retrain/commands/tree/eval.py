@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def evaluate_done(tree) -> None:
     """Evaluate success conditions for all done nodes without outcomes."""
-    from retrain.tree import evaluate_node
+    from retrain.tree.eval import evaluate_node
 
     evaluated = 0
     for node in tree.nodes:

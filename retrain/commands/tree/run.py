@@ -23,14 +23,14 @@ USAGE = (
 
 def run(args: list[str]) -> None:
     """Experiment tech-tree commands."""
-    from retrain.tree import (
+    from retrain.tree.format import (
         format_next,
         format_show,
         format_tree,
         format_tree_json,
-        load_tree,
-        reset_node,
     )
+    from retrain.tree.load import load_tree
+    from retrain.tree.state import reset_node
 
     if not args or args[0] in ("-h", "--help"):
         print(USAGE)

@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 def run_campaign_node(tree, node_id: str) -> None:
     """Launch a node's campaign and record state."""
     from retrain.campaign import run_campaign
-    from retrain.tree import NodeState, save_state
+    from retrain.tree.model import NodeState
+    from retrain.tree.state import save_state
 
     if node_id not in tree.node_map:
         print(f"Error: unknown node {node_id!r}")
