@@ -73,7 +73,8 @@ retrain
 │   ├── branch.py       # TL-GRPO branching and turn advantages
 │   ├── load.py         # Verifiers args, loading, dataset conversion
 │   ├── prompt.py       # Prompt previews, tokenization, observation masks
-│   └── verifiers.py    # Verifiers bridge: rollout scheduling and scoring
+│   ├── rollout.py      # Multi-turn rollout samples, timing, and scheduling
+│   └── verifiers.py    # Verifiers bridge: loading, scoring, and rollouts
 ├── rewards/            # match, math, judge, custom reward functions
 ├── planning/           # Planning-token detectors (regex, semantic)
 ├── registry/           # Component registries, builtins, dependency health

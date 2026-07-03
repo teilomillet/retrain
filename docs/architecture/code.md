@@ -91,6 +91,7 @@ retrain/
     branch.py
     load.py
     prompt.py
+    rollout.py
     verifiers.py
   rewards/
     boxed.py
@@ -213,8 +214,10 @@ Split code when it creates a stable place a maintainer would naturally search:
   dataset row conversion.
 - `environments/prompt.py`: prompt preview, tokenizer encoding, and observation
   token masks.
-- `environments/verifiers.py`: multi-turn rollout execution, scheduling, and
-  rubric scoring.
+- `environments/rollout.py`: multi-turn rollout samples, timing, temperature
+  scheduling, and bounded async environment work.
+- `environments/verifiers.py`: verifiers bridge loading, single-turn scoring,
+  and multi-turn rollout orchestration.
 - `registry/`: registry core, built-in factories, and dependency health probes.
 - `rewards/`: boxed-match, verifiers-backed, and custom rewards.
 - `planning/`: regex and semantic planning-token detectors.
