@@ -19,8 +19,6 @@ from retrain.advantages import (
     AdvantageResult,
     EntropyStats,
     apply_batch_advantage_normalization,
-    compute_algorithm_advantages,
-    compute_composable_advantages,
 )
 from retrain.backends import (
     EntropySamplingHelper,
@@ -41,7 +39,6 @@ from retrain.echo import (
 )
 from retrain.flow import (
     TrainingFlow,
-    _UNIFORMITY_EPS,
     _condition_label,
     build_flow,
 )
@@ -76,6 +73,15 @@ from retrain.training_telemetry import (
     format_step_log_summary,
     summarize_surprisal_stats,
 )
+from retrain.training_signals import (
+    CORRECT_THRESHOLD,
+    RewardTieAccumulator,
+    apply_advantage_cap,
+    assert_uniform_completion_advantages_for_non_preserving_backend,
+    compute_group_advantages,
+    prepare_algorithm_params_for_step,
+    prepare_transform_params_for_step,
+)
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
@@ -88,10 +94,6 @@ from retrain.verifiers_bridge import (
 
 
 _TRAINER_STATE_FILE = "trainer_state.json"
-_CORRECT_THRESHOLD = 0.5
-_PROMPT_PAD_EPS = 1e-9
-
-
 def _accumulate_metric_totals(
     totals: dict[str, float],
     metrics: Mapping[str, float],
@@ -174,50 +176,6 @@ def _top_surprisal_payload(
         token_lookup,
         limit=limit,
     )
-
-
-def _apply_advantage_cap(
-    all_advantages: list[list[float]],
-    cap: float,
-) -> tuple[list[list[float]], float, float]:
-    """Cap per-token advantages to [-cap, +cap].
-
-    This is NOT ratio clipping (PPO). It bounds the advantage magnitude sent
-    to the backend, limiting how hard any single token can push the gradient.
-    The mechanism is upstream of the loss function — it modifies the signal,
-    not the optimization dynamics.
-
-    Returns:
-        (capped_advantages, cap_fraction, mean_cap_magnitude)
-        cap_fraction: fraction of non-zero tokens that were capped.
-        mean_cap_magnitude: mean absolute value of tokens that were capped
-            (before capping). 0.0 if nothing was capped.
-    """
-    total = 0
-    capped_count = 0
-    capped_magnitude_sum = 0.0
-    result: list[list[float]] = []
-    for seq in all_advantages:
-        capped_seq: list[float] = []
-        for a in seq:
-            if a == 0.0:
-                capped_seq.append(a)
-                continue
-            total += 1
-            if a > cap:
-                capped_magnitude_sum += abs(a)
-                capped_count += 1
-                capped_seq.append(cap)
-            elif a < -cap:
-                capped_magnitude_sum += abs(a)
-                capped_count += 1
-                capped_seq.append(-cap)
-            else:
-                capped_seq.append(a)
-        result.append(capped_seq)
-    frac = capped_count / max(total, 1)
-    mean_mag = capped_magnitude_sum / max(capped_count, 1)
-    return result, frac, mean_mag
 
 
 def _has_nonzero_advantage(rows: list[list[float]]) -> bool:
@@ -328,17 +286,6 @@ class TrainerState(TypedDict):
     delight_eta_ema: NotRequired[float]
 
 
-class RewardTieStats(TypedDict):
-    """Approximate within-group reward tie summary."""
-
-    eligible: bool
-    has_tie: bool
-    is_uniform: bool
-    unique_count: int
-    tied_pairs: int
-    total_pairs: int
-
-
 def _require_int_field(payload: Mapping[str, object], key: str) -> int:
     value = payload.get(key)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -367,90 +314,6 @@ def _optional_float_field(payload: Mapping[str, object], key: str) -> float | No
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"Trainer state field '{key}' must be a number.")
     return float(value)
-
-
-def _uses_adaptive_delight(params: Mapping[str, object] | None) -> bool:
-    if params is None:
-        return False
-    raw_mode = params.get("delight_eta_mode")
-    if isinstance(raw_mode, str):
-        return raw_mode.strip().lower() == "adaptive"
-    return params.get("delight_eta_adaptive") is True
-
-
-def _prepare_transform_params_for_step(
-    params: Mapping[str, object] | None,
-    *,
-    delight_eta_prev: float | None,
-) -> dict[str, object]:
-    prepared = dict(params) if params is not None else {}
-    if delight_eta_prev is not None and _uses_adaptive_delight(prepared):
-        prepared["delight_eta_prev"] = delight_eta_prev
-    return prepared
-
-
-def _prepare_algorithm_params_for_step(
-    params: Mapping[str, object],
-    *,
-    delight_eta_prev: float | None,
-) -> dict[str, object]:
-    prepared = dict(params)
-    raw_transform_params = prepared.get("transform_params")
-    transform_params = (
-        dict(raw_transform_params)
-        if isinstance(raw_transform_params, Mapping)
-        else {}
-    )
-    prepared["transform_params"] = _prepare_transform_params_for_step(
-        transform_params,
-        delight_eta_prev=delight_eta_prev,
-    )
-    return prepared
-
-
-def _compute_group_advantages(
-    config: TrainConfig,
-    rewards_G: list[float],
-    logprobs_G: list[list[float]],
-    planning_masks_G: list[list[int]],
-    *,
-    step: int,
-    sepa_lambda: float,
-    algorithm_params: Mapping[str, object],
-    transform_params: Mapping[str, object],
-    precomputed_entropies_G: list[list[float]] | None = None,
-) -> AdvantageResult:
-    """Dispatch one group to the full-algorithm or composable advantage path."""
-    if config.algorithm_mode:
-        return compute_algorithm_advantages(
-            rewards_G,
-            logprobs_G,
-            planning_masks_G,
-            algorithm_mode=config.algorithm_mode,
-            params=algorithm_params,
-            gtpo_beta=config.gtpo_beta,
-            hicra_alpha=config.hicra_alpha,
-            sepa_lambda=sepa_lambda,
-            step=step,
-            token_distributions_G=None,
-            precomputed_entropies_G=precomputed_entropies_G,
-        )
-    return compute_composable_advantages(
-        rewards_G,
-        logprobs_G,
-        planning_masks_G,
-        advantage_mode=config.advantage_mode,
-        transform_mode=config.transform_mode,
-        gtpo_beta=config.gtpo_beta,
-        hicra_alpha=config.hicra_alpha,
-        sepa_lambda=sepa_lambda,
-        advantage_params=config.effective_advantage_params,
-        transform_params=transform_params,
-        step=step,
-        post_process_params=config.post_process_params,
-        token_distributions_G=None,
-        precomputed_entropies_G=precomputed_entropies_G,
-    )
 
 
 def _print_config_summary(config: TrainConfig) -> None:
@@ -520,126 +383,8 @@ def _print_flow_warnings(trace_result: object) -> None:
         print(f"Training flow warning [{category}]: {message}")
 
 
-def _assert_uniform_completion_advantages_for_non_preserving_backend(
-    all_logprobs: list[list[float]],
-    all_advantages: list[list[float]],
-    *,
-    backend_name: str,
-    eps: float = _UNIFORMITY_EPS,
-) -> None:
-    """Runtime guard: non-preserving backends must receive scalar completion advantages."""
-    for sample_idx, (logprobs, advantages) in enumerate(zip(all_logprobs, all_advantages)):
-        n = min(len(logprobs), len(advantages))
-        if n <= 1:
-            continue
-        prompt_len = 0
-        for lp, adv in zip(logprobs[:n], advantages[:n]):
-            if abs(lp) <= _PROMPT_PAD_EPS and abs(adv) <= _PROMPT_PAD_EPS:
-                prompt_len += 1
-            else:
-                break
-        completion = advantages[prompt_len:n]
-        if len(completion) <= 1:
-            continue
-        lo = min(completion)
-        hi = max(completion)
-        if (hi - lo) > eps:
-            raise RuntimeError(
-                f"backend='{backend_name}' does not preserve token-level advantages, "
-                f"but sample {sample_idx} contains non-uniform completion advantages."
-            )
-
-
-def _summarize_reward_ties(
-    rewards: list[float],
-    *,
-    eps: float = _UNIFORMITY_EPS,
-) -> RewardTieStats:
-    """Summarize approximate reward ties inside one prompt group."""
-    n = len(rewards)
-    if n < 2:
-        return {
-            "eligible": False,
-            "has_tie": False,
-            "is_uniform": False,
-            "unique_count": n,
-            "tied_pairs": 0,
-            "total_pairs": 0,
-        }
-
-    bucket_sizes: list[int] = []
-    bucket_anchor = 0.0
-    for reward in sorted(rewards):
-        if not bucket_sizes:
-            bucket_sizes.append(1)
-            bucket_anchor = reward
-            continue
-        if abs(reward - bucket_anchor) <= eps:
-            bucket_sizes[-1] += 1
-        else:
-            bucket_sizes.append(1)
-            bucket_anchor = reward
-
-    unique_count = len(bucket_sizes)
-    total_pairs = n * (n - 1) // 2
-    tied_pairs = sum(size * (size - 1) // 2 for size in bucket_sizes)
-    return {
-        "eligible": True,
-        "has_tie": unique_count < n,
-        "is_uniform": unique_count == 1,
-        "unique_count": unique_count,
-        "tied_pairs": tied_pairs,
-        "total_pairs": total_pairs,
-    }
-
-
-@dataclass
-class _RewardTieAccumulator:
-    """Per-step aggregate of group-level reward-tie diagnostics."""
-
-    eligible_groups: int = 0
-    tie_groups: int = 0
-    uniform_groups: int = 0
-    tied_pairs: int = 0
-    total_pairs: int = 0
-    unique_fraction_sum: float = 0.0
-
-    def observe(self, rewards: list[float]) -> RewardTieStats:
-        stats = _summarize_reward_ties(rewards)
-        if stats["eligible"]:
-            self.eligible_groups += 1
-            self.tie_groups += int(stats["has_tie"])
-            self.uniform_groups += int(stats["is_uniform"])
-            self.tied_pairs += stats["tied_pairs"]
-            self.total_pairs += stats["total_pairs"]
-            self.unique_fraction_sum += stats["unique_count"] / len(rewards)
-        return stats
-
-    @property
-    def tie_group_rate(self) -> float:
-        return self.tie_groups / self.eligible_groups if self.eligible_groups else 0.0
-
-    @property
-    def uniform_group_rate(self) -> float:
-        return (
-            self.uniform_groups / self.eligible_groups if self.eligible_groups else 0.0
-        )
-
-    @property
-    def tie_pair_rate(self) -> float:
-        return self.tied_pairs / self.total_pairs if self.total_pairs else 0.0
-
-    @property
-    def unique_fraction_mean(self) -> float:
-        return (
-            self.unique_fraction_sum / self.eligible_groups
-            if self.eligible_groups
-            else 0.0
-        )
-
-
 def _print_group_summary(rewards: list[float], answer: str) -> None:
-    correct = sum(1 for r in rewards if r > _CORRECT_THRESHOLD)
+    correct = sum(1 for r in rewards if r > CORRECT_THRESHOLD)
     print(f"  group: {correct}/{len(rewards)} correct | answer={answer[:40]}")
 
 
@@ -662,7 +407,7 @@ def _keep_uniform_group(
     if keep_for_echo:
         print(f"    -> uniform (reward={rewards[0]:.3f}, kept for ECHO)")
         return True
-    if rewards[0] > _CORRECT_THRESHOLD:
+    if rewards[0] > CORRECT_THRESHOLD:
         print("    -> skipped (all correct)")
     else:
         print(f"    -> skipped (all same, reward={rewards[0]:.3f})")
@@ -1003,7 +748,7 @@ class _RolloutAccumulator:
     correct: int = 0
     max_token_hits: int = 0
     total_completions: int = 0
-    ties: _RewardTieAccumulator = field(default_factory=_RewardTieAccumulator)
+    ties: RewardTieAccumulator = field(default_factory=RewardTieAccumulator)
     surprisal_stats: list[EntropyStats] = field(default_factory=list)
     adv_results: list[AdvantageResult] = field(default_factory=list)
     logprobs_sepa: list[list[float]] = field(default_factory=list)
@@ -1193,7 +938,7 @@ def _run_multiturn_rollouts(
 
         for r in rewards_G:
             acc.rewards.append(r)
-            if r > _CORRECT_THRESHOLD:
+            if r > CORRECT_THRESHOLD:
                 acc.correct += 1
             if acc.tl_grpo_ema is not None:
                 acc.tl_grpo_ema = (
@@ -1211,7 +956,7 @@ def _run_multiturn_rollouts(
             ):
                 continue
 
-        adv_result = _compute_group_advantages(
+        adv_result = compute_group_advantages(
             config,
             rewards_G,
             logprobs_G,
@@ -1505,7 +1250,7 @@ def _run_singleturn_rollouts(
 
         for r in rewards_G:
             acc.rewards.append(r)
-            if r > _CORRECT_THRESHOLD:
+            if r > CORRECT_THRESHOLD:
                 acc.correct += 1
 
         for sample in decoded_group:
@@ -1528,7 +1273,7 @@ def _run_singleturn_rollouts(
         if precomputed_entropies_batch is not None:
             group_entropies_G = precomputed_entropies_batch[f_idx]
 
-        adv_result = _compute_group_advantages(
+        adv_result = compute_group_advantages(
             config,
             rewards_G,
             logprobs_G,
@@ -1848,11 +1593,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             echo_loss = 0.0
             echo_train_time = 0.0
             echo_joint_optimizer_step = False
-            step_transform_params = _prepare_transform_params_for_step(
+            step_transform_params = prepare_transform_params_for_step(
                 config.transform_params,
                 delight_eta_prev=delight_eta_ema,
             )
-            step_algorithm_params = _prepare_algorithm_params_for_step(
+            step_algorithm_params = prepare_algorithm_params_for_step(
                 config.effective_algorithm_params,
                 delight_eta_prev=delight_eta_ema,
             )
@@ -1925,7 +1670,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # 10f. Train
             num_datums = len(acc.datum_tokens)
             if num_datums > 0 and not backend_caps.preserves_token_advantages:
-                _assert_uniform_completion_advantages_for_non_preserving_backend(
+                assert_uniform_completion_advantages_for_non_preserving_backend(
                     acc.datum_logprobs,
                     acc.datum_advantages,
                     backend_name=config.backend,
@@ -1943,7 +1688,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             adv_cap_magnitude = 0.0
             if num_datums > 0 and config.adv_clip_max > 0:
                 acc.datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
-                    _apply_advantage_cap(acc.datum_advantages, config.adv_clip_max)
+                    apply_advantage_cap(acc.datum_advantages, config.adv_clip_max)
                 )
 
             echo_plan = _prepare_echo_step_plan(config, acc)

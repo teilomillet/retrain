@@ -10,10 +10,12 @@ import json
 import pytest
 
 from retrain.flow import TraceIssue, TraceResult, build_flow
+from retrain.training_signals import (
+    assert_uniform_completion_advantages_for_non_preserving_backend,
+)
 from retrain.training_telemetry import format_loss_for_display
 from retrain.trainer import (
     _TRAINER_STATE_FILE,
-    _assert_uniform_completion_advantages_for_non_preserving_backend,
     _load_trainer_state,
     _print_flow_warnings,
     _run_rl_echo_train_step,
@@ -444,7 +446,7 @@ class TestBackendAdvantageFlowGuard:
 
 class TestNonPreservingRuntimeGuard:
     def test_allows_uniform_completion_advantages(self):
-        _assert_uniform_completion_advantages_for_non_preserving_backend(
+        assert_uniform_completion_advantages_for_non_preserving_backend(
             all_logprobs=[[0.0, 0.0, -0.4, -0.2]],
             all_advantages=[[0.0, 0.0, 1.5, 1.5]],
             backend_name="future.backends.MyBackend",
@@ -452,7 +454,7 @@ class TestNonPreservingRuntimeGuard:
 
     def test_rejects_non_uniform_completion_advantages(self):
         with pytest.raises(RuntimeError, match="does not preserve token-level advantages"):
-            _assert_uniform_completion_advantages_for_non_preserving_backend(
+            assert_uniform_completion_advantages_for_non_preserving_backend(
                 all_logprobs=[[0.0, 0.0, -0.4, -0.2]],
                 all_advantages=[[0.0, 0.0, 1.0, 2.0]],
                 backend_name="future.backends.MyBackend",

@@ -35,16 +35,18 @@ from retrain.runtime_support import (
     decode_sequence_groups,
 )
 from retrain.trainer import (
-    _CORRECT_THRESHOLD,
     _TRAINER_STATE_FILE,
-    _apply_advantage_cap,
-    _assert_uniform_completion_advantages_for_non_preserving_backend,
-    _compute_group_advantages,
-    _prepare_algorithm_params_for_step,
-    _prepare_transform_params_for_step,
     _print_backend_capability_summary,
     _print_config_summary,
-    _summarize_reward_ties,
+)
+from retrain.training_signals import (
+    CORRECT_THRESHOLD,
+    apply_advantage_cap,
+    assert_uniform_completion_advantages_for_non_preserving_backend,
+    compute_group_advantages,
+    prepare_algorithm_params_for_step,
+    prepare_transform_params_for_step,
+    summarize_reward_ties,
 )
 from retrain.training_telemetry import format_loss_for_display
 from retrain.training_runner import (
@@ -526,11 +528,11 @@ class TTTDiscoverRunner:
                 all_datum_logprobs: list[list[float]] = []
                 all_datum_advantages: list[list[float]] = []
 
-                step_transform_params = _prepare_transform_params_for_step(
+                step_transform_params = prepare_transform_params_for_step(
                     config.transform_params,
                     delight_eta_prev=delight_eta_ema,
                 )
-                step_algorithm_params = _prepare_algorithm_params_for_step(
+                step_algorithm_params = prepare_algorithm_params_for_step(
                     config.effective_algorithm_params,
                     delight_eta_prev=delight_eta_ema,
                 )
@@ -612,7 +614,7 @@ class TTTDiscoverRunner:
                     all_logprobs_sepa.extend(logprobs_G)
                     all_planning_masks_sepa.extend(planning_masks_G)
                     batch_rewards.extend(rewards_G)
-                    batch_correct += sum(1 for r in rewards_G if r > _CORRECT_THRESHOLD)
+                    batch_correct += sum(1 for r in rewards_G if r > CORRECT_THRESHOLD)
                     batch_total_completions += len(rewards_G)
                     batch_max_token_hits += sum(
                         1
@@ -629,7 +631,7 @@ class TTTDiscoverRunner:
                         )
                     archive.prune(archive_max_entries)
 
-                    reward_tie_stats = _summarize_reward_ties(rewards_G)
+                    reward_tie_stats = summarize_reward_ties(rewards_G)
                     if reward_tie_stats["eligible"]:
                         batch_reward_tie_eligible_groups += 1
                         batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
@@ -655,7 +657,7 @@ class TTTDiscoverRunner:
                     if precomputed_entropies_batch is not None:
                         group_entropies_G = precomputed_entropies_batch[f_idx]
 
-                    adv_result = _compute_group_advantages(
+                    adv_result = compute_group_advantages(
                         config,
                         rewards_G,
                         logprobs_G,
@@ -730,7 +732,7 @@ class TTTDiscoverRunner:
                     continue
 
                 if not backend_caps.preserves_token_advantages:
-                    _assert_uniform_completion_advantages_for_non_preserving_backend(
+                    assert_uniform_completion_advantages_for_non_preserving_backend(
                         all_datum_logprobs,
                         all_datum_advantages,
                         backend_name=config.backend,
@@ -746,7 +748,7 @@ class TTTDiscoverRunner:
                 adv_cap_magnitude = 0.0
                 if config.adv_clip_max > 0:
                     all_datum_advantages, adv_cap_fraction, adv_cap_magnitude = (
-                        _apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
+                        apply_advantage_cap(all_datum_advantages, config.adv_clip_max)
                     )
 
                 train_start = time.perf_counter()

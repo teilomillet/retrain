@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from retrain import trainer as trainer_mod
+from retrain import training_signals as signal_mod
 from retrain.advantages import AdvantageResult
 from retrain.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig
@@ -247,7 +248,7 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
-        trainer_mod,
+        signal_mod,
         "compute_composable_advantages",
         fake_compute_composable_advantages,
     )
@@ -335,7 +336,7 @@ def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
-        trainer_mod,
+        signal_mod,
         "compute_composable_advantages",
         fake_compute_composable_advantages,
     )
@@ -445,12 +446,12 @@ def test_train_prefers_algorithm_mode_over_composable(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
     monkeypatch.setattr(
-        trainer_mod,
+        signal_mod,
         "compute_algorithm_advantages",
         fake_compute_algorithm_advantages,
     )
     monkeypatch.setattr(
-        trainer_mod,
+        signal_mod,
         "compute_composable_advantages",
         fake_compute_composable_advantages,
     )
