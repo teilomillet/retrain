@@ -13,11 +13,12 @@ from retrain.advantages import compute_algorithm_advantages
 from retrain.backends.catalog import BackendCapabilities
 from retrain.config import TrainConfig
 from retrain.data.source import Example
-from retrain.training.discover import (
+from retrain.training import discover
+from retrain.training.discovery import (
     DiscoverArchive,
-    TTTDiscoverRunner,
     build_discovery_prompt,
 )
+from retrain.training.discover import TTTDiscoverRunner
 from retrain.training.runner import TrainingRunResult
 
 
@@ -68,6 +69,10 @@ class TestDiscoverEntropicAlgorithm:
 
 
 class TestDiscoverArchive:
+    def test_discover_module_reexports_public_archive_helpers(self):
+        assert discover.DiscoverArchive is DiscoverArchive
+        assert discover.build_discovery_prompt is build_discovery_prompt
+
     def test_select_prefers_high_reward_when_exploration_zero(self):
         archive = DiscoverArchive(empty_reward=0.0)
         low = archive.add_attempt(parent_id=0, text="low", reward=0.5, step=0)

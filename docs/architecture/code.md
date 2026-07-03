@@ -55,6 +55,10 @@ retrain/
     console.py
     trainer.py
     discover.py
+    discovery/
+      archive.py
+      prompt.py
+      summary.py
     runner.py
     flow.py
     sft.py
@@ -222,6 +226,8 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/warmup.py`: supervised warmup data loading, stepping, and logging.
 - `training/trainer.py`: the main RL orchestration path.
 - `training/discover.py`: test-time training over a single problem.
+- `training/discovery/`: candidate archive, prompt memory rendering, and
+  archive summary export for TTT-Discover.
 - `advantages/episode.py`: episode-level GRPO, MaxRL, and REINFORCE++ modes.
 - `advantages/credit.py`: token-credit transforms such as GTPO, HICRA, SEPA,
   and masking.

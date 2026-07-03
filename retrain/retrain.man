@@ -1594,6 +1594,10 @@ ARCHITECTURE
         +-- console.py           Terminal summaries for training runs
         +-- trainer.py           Main RL loop
         +-- discover.py          Test-time training over one problem
+        +-- discovery/           TTT-Discover archive, prompt, summary helpers
+            +-- archive.py       Candidate archive ranking, pruning, selection
+            +-- prompt.py        Discovery memory prompt rendering
+            +-- summary.py       Discovery archive JSON summary export
         +-- runner.py            TrainingRunner protocol and built-in runners
         +-- flow.py              Flow construction and synthetic trace
         +-- sft.py               SFT dataset and tokenization helpers

@@ -42,6 +42,10 @@ retrain
 │   ├── console.py      # Terminal summaries for training runs
 │   ├── trainer.py      # Main RL loop: sample, score, compute advantages, train
 │   ├── discover.py     # Test-time training over a single problem
+│   ├── discovery/      # Archive, prompt, and summary helpers for discovery
+│   │   ├── archive.py  # Candidate archive ranking, pruning, and selection
+│   │   ├── prompt.py   # Discovery memory prompt rendering
+│   │   └── summary.py  # Discovery archive JSON summary export
 │   ├── runner.py       # TrainingRunner protocol + built-in runners
 │   ├── flow.py         # Construct-and-trace of the training flow
 │   ├── sft.py          # SFT dataset and tokenization helpers
