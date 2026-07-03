@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from retrain.token_ids import model_eos_token_ids
+
 
 DEFAULT_LORA_TARGET_MODULES = (
     "q_proj", "k_proj", "v_proj", "o_proj",
@@ -111,12 +113,4 @@ def forward_hidden_states_and_lm_head(model, input_ids, attention_mask):
 
 
 def eos_token_ids(model) -> set[int]:
-    generation_config = getattr(model, "generation_config", None)
-    token_ids = getattr(generation_config, "eos_token_id", None)
-    if token_ids is None:
-        token_ids = getattr(getattr(unwrap_peft_model(model), "config", None), "eos_token_id", None)
-    if token_ids is None:
-        return set()
-    if isinstance(token_ids, int):
-        return {token_ids}
-    return {int(token_id) for token_id in token_ids}
+    return model_eos_token_ids(model, unwrap_model=unwrap_peft_model)

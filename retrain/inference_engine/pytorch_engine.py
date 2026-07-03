@@ -21,8 +21,9 @@ from retrain.accelerators import (
     apply_liger_kernel_if_available,
     from_pretrained_attention_kwargs,
 )
-from retrain.gemma4_text import eos_token_ids, is_gemma4_text_model, unwrap_peft_model
+from retrain.gemma4_text import is_gemma4_text_model, unwrap_peft_model
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+from retrain.token_ids import model_eos_token_ids
 from retrain.torch_runtime import (
     is_cuda_device,
     timer_start as _timer_start,
@@ -99,23 +100,6 @@ class _TimingAccumulator:
                 )
             self._events.clear()
         return dict(self._totals)
-
-
-def _coerce_eos_ids(raw) -> set[int]:
-    if raw is None:
-        return set()
-    if isinstance(raw, (list, tuple, set)):
-        return {int(item) for item in raw if item is not None}
-    return {int(raw)}
-
-
-def _generic_eos_token_ids(model) -> set[int]:
-    generation_config = getattr(model, "generation_config", None)
-    config = getattr(model, "config", None)
-    return (
-        _coerce_eos_ids(getattr(generation_config, "eos_token_id", None))
-        or _coerce_eos_ids(getattr(config, "eos_token_id", None))
-    )
 
 
 class PyTorchEngine(InferenceEngine):
@@ -205,7 +189,7 @@ class PyTorchEngine(InferenceEngine):
         results = []
         generation_start = time.perf_counter()
         timings = _TimingAccumulator(self.device)
-        eos_ids = _generic_eos_token_ids(self.model)
+        eos_ids = model_eos_token_ids(self.model, unwrap_model=unwrap_peft_model)
 
         with torch.no_grad():
             for prompt_ids in prompt_ids_list:
@@ -610,7 +594,7 @@ class PyTorchEngine(InferenceEngine):
         unwrapped = unwrap_peft_model(self.model)
         text_model = unwrapped.model.language_model
         lm_head = unwrapped.lm_head
-        eos_ids = eos_token_ids(self.model)
+        eos_ids = model_eos_token_ids(self.model, unwrap_model=unwrap_peft_model)
 
         with torch.no_grad():
             generation_start = time.perf_counter()
