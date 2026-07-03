@@ -39,6 +39,7 @@ from retrain.training.flow import (
     _condition_label,
     build_flow,
 )
+from retrain.training.examples import load_training_examples
 from retrain.training.generations import (
     generation_log_indices,
     top_surprisal_payload,
@@ -768,39 +769,16 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # 2. Load dataset (fail fast before backend/tokenizer setup)
         # -----------------------------------------------------------------------
-        print("Loading dataset...")
-        verifiers_env = None
-        if config.environment_provider == "verifiers":
-            verifiers_env = load_verifiers_environment(config)
-            examples = load_examples_from_environment(verifiers_env, config)
-            print(
-                f"Loaded {len(examples)} examples from verifiers env "
-                f"'{config.environment_id}'"
-            )
-        elif config.environment_provider == "openenv":
-            from retrain.environments.openenv import (
-                examples_from_environment as load_examples_from_openenv,
-                load_environment as load_openenv_environment,
-            )
-
-            verifiers_env = load_openenv_environment(config)
-            examples = load_examples_from_openenv(verifiers_env, config)
-            print(
-                f"Loaded {len(examples)} seed examples from OpenEnv server "
-                f"'{config.environment_id}'"
-            )
-        else:
-            examples = get_registry("data_source").create(config.data_source, config).load()
-        if verifiers_env is not None:
-            if config.data_source != "math":
-                print(
-                    "NOTE: [data].source is ignored when [environment].provider is set."
-                )
-            if config.reward_type != "match":
-                print(
-                    "NOTE: [reward] settings are ignored when [environment].provider "
-                    "is set; the environment rubric is used."
-                )
+        loaded_examples = load_training_examples(
+            config,
+            data_source_factory=lambda source, cfg: get_registry(
+                "data_source"
+            ).create(source, cfg),
+            verifiers_environment_loader=load_verifiers_environment,
+            verifiers_examples_loader=load_examples_from_environment,
+        )
+        examples = loaded_examples.examples
+        verifiers_env = loaded_examples.environment
         if not examples:
             raise RuntimeError("Dataset is empty — cannot train with zero examples.")
         if verifiers_env is None:
