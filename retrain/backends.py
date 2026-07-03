@@ -1,8 +1,8 @@
-"""TrainHelper Protocol — formal interface for training backends.
+"""Formal interfaces for training backends.
 
-Both ``LocalTrainHelper`` and ``TinkerTrainHelper`` already satisfy this
-protocol by convention.  Making it explicit enables type-checking and
-documentation.
+``TrainHelper`` is the minimum lifecycle required by the trainer.  Optional
+capabilities live in separate protocols so remote backends can expose only the
+features their wire format supports.
 """
 
 from __future__ import annotations
@@ -27,15 +27,6 @@ class TrainHelper(Protocol):
         top_p: float,
     ) -> SampleBatch: ...
 
-    def sample_with_entropy(
-        self,
-        prompt_ids_list: list[list[int]],
-        num_samples: int,
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> EnrichedSampleBatch: ...
-
     def train_step(
         self,
         all_tokens: list[list[int]],
@@ -48,3 +39,17 @@ class TrainHelper(Protocol):
     def save_adapter(self, path: str, name: str) -> str: ...
 
     def load_state(self, name: str) -> None: ...
+
+
+@runtime_checkable
+class EntropySamplingHelper(Protocol):
+    """Optional backend capability for token-entropy sampling."""
+
+    def sample_with_entropy(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> EnrichedSampleBatch: ...

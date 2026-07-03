@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
-from retrain.backends import TrainHelper
+from retrain.backends import EntropySamplingHelper, TrainHelper
 from retrain.config import TrainConfig
 from retrain.registry import backend
 
@@ -32,21 +32,6 @@ class _BaseFakeHelper:
             for _ in prompt_ids_list
         ]
 
-    def sample_with_entropy(
-        self,
-        prompt_ids_list: list[list[int]],
-        num_samples: int,
-        max_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> list[list[tuple[list[int], list[float], list[float] | None]]]:
-        self.calls.append("sample_with_entropy")
-        _ = max_tokens, temperature, top_p
-        return [
-            [([101, 102], [-0.1, -0.2], None) for _ in range(num_samples)]
-            for _ in prompt_ids_list
-        ]
-
     def train_step(
         self,
         all_tokens: list[list[int]],
@@ -67,7 +52,24 @@ class _BaseFakeHelper:
         self.calls.append(f"load_state:{name}")
 
 
-class _FakeLocalTrainHelper(_BaseFakeHelper):
+class _EntropyFakeHelper(_BaseFakeHelper):
+    def sample_with_entropy(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> list[list[tuple[list[int], list[float], list[float] | None]]]:
+        self.calls.append("sample_with_entropy")
+        _ = max_tokens, temperature, top_p
+        return [
+            [([101, 102], [-0.1, -0.2], None) for _ in range(num_samples)]
+            for _ in prompt_ids_list
+        ]
+
+
+class _FakeLocalTrainHelper(_EntropyFakeHelper):
     init_calls: list[dict] = []
 
     def __init__(self, *args, **kwargs):
@@ -75,7 +77,7 @@ class _FakeLocalTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
-class _FakeTinkerTrainHelper(_BaseFakeHelper):
+class _FakeTinkerTrainHelper(_EntropyFakeHelper):
     def __init__(self, *args, **kwargs):
         _ = args, kwargs
         super().__init__()
@@ -87,7 +89,7 @@ class _FakePrimeRLTrainHelper(_BaseFakeHelper):
         super().__init__()
 
 
-class _FakeUnslothTrainHelper(_BaseFakeHelper):
+class _FakeUnslothTrainHelper(_EntropyFakeHelper):
     init_calls: list[dict] = []
 
     def __init__(self, *args, **kwargs):
@@ -144,6 +146,7 @@ def test_local_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="local")
     helper = backend.create("local", cfg)
     assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, EntropySamplingHelper)
     assert isinstance(helper, _BaseFakeHelper)
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
@@ -357,6 +360,7 @@ def test_unsloth_backend_contract(monkeypatch):
     )
     helper = backend.create("unsloth", cfg)
     assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, EntropySamplingHelper)
     assert isinstance(helper, _BaseFakeHelper)
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
@@ -414,6 +418,7 @@ def test_tinker_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="tinker")
     helper = backend.create("tinker", cfg)
     assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, EntropySamplingHelper)
     assert isinstance(helper, _BaseFakeHelper)
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
@@ -427,6 +432,7 @@ def test_prime_rl_backend_contract(monkeypatch):
     cfg = TrainConfig(backend="prime_rl")
     helper = backend.create("prime_rl", cfg)
     assert isinstance(helper, TrainHelper)
+    assert not isinstance(helper, EntropySamplingHelper)
     assert isinstance(helper, _BaseFakeHelper)
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")

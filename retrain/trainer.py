@@ -21,6 +21,7 @@ from retrain.advantages import (
     compute_algorithm_advantages,
     compute_composable_advantages,
 )
+from retrain.backends import EntropySamplingHelper
 from retrain.backpressure import (
     StepObservation,
 )
@@ -1522,13 +1523,15 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             else:
                 # 10c. Sample completions
                 sample_start = time.perf_counter()
-                use_entropy_sampling = (
-                    config.uncertainty_kind == "shannon_entropy"
-                    and hasattr(helper, "sample_with_entropy")
+                entropy_helper = (
+                    helper
+                    if config.uncertainty_kind == "shannon_entropy"
+                    and isinstance(helper, EntropySamplingHelper)
+                    else None
                 )
                 precomputed_entropies_batch: list[list[list[float]]] | None = None
-                if use_entropy_sampling:
-                    enriched_sequences = helper.sample_with_entropy(  # type: ignore[unresolved-attribute]
+                if entropy_helper is not None:
+                    enriched_sequences = entropy_helper.sample_with_entropy(
                         batch_prompt_ids,
                         current_group_size,
                         config.max_tokens,
