@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from heapq import nlargest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -39,6 +38,10 @@ from retrain.training.flow import (
     _condition_label,
     build_flow,
 )
+from retrain.training.generations import (
+    generation_log_indices,
+    top_surprisal_payload,
+)
 from retrain.training import console
 from retrain.io.log import JsonlLogger
 from retrain.planning.types import PlanningDetector
@@ -49,7 +52,6 @@ from retrain.training.rollouts import (
     RuntimeCounters,
     TokenTextLookup,
     decode_sequence_groups,
-    top_surprisal_entries,
 )
 from retrain.types import ExampleInfoLike, PromptLike
 from retrain.training.log import (
@@ -87,58 +89,6 @@ def _accumulate_metric_totals(
 ) -> None:
     for key, value in metrics.items():
         totals[key] = totals.get(key, 0.0) + float(value)
-
-
-def _generation_log_indices(
-    sample_count: int,
-    *,
-    samples_per_prompt: int,
-    rewards: list[float] | None = None,
-) -> list[int]:
-    """Select the generation indices to log for one prompt.
-
-    When a cap is active, prefer the highest-reward completions because they
-    are the most representative of the learning signal. Ties are broken by the
-    earlier sample index to keep the result deterministic.
-    """
-    if sample_count <= 0:
-        return []
-    if samples_per_prompt <= 0 or samples_per_prompt >= sample_count:
-        return list(range(sample_count))
-    if rewards is None or len(rewards) != sample_count:
-        return list(range(samples_per_prompt))
-    if samples_per_prompt == 1:
-        return [
-            max(
-                range(sample_count),
-                key=lambda idx: (rewards[idx], -idx),
-            )
-        ]
-
-    ranked = nlargest(
-        samples_per_prompt,
-        range(sample_count),
-        key=lambda idx: (rewards[idx], -idx),
-    )
-    return ranked
-
-
-def _top_surprisal_payload(
-    logprobs: list[float],
-    token_ids: list[int],
-    token_lookup: TokenTextLookup,
-    *,
-    limit: int,
-) -> list[dict[str, int | float | str]]:
-    """Build optional top-surprisal diagnostics for one sampled completion."""
-    if limit <= 0 or not logprobs or not token_ids:
-        return []
-    return top_surprisal_entries(
-        logprobs,
-        token_ids,
-        token_lookup,
-        limit=limit,
-    )
 
 
 def _has_nonzero_advantage(rows: list[list[float]]) -> bool:
@@ -587,7 +537,7 @@ def _run_multiturn_rollouts(
 
         generation_entries: list[dict[str, object]] = []
         selected_generation_indices = (
-            _generation_log_indices(
+            generation_log_indices(
                 len(completion_texts_G),
                 samples_per_prompt=config.generation_log_samples_per_prompt,
                 rewards=rewards_G,
@@ -663,7 +613,7 @@ def _run_multiturn_rollouts(
                 s_tids: list[int] = []
                 for t_idx2 in range(len(turns_token_ids_G[s_idx])):
                     s_tids.extend(turns_token_ids_G[s_idx][t_idx2])
-                top_entries = _top_surprisal_payload(
+                top_entries = top_surprisal_payload(
                     logprobs_G[s_idx],
                     s_tids,
                     token_lookup,
@@ -834,7 +784,7 @@ def _run_singleturn_rollouts(
 
         generation_entries: list[dict[str, object]] = []
         selected_generation_indices = (
-            _generation_log_indices(
+            generation_log_indices(
                 len(decoded_group),
                 samples_per_prompt=config.generation_log_samples_per_prompt,
                 rewards=rewards_G,
@@ -852,7 +802,7 @@ def _run_singleturn_rollouts(
                 "num_tokens": len(sample.logprobs),
             }
             # Top-K highest surprisal tokens with decoded text
-            top_entries = _top_surprisal_payload(
+            top_entries = top_surprisal_payload(
                 sample.logprobs,
                 sample.token_ids,
                 token_lookup,
@@ -1025,8 +975,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         current_group_size = config.group_size
         needs_planning = flow.needs_planning
         uses_sepa_controller = flow.uses_sepa_controller
-        generation_log_samples_per_prompt = config.generation_log_samples_per_prompt
-        generation_top_surprisal_limit = config.generation_top_surprisal_limit
         if config.algorithm_mode:
             print(
                 "Algorithm mode active: "

@@ -61,6 +61,7 @@ retrain/
       summary.py
     runner.py
     flow.py
+    generations.py
     sft.py
     warmup.py
     state.py
@@ -220,6 +221,8 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/console.py`: terminal summaries for training runs.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
 - `training/flow.py`: flow construction and traceable preflight state.
+- `training/generations.py`: generation log selection and top-surprisal
+  payloads.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
