@@ -43,6 +43,7 @@ from retrain.backends.local import device as local_device
 from retrain.backends.local import loss as local_loss
 from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import sft as local_sft
+from retrain.backends.local import state as local_state
 from retrain.backends.local.checkpointing import (
     configure_gradient_checkpointing,
 )
@@ -438,12 +439,9 @@ class LocalTrainHelper:
         exists yet). After this, all syncs go through _sync_lora_weights which
         reads from the weight snapshot.
         """
-        train_state = dict(self.train_model.named_parameters())
-        lora_dict = {}
-        for name, param in train_state.items():
-            if "lora_" in name:
-                lora_dict[name] = param.data
-        self.engine.sync_from_state_dict(lora_dict)
+        self.engine.sync_from_state_dict(
+            local_state.lora_state_dict(self.train_model, clone=False)
+        )
 
     def _sync_lora_weights(self):
         """Copy LoRA weights from snapshot to engine.
@@ -623,11 +621,10 @@ class LocalTrainHelper:
         if not (self.split_mode or self._external_engine):
             return 0.0
         timer = _timer_start(self.train_device)
-        snapshot = {}
-        for name, param in self.train_model.named_parameters():
-            if "lora_" in name:
-                snapshot[name] = param.data.clone()
-        self._weight_snapshot = snapshot
+        self._weight_snapshot = local_state.lora_state_dict(
+            self.train_model,
+            clone=True,
+        )
         self._weights_dirty = True
         return _timer_stop(timer)
 
@@ -1806,43 +1803,19 @@ class LocalTrainHelper:
             name: Checkpoint name under adapter_path, or a direct path to a
                 PEFT adapter directory containing adapter_model.*.
         """
-        candidate_dir = os.fspath(name)
-        direct_weights = (
-            os.path.isfile(os.path.join(candidate_dir, "adapter_model.safetensors"))
-            or os.path.isfile(os.path.join(candidate_dir, "adapter_model.bin"))
+        save_dir = local_state.load_into_model(
+            self.train_model,
+            adapter_path=self.adapter_path,
+            name=name,
+            train_device=self.train_device,
         )
-        save_dir = candidate_dir if direct_weights else os.path.join(self.adapter_path, candidate_dir)
-        if not os.path.isdir(save_dir):
-            raise FileNotFoundError(
-                f"Adapter checkpoint not found: {save_dir}. "
-                f"Cannot resume from checkpoint '{name}'."
-            )
-
-        from peft import set_peft_model_state_dict
-
-        safetensors_path = os.path.join(save_dir, "adapter_model.safetensors")
-        bin_path = os.path.join(save_dir, "adapter_model.bin")
-
-        if os.path.isfile(safetensors_path):
-            from safetensors.torch import load_file
-            adapter_state = load_file(safetensors_path, device=str(self.train_device))
-        elif os.path.isfile(bin_path):
-            adapter_state = torch.load(bin_path, map_location=self.train_device, weights_only=True)
-        else:
-            raise FileNotFoundError(
-                f"No adapter weights in {save_dir}. "
-                f"Expected adapter_model.safetensors or adapter_model.bin."
-            )
-
-        set_peft_model_state_dict(self.train_model, adapter_state)
 
         # Re-sync weights to inference engine
         if self.split_mode or self._external_engine:
-            snapshot = {}
-            for pname, param in self.train_model.named_parameters():
-                if "lora_" in pname:
-                    snapshot[pname] = param.data.clone()
-            self._weight_snapshot = snapshot
+            self._weight_snapshot = local_state.lora_state_dict(
+                self.train_model,
+                clone=True,
+            )
             self._weights_dirty = True
 
         print(f"Loaded adapter checkpoint: {save_dir} (optimizer state not restored)")
@@ -1865,8 +1838,6 @@ class LocalTrainHelper:
             self._pending_loss = self._train_future.result()
             self._train_future = None
 
-        save_dir = os.path.join(path, name)
-        os.makedirs(save_dir, exist_ok=True)
-        self.train_model.save_pretrained(save_dir)
+        save_dir = local_state.save_model(self.train_model, path=path, name=name)
         print(f"Adapter saved to {save_dir}")
         return save_dir

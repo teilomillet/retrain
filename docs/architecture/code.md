@@ -148,11 +148,13 @@ retrain/
     local/
       batch.py
       device.py
+      loss.py
       train.py
       checkpointing.py
       lora.py
       metrics.py
       memory.py
+      state.py
       sft.py
     tinker/
       train.py

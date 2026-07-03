@@ -92,6 +92,7 @@ retrain
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics
 │   │   ├── metrics.py  # Local backend runtime telemetry and counters
 │   │   ├── memory.py   # CUDA allocator, cache, and saved-tensor policy
+│   │   ├── state.py    # Adapter state load/save and LoRA snapshots
 │   │   └── sft.py      # SFT row shaping, padding, and context cropping
 │   ├── prime.py        # PRIME-RL bridge backend
 │   ├── tinker/         # Remote Tinker backend
