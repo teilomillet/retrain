@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+import retrain.sft as sft_module
 from retrain.config import TrainConfig, load_config
 from retrain.sft import SftExample, load_sft_jsonl, tokenize_sft_batch
 
@@ -200,6 +201,30 @@ class TestGenericSftJsonl:
             {"enable_thinking": False},
             {"enable_thinking": False},
         ]
+
+    def test_message_sft_resolves_template_kwargs_once_per_row(self, monkeypatch):
+        tokenizer = _ThinkingTokenizer()
+        examples = [
+            SftExample(
+                messages=[
+                    {"role": "user", "content": "question"},
+                    {"role": "assistant", "content": "answer"},
+                ]
+            )
+        ]
+        real_signature = sft_module.inspect.signature
+        signature_calls = 0
+
+        def counting_signature(obj):
+            nonlocal signature_calls
+            signature_calls += 1
+            return real_signature(obj)
+
+        monkeypatch.setattr(sft_module.inspect, "signature", counting_signature)
+
+        tokenize_sft_batch(tokenizer, examples, max_tokens=0)
+
+        assert signature_calls == 1
 
     def test_invalid_jsonl_reports_line_number(self, tmp_path):
         data_path = tmp_path / "bad.jsonl"

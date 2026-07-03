@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, cast
@@ -201,10 +202,17 @@ def _last_assistant_index(messages: list[dict[str, str]]) -> int:
     raise ValueError("SFT messages must include an assistant target.")
 
 
-def _chat_template_kwargs(tokenizer: object) -> dict[str, object]:
+type _ChatTemplate = Callable[..., object]
+
+
+def _chat_template(tokenizer: object) -> _ChatTemplate | None:
     apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
     if not callable(apply_chat_template):
-        return {}
+        return None
+    return apply_chat_template
+
+
+def _chat_template_kwargs(apply_chat_template: _ChatTemplate) -> dict[str, object]:
     try:
         sig = inspect.signature(apply_chat_template)
     except (TypeError, ValueError):
@@ -220,11 +228,12 @@ def _chat_template_kwargs(tokenizer: object) -> dict[str, object]:
 def _render_sft_text(tokenizer: object, example: SftExample) -> tuple[str, str]:
     """Return (full_text, prompt_text) for one SFT example."""
     if example.messages is not None:
-        apply_chat_template = getattr(tokenizer, "apply_chat_template", None)
-        if not callable(apply_chat_template):
+        apply_chat_template = _chat_template(tokenizer)
+        if apply_chat_template is None:
             raise RuntimeError(
                 "SFT rows with 'messages' require a tokenizer with apply_chat_template()."
             )
+        chat_template_kwargs = _chat_template_kwargs(apply_chat_template)
         target_idx = _last_assistant_index(example.messages)
         full_messages = example.messages[: target_idx + 1]
         prompt_messages = example.messages[:target_idx]
@@ -232,13 +241,13 @@ def _render_sft_text(tokenizer: object, example: SftExample) -> tuple[str, str]:
             full_messages,
             tokenize=False,
             add_generation_prompt=False,
-            **_chat_template_kwargs(tokenizer),
+            **chat_template_kwargs,
         )
         prompt_text = apply_chat_template(
             prompt_messages,
             tokenize=False,
             add_generation_prompt=True,
-            **_chat_template_kwargs(tokenizer),
+            **chat_template_kwargs,
         )
         return str(full_text), str(prompt_text)
 
