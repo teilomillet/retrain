@@ -2100,15 +2100,12 @@ def _run_trace(args: list[str]) -> None:
 def _run_tree(args: list[str]) -> None:
     """Experiment tech-tree commands."""
     from retrain.tree import (
-        Annotation,
-        evaluate_node,
         format_next,
         format_show,
         format_tree,
         format_tree_json,
         load_tree,
         reset_node,
-        save_state,
     )
 
     usage = (
@@ -2283,7 +2280,7 @@ def _tree_add_note(tree, node_id: str, text: str) -> None:
 
 def _tree_eval(tree) -> None:
     """Evaluate success conditions for all done nodes without outcomes."""
-    from retrain.tree import evaluate_node, save_state
+    from retrain.tree import evaluate_node
 
     evaluated = 0
     for node in tree.nodes:

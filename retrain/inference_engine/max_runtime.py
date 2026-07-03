@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Protocol, cast
 
 

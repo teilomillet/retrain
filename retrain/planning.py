@@ -214,7 +214,6 @@ class SemanticPlanningDetector:
         self._exec_centroid = exec_centroid
 
     def detect(self, token_strs: list[str]) -> list[int]:
-        np = self._np
         n = len(token_strs)
         if n == 0:
             return []

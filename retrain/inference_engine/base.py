@@ -7,7 +7,6 @@ independently from the training model.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
 
 
 @dataclass
@@ -20,9 +19,9 @@ class SampleResult:
         token_entropies: Per-token Shannon entropy (optional, GPU-computed).
     """
 
-    token_ids: List[int]
-    logprobs: List[float]
-    token_entropies: Optional[List[float]] = None
+    token_ids: list[int]
+    logprobs: list[float]
+    token_entropies: list[float] | None = None
 
 
 class InferenceEngine(ABC):
@@ -31,13 +30,13 @@ class InferenceEngine(ABC):
     @abstractmethod
     def generate(
         self,
-        prompt_ids_list: List[List[int]],
+        prompt_ids_list: list[list[int]],
         num_samples: int,
         max_tokens: int,
         temperature: float,
         top_p: float,
         compute_entropy: bool = False,
-    ) -> List[List[SampleResult]]:
+    ) -> list[list[SampleResult]]:
         """Generate completions for a batch of prompts.
 
         Args:

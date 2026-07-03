@@ -6,7 +6,6 @@ Ports the training loop from src/main.mojo into pure Python.
 from __future__ import annotations
 
 import json
-import random
 import sys
 import time
 from heapq import nlargest
@@ -57,7 +56,6 @@ from retrain.sft import (
 )
 from retrain.type_defs import ExampleInfoLike, PromptLike
 from retrain.verifiers_bridge import (
-    VerifiersRolloutTiming,
     encode_prompt_for_sampling,
     is_multiturn_environment,
     load_examples_from_environment,

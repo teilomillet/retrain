@@ -14,6 +14,7 @@ The LocalBackend in Mojo calls into this module via Python interop.
 """
 
 import gc
+import importlib
 import os
 import time
 from contextlib import contextmanager
@@ -22,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 from peft import get_peft_model, LoraConfig, TaskType
 
 from retrain.accelerators import (
@@ -54,7 +55,6 @@ from retrain.qwen35_gated_delta import patch_qwen35_gated_delta_kernel
 from retrain.torch_runtime import (
     cuda_peak_metrics as _cuda_peak_metrics,
     is_cuda_device as _is_cuda_device,
-    pad_to_width as _pad_to_width,
     parse_device_spec as _parse_device,
     reset_cuda_peak as _reset_cuda_peak,
     timer_start as _timer_start,
@@ -1332,7 +1332,7 @@ class LocalTrainHelper:
             return cached
         try:
             try:
-                import unsloth  # type: ignore[import-not-found]
+                importlib.import_module("unsloth")
             except Exception:
                 pass
             from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
