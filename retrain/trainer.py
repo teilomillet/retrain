@@ -25,9 +25,9 @@ from retrain.advantages import (
 from retrain.backends import (
     EntropySamplingHelper,
     TrainHelper,
-    collect_runtime_metrics,
     run_sft_train_step,
 )
+from retrain.backend_definitions import BackendCapabilities
 from retrain.backpressure import (
     StepObservation,
 )
@@ -66,6 +66,15 @@ from retrain.sft import (
     tokenize_sft_dataset,
 )
 from retrain.type_defs import ExampleInfoLike, PromptLike
+from retrain.training_telemetry import (
+    EchoStepPlan,
+    RolloutTelemetry,
+    StepLogData,
+    build_emergence_step_entry,
+    build_step_metrics,
+    build_wandb_metrics,
+    summarize_surprisal_stats,
+)
 from retrain.verifiers_bridge import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
@@ -281,22 +290,6 @@ def _echo_allowed_tokens(
 
     ratio_cap = int(rl_completion_tokens * max_token_ratio)
     return max(0, min(max_tokens_per_step, ratio_cap))
-
-
-@dataclass(frozen=True)
-class _EchoStepPlan:
-    limit: EchoLimitStats
-    allowed_tokens: int
-    reference_completion_tokens: int
-    skipped_entropy_floor: bool
-    rl_completion_surprisal_mean: float
-    echo_completion_surprisal_mean: float
-
-    @property
-    def token_ratio(self) -> float:
-        if self.reference_completion_tokens <= 0:
-            return 0.0
-        return self.limit.kept_tokens / self.reference_completion_tokens
 
 
 def _add_echo_build_stats(
@@ -1040,11 +1033,33 @@ class _RolloutAccumulator:
     sample_time_s: float = 0.0
     tl_grpo_ema: float | None = None
 
+def _print_step_log_summary(
+    data: StepLogData,
+    *,
+    backend_caps: BackendCapabilities,
+    acc: _RolloutAccumulator,
+) -> None:
+    loss_display = _format_loss_for_display(
+        data.loss_value,
+        backend_caps.reports_sync_loss,
+    )
+    print(
+        f"Step {data.step} [{data.condition_label}] | loss={loss_display}"
+        f" | reward={data.mean_reward:.3f}"
+        f" | correct={data.correct_rate * 100:.1f}%"
+        f" | datums={data.num_datums}"
+        f" | bs={data.batch_size}"
+        f" | gs={data.group_size}"
+        f" | tie_g={acc.ties.tie_group_rate * 100:.1f}%"
+        f" | sepa_l={data.sepa_lambda:.4f}"
+        f" | time={data.step_time:.1f}s"
+    )
+
 
 def _prepare_echo_step_plan(
     config: TrainConfig,
     acc: _RolloutAccumulator,
-) -> _EchoStepPlan:
+) -> EchoStepPlan:
     """Apply ECHO token limits and return the values logged for this step."""
     rl_completion_surprisal_mean = (
         acc.rl_completion_surprisal_sum / acc.rl_completion_token_count
@@ -1057,7 +1072,7 @@ def _prepare_echo_step_plan(
         else rl_completion_surprisal_mean
     )
     if not config.echo_enabled:
-        return _EchoStepPlan(
+        return EchoStepPlan(
             limit=EchoLimitStats(),
             allowed_tokens=0,
             reference_completion_tokens=0,
@@ -1076,7 +1091,7 @@ def _prepare_echo_step_plan(
         acc.datum_echo_advantages = [
             [0.0] * len(row) for row in acc.datum_echo_advantages
         ]
-        return _EchoStepPlan(
+        return EchoStepPlan(
             limit=EchoLimitStats(
                 kept_datums=0,
                 kept_tokens=0,
@@ -1093,7 +1108,7 @@ def _prepare_echo_step_plan(
         acc.datum_echo_advantages,
         max_positive_tokens=allowed_tokens,
     )
-    return _EchoStepPlan(
+    return EchoStepPlan(
         limit=limit,
         allowed_tokens=allowed_tokens,
         reference_completion_tokens=reference_completion_tokens,
@@ -2030,336 +2045,91 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         current_batch_size = new_bs
 
             # 10g. Logging
-            mean_reward = (
-                sum(acc.rewards) / len(acc.rewards) if acc.rewards else 0.0
+            step_log = StepLogData(
+                step=batch_idx,
+                condition_label=_condition_label(config),
+                loss_value=loss_value,
+                echo_loss=echo_loss,
+                echo_joint_optimizer_step=echo_joint_optimizer_step,
+                mean_reward=sum(acc.rewards) / len(acc.rewards) if acc.rewards else 0.0,
+                correct_rate=correct_rate,
+                running_correct_rate=(
+                    total_correct / total_completions if total_completions > 0 else 0.0
+                ),
+                max_token_hit_rate=(
+                    acc.max_token_hits / acc.total_completions
+                    if acc.total_completions > 0
+                    else 0.0
+                ),
+                num_datums=num_datums,
+                step_time=step_time,
+                sample_time=acc.sample_time_s,
+                train_time=train_time,
+                rl_train_time=rl_train_time,
+                echo_train_time=echo_train_time,
+                bp_total_tokens=bp_total_tokens,
+                batch_size=current_batch_size,
+                group_size=current_group_size,
+                bp_warmup=bp_warmup,
+                sepa_lambda=sepa_lambda_val,
+                sepa_gate=(
+                    sepa_controller.gate_open()
+                    if uses_sepa_controller
+                    else False
+                ),
+                clip_fraction=clip_fraction,
+                policy_cov_fraction=policy_cov_fraction,
+                policy_abs_kl=policy_abs_kl,
+                adv_cap_fraction=adv_cap_fraction,
+                adv_cap_magnitude=adv_cap_magnitude,
+                tl_grpo_ema=tl_grpo_ema,
+                surprisal=summarize_surprisal_stats(acc.surprisal_stats),
             )
-            running_correct_rate = (
-                total_correct / total_completions if total_completions > 0 else 0.0
+            rollout_log = cast(RolloutTelemetry, acc)
+            metrics = build_step_metrics(
+                step_log,
+                config=config,
+                backend_caps=backend_caps,
+                rollout=rollout_log,
+                echo_plan=echo_plan,
+                bp_decision=bp_decision,
+                batch_norm_metrics=batch_norm_metrics,
+                runtime_counters=runtime_counters,
+                helper=helper,
             )
-            max_token_hit_rate = (
-                acc.max_token_hits / acc.total_completions
-                if acc.total_completions > 0
-                else 0.0
-            )
-
-            # Aggregate entropy stats
-            step_exec_mean = step_exec_var = step_plan_mean = step_plan_var = 0.0
-            step_post_exec_mean = step_post_exec_var = 0.0
-            step_post_plan_mean = step_post_plan_var = 0.0
-            if acc.surprisal_stats:
-                n_stats = len(acc.surprisal_stats)
-                step_exec_mean = sum(s.exec_mean for s in acc.surprisal_stats) / n_stats
-                step_exec_var = sum(s.exec_var for s in acc.surprisal_stats) / n_stats
-                step_plan_mean = sum(s.plan_mean for s in acc.surprisal_stats) / n_stats
-                step_plan_var = sum(s.plan_var for s in acc.surprisal_stats) / n_stats
-                step_post_exec_mean = sum(s.post_exec_mean for s in acc.surprisal_stats) / n_stats
-                step_post_exec_var = sum(s.post_exec_var for s in acc.surprisal_stats) / n_stats
-                step_post_plan_mean = sum(s.post_plan_mean for s in acc.surprisal_stats) / n_stats
-                step_post_plan_var = sum(s.post_plan_var for s in acc.surprisal_stats) / n_stats
-
-            condition_label = _condition_label(config)
-            sepa_gate = (
-                sepa_controller.gate_open()
-                if uses_sepa_controller
-                else False
-            )
-
-            metrics: dict = {
-                "step": batch_idx,
-                "algorithm_mode": config.algorithm_mode,
-                "advantage_mode": config.advantage_mode,
-                "transform_mode": config.transform_mode,
-                "uncertainty_kind": config.uncertainty_kind,
-                "condition": condition_label,
-                "backend_reports_sync_loss": backend_caps.reports_sync_loss,
-                "backend_preserves_token_advantages": backend_caps.preserves_token_advantages,
-                "loss_is_placeholder": not backend_caps.reports_sync_loss,
-                "reported_loss": loss_value,
-                "loss": loss_value,
-                "mean_reward": mean_reward,
-                "correct_rate": correct_rate,
-                "running_correct_rate": running_correct_rate,
-                "reward_tie_eligible_groups": acc.ties.eligible_groups,
-                "reward_tie_groups": acc.ties.tie_groups,
-                "reward_uniform_groups": acc.ties.uniform_groups,
-                "reward_tie_group_rate": acc.ties.tie_group_rate,
-                "reward_uniform_group_rate": acc.ties.uniform_group_rate,
-                "reward_tie_pair_rate": acc.ties.tie_pair_rate,
-                "reward_unique_fraction_mean": acc.ties.unique_fraction_mean,
-                "sepa_lambda": sepa_lambda_val,
-                "sepa_gate_open": sepa_gate,
-                "num_datums": num_datums,
-                "max_token_hit_rate": max_token_hit_rate,
-                "step_time_s": step_time,
-                "sample_time_s": acc.sample_time_s,
-                "train_time_s": train_time,
-                "batch_size": current_batch_size,
-                "group_size": current_group_size,
-                "bp_warmup": bp_warmup,
-                "bp_action": bp_decision.action,
-                "bp_regime": bp_decision.regime,
-                "bp_p_star": bp_decision.p_star,
-                "bp_sigma": bp_decision.sigma,
-                "bp_kappa": bp_decision.kappa,
-                "bp_utilization": bp_decision.utilization,
-                "bp_throughput": bp_decision.throughput,
-            }
-            metrics["tokens_per_step"] = bp_total_tokens
-            metrics["tokens_per_second"] = (
-                bp_total_tokens / step_time if step_time > _PROMPT_PAD_EPS else 0.0
-            )
-            metrics["sample_share"] = (
-                acc.sample_time_s / step_time if step_time > _PROMPT_PAD_EPS else 0.0
-            )
-            metrics["train_share"] = (
-                train_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
-            )
-            echo_token_ratio = echo_plan.token_ratio
-            metrics["rl/train_time_s"] = rl_train_time
-            metrics["rl/completion_tokens"] = acc.rl_completion_token_count
-            metrics["rl/completion_surprisal_mean"] = (
-                echo_plan.rl_completion_surprisal_mean
-            )
-            metrics["echo/enabled"] = int(config.echo_enabled)
-            metrics["echo/loss"] = echo_loss
-            metrics["echo/train_time_s"] = echo_train_time
-            metrics["echo/weight"] = config.echo_weight
-            metrics["echo/allowed_tokens"] = echo_plan.allowed_tokens
-            metrics["echo/reference_completion_tokens"] = (
-                echo_plan.reference_completion_tokens
-            )
-            metrics["echo/completion_surprisal_mean"] = (
-                echo_plan.echo_completion_surprisal_mean
-            )
-            metrics["echo/candidate_datums"] = acc.echo_build.candidate_datums
-            metrics["echo/candidate_tokens"] = acc.echo_build.candidate_tokens
-            metrics["echo/observation_mask_datums"] = (
-                acc.echo_build.observation_mask_datums
-            )
-            metrics["echo/kept_datums"] = echo_plan.limit.kept_datums
-            metrics["echo/kept_tokens"] = echo_plan.limit.kept_tokens
-            metrics["echo/truncated_tokens"] = echo_plan.limit.truncated_tokens
-            metrics["echo/token_ratio"] = echo_token_ratio
-            metrics["echo/skipped_first_turns"] = acc.echo_build.skipped_first_turns
-            metrics["echo/skipped_no_suffix"] = acc.echo_build.skipped_no_suffix
-            metrics["echo/skipped_low_overlap"] = acc.echo_build.skipped_low_overlap
-            metrics["echo/skipped_bad_observation_mask"] = (
-                acc.echo_build.skipped_bad_observation_mask
-            )
-            metrics["echo/skipped_entropy_floor"] = int(echo_plan.skipped_entropy_floor)
-            metrics["echo/entropy_floor"] = config.echo_entropy_floor
-            metrics["echo/mode_collapse_guard"] = int(echo_plan.skipped_entropy_floor)
-            metrics["echo/joint_optimizer_step"] = int(echo_joint_optimizer_step)
-            rss_mb = process_max_rss_mb()
-            if rss_mb is not None:
-                metrics["process_max_rss_mb"] = round(rss_mb, 3)
-            metrics.update(runtime_counters.metrics())
-            metrics.update(collect_runtime_metrics(helper))
-            if acc.rollout_timing_metrics:
-                metrics.update(acc.rollout_timing_metrics)
-                rollout_total = acc.rollout_timing_metrics.get("rollout/total_s", 0.0)
-                rollout_share = (
-                    rollout_total / acc.sample_time_s if acc.sample_time_s > _PROMPT_PAD_EPS else 0.0
-                )
-                metrics["rollout/accounted_share_of_sample"] = min(
-                    max(rollout_share, 0.0),
-                    1.0,
-                )
-            if acc.surprisal_stats:
-                metrics["exec_entropy_mean"] = step_exec_mean
-                metrics["exec_entropy_var"] = step_exec_var
-                metrics["plan_entropy_mean"] = step_plan_mean
-                metrics["plan_entropy_var"] = step_plan_var
-                # Preferred names: these values are sampled-token surprisal.
-                metrics["exec_surprisal_mean"] = step_exec_mean
-                metrics["exec_surprisal_var"] = step_exec_var
-                metrics["plan_surprisal_mean"] = step_plan_mean
-                metrics["plan_surprisal_var"] = step_plan_var
-                metrics["post_exec_surprisal_mean"] = step_post_exec_mean
-                metrics["post_exec_surprisal_var"] = step_post_exec_var
-                metrics["post_plan_surprisal_mean"] = step_post_plan_mean
-                metrics["post_plan_surprisal_var"] = step_post_plan_var
-            metrics["clip_fraction"] = clip_fraction
-            metrics["policy_loss_mode"] = config.policy_loss_mode
-            metrics["policy/cov_fraction"] = policy_cov_fraction
-            metrics["policy/abs_kl"] = policy_abs_kl
-            metrics["adv_cap_fraction"] = adv_cap_fraction
-            metrics["adv_cap_magnitude"] = adv_cap_magnitude
-            if batch_norm_metrics:
-                metrics.update(batch_norm_metrics)
-            if acc.adv_results:
-                all_extra_keys = {k for r in acc.adv_results for k in r.extra_metrics}
-                for k in all_extra_keys:
-                    vals = [r.extra_metrics[k] for r in acc.adv_results if k in r.extra_metrics]
-                    metrics[k] = sum(vals) / len(vals)
             if "dg_eta" in metrics:
                 delight_eta_ema = float(metrics["dg_eta"])
 
-            # ── Behavior monitoring ─────────────────────────────────────
-            # Aggregate turn-level behavior from this step's generations.
-            # Tracks model behavior drift that loss alone cannot detect:
-            # action collapse, invalid action rate, response length.
-            if acc.behavior_turns > 0:
-                metrics["behavior/invalid_action_rate"] = (
-                    acc.behavior_invalid / acc.behavior_turns
-                )
-                metrics["behavior/action_type_count"] = len(acc.behavior_actions)
-                if acc.behavior_actions:
-                    _act_total = sum(acc.behavior_actions.values())
-                    _max_frac = max(acc.behavior_actions.values()) / _act_total
-                    metrics["behavior/action_dominance"] = _max_frac
-            if acc.behavior_resp_lens:
-                metrics["behavior/avg_response_chars"] = (
-                    sum(acc.behavior_resp_lens) / len(acc.behavior_resp_lens)
-                )
-            # ────────────────────────────────────────────────────────────
-
             metrics_logger.log(metrics)
-
-            loss_display = _format_loss_for_display(
-                loss_value,
-                backend_caps.reports_sync_loss,
-            )
-            print(
-                f"Step {batch_idx} [{condition_label}] | loss={loss_display}"
-                f" | reward={mean_reward:.3f}"
-                f" | correct={correct_rate * 100:.1f}%"
-                f" | datums={num_datums}"
-                f" | bs={current_batch_size}"
-                f" | gs={current_group_size}"
-                f" | tie_g={acc.ties.tie_group_rate * 100:.1f}%"
-                f" | sepa_l={sepa_lambda_val:.4f}"
-                f" | time={step_time:.1f}s"
+            _print_step_log_summary(
+                step_log,
+                backend_caps=backend_caps,
+                acc=acc,
             )
 
-            # Wandb
             if wandb_run is not None:
-                wandb_metrics: dict[str, int | float | str] = {
-                    "train/loss": loss_value,
-                    "train/reported_loss": loss_value,
-                    "train/uncertainty_kind": config.uncertainty_kind,
-                    "train/loss_is_placeholder": int(not backend_caps.reports_sync_loss),
-                    "train/rewards/mean_reward": mean_reward,
-                    "train/rewards/correct_rate": correct_rate,
-                    "train/rewards/running_correct_rate": running_correct_rate,
-                    "train/rewards/tie_eligible_groups": acc.ties.eligible_groups,
-                    "train/rewards/tie_groups": acc.ties.tie_groups,
-                    "train/rewards/uniform_groups": acc.ties.uniform_groups,
-                    "train/rewards/tie_group_rate": acc.ties.tie_group_rate,
-                    "train/rewards/uniform_group_rate": acc.ties.uniform_group_rate,
-                    "train/rewards/tie_pair_rate": acc.ties.tie_pair_rate,
-                    "train/rewards/unique_fraction_mean": acc.ties.unique_fraction_mean,
-                    "train/backend/reports_sync_loss": int(backend_caps.reports_sync_loss),
-                    "train/backend/preserves_token_advantages": int(
-                        backend_caps.preserves_token_advantages
+                wandb_run.log(
+                    build_wandb_metrics(
+                        step_log,
+                        config=config,
+                        backend_caps=backend_caps,
+                        rollout=rollout_log,
+                        bp_decision=bp_decision,
+                        batch_norm_metrics=batch_norm_metrics,
+                        metrics=metrics,
                     ),
-                    "train/sepa_lambda": sepa_lambda_val,
-                    "train/sepa_gate_open": int(sepa_gate),
-                    "train/max_token_hit_rate": max_token_hit_rate,
-                    "train/num_datums": num_datums,
-                    "train/step_time_s": step_time,
-                    "train/batch_size": current_batch_size,
-                    "train/group_size": current_group_size,
-                    "train/entropy/exec_mean": step_exec_mean,
-                    "train/entropy/exec_var": step_exec_var,
-                    "train/entropy/plan_mean": step_plan_mean,
-                    "train/entropy/plan_var": step_plan_var,
-                    "train/surprisal/exec_mean": step_exec_mean,
-                    "train/surprisal/exec_var": step_exec_var,
-                    "train/surprisal/plan_mean": step_plan_mean,
-                    "train/surprisal/plan_var": step_plan_var,
-                    "train/surprisal/post_exec_mean": step_post_exec_mean,
-                    "train/surprisal/post_exec_var": step_post_exec_var,
-                    "train/surprisal/post_plan_mean": step_post_plan_mean,
-                    "train/surprisal/post_plan_var": step_post_plan_var,
-                    "train/clip_fraction": clip_fraction,
-                    "train/policy_cov_fraction": policy_cov_fraction,
-                    "train/policy_abs_kl": policy_abs_kl,
-                    "train/adv_cap_fraction": adv_cap_fraction,
-                    "train/adv_cap_magnitude": adv_cap_magnitude,
-                    **{f"train/{k}": v for k, v in batch_norm_metrics.items()},
-                    "train/backpressure/action": bp_decision.action,
-                    "train/backpressure/regime": bp_decision.regime,
-                    "train/backpressure/p_star": bp_decision.p_star,
-                    "train/backpressure/sigma": bp_decision.sigma,
-                    "train/backpressure/kappa": bp_decision.kappa,
-                    "train/backpressure/utilization": bp_decision.utilization,
-                    "train/backpressure/throughput": bp_decision.throughput,
-                    "train/backpressure/warmup": int(bp_warmup),
-                }
-                if acc.adv_results:
-                    for k in {k for r in acc.adv_results for k in r.extra_metrics}:
-                        wandb_metrics[f"train/{k}"] = metrics.get(k, 0.0)
-                for _ek in (
-                    "rl/train_time_s",
-                    "rl/completion_tokens",
-                    "rl/completion_surprisal_mean",
-                    "echo/enabled",
-                    "echo/loss",
-                    "echo/train_time_s",
-                    "echo/weight",
-                    "echo/allowed_tokens",
-                    "echo/reference_completion_tokens",
-                    "echo/completion_surprisal_mean",
-                    "echo/candidate_datums",
-                    "echo/candidate_tokens",
-                    "echo/observation_mask_datums",
-                    "echo/kept_datums",
-                    "echo/kept_tokens",
-                    "echo/truncated_tokens",
-                    "echo/token_ratio",
-                    "echo/skipped_low_overlap",
-                    "echo/skipped_bad_observation_mask",
-                    "echo/skipped_entropy_floor",
-                    "echo/entropy_floor",
-                    "echo/mode_collapse_guard",
-                ):
-                    wandb_metrics[f"train/{_ek}"] = metrics[_ek]
-                if tl_grpo_ema is not None:
-                    wandb_metrics["train/tl_grpo_ema_baseline"] = tl_grpo_ema
-                # Behavior monitoring → W&B
-                for _bk in ("behavior/invalid_action_rate", "behavior/action_type_count",
-                            "behavior/action_dominance", "behavior/avg_response_chars"):
-                    if _bk in metrics:
-                        wandb_metrics[f"train/{_bk}"] = metrics[_bk]
-                wandb_run.log(wandb_metrics, step=batch_idx)
+                    step=batch_idx,
+                )
 
-            # Step record for emergence analysis
-            step_entry: dict = {
-                "step": batch_idx,
-                "mean_reward": mean_reward,
-                "correct_count": acc.correct,
-                "total_count": len(acc.rewards),
-                "condition": condition_label,
-                "uncertainty_kind": config.uncertainty_kind,
-            }
-            if acc.surprisal_stats:
-                step_entry["exec_entropy_mean"] = step_exec_mean
-                step_entry["exec_entropy_var"] = step_exec_var
-                step_entry["plan_entropy_mean"] = step_plan_mean
-                step_entry["plan_entropy_var"] = step_plan_var
-                step_entry["exec_surprisal_mean"] = step_exec_mean
-                step_entry["exec_surprisal_var"] = step_exec_var
-                step_entry["plan_surprisal_mean"] = step_plan_mean
-                step_entry["plan_surprisal_var"] = step_plan_var
-                step_entry["post_exec_surprisal_mean"] = step_post_exec_mean
-                step_entry["post_exec_surprisal_var"] = step_post_exec_var
-                step_entry["post_plan_surprisal_mean"] = step_post_plan_mean
-                step_entry["post_plan_surprisal_var"] = step_post_plan_var
-            step_entry["clip_fraction"] = clip_fraction
-            step_entry["policy_loss_mode"] = config.policy_loss_mode
-            step_entry["policy/cov_fraction"] = policy_cov_fraction
-            step_entry["policy/abs_kl"] = policy_abs_kl
-            step_entry["adv_cap_fraction"] = adv_cap_fraction
-            step_entry["adv_cap_magnitude"] = adv_cap_magnitude
-            step_entry["echo/enabled"] = int(config.echo_enabled)
-            step_entry["echo/kept_tokens"] = echo_plan.limit.kept_tokens
-            step_entry["echo/token_ratio"] = echo_token_ratio
-            step_entry["echo/skipped_entropy_floor"] = int(echo_plan.skipped_entropy_floor)
-            if acc.adv_results:
-                for k in {k for r in acc.adv_results for k in r.extra_metrics}:
-                    step_entry[k] = metrics.get(k, 0.0)
-            steps_logger.log(step_entry)
+            steps_logger.log(
+                build_emergence_step_entry(
+                    step_log,
+                    config=config,
+                    rollout=rollout_log,
+                    echo_plan=echo_plan,
+                    metrics=metrics,
+                )
+            )
 
             # Periodic checkpoint
             if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
