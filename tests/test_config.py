@@ -1,7 +1,6 @@
 """Tests for retrain.config — TrainConfig and TOML loading."""
 
 import warnings
-from pathlib import Path
 
 import pytest
 

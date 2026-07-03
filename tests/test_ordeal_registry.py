@@ -7,10 +7,9 @@ creation, override, dotted-path fallback, and error handling.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from unittest.mock import MagicMock
 
 import hypothesis.strategies as st
-from ordeal import ChaosTest, always, invariant, rule, sometimes
+from ordeal import ChaosTest, always, invariant, rule
 
 from retrain.registry import Registry
 

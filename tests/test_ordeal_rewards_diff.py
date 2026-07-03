@@ -6,10 +6,9 @@ Fuzz tests for crash safety on diff formatting functions.
 
 from __future__ import annotations
 
-import math
 
 import hypothesis.strategies as st
-from hypothesis import given, settings
+from hypothesis import given
 from ordeal.auto import fuzz
 from ordeal.quickcheck import quickcheck
 

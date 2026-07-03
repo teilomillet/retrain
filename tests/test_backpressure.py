@@ -7,7 +7,6 @@ from collections import deque
 import pytest
 
 from retrain.backpressure import (
-    BackPressureDecision,
     NoOpBackPressure,
     StepObservation,
     USLBackPressure,

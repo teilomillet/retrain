@@ -14,7 +14,7 @@ from hypothesis import given, settings
 
 torch = pytest.importorskip("torch")
 
-from retrain.squeeze import LayerSqueeze, compress_layer, squeeze_layer
+from retrain.squeeze import compress_layer, squeeze_layer
 
 
 # ── Strategies ──

@@ -1,7 +1,6 @@
 """Tests for retrain.squeeze — LoRA-Squeeze rank analysis and compression."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from safetensors.torch import save_file
 
 from retrain.config import SqueezeConfig, load_squeeze_config
 from retrain.squeeze import (
-    SqueezeAnalysis,
     analyze_adapter,
     compress_adapter,
     compress_layer,

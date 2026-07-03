@@ -5,7 +5,6 @@ import os
 import time
 from dataclasses import fields
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 

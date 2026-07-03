@@ -9,12 +9,11 @@ from __future__ import annotations
 import math
 
 import hypothesis.strategies as st
-from hypothesis import given, settings
-from ordeal import ChaosTest, always, invariant, rule, sometimes
+from hypothesis import given
+from ordeal import ChaosTest, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
 from retrain.backpressure import (
-    BackPressureDecision,
     NoOpBackPressure,
     StepObservation,
     USLBackPressure,

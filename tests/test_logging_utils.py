@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from retrain.logging_utils import JsonlLogger
 

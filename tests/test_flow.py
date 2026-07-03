@@ -3,7 +3,6 @@
 import json
 import subprocess
 import sys
-import textwrap
 
 import pytest
 
@@ -12,10 +11,7 @@ from retrain.config import TrainConfig
 from retrain.flow import (
     TraceIssue,
     TraceResult,
-    TrainingFlow,
     _FLOW_PROBE_CASES,
-    _SCALAR_BACKEND_DISALLOWED_BUILTIN_ALGORITHM_MODES,
-    _SCALAR_BACKEND_DISALLOWED_BUILTIN_TRANSFORM_MODES,
     _condition_label,
     _token_advs_are_uniform,
     build_flow,

@@ -9,12 +9,10 @@ from __future__ import annotations
 import math
 
 import hypothesis.strategies as st
-import pytest
 from hypothesis import given, settings
-from ordeal.invariants import no_nan, no_inf, bounded
+from ordeal.invariants import no_nan, no_inf
 
 from retrain.advantages import (
-    AdvantageResult,
     apply_batch_advantage_normalization,
     apply_gtpo_weighting,
     apply_hard_delight_gating,

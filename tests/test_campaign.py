@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from retrain.campaign import (
-    CampaignCondition,
     DEFAULT_CONDITIONS,
     _config_to_toml,
     _parse_campaign_conditions,
@@ -474,7 +473,6 @@ class TestParallelCampaignConfig:
             return runs
 
         squeeze_called = [False]
-        original_auto_squeeze = None
 
         def mock_auto_squeeze(*args, **kwargs):
             squeeze_called[0] = True

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, settings
-from ordeal import ChaosTest, always, invariant, rule, sometimes
+from hypothesis import given
+from ordeal import ChaosTest, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
 from retrain.trainer import _load_trainer_state, _save_trainer_state

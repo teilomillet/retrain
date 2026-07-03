@@ -6,12 +6,10 @@ from pathlib import Path
 import pytest
 
 from retrain.cli import (
-    _INIT_TEMPLATES,
     _customize_toml,
     _print_top_help,
     _run_benchmark,
     _run_backends,
-    _run_diff,
     _run_doctor,
     _run_explain,
     _run_init,

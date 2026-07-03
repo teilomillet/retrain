@@ -6,8 +6,6 @@ from pathlib import Path
 import pytest
 
 from retrain.diff import (
-    DiffResult,
-    MetricsEntry,
     _sparkline,
     _winner,
     diff_conditions,

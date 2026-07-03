@@ -864,9 +864,6 @@ class TestReinforcePPStress:
 
     def test_all_finite_under_adversarial_inputs(self):
         """No NaN/Inf even with adversarial reward patterns."""
-        import random
-        rng = random.Random(7)
-
         adversarial_cases = [
             [1.0, 1.0, 1.0, 1.0],         # all same (std=0)
             [0.0, 0.0, 0.0, 0.0],         # all zero

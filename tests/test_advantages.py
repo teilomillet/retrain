@@ -5,7 +5,6 @@ import math
 import pytest
 
 from retrain.advantages import (
-    MAX_ENTROPY,
     TransformSpec,
     UncertaintyContext,
     UncertaintySpec,
@@ -168,7 +167,6 @@ class TestSEPAPooling:
     def test_partial_lambda(self):
         entropies = [0.2, 0.8]
         mask = [0, 0]
-        exec_mean = 0.5
         result = apply_sepa_pooling(entropies, mask, lambda_t=0.5)
         # 0.5 * 0.5 + 0.5 * 0.2 = 0.35
         assert result[0] == pytest.approx(0.35)

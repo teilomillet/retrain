@@ -11,7 +11,7 @@ from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
 class TestTinkerThrottle:
     def test_creates_lock_files(self, tmp_path):
         lock_dir = str(tmp_path / "locks")
-        throttle = TinkerThrottle(lock_dir, max_concurrent=3)
+        TinkerThrottle(lock_dir, max_concurrent=3)
         for i in range(3):
             assert (tmp_path / "locks" / f"slot_{i}.lock").exists()
 
@@ -47,7 +47,6 @@ class TestTinkerThrottle:
         max_concurrent = 2
         num_threads = 6
 
-        current = threading.Semaphore(0)
         peak_lock = threading.Lock()
         peak = [0]
         current_count = [0]
@@ -75,7 +74,7 @@ class TestTinkerThrottle:
 
     def test_auto_creates_lock_dir(self, tmp_path):
         lock_dir = str(tmp_path / "nested" / "deep" / "locks")
-        throttle = TinkerThrottle(lock_dir, max_concurrent=2)
+        TinkerThrottle(lock_dir, max_concurrent=2)
         assert (tmp_path / "nested" / "deep" / "locks" / "slot_0.lock").exists()
 
     def test_works_when_lock_files_already_exist(self, tmp_path):
