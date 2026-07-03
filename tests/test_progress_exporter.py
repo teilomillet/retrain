@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 
-from retrain.progress_exporter import collect_run_snapshots, render_prometheus_text
+from retrain.progress_exporter import _render_runs_json, collect_run_snapshots, render_prometheus_text
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -92,6 +93,14 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
     assert snapshot.recent_prompt_tokens_max == 16600
     assert snapshot.recent_completion_tokens_max == 640
     assert snapshot.recent_result_latency_max_s == 300.0
+    assert snapshot.to_dict() == asdict(snapshot)
+
+    payload = json.loads(_render_runs_json(tmp_path, snapshots, generated_at=123.0))
+    assert payload == {
+        "generated_at": 123.0,
+        "root": str(tmp_path),
+        "runs": [snapshot.to_dict()],
+    }
 
 
 def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> None:

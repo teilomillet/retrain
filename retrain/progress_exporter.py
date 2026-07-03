@@ -13,7 +13,7 @@ import math
 import time
 from collections import Counter, deque
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -61,7 +61,12 @@ class RunSnapshot:
     recent_result_latency_last_s: float | None
     recent_result_latency_max_s: float | None
 
+    def to_dict(self) -> JsonObject:
+        """Serialize the flat snapshot without ``asdict`` deep-copy overhead."""
+        return {name: getattr(self, name) for name in _RUN_SNAPSHOT_FIELD_NAMES}
 
+
+_RUN_SNAPSHOT_FIELD_NAMES = tuple(field.name for field in fields(RunSnapshot))
 MetricGetter = Callable[[RunSnapshot], float | int | None]
 
 
@@ -354,6 +359,18 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _render_runs_json(root: Path, snapshots: list[RunSnapshot], *, generated_at: float) -> str:
+    return json.dumps(
+        {
+            "generated_at": generated_at,
+            "root": str(root),
+            "runs": [snapshot.to_dict() for snapshot in snapshots],
+        },
+        indent=2,
+        sort_keys=True,
+    )
+
+
 class _ExporterHandler(BaseHTTPRequestHandler):
     root: Path = Path(".")
 
@@ -368,15 +385,9 @@ class _ExporterHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
         if self.path in ("/v1/runs", "/v1/runs/"):
-            payload = json.dumps(
-                {
-                    "generated_at": time.time(),
-                    "root": str(self.root),
-                    "runs": [asdict(snapshot) for snapshot in snapshots],
-                },
-                indent=2,
-                sort_keys=True,
-            ).encode("utf-8")
+            payload = _render_runs_json(self.root, snapshots, generated_at=time.time()).encode(
+                "utf-8"
+            )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
