@@ -4,8 +4,8 @@ import types
 import torch
 import torch.nn.functional as F
 
-import retrain.accelerators as accelerators
-from retrain.accelerators import install_cudnn_causal_conv1d_shim
+import retrain.kernels.accelerators as accelerators
+from retrain.kernels.accelerators import install_cudnn_causal_conv1d_shim
 
 
 def _clear_causal_conv1d(monkeypatch):

@@ -24,7 +24,7 @@ from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model, LoraConfig, TaskType
 
-from retrain.accelerators import (
+from retrain.kernels.accelerators import (
     accelerator_status,
     apply_liger_kernel_if_available,
     from_pretrained_attention_kwargs,
@@ -38,12 +38,12 @@ from retrain.models.gemma4 import (
     resolve_lora_target_modules,
 )
 from retrain.inference_engine import create_engine
-from retrain.fast_lora import (
+from retrain.kernels.lora import (
     infer_transformer_layer_count as _infer_transformer_layer_count,
     parse_lora_layers_to_transform as _parse_lora_layers_to_transform,
     patch_lora_fast_linear_modules,
 )
-from retrain.selective_logprobs import (
+from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs as _packed_quantized_linear_target_logprobs,
     selected_linear_ce_logprobs_no_bias as _selected_linear_ce_logprobs_no_bias,
     selected_linear_ce_logprobs_with_bias as _selected_linear_ce_logprobs_with_bias,

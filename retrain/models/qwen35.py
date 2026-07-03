@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 if TYPE_CHECKING:
     import torch
 
-from retrain.accelerators import module_available
+from retrain.kernels.accelerators import module_available
 
 _FLASH_QLA_SUPPORTED_CAPABILITIES = {(9, 0), (10, 0)}
 

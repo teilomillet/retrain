@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model
 
-from retrain.accelerators import (
+from retrain.kernels.accelerators import (
     accelerator_status,
     apply_liger_kernel_if_available,
     from_pretrained_attention_kwargs,

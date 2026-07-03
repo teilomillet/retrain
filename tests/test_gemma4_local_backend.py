@@ -24,8 +24,8 @@ from retrain.inference_engine.pytorch_engine import (
     _sample_next_token,
     _shannon_entropy_from_probs_logprobs,
 )
-from retrain.fast_lora import FastLoRALinearFunction
-from retrain.fast_lora import parse_lora_layers_to_transform
+from retrain.kernels.lora import FastLoRALinearFunction
+from retrain.kernels.lora import parse_lora_layers_to_transform
 from retrain.backends.local import LocalTrainHelper
 
 

@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from retrain.backends import local as local_mod
 from retrain.backends.local import LocalTrainHelper
-from retrain.selective_logprobs import (
+from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs,
     unpack_quantized_weight,
 )
