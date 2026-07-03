@@ -270,7 +270,7 @@ class SftRunner:
                     "trainer='sft' resume_from requires a backend with load_state()."
                 )
             print(f"Loading SFT initial adapter from {config.resume_from} ...")
-            helper.load_state(config.resume_from)  # type: ignore[call-arg]
+            helper.load_state(config.resume_from)
 
         print(f"Loading tokenizer for {config.model} ...")
         tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)

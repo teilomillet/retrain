@@ -27,6 +27,7 @@ TYPECHECK_PATHS = \
 	retrain/qwen35_gated_delta.py \
 	retrain/local_train_helper.py \
 	retrain/flow.py \
+	retrain/training_runner.py \
 	retrain/tree.py \
 	retrain/trainer.py \
 	retrain/prime_rl_backend.py \
