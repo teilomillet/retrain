@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from retrain.backends import collect_runtime_metrics
 from retrain.config import TrainConfig
 
 
@@ -360,11 +361,9 @@ class SftRunner:
                 rss_mb = _process_max_rss_mb()
                 if rss_mb is not None:
                     metrics["process_max_rss_mb"] = round(rss_mb, 3)
-                runtime_metrics = getattr(helper, "runtime_metrics", None)
-                if callable(runtime_metrics):
-                    for key, value in runtime_metrics().items():
-                        if isinstance(value, (int, float, str)):
-                            metrics[f"backend/{key}"] = value
+                for key, value in collect_runtime_metrics(helper).items():
+                    if isinstance(value, (int, float, str)):
+                        metrics[f"backend/{key}"] = value
 
                 metrics_logger.log(metrics)
                 steps_logger.log(metrics)

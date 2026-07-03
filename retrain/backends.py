@@ -7,6 +7,7 @@ features their wire format supports.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
 from retrain.type_defs import EnrichedSampleBatch, SampleBatch
@@ -53,3 +54,21 @@ class EntropySamplingHelper(Protocol):
         temperature: float,
         top_p: float,
     ) -> EnrichedSampleBatch: ...
+
+
+@runtime_checkable
+class RuntimeMetricsHelper(Protocol):
+    """Optional backend capability for runtime telemetry."""
+
+    def runtime_metrics(self) -> Mapping[str, object]: ...
+
+
+def collect_runtime_metrics(helper: object) -> dict[str, object]:
+    """Return backend runtime telemetry when the helper exposes it safely."""
+    runtime_metrics = getattr(helper, "runtime_metrics", None)
+    if not callable(runtime_metrics):
+        return {}
+    metrics = runtime_metrics()
+    if isinstance(metrics, Mapping):
+        return dict(metrics)
+    return {}

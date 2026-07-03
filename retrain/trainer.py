@@ -21,7 +21,7 @@ from retrain.advantages import (
     compute_algorithm_advantages,
     compute_composable_advantages,
 )
-from retrain.backends import EntropySamplingHelper
+from retrain.backends import EntropySamplingHelper, collect_runtime_metrics
 from retrain.backpressure import (
     StepObservation,
 )
@@ -141,16 +141,6 @@ def _process_max_rss_mb() -> float | None:
     if sys.platform == "darwin":
         return raw_rss / (1024.0 * 1024.0)
     return raw_rss / 1024.0
-
-
-def _helper_runtime_metrics(helper: object) -> dict[str, object]:
-    """Collect optional backend-helper runtime counters."""
-    if not hasattr(helper, "runtime_metrics"):
-        return {}
-    metrics = helper.runtime_metrics()  # type: ignore[unresolved-attribute]
-    if isinstance(metrics, dict):
-        return dict(metrics)
-    return {}
 
 
 def _generation_log_indices(
@@ -2019,7 +2009,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             if rss_mb is not None:
                 metrics["process_max_rss_mb"] = round(rss_mb, 3)
             metrics.update(runtime_counters.metrics())
-            metrics.update(_helper_runtime_metrics(helper))
+            metrics.update(collect_runtime_metrics(helper))
             if rollout_timing_metrics:
                 metrics.update(rollout_timing_metrics)
                 rollout_total = rollout_timing_metrics.get("rollout/total_s", 0.0)

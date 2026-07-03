@@ -5,7 +5,12 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
-from retrain.backends import EntropySamplingHelper, TrainHelper
+from retrain.backends import (
+    EntropySamplingHelper,
+    RuntimeMetricsHelper,
+    TrainHelper,
+    collect_runtime_metrics,
+)
 from retrain.config import TrainConfig
 from retrain.registry import backend
 
@@ -95,6 +100,20 @@ class _FakeUnslothTrainHelper(_EntropyFakeHelper):
     def __init__(self, *args, **kwargs):
         self.init_calls.append({"args": args, "kwargs": kwargs})
         super().__init__()
+
+
+class _RuntimeMetricsFakeHelper(_BaseFakeHelper):
+    def runtime_metrics(self) -> dict[str, object]:
+        return {"fake_backend_metric": 1}
+
+
+class _NonCallableRuntimeMetricsHelper(_BaseFakeHelper):
+    runtime_metrics = 1
+
+
+class _NonMappingRuntimeMetricsHelper(_BaseFakeHelper):
+    def runtime_metrics(self) -> list[tuple[str, int]]:
+        return [("fake_backend_metric", 1)]
 
 
 def _exercise_lifecycle_step(helper: TrainHelper, step_name: str) -> None:
@@ -437,3 +456,22 @@ def test_prime_rl_backend_contract(monkeypatch):
     _exercise_lifecycle_step(helper, "step_0")
     _exercise_lifecycle_step(helper, "step_1")
     _assert_lifecycle_calls(helper)
+
+
+def test_runtime_metrics_helper_is_optional_capability():
+    helper = _RuntimeMetricsFakeHelper()
+
+    assert isinstance(helper, TrainHelper)
+    assert isinstance(helper, RuntimeMetricsHelper)
+    assert helper.runtime_metrics() == {"fake_backend_metric": 1}
+    assert collect_runtime_metrics(helper) == {"fake_backend_metric": 1}
+    assert not isinstance(_FakePrimeRLTrainHelper(), RuntimeMetricsHelper)
+
+
+def test_collect_runtime_metrics_tolerates_malformed_helpers():
+    non_callable = _NonCallableRuntimeMetricsHelper()
+    non_mapping = _NonMappingRuntimeMetricsHelper()
+
+    assert isinstance(non_callable, RuntimeMetricsHelper)
+    assert collect_runtime_metrics(non_callable) == {}
+    assert collect_runtime_metrics(non_mapping) == {}
