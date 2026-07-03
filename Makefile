@@ -19,6 +19,8 @@ TYPECHECK_PATHS = \
 	retrain/tinker_runtime.py \
 	retrain/tinker_backend.py \
 	retrain/squeeze.py \
+	retrain/unsloth_runtime.py \
+	retrain/unsloth_backend.py \
 	retrain/backend_definitions.py \
 	retrain/registry.py \
 	retrain/backends.py \

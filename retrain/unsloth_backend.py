@@ -13,8 +13,10 @@ import os
 from contextlib import contextmanager
 from functools import wraps
 
+from retrain.unsloth_runtime import FastLanguageModel, load_fast_language_model
+
 try:
-    from unsloth import FastLanguageModel as _BOOTSTRAP_FAST_LANGUAGE_MODEL
+    _BOOTSTRAP_FAST_LANGUAGE_MODEL = load_fast_language_model()
 except ImportError:
     _BOOTSTRAP_FAST_LANGUAGE_MODEL = None
 
@@ -226,10 +228,10 @@ class UnslothTrainHelper(LocalTrainHelper):
         )
 
     def _load_train_model(self, model_name, dtype, lora_rank, lora_alpha, lora_dropout):
-        fast_language_model = _BOOTSTRAP_FAST_LANGUAGE_MODEL
+        fast_language_model: FastLanguageModel | None = _BOOTSTRAP_FAST_LANGUAGE_MODEL
         if fast_language_model is None:
             try:
-                from unsloth import FastLanguageModel as fast_language_model
+                fast_language_model = load_fast_language_model()
             except ImportError as exc:
                 raise RuntimeError(
                     "Backend 'unsloth' requires Unsloth Core. "
@@ -382,20 +384,20 @@ class UnslothTrainHelper(LocalTrainHelper):
                 torch_rule = _module_global(module, "torch_chunk_gated_delta_rule")
                 if not callable(torch_rule):
                     continue
-                torch_rule._retrain_qwen35_chunk_size = 0
+                setattr(torch_rule, "_retrain_qwen35_chunk_size", 0)
                 module.chunk_gated_delta_rule = torch_rule
             else:
                 @wraps(rule)
                 def chunked_rule(
                     *args,
-                    __rule=rule,
-                    __chunk_size=chunk_size,
+                    _rule=rule,
+                    _chunk_size=chunk_size,
                     **kwargs,
                 ):
-                    kwargs.setdefault("chunk_size", __chunk_size)
-                    return __rule(*args, **kwargs)
+                    kwargs.setdefault("chunk_size", _chunk_size)
+                    return _rule(*args, **kwargs)
 
-                chunked_rule._retrain_qwen35_chunk_size = chunk_size
+                setattr(chunked_rule, "_retrain_qwen35_chunk_size", chunk_size)
                 module.chunk_gated_delta_rule = chunked_rule
             patched += 1
 
