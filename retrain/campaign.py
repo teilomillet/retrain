@@ -282,7 +282,7 @@ def _run_campaign_summary(
     }
 
 
-def _parse_campaign_conditions(
+def parse_campaign_conditions(
     raw_conditions: object, campaign_path: str
 ) -> list[CampaignCondition]:
     """Parse campaign conditions and fail fast on malformed entries."""
@@ -689,7 +689,7 @@ def run_campaign(campaign_path: str) -> str:
 
     # Conditions
     raw_conditions = campaign.get("conditions", None)
-    conditions = _parse_campaign_conditions(raw_conditions, campaign_path)
+    conditions = parse_campaign_conditions(raw_conditions, campaign_path)
 
     # Load the same TOML as a base training config (non-campaign sections)
     base_config = load_config(campaign_path)

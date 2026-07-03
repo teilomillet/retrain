@@ -25,11 +25,10 @@ import tomllib
 from pathlib import Path
 
 from retrain.commands import manual as manual_command
-from retrain.commands.backends.capability import payload as capability_payload
-from retrain.commands.backends.capability import summary as capability_summary
 from retrain.commands.backends.run import run as run_backends
 from retrain.commands.doctor.run import run as run_doctor
 from retrain.commands.doctor.warn import warn_missing
+from retrain.commands.explain.run import run as run_explain
 from retrain.commands.init.run import run as run_init
 from retrain.commands.name import resolve as resolve_cli_name
 from retrain.commands.plugins.run import run as run_plugins
@@ -62,225 +61,6 @@ def _load_dotenv() -> None:
             val = val[1:-1]
         os.environ[key] = val
     print("Loaded .env", file=sys.stderr)
-
-
-def _explain_single(config_path: str | None, fmt: str) -> None:
-    """Explain what a single training run would do."""
-    import warnings
-
-    from retrain.config import load_config
-    from retrain.registry import check_environment
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        config = load_config(config_path)
-
-    if config.trainer == "sft":
-        condition = "sft"
-        datums_per_step = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
-    else:
-        condition = (
-            config.algorithm_mode
-            if config.algorithm_mode
-            else f"{config.advantage_mode}+{config.transform_mode}"
-        )
-        datums_per_step = config.batch_size * config.group_size
-    total_datums = datums_per_step * config.max_steps
-    sft_loss_fn = config.sft_loss_fn
-    if sft_loss_fn == "auto":
-        sft_loss_fn = "cross_entropy" if config.trainer == "sft" else "importance_sampling"
-    lora_alpha = config.lora_alpha if config.lora_alpha else config.lora_rank * 2
-    data_info = config.data_source
-    if config.environment_provider:
-        data_info = f"{config.environment_provider}:{config.environment_id}"
-    if config.trainer == "sft":
-        data_info = config.sft_data_path
-    backend_capabilities = capability_payload(
-        config.backend,
-        config.backend_options,
-    )
-
-    info: dict = {
-        "mode": "single",
-        "config": config_path or "retrain.toml",
-        "model": config.model,
-        "trainer": config.trainer,
-        "backend": config.backend,
-        "backend_options": dict(config.backend_options),
-        "backend_capabilities": backend_capabilities,
-        "condition": condition,
-        "algorithm_mode": config.algorithm_mode,
-        "advantage_mode": config.advantage_mode,
-        "transform_mode": config.transform_mode,
-        "max_steps": config.max_steps,
-        "batch_size": config.batch_size,
-        "group_size": config.group_size,
-        "datums_per_step": datums_per_step,
-        "total_datums": total_datums,
-        "sft_warmup_steps": config.sft_warmup_steps,
-        "sft_data_path": config.sft_data_path,
-        "sft_batch_size": config.sft_batch_size,
-        "sft_max_tokens": config.sft_max_tokens,
-        "sft_loss_fn": sft_loss_fn,
-        "sft_batch_order": config.sft_batch_order,
-        "sft_length_bucket_size": config.sft_length_bucket_size,
-        "max_tokens": config.max_tokens,
-        "temperature": config.temperature,
-        "lr": config.lr,
-        "seed": config.seed,
-        "lora_rank": config.lora_rank,
-        "lora_alpha": lora_alpha,
-        "data": data_info,
-        "reward_type": config.reward_type,
-        "log_dir": config.log_dir,
-        "adapter_path": config.adapter_path,
-        "wandb_project": config.wandb_project or "(disabled)",
-        "warnings": [str(w.message) for w in caught],
-    }
-
-    # Dependency warnings
-    dep_warnings = []
-    results = check_environment(config=config)
-    for name, import_name, hint, available in results:
-        if not available:
-            dep_warnings.append(f"{name} requires {import_name} ({hint})")
-    if dep_warnings:
-        info["dep_warnings"] = dep_warnings
-
-    if fmt == "json":
-        print(json.dumps(info, indent=2))
-        return
-
-    print(f"retrain explain — dry-run preview")
-    print(f"  config        : {info['config']}")
-    print(f"  model         : {config.model}")
-    print(f"  trainer       : {config.trainer}")
-    print(f"  backend       : {config.backend}")
-    print(f"  backend caps  : {capability_summary(backend_capabilities)}")
-    if not backend_capabilities["reports_sync_loss"]:
-        print("  note          : loss is reported as placeholder by backend design")
-    print(f"  condition     : {condition}")
-    print(f"  steps         : {config.max_steps}")
-    print(f"  batch_size    : {config.batch_size}")
-    if config.trainer == "sft":
-        print(f"  sft_batch     : {datums_per_step}")
-    else:
-        print(f"  group_size    : {config.group_size}")
-    print(f"  datums/step   : {datums_per_step}")
-    print(f"  total datums  : {total_datums}")
-    print(f"  max_tokens    : {config.max_tokens}")
-    print(f"  temperature   : {config.temperature}")
-    print(f"  lr            : {config.lr}")
-    if config.trainer == "sft" or config.sft_warmup_steps > 0:
-        print(
-            "  sft           : "
-            f"steps={config.max_steps if config.trainer == 'sft' else config.sft_warmup_steps} "
-            f"batch={config.sft_batch_size or '(default)'} "
-            f"loss={sft_loss_fn} "
-            f"order={config.sft_batch_order}"
-        )
-        if config.sft_data_path:
-            print(f"  sft_data      : {config.sft_data_path}")
-    print(f"  seed          : {config.seed}")
-    print(f"  lora          : rank={config.lora_rank} alpha={lora_alpha}")
-    print(f"  data          : {data_info}")
-    print(f"  reward        : {config.reward_type}")
-    print(f"  log_dir       : {config.log_dir}")
-    print(f"  adapter_path  : {config.adapter_path}")
-    print(f"  wandb         : {info['wandb_project']}")
-    if caught:
-        print("\nWarnings:")
-        for w in caught:
-            print(f"  - {w.message}")
-    if dep_warnings:
-        print("\nMissing dependencies:")
-        for dw in dep_warnings:
-            print(f"  - {dw}")
-
-
-def _explain_campaign(config_path: str, fmt: str) -> None:
-    """Explain what a campaign would do."""
-    from retrain.campaign import DEFAULT_SEEDS, _parse_campaign_conditions
-
-    with open(config_path, "rb") as f:
-        data = tomllib.load(f)
-
-    campaign = data.get("campaign", {})
-    seeds = campaign.get("seeds", DEFAULT_SEEDS)
-    max_steps = campaign.get("max_steps", 500)
-    raw_conditions = campaign.get("conditions", None)
-    conditions = _parse_campaign_conditions(raw_conditions, config_path)
-    condition_labels = [c.label for c in conditions]
-    total_runs = len(conditions) * len(seeds)
-    backend_sec = data.get("backend", {})
-    backend_name = "local"
-    backend_options: dict[str, object] = {}
-    if isinstance(backend_sec, dict):
-        backend_name = str(backend_sec.get("backend", "local") or "local")
-        raw_options = backend_sec.get("options", {})
-        if isinstance(raw_options, dict):
-            backend_options = dict(raw_options)
-    backend_capabilities = capability_payload(
-        backend_name,
-        backend_options,
-    )
-
-    info = {
-        "mode": "campaign",
-        "config": config_path,
-        "backend": backend_name,
-        "backend_capabilities": backend_capabilities,
-        "conditions": condition_labels,
-        "seeds": seeds,
-        "max_steps": max_steps,
-        "total_runs": total_runs,
-    }
-
-    if fmt == "json":
-        print(json.dumps(info, indent=2))
-        return
-
-    print(f"retrain explain — campaign dry-run preview")
-    print(f"  config        : {config_path}")
-    print(f"  backend       : {backend_name}")
-    print(f"  backend caps  : {capability_summary(backend_capabilities)}")
-    print(f"  conditions    : {', '.join(condition_labels)}")
-    print(f"  seeds         : {seeds}")
-    print(f"  max_steps     : {max_steps}")
-    print(f"  total runs    : {total_runs}")
-
-
-def _explain_squeeze(config_path: str, fmt: str) -> None:
-    """Explain what a squeeze run would do."""
-    from retrain.config import load_squeeze_config
-
-    cfg = load_squeeze_config(config_path)
-
-    info = {
-        "mode": "squeeze",
-        "config": config_path,
-        "adapter_path": cfg.adapter_path,
-        "source_rank": cfg.source_rank,
-        "min_variance_retention": cfg.min_variance_retention,
-    }
-    if cfg.output_path:
-        info["output_path"] = cfg.output_path
-    if cfg.compress_to > 0:
-        info["compress_to"] = cfg.compress_to
-
-    if fmt == "json":
-        print(json.dumps(info, indent=2))
-        return
-
-    print(f"retrain explain — squeeze dry-run preview")
-    print(f"  config                : {config_path}")
-    print(f"  adapter_path          : {cfg.adapter_path}")
-    print(f"  source_rank           : {cfg.source_rank}")
-    print(f"  min_variance_retention: {cfg.min_variance_retention}")
-    if cfg.output_path:
-        print(f"  output_path           : {cfg.output_path}")
-    if cfg.compress_to > 0:
-        print(f"  compress_to           : {cfg.compress_to}")
 
 
 def _run_diff(args: list[str]) -> None:
@@ -600,43 +380,6 @@ def _run_migrate_config(args: list[str]) -> None:
         print(diff_text)
     else:
         print(f"No migration needed: {source_label}")
-
-
-def _run_explain(args: list[str]) -> None:
-    """Dry-run: show what a config would do without running it."""
-    fmt = "text"
-    config_path: str | None = None
-    for arg in args:
-        if arg == "--json":
-            fmt = "json"
-        elif arg.startswith("--"):
-            print(f"Unknown explain flag: {arg}", file=sys.stderr)
-            sys.exit(1)
-        else:
-            config_path = arg
-
-    # Resolve config path
-    if config_path is None:
-        if Path("retrain.toml").is_file():
-            config_path = "retrain.toml"
-        else:
-            print("No config file specified and no retrain.toml in cwd.")
-            sys.exit(1)
-
-    if not Path(config_path).is_file():
-        print(f"File not found: {config_path}")
-        sys.exit(1)
-
-    # Route by config type
-    from retrain.config import config_kind
-
-    kind = config_kind(config_path)
-    if kind == "campaign":
-        _explain_campaign(config_path, fmt)
-    elif kind == "squeeze":
-        _explain_squeeze(config_path, fmt)
-    else:
-        _explain_single(config_path, fmt)
 
 
 def _run_trace(args: list[str]) -> None:
@@ -966,7 +709,7 @@ def main() -> None:
         sys.exit(0)
 
     if args and args[0] == "explain":
-        _run_explain(args[1:])
+        run_explain(args[1:])
         sys.exit(0)
 
     if args and args[0] == "diff":

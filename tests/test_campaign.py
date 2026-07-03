@@ -10,7 +10,7 @@ import pytest
 from retrain.campaign import (
     DEFAULT_CONDITIONS,
     _config_to_toml,
-    _parse_campaign_conditions,
+    parse_campaign_conditions,
     _run_parallel,
     _toml_value,
     _write_run_configs,
@@ -21,13 +21,13 @@ from retrain.config import TrainConfig, load_config
 
 class TestParseCampaignConditions:
     def test_defaults_when_conditions_missing(self):
-        defaults = _parse_campaign_conditions(None, "campaign.toml")
+        defaults = parse_campaign_conditions(None, "campaign.toml")
         assert [c.as_legacy_tuple() for c in defaults] == list(DEFAULT_CONDITIONS)
-        defaults_empty = _parse_campaign_conditions([], "campaign.toml")
+        defaults_empty = parse_campaign_conditions([], "campaign.toml")
         assert [c.as_legacy_tuple() for c in defaults_empty] == list(DEFAULT_CONDITIONS)
 
     def test_valid_conditions_with_new_modes(self):
-        conditions = _parse_campaign_conditions(
+        conditions = parse_campaign_conditions(
             [
                 {
                     "advantage_mode": "maxrl",
@@ -46,7 +46,7 @@ class TestParseCampaignConditions:
         ]
 
     def test_dotted_transform_mode_is_accepted(self):
-        conditions = _parse_campaign_conditions(
+        conditions = parse_campaign_conditions(
             [
                 {
                     "advantage_mode": "maxrl",
@@ -60,7 +60,7 @@ class TestParseCampaignConditions:
         ]
 
     def test_dotted_advantage_mode_is_accepted(self):
-        conditions = _parse_campaign_conditions(
+        conditions = parse_campaign_conditions(
             [
                 {
                     "advantage_mode": "my_advantages.hipa_like_advantages",
@@ -74,7 +74,7 @@ class TestParseCampaignConditions:
         ]
 
     def test_condition_with_overrides(self):
-        conditions = _parse_campaign_conditions(
+        conditions = parse_campaign_conditions(
             [
                 {
                     "advantage_mode": "maxrl",
@@ -90,24 +90,24 @@ class TestParseCampaignConditions:
 
     def test_non_list_conditions_raises(self):
         with pytest.raises(ValueError, match="campaign.conditions must be a list"):
-            _parse_campaign_conditions({"advantage_mode": "grpo"}, "campaign.toml")
+            parse_campaign_conditions({"advantage_mode": "grpo"}, "campaign.toml")
 
     def test_missing_keys_raises(self):
         with pytest.raises(ValueError, match="advantage_mode must be a non-empty string"):
-            _parse_campaign_conditions([{"transform_mode": "none"}], "campaign.toml")
+            parse_campaign_conditions([{"transform_mode": "none"}], "campaign.toml")
         with pytest.raises(ValueError, match="transform_mode must be a non-empty string"):
-            _parse_campaign_conditions([{"advantage_mode": "grpo"}], "campaign.toml")
+            parse_campaign_conditions([{"advantage_mode": "grpo"}], "campaign.toml")
 
     def test_invalid_mode_raises(self):
         with pytest.raises(ValueError, match="Invalid campaign condition at index 0"):
-            _parse_campaign_conditions(
+            parse_campaign_conditions(
                 [{"advantage_mode": "grpo", "transform_mode": "typo"}],
                 "campaign.toml",
             )
 
     def test_unknown_override_raises(self):
         with pytest.raises(ValueError, match="unknown TrainConfig field"):
-            _parse_campaign_conditions(
+            parse_campaign_conditions(
                 [
                     {
                         "advantage_mode": "grpo",
@@ -120,7 +120,7 @@ class TestParseCampaignConditions:
 
     def test_invalid_override_type_raises(self):
         with pytest.raises(ValueError, match="Invalid campaign condition at index 0"):
-            _parse_campaign_conditions(
+            parse_campaign_conditions(
                 [
                     {
                         "advantage_mode": "grpo",
@@ -141,7 +141,7 @@ class TestParseCampaignConditions:
             data = tomllib.load(f)
 
         campaign = data["campaign"]
-        conditions = _parse_campaign_conditions(
+        conditions = parse_campaign_conditions(
             campaign.get("conditions"),
             str(campaign_path),
         )

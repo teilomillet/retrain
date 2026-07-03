@@ -15,10 +15,8 @@ from retrain.commands import manual as manual_command
 from retrain.commands.plugins.run import run as _run_plugins
 from retrain.commands.plugins.scaffold import run as _run_init_plugin
 from retrain.commands.help import print_help
-from retrain.cli import (
-    _run_benchmark,
-    _run_explain,
-)
+from retrain.cli import _run_benchmark
+from retrain.commands.explain.run import run as _run_explain
 from retrain.config import parse_cli_overrides
 
 

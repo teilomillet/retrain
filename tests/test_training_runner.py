@@ -588,8 +588,8 @@ trainer = "retrain"
         config_file = tmp_path / "test.toml"
         config_file.write_text(toml_content)
 
-        from retrain.cli import _explain_single
-        _explain_single(str(config_file), "json")
+        from retrain.commands.explain.single import explain_single
+        explain_single(str(config_file), "json")
         output = capsys.readouterr().out
         data = json.loads(output)
         assert "trainer" in data
@@ -603,8 +603,8 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
         config_file = tmp_path / "test.toml"
         config_file.write_text(toml_content)
 
-        from retrain.cli import _explain_single
-        _explain_single(str(config_file), "text")
+        from retrain.commands.explain.single import explain_single
+        explain_single(str(config_file), "text")
         output = capsys.readouterr().out
         assert "trainer" in output
 
@@ -627,8 +627,8 @@ sft_data_path = "{tmp_path / 'sft.jsonl'}"
         config_file = tmp_path / "sft.toml"
         config_file.write_text(toml_content)
 
-        from retrain.cli import _explain_single
-        _explain_single(str(config_file), "json")
+        from retrain.commands.explain.single import explain_single
+        explain_single(str(config_file), "json")
         output = capsys.readouterr().out
         data = json.loads(output)
         assert data["trainer"] == "sft"
