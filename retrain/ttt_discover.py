@@ -17,7 +17,6 @@ import math
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
 from transformers import AutoTokenizer
 
@@ -32,6 +31,7 @@ from retrain.backpressure import StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
 from retrain.logging_utils import JsonlLogger
+from retrain.rewards import RewardFunction
 from retrain.runtime_support import (
     TokenTextLookup,
     decode_sequence_groups,
@@ -349,7 +349,7 @@ def _write_discovery_summary(log_dir: Path, archive: DiscoverArchive) -> None:
     out_path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def _load_discovery_source(config) -> tuple[Example, object | None, object | None]:
+def _load_discovery_source(config) -> tuple[Example, object | None, RewardFunction | None]:
     """Load the single problem used by TTT-Discover."""
 
     from retrain.registry import get_registry
@@ -381,7 +381,7 @@ def _load_discovery_source(config) -> tuple[Example, object | None, object | Non
 def _score_completion_texts(
     *,
     verifiers_env: object | None,
-    reward_fn: object | None,
+    reward_fn: RewardFunction | None,
     prompt: PromptLike,
     answer: str,
     task: str,
@@ -390,9 +390,8 @@ def _score_completion_texts(
 ) -> list[float]:
     if verifiers_env is None:
         assert reward_fn is not None
-        scorer = cast(object, reward_fn)
         return [
-            float(cast(float, scorer.score(text, answer)))  # type: ignore[attr-defined]
+            float(reward_fn.score(text, answer))
             for text in completion_texts
         ]
     return score_singleturn_group(
