@@ -145,6 +145,7 @@ retrain/
     accelerators.py
   backends/
     catalog.py
+    options.py
     local/
       batch.py
       device.py
