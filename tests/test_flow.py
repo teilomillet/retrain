@@ -8,7 +8,7 @@ import pytest
 
 from retrain.advantages import get_builtin_algorithm_modes
 from retrain.config import TrainConfig
-from retrain.flow import (
+from retrain.training.flow import (
     TraceIssue,
     TraceResult,
     _FLOW_PROBE_CASES,

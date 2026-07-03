@@ -36,7 +36,7 @@ from retrain.training.echo import (
     build_rollout_echo_datum,
     limit_echo_masks,
 )
-from retrain.flow import (
+from retrain.training.flow import (
     TrainingFlow,
     _condition_label,
     build_flow,

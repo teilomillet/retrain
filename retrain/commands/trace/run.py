@@ -10,7 +10,7 @@ from pathlib import Path
 def run(args: list[str]) -> None:
     """Pre-flight validation: build flow, trace with synthetic data."""
     from retrain.config import load_config
-    from retrain.flow import build_flow
+    from retrain.training.flow import build_flow
 
     config_path: str | None = None
     json_mode = False

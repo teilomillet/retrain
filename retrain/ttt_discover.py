@@ -27,7 +27,7 @@ from retrain.advantages import (
 from retrain.backends import EntropySamplingHelper
 from retrain.training.backpressure import StepObservation
 from retrain.data import Example
-from retrain.flow import build_flow
+from retrain.training.flow import build_flow
 from retrain.io.log import JsonlLogger
 from retrain.rewards import RewardFunction
 from retrain.training.rollouts import (

@@ -8,7 +8,7 @@ import pytest
 
 from retrain.config import TrainConfig
 from retrain import trainer as trainer_mod
-from retrain.flow import TraceIssue, TraceResult
+from retrain.training.flow import TraceIssue, TraceResult
 
 
 class _FakeLogger:

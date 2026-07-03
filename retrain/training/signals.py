@@ -12,7 +12,7 @@ from retrain.advantages import (
     compute_composable_advantages,
 )
 from retrain.config import TrainConfig
-from retrain.flow import _UNIFORMITY_EPS
+from retrain.training.flow import _UNIFORMITY_EPS
 
 
 CORRECT_THRESHOLD = 0.5

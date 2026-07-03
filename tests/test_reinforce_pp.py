@@ -606,7 +606,7 @@ class TestReinforcePPFlow:
     def test_flow_probe_reinforce_pp_none(self):
         """Flow probing should succeed for reinforce_pp + none."""
         from retrain.config import TrainConfig
-        from retrain.flow import build_flow
+        from retrain.training.flow import build_flow
 
         config = TrainConfig(
             advantage_mode="reinforce_pp",
@@ -620,7 +620,7 @@ class TestReinforcePPFlow:
     def test_flow_probe_reinforce_pp_algorithm_mode(self):
         """Flow probing should succeed for reinforce_pp_none algorithm mode."""
         from retrain.config import TrainConfig
-        from retrain.flow import build_flow
+        from retrain.training.flow import build_flow
 
         config = TrainConfig(
             algorithm_mode="reinforce_pp_none",
@@ -633,7 +633,7 @@ class TestReinforcePPFlow:
     def test_flow_probe_reinforce_pp_gtpo(self):
         """Flow probing should succeed for reinforce_pp_gtpo."""
         from retrain.config import TrainConfig
-        from retrain.flow import build_flow
+        from retrain.training.flow import build_flow
 
         config = TrainConfig(
             algorithm_mode="reinforce_pp_gtpo",
@@ -646,7 +646,7 @@ class TestReinforcePPFlow:
     def test_flow_probe_reinforce_pp_gtpo_sepa(self):
         """Flow probing should succeed for reinforce_pp_gtpo_sepa."""
         from retrain.config import TrainConfig
-        from retrain.flow import build_flow
+        from retrain.training.flow import build_flow
 
         config = TrainConfig(
             algorithm_mode="reinforce_pp_gtpo_sepa",

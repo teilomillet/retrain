@@ -15,7 +15,7 @@ from retrain.advantages import AdvantageResult
 from retrain.training.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig
 from retrain.data import Example
-from retrain.flow import build_flow
+from retrain.training.flow import build_flow
 from retrain.verifiers_bridge import VerifiersRolloutTiming, VerifiersTurnSample
 
 

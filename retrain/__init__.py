@@ -25,7 +25,7 @@ from retrain.advantages import (
     register_transform_mode as register_transform_mode,
     register_uncertainty_kind as register_uncertainty_kind,
 )
-from retrain.flow import (
+from retrain.training.flow import (
     TraceIssue as TraceIssue,
     TraceResult as TraceResult,
     TrainingFlow as TrainingFlow,

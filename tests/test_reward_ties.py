@@ -1,6 +1,6 @@
 """Tests for reward tie diagnostics in retrain.training.signals."""
 
-from retrain.flow import _UNIFORMITY_EPS
+from retrain.training.flow import _UNIFORMITY_EPS
 from retrain.training.signals import summarize_reward_ties
 
 

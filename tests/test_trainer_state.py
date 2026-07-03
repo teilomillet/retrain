@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from retrain.flow import TraceIssue, TraceResult, build_flow
+from retrain.training.flow import TraceIssue, TraceResult, build_flow
 from retrain.training.signals import (
     assert_uniform_completion_advantages_for_non_preserving_backend,
 )
