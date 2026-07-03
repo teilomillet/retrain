@@ -723,6 +723,13 @@ def get_advantage_spec(advantage_mode: str) -> AdvantageSpec:
 # ---------------------------------------------------------------------------
 
 
+def _mapping_param(params: Mapping[str, object], key: str) -> dict[str, object]:
+    raw = params.get(key)
+    if isinstance(raw, Mapping):
+        return cast(dict[str, object], dict(raw))
+    return {}
+
+
 def _make_builtin_algorithm_spec(
     name: str,
     *,
@@ -734,7 +741,9 @@ def _make_builtin_algorithm_spec(
     """Create a built-in AlgorithmSpec by delegating to composable pipeline."""
 
     def _compute(ctx: AlgorithmContext) -> AdvantageResult:
-        post_process = dict(ctx.params.get("transform_params", {}))  # type: ignore[no-matching-overload]
+        advantage_params = _mapping_param(ctx.params, "advantage_params")
+        transform_params = _mapping_param(ctx.params, "transform_params")
+        post_process = dict(transform_params)
         if "entropy_mask_rho" in ctx.params:
             post_process.setdefault("entropy_mask_rho", ctx.params["entropy_mask_rho"])
         return compute_composable_advantages(
@@ -747,12 +756,8 @@ def _make_builtin_algorithm_spec(
             gtpo_beta=ctx.gtpo_beta,
             hicra_alpha=ctx.hicra_alpha,
             sepa_lambda=ctx.sepa_lambda,
-            advantage_params=ctx.params.get("advantage_params")  # type: ignore[invalid-argument-type]
-            if isinstance(ctx.params.get("advantage_params"), Mapping)
-            else {},
-            transform_params=ctx.params.get("transform_params")  # type: ignore[invalid-argument-type]
-            if isinstance(ctx.params.get("transform_params"), Mapping)
-            else {},
+            advantage_params=advantage_params,
+            transform_params=transform_params,
             step=ctx.step,
             post_process_params=post_process,
             token_distributions_G=ctx.token_distributions_G,
