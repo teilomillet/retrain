@@ -82,7 +82,8 @@ retrain
 │   │   ├── train.py    # PyTorch/PEFT training + inference engine orchestration
 │   │   ├── checkpointing.py  # Gradient-checkpointing policy and layer metrics
 │   │   ├── lora.py     # Local-backend LoRA config, patching, and metrics
-│   │   └── memory.py   # CUDA allocator, cache, and saved-tensor policy
+│   │   ├── memory.py   # CUDA allocator, cache, and saved-tensor policy
+│   │   └── sft.py      # SFT row shaping, padding, and context cropping
 │   ├── prime.py        # PRIME-RL bridge backend
 │   ├── tinker/         # Remote Tinker backend
 │   │   ├── train.py    # Tinker training client implementation

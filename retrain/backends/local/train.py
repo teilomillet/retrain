@@ -40,6 +40,7 @@ from retrain.backends.local.lora import (
     metrics as _lora_metrics,
     patch_fast as _patch_fast_lora,
 )
+from retrain.backends.local import sft as local_sft
 from retrain.backends.local.checkpointing import (
     configure_gradient_checkpointing,
 )
@@ -1866,87 +1867,6 @@ class LocalTrainHelper:
             self.optimizer.zero_grad()
             empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
-    @staticmethod
-    def _sft_microbatch_ranges(lengths, microbatch_size, token_budget=0):
-        """Return microbatch [start, stop) ranges under count/token limits."""
-        batch_size = len(lengths)
-        if batch_size <= 0:
-            return []
-        max_count = int(microbatch_size or batch_size)
-        max_count = max(1, min(max_count, batch_size))
-        token_budget = max(0, int(token_budget or 0))
-
-        ranges = []
-        start = 0
-        while start < batch_size:
-            stop = start
-            max_len = 0
-            while stop < batch_size and stop - start < max_count:
-                candidate_max = max(max_len, int(lengths[stop]))
-                candidate_count = stop - start + 1
-                candidate_padded = candidate_count * candidate_max
-                if (
-                    token_budget > 0
-                    and stop > start
-                    and candidate_padded > token_budget
-                ):
-                    break
-                max_len = candidate_max
-                stop += 1
-            if stop == start:
-                stop += 1
-            ranges.append((start, stop))
-            start = stop
-        return ranges
-
-    @staticmethod
-    def _microbatch_padding_stats(lengths, microbatch_size, token_budget=0):
-        """Return global and microbatch-local padded token counts."""
-        if not lengths:
-            return 0, 0
-        batch_size = len(lengths)
-        global_padded = batch_size * max(lengths)
-        microbatch_padded = 0
-        for start, stop in LocalTrainHelper._sft_microbatch_ranges(
-            lengths,
-            microbatch_size,
-            token_budget,
-        ):
-            chunk = lengths[start:stop]
-            if chunk:
-                microbatch_padded += len(chunk) * max(chunk)
-        return global_padded, microbatch_padded
-
-    def _pad_sft_microbatch(self, all_tokens, all_advantages, start, stop):
-        token_tensors = [
-            torch.tensor(t, dtype=torch.long) for t in all_tokens[start:stop]
-        ]
-        adv_tensors = [
-            torch.tensor(a, dtype=torch.float32) for a in all_advantages[start:stop]
-        ]
-
-        input_ids = pad_sequence(
-            token_tensors,
-            batch_first=True,
-            padding_value=0,
-        ).to(self.train_device)
-        advantages = pad_sequence(
-            adv_tensors,
-            batch_first=True,
-            padding_value=0.0,
-        ).to(self.train_device)
-
-        lengths = torch.tensor(
-            [len(t) for t in all_tokens[start:stop]],
-            device=self.train_device,
-        )
-        max_len = input_ids.shape[1]
-        attention_mask = (
-            torch.arange(max_len, device=self.train_device).unsqueeze(0)
-            < lengths.unsqueeze(1)
-        )
-        return input_ids, advantages, attention_mask
-
     def _do_sft_sequence_impl(self, all_tokens, all_advantages):
         """Execute one SFT update while padding only each microbatch.
 
@@ -1968,12 +1888,12 @@ class LocalTrainHelper:
         microbatch_size = self.train_microbatch_size or batch_size
         token_budget = getattr(self, "train_sft_microbatch_token_budget", 0)
         lengths = [len(row) for row in all_tokens]
-        global_padded, microbatch_padded = self._microbatch_padding_stats(
+        global_padded, microbatch_padded = local_sft.padding_stats(
             lengths,
             microbatch_size,
             token_budget,
         )
-        microbatch_ranges = self._sft_microbatch_ranges(
+        microbatch_ranges = local_sft.microbatch_ranges(
             lengths,
             microbatch_size,
             token_budget,
@@ -1993,11 +1913,12 @@ class LocalTrainHelper:
 
             for start, stop in microbatch_ranges:
                 microbatches += 1
-                input_ids, advantages, attention_mask = self._pad_sft_microbatch(
+                input_ids, advantages, attention_mask = local_sft.pad_microbatch(
                     all_tokens,
                     all_advantages,
                     start,
                     stop,
+                    device=self.train_device,
                 )
                 masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
                     self._backward_sft_microbatch(
@@ -2207,18 +2128,6 @@ class LocalTrainHelper:
             self.optimizer.zero_grad()
             empty_cuda_cache_if_requested(self.cuda_empty_cache)
 
-    @staticmethod
-    def _first_supervised_token_index(*rows) -> int | None:
-        earliest: int | None = None
-        for row in rows:
-            if row is None:
-                continue
-            for idx, value in enumerate(row[1:], start=1):
-                if float(value) != 0.0:
-                    earliest = idx if earliest is None else min(earliest, idx)
-                    break
-        return earliest
-
     def _maybe_crop_supervised_context(
         self,
         all_tokens,
@@ -2231,55 +2140,16 @@ class LocalTrainHelper:
             context_tokens > 0
             and getattr(self, "train_selective_suffix_logits", False)
         )
-        original_lengths = [len(row) for row in all_tokens]
-        if not enabled or not original_lengths:
-            self._last_context_crop_metrics = {
-                "local_train_context_rows_cropped": 0,
-                "local_train_context_tokens_removed": 0,
-                "local_train_context_original_max_tokens": max(original_lengths, default=0),
-                "local_train_context_cropped_max_tokens": max(original_lengths, default=0),
-            }
-            return all_tokens, all_logprobs, all_advantages, echo_advantages
-
-        cropped_tokens = []
-        cropped_logprobs = [] if all_logprobs is not None else None
-        cropped_advantages = [] if all_advantages is not None else None
-        cropped_echo = [] if echo_advantages is not None else None
-        rows_cropped = 0
-        tokens_removed = 0
-
-        for idx, tokens in enumerate(all_tokens):
-            logprobs = all_logprobs[idx] if all_logprobs is not None else None
-            advantages = all_advantages[idx] if all_advantages is not None else None
-            echo = echo_advantages[idx] if echo_advantages is not None else None
-            earliest = self._first_supervised_token_index(advantages, echo)
-            start = 0
-            if earliest is not None:
-                start = max(0, int(earliest) - context_tokens)
-                if start >= earliest:
-                    start = max(0, int(earliest) - 1)
-            if start > 0:
-                rows_cropped += 1
-                tokens_removed += start
-            cropped_tokens.append(tokens[start:])
-            if cropped_logprobs is not None:
-                assert logprobs is not None
-                cropped_logprobs.append(logprobs[start:])
-            if cropped_advantages is not None:
-                assert advantages is not None
-                cropped_advantages.append(advantages[start:])
-            if cropped_echo is not None:
-                assert echo is not None
-                cropped_echo.append(echo[start:])
-
-        cropped_lengths = [len(row) for row in cropped_tokens]
-        self._last_context_crop_metrics = {
-            "local_train_context_rows_cropped": rows_cropped,
-            "local_train_context_tokens_removed": tokens_removed,
-            "local_train_context_original_max_tokens": max(original_lengths, default=0),
-            "local_train_context_cropped_max_tokens": max(cropped_lengths, default=0),
-        }
-        return cropped_tokens, cropped_logprobs, cropped_advantages, cropped_echo
+        result = local_sft.crop_supervised_context(
+            all_tokens,
+            all_logprobs=all_logprobs,
+            all_advantages=all_advantages,
+            echo_advantages=echo_advantages,
+            context_tokens=context_tokens,
+            enabled=enabled,
+        )
+        self._last_context_crop_metrics = result.metrics
+        return result.tokens, result.logprobs, result.advantages, result.echo_advantages
 
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
         """Run one training step with importance sampling loss.

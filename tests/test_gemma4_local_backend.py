@@ -13,6 +13,7 @@ from transformers import Qwen2Config, Qwen2ForCausalLM
 from retrain.backends.local import checkpointing as local_checkpointing
 from retrain.backends.local import lora as local_lora
 from retrain.backends.local import memory as local_memory
+from retrain.backends.local import sft as local_sft
 from retrain.backends.local import train as local_mod
 from retrain.models.gemma4 import (
     DEFAULT_LORA_TARGET_MODULES,
@@ -1163,10 +1164,10 @@ def test_sft_train_step_token_budget_matches_full_batch_update():
 
 
 def test_microbatch_padding_stats_preserve_full_batch_when_unsplit():
-    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 0) == (18, 18)
-    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 8) == (18, 18)
-    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5], 1) == (18, 14)
-    assert LocalTrainHelper._microbatch_padding_stats([6, 3, 5, 2], 0, 8) == (
+    assert local_sft.padding_stats([6, 3, 5], 0) == (18, 18)
+    assert local_sft.padding_stats([6, 3, 5], 8) == (18, 18)
+    assert local_sft.padding_stats([6, 3, 5], 1) == (18, 14)
+    assert local_sft.padding_stats([6, 3, 5, 2], 0, 8) == (
         24,
         16,
     )
