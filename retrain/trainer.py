@@ -762,6 +762,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # 3. Use flow-resolved backend + capabilities
         # -----------------------------------------------------------------------
         helper = flow.backend
+        assert helper is not None
         backend_caps = flow.backend_capabilities
         _print_backend_capability_summary(
             config.backend,
@@ -805,6 +806,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # 6. Back pressure
         # -----------------------------------------------------------------------
         backpressure = flow.backpressure
+        assert backpressure is not None
 
         # -----------------------------------------------------------------------
         # 8. Optional wandb
@@ -927,7 +929,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             ckpt_name = saved.get("checkpoint_name", "")
             checkpoint_ref = saved.get("checkpoint_path", "") or ckpt_name
             if checkpoint_ref:
-                helper.load_state(checkpoint_ref)  # type: ignore[unresolved-attribute]
+                helper.load_state(checkpoint_ref)
 
             print(
                 f"Resumed from step {saved['step']} "
@@ -987,7 +989,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # SFT warmup: supervised training from oracle demonstrations
             # =================================================================
             if batch_idx < config.sft_warmup_steps and sft_examples:
-                helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
+                helper.checkpoint(f"step_{batch_idx}")
 
                 # Sample a batch of SFT examples
                 sft_batch_size = (
@@ -1025,7 +1027,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     )
                 else:
                     # Fallback: use standard train_step with importance_sampling
-                    loss = helper.train_step(  # type: ignore[unresolved-attribute]
+                    loss = helper.train_step(
                         sft_tokens_list,
                         sft_logprobs_list,
                         sft_advantages_list,
@@ -1091,7 +1093,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 # Save checkpoint
                 if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
                     ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-                    helper.save_adapter(config.adapter_path, ckpt_name)  # type: ignore[unresolved-attribute]
+                    helper.save_adapter(config.adapter_path, ckpt_name)
                     print(f"Saved checkpoint: {ckpt_name}")
 
                 # Note: SFT→GRPO transition eval removed (caused context overflow).
@@ -1107,7 +1109,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 current_batch_size = warmup_batch_sizes[batch_idx % len(warmup_batch_sizes)]
 
             # 10a. Checkpoint for sampling
-            helper.checkpoint(f"step_{batch_idx}")  # type: ignore[unresolved-attribute]
+            helper.checkpoint(f"step_{batch_idx}")
 
             # 10b. Select prompts
             batch_prompt_objs: list[PromptLike] = []
@@ -1200,7 +1202,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         rollout_timing,
                     ) = run_multiturn_group(
                         verifiers_env,
-                        helper=helper,  # type: ignore[invalid-argument-type]
+                        helper=helper,
                         tokenizer=tokenizer,
                         model_name=config.model,
                         prompt=prompt_obj,
@@ -1248,8 +1250,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         turns_token_ids_G.append(turn_token_ids)
                         turns_prompt_ids_G.append(turn_prompt_ids)
                         if needs_planning:
+                            assert detector is not None
                             planning_masks_G.append(
-                                detector.detect(token_lookup.get_many(seq_token_ids))  # type: ignore[unresolved-attribute]
+                                detector.detect(token_lookup.get_many(seq_token_ids))
                             )
                         else:
                             planning_masks_G.append([0] * len(seq_logprobs))
@@ -1548,7 +1551,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         for group in enriched_sequences
                     ]
                 else:
-                    all_group_sequences = helper.sample(  # type: ignore[unresolved-attribute]
+                    all_group_sequences = helper.sample(
                         batch_prompt_ids,
                         current_group_size,
                         config.max_tokens,
@@ -1818,7 +1821,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     group_size=current_group_size,
                     skipped=True,
                 )
-                backpressure.observe(obs)  # type: ignore[unresolved-attribute]
+                backpressure.observe(obs)
                 continue
 
             print(
@@ -1859,8 +1862,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 loss=loss_value,
                 skipped=False,
             )
-            backpressure.observe(obs)  # type: ignore[unresolved-attribute]
-            bp_decision = backpressure.recommend()  # type: ignore[unresolved-attribute]
+            backpressure.observe(obs)
+            bp_decision = backpressure.recommend()
 
             if config.bp_enabled and not bp_warmup:
                 if bp_decision.action in ("throttle", "increase"):
@@ -2226,7 +2229,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # Periodic checkpoint
             if config.save_every > 0 and (batch_idx + 1) % config.save_every == 0:
                 ckpt_name = f"checkpoint_step_{batch_idx + 1}"
-                checkpoint_path = helper.save_adapter(  # type: ignore[unresolved-attribute]
+                checkpoint_path = helper.save_adapter(
                     config.adapter_path,
                     ckpt_name,
                 )
@@ -2249,7 +2252,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # Final
         # -----------------------------------------------------------------------
-        final_path = helper.save_adapter(config.adapter_path, "final")  # type: ignore[unresolved-attribute]
+        final_path = helper.save_adapter(config.adapter_path, "final")
         _save_trainer_state(
             log_path,
             step=config.max_steps - 1,

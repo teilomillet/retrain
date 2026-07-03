@@ -29,7 +29,10 @@ from retrain.backend_definitions import (
     backend_capability_source,
     resolve_backend_capabilities,
 )
+from retrain.backends import TrainHelper
+from retrain.backpressure import BackPressure
 from retrain.config import TrainConfig
+from retrain.planning import PlanningDetector
 from retrain.sepa import SEPAController
 
 # ── Constants moved from trainer.py ──────────────────────────────────────
@@ -121,9 +124,9 @@ class TrainingFlow:
     condition_label: str
 
     # Tier 2 — resolved with GPU (None when gpu=False)
-    backend: object | None = None
-    planning_detector: object | None = None
-    backpressure: object | None = None
+    backend: TrainHelper | None = None
+    planning_detector: PlanningDetector | None = None
+    backpressure: BackPressure | None = None
     sepa_controller: SEPAController | None = None
 
     def trace(self) -> TraceResult:

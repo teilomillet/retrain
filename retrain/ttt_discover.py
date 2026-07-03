@@ -28,7 +28,7 @@ from retrain.advantages import (
     compute_composable_advantages,
 )
 from retrain.backends import EntropySamplingHelper
-from retrain.backpressure import BackPressure, StepObservation
+from retrain.backpressure import StepObservation
 from retrain.data import Example
 from retrain.flow import build_flow
 from retrain.logging_utils import JsonlLogger
@@ -453,7 +453,7 @@ class TTTDiscoverRunner:
             sepa_controller = flow.sepa_controller
             assert sepa_controller is not None
             assert flow.backpressure is not None
-            backpressure = cast(BackPressure, flow.backpressure)
+            backpressure = flow.backpressure
             backend_caps = flow.backend_capabilities
             _print_backend_capability_summary(
                 config.backend,
@@ -490,7 +490,7 @@ class TTTDiscoverRunner:
 
             for step in range(config.max_steps):
                 step_start = time.perf_counter()
-                helper.checkpoint(f"step_{step}")  # type: ignore[unresolved-attribute]
+                helper.checkpoint(f"step_{step}")
 
                 selected_entries = archive.select(current_batch_size, puct_c)
                 batch_prompt_objs: list[PromptLike] = []
@@ -566,7 +566,7 @@ class TTTDiscoverRunner:
                         for group in enriched_sequences
                     ]
                 else:
-                    all_group_sequences = helper.sample(  # type: ignore[unresolved-attribute]
+                    all_group_sequences = helper.sample(
                         batch_prompt_ids,
                         current_group_size,
                         config.max_tokens,
@@ -772,7 +772,7 @@ class TTTDiscoverRunner:
                     )
 
                 train_start = time.perf_counter()
-                loss_value = helper.train_step(  # type: ignore[unresolved-attribute]
+                loss_value = helper.train_step(
                     all_datum_tokens,
                     all_datum_logprobs,
                     all_datum_advantages,
@@ -890,11 +890,11 @@ class TTTDiscoverRunner:
 
                 if config.save_every > 0 and (step + 1) % config.save_every == 0:
                     ckpt_name = f"checkpoint_step_{step + 1}"
-                    helper.save_adapter(config.adapter_path, ckpt_name)  # type: ignore[unresolved-attribute]
+                    helper.save_adapter(config.adapter_path, ckpt_name)
                     _write_discovery_summary(log_dir, archive)
                     print(f"Saved checkpoint: {ckpt_name}")
 
-            final_path = helper.save_adapter(  # type: ignore[unresolved-attribute]
+            final_path = helper.save_adapter(
                 config.adapter_path,
                 "final",
             )
