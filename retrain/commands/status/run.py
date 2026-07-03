@@ -14,13 +14,12 @@ def run(args: list[str]) -> None:
     """Scan log directories and print run/campaign status."""
     import time as _time
 
-    from retrain.status import (
-        CampaignSummary,
+    from retrain.status.format import (
         format_campaign,
         format_run,
         format_summary_banner,
-        scan_all,
     )
+    from retrain.status.scan import CampaignSummary, scan_all
 
     fmt = "text"
     root = "logs"

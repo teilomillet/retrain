@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from retrain.metrics.scan import float_or_none, int_or_none, iter_jsonl_objects
-from retrain.status import format_time
+from retrain.status.format import format_time
 
 
 @dataclass

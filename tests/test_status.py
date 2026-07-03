@@ -8,17 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from retrain.status import (
-    CampaignSummary,
-    RunSummary,
-    _read_run_pid,
+from retrain.status.format import (
     _run_cell,
     _truncate_condition,
-    campaign_status,
     format_campaign,
     format_run,
     format_summary_banner,
     format_time,
+)
+from retrain.status.scan import (
+    CampaignSummary,
+    RunSummary,
+    _read_run_pid,
+    campaign_status,
     is_pid_alive,
     scan_all,
     scan_campaign,

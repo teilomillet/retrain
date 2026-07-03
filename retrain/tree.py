@@ -331,7 +331,7 @@ def evaluate_node(tree: Tree, node_id: str) -> str | None:
 
     Returns ``"success"``, ``"failure"``, or ``None`` (no condition).
     """
-    from retrain.status import scan_campaign
+    from retrain.status.scan import scan_campaign
 
     node = tree.node_map[node_id]
     ns = _get_node_state(tree, node_id)
