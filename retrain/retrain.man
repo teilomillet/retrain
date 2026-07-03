@@ -1601,6 +1601,7 @@ ARCHITECTURE
         +-- runner.py            TrainingRunner protocol and built-in runners
         +-- flow.py              Flow construction and synthetic trace
         +-- generations.py       Generation log selection and surprisal payloads
+        +-- prompts.py           Prompt batch selection for training steps
         +-- sft.py               SFT dataset and tokenization helpers
         +-- warmup.py            Supervised warmup phase for the RL trainer
         +-- state.py             Checkpoint state serialization

@@ -49,6 +49,7 @@ retrain
 │   ├── runner.py       # TrainingRunner protocol + built-in runners
 │   ├── flow.py         # Construct-and-trace of the training flow
 │   ├── generations.py  # Generation log selection and surprisal payloads
+│   ├── prompts.py      # Prompt batch selection for training steps
 │   ├── sft.py          # SFT dataset and tokenization helpers
 │   ├── warmup.py       # Supervised warmup phase for the RL trainer
 │   ├── state.py        # Checkpoint state serialization

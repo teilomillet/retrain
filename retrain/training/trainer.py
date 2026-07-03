@@ -26,7 +26,6 @@ from retrain.training.backpressure import (
     StepObservation,
 )
 from retrain.config import TrainConfig
-from retrain.data.source import Example
 from retrain.training.echo import (
     EchoBuildStats,
     EchoLimitStats,
@@ -42,6 +41,7 @@ from retrain.training.generations import (
     generation_log_indices,
     top_surprisal_payload,
 )
+from retrain.training.prompts import PromptBatch, select_prompt_batch
 from retrain.training import console
 from retrain.io.log import JsonlLogger
 from retrain.planning.types import PlanningDetector
@@ -53,7 +53,6 @@ from retrain.training.rollouts import (
     TokenTextLookup,
     decode_sequence_groups,
 )
-from retrain.types import ExampleInfoLike, PromptLike
 from retrain.training.log import (
     StepLoggingContext,
     WandbRunLike,
@@ -184,40 +183,6 @@ def _add_echo_build_stats(
 
 
 @dataclass
-class _PromptBatch:
-    """Parallel per-prompt arrays for one training batch."""
-
-    objs: list[PromptLike] = field(default_factory=list)
-    previews: list[str] = field(default_factory=list)
-    ids: list[list[int]] = field(default_factory=list)
-    answers: list[str] = field(default_factory=list)
-    tasks: list[str] = field(default_factory=list)
-    infos: list[ExampleInfoLike] = field(default_factory=list)
-
-
-def _select_prompt_batch(
-    examples: list[Example],
-    prompt_cache: ExamplePromptCache,
-    start_index: int,
-    batch_size: int,
-) -> tuple[_PromptBatch, int]:
-    """Take the next batch_size examples round-robin; returns new cursor."""
-    prompts = _PromptBatch()
-    example_idx = start_index
-    for _ in range(batch_size):
-        ex_idx = example_idx % len(examples)
-        example_idx += 1
-        ex = examples[ex_idx]
-        prompts.objs.append(ex.prompt)
-        prompts.previews.append(prompt_cache.preview(ex_idx))
-        prompts.ids.append(list(prompt_cache.prompt_ids(ex_idx)))
-        prompts.answers.append(ex.reference)
-        prompts.tasks.append(ex.task)
-        prompts.infos.append(ex.info)
-    return prompts, example_idx
-
-
-@dataclass
 class _RolloutAccumulator:
     """Everything one RL step's rollout phase produces for training/logging."""
 
@@ -316,7 +281,7 @@ def _run_multiturn_rollouts(
     helper: TrainHelper,
     tokenizer: object,
     verifiers_env: object,
-    prompts: _PromptBatch,
+    prompts: PromptBatch,
     acc: _RolloutAccumulator,
     *,
     step: int,
@@ -633,7 +598,7 @@ def _run_singleturn_rollouts(
     tokenizer: object,
     verifiers_env: object | None,
     reward_fn: RewardFunction | None,
-    prompts: _PromptBatch,
+    prompts: PromptBatch,
     acc: _RolloutAccumulator,
     *,
     step: int,
@@ -1061,7 +1026,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             helper.checkpoint(f"step_{batch_idx}")
 
             # 10b. Select prompts
-            prompts, example_idx = _select_prompt_batch(
+            prompts, example_idx = select_prompt_batch(
                 examples, prompt_cache, example_idx, current_batch_size
             )
 
