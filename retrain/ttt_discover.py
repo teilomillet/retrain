@@ -23,8 +23,6 @@ from transformers import AutoTokenizer
 from retrain.advantages import (
     EntropyStats,
     apply_batch_advantage_normalization,
-    compute_algorithm_advantages,
-    compute_composable_advantages,
 )
 from retrain.backends import EntropySamplingHelper
 from retrain.backpressure import StepObservation
@@ -41,6 +39,7 @@ from retrain.trainer import (
     _TRAINER_STATE_FILE,
     _apply_advantage_cap,
     _assert_uniform_completion_advantages_for_non_preserving_backend,
+    _compute_group_advantages,
     _format_loss_for_display,
     _prepare_algorithm_params_for_step,
     _prepare_transform_params_for_step,
@@ -656,37 +655,17 @@ class TTTDiscoverRunner:
                     if precomputed_entropies_batch is not None:
                         group_entropies_G = precomputed_entropies_batch[f_idx]
 
-                    if config.algorithm_mode:
-                        adv_result = compute_algorithm_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            algorithm_mode=config.algorithm_mode,
-                            params=step_algorithm_params,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            step=step,
-                            token_distributions_G=None,
-                            precomputed_entropies_G=group_entropies_G,
-                        )
-                    else:
-                        adv_result = compute_composable_advantages(
-                            rewards_G,
-                            logprobs_G,
-                            planning_masks_G,
-                            advantage_mode=config.advantage_mode,
-                            transform_mode=config.transform_mode,
-                            gtpo_beta=config.gtpo_beta,
-                            hicra_alpha=config.hicra_alpha,
-                            sepa_lambda=sepa_lambda_val,
-                            advantage_params=config.effective_advantage_params,
-                            transform_params=step_transform_params,
-                            step=step,
-                            post_process_params=config.post_process_params,
-                            token_distributions_G=None,
-                            precomputed_entropies_G=group_entropies_G,
-                        )
+                    adv_result = _compute_group_advantages(
+                        config,
+                        rewards_G,
+                        logprobs_G,
+                        planning_masks_G,
+                        step=step,
+                        sepa_lambda=sepa_lambda_val,
+                        algorithm_params=step_algorithm_params,
+                        transform_params=step_transform_params,
+                        precomputed_entropies_G=group_entropies_G,
+                    )
 
                     if adv_result.has_stats:
                         batch_surprisal_stats.append(adv_result.stats)
