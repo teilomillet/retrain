@@ -28,6 +28,18 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
         errors.append(
             "environment_id is required when environment_provider is set."
         )
+    if (
+        config.environment_provider == "openenv"
+        and config.environment_id
+        and not config.environment_id.startswith(
+            ("http://", "https://", "ws://", "wss://")
+        )
+    ):
+        errors.append(
+            "environment_id must be a server URL (http(s):// or ws(s)://) "
+            "when environment_provider is 'openenv'. "
+            "Try: id = \"http://localhost:8765\""
+        )
     if config.environment_provider and config.environment_args:
         try:
             parsed_args = json.loads(config.environment_args)

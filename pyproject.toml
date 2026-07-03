@@ -29,10 +29,11 @@ cuda-accelerated = [
 tinker = ["tinker>=0.13.1"]
 mlx = ["mlx-lm>=0.20.0; platform_system == 'Darwin'"]
 verifiers = ["verifiers>=0.1.0"]
+openenv = ["websockets>=13.0"]
 semantic = ["sentence-transformers>=5.2.3"]
 wandb = ["wandb>=0.17.0"]
 docs = ["mkdocs>=1.6,<2.0", "mkdocs-material>=9.5,<10.0"]
-all = ["retrain[local,tinker,mlx,verifiers,semantic,wandb]"]
+all = ["retrain[local,tinker,mlx,verifiers,openenv,semantic,wandb]"]
 dev = [
     "retrain[all,docs]",
     "pytest>=8.0.0",

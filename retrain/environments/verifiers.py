@@ -84,6 +84,19 @@ def _require_verifiers() -> types.ModuleType:
     return env_load.require_verifiers()
 
 
+def _optional_verifiers() -> types.ModuleType | None:
+    """verifiers module if installed, else None.
+
+    The multi-turn rollout engine drives environments structurally, so it
+    also serves providers that do not need verifiers (e.g. openenv); only
+    optional niceties like vf.TrajectoryStep come from the module.
+    """
+    try:
+        return env_load.require_verifiers()
+    except ImportError:
+        return None
+
+
 _NULL_CLIENT_MSG = (
     "retrain performs sampling via TrainHelper; the verifiers client must never be used"
 )
@@ -260,7 +273,10 @@ def score_singleturn_group(
 
 
 def is_multiturn_environment(env: object) -> bool:
-    """Whether env is a verifiers MultiTurnEnv."""
+    """Whether env drives retrain's multi-turn rollout protocol."""
+    # Native providers mark themselves so no verifiers import is needed.
+    if getattr(env, "retrain_multiturn", False):
+        return True
     vf = _require_verifiers()
     return isinstance(env, vf.MultiTurnEnv)
 
@@ -325,7 +341,7 @@ def run_multiturn_group(
         list[list[list[float]]],
         VerifiersRolloutTiming,
     ]:
-        vf = _require_verifiers()
+        vf = _optional_verifiers()
         env_typed = cast(_MultiTurnEnvironment, env)
         tokenizer_typed = cast(_Tokenizer, tokenizer)
         states: list[StateDict] = []
@@ -501,7 +517,9 @@ def run_multiturn_group(
                         "overlong_prompt": False,
                         "is_truncated": False,
                     }
-                    _TrajectoryStep = getattr(vf, "TrajectoryStep", None)
+                    _TrajectoryStep = (
+                        getattr(vf, "TrajectoryStep", None) if vf is not None else None
+                    )
                     if _TrajectoryStep is not None:
                         trajectory_step = _TrajectoryStep(
                             prompt=prompt_messages,

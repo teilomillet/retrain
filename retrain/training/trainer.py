@@ -777,17 +777,30 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 f"Loaded {len(examples)} examples from verifiers env "
                 f"'{config.environment_id}'"
             )
+        elif config.environment_provider == "openenv":
+            from retrain.environments.openenv import (
+                examples_from_environment as load_examples_from_openenv,
+                load_environment as load_openenv_environment,
+            )
+
+            verifiers_env = load_openenv_environment(config)
+            examples = load_examples_from_openenv(verifiers_env, config)
+            print(
+                f"Loaded {len(examples)} seed examples from OpenEnv server "
+                f"'{config.environment_id}'"
+            )
+        else:
+            examples = get_registry("data_source").create(config.data_source, config).load()
+        if verifiers_env is not None:
             if config.data_source != "math":
                 print(
                     "NOTE: [data].source is ignored when [environment].provider is set."
                 )
             if config.reward_type != "match":
                 print(
-                    "NOTE: [reward] settings are ignored with [environment].provider="
-                    "'verifiers'; the environment rubric is used."
+                    "NOTE: [reward] settings are ignored when [environment].provider "
+                    "is set; the environment rubric is used."
                 )
-        else:
-            examples = get_registry("data_source").create(config.data_source, config).load()
         if not examples:
             raise RuntimeError("Dataset is empty — cannot train with zero examples.")
         if verifiers_env is None:

@@ -153,8 +153,10 @@ def render_environment(cli_name: str) -> list[str]:
     from retrain.environments.verifiers import _FALLBACK_TRAINING_ENVS
 
     lines = [
-        f"    {cli_name} uses verifiers environments for RLVR training data.",
-        "    Set [environment].provider = \"verifiers\" and specify a Hub ID.",
+        f"    {cli_name} trains on environments for RLVR data.",
+        "    Set [environment].provider = \"verifiers\" and specify a Hub ID,",
+        "    or provider = \"openenv\" with the URL of a running OpenEnv gym",
+        "    server (id = \"http://localhost:8765\").",
         "",
         "    Trainable verifiers examples:",
     ]

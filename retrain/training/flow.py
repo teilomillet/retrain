@@ -247,14 +247,18 @@ class TrainingFlow:
                 ),
             ))
 
-        if self.config.echo_enabled and self.config.environment_provider != "verifiers":
+        if self.config.echo_enabled and self.config.environment_provider not in (
+            "verifiers",
+            "openenv",
+        ):
             issues.append(TraceIssue(
                 severity="warning",
                 category="config",
                 message=(
-                    "ECHO is enabled, but environment_provider is not 'verifiers'. "
-                    "No prompt-side environment/tool tokens will be extracted "
-                    "unless the training loop receives multi-turn verifiers turns."
+                    "ECHO is enabled, but environment_provider is not "
+                    "'verifiers' or 'openenv'. No prompt-side environment/tool "
+                    "tokens will be extracted unless the training loop "
+                    "receives multi-turn environment turns."
                 ),
             ))
 

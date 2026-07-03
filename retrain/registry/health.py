@@ -16,6 +16,7 @@ _DEPENDENCY_MAP: dict[str, tuple[str, str]] = {
     "judge": ("verifiers", "pip install retrain[verifiers]"),
     "semantic": ("sentence_transformers", "pip install retrain[semantic]"),
     "verifiers_env": ("verifiers", "pip install retrain[verifiers]"),
+    "openenv_env": ("websockets", "pip install retrain[openenv]"),
 }
 
 
@@ -38,6 +39,8 @@ def check_environment(
                 names_to_check.append(name)
         if config.environment_provider == "verifiers":
             names_to_check.append("verifiers_env")
+        if config.environment_provider == "openenv":
+            names_to_check.append("openenv_env")
 
     results: list[tuple[str, str, str, bool]] = []
     for name in names_to_check:

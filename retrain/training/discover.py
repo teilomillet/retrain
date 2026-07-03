@@ -104,6 +104,12 @@ def _load_discovery_source(config) -> tuple[Example, object | None, RewardFuncti
 
     verifiers_env = None
     reward_fn = None
+    if config.environment_provider == "openenv":
+        # OpenEnv environments are multi-turn by construction.
+        raise NotImplementedError(
+            "trainer='ttt_discover' currently supports single-turn problems only. "
+            "Multi-turn environment state reuse is not implemented yet."
+        )
     if config.environment_provider == "verifiers":
         verifiers_env = load_verifiers_environment(config)
         if is_multiturn_environment(verifiers_env):

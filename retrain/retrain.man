@@ -1388,8 +1388,10 @@ VALIDATION
 
 ENVIRONMENT
 <<AUTO:ENVIRONMENT>>
-    retrain uses verifiers environments for RLVR training data.
-    Set [environment].provider = "verifiers" and specify a Hub ID.
+    retrain trains on environments for RLVR data.
+    Set [environment].provider = "verifiers" and specify a Hub ID,
+    or provider = "openenv" with the URL of a running OpenEnv gym
+    server (id = "http://localhost:8765").
 
     Trainable verifiers examples:
         primeintellect/gsm8k
@@ -1634,6 +1636,12 @@ ARCHITECTURE
         +-- rollout.py           Multi-turn rollout samples, timing, scheduling
         +-- timing.py            Environment observation timing extraction
         +-- verifiers.py         Verifiers bridge: loading, scoring, rollouts
+        +-- openenv/             Native OpenEnv gym provider
+            +-- actions.py       Completion-to-action parsing
+            +-- client.py        OpenEnv WebSocket wire-protocol client
+            +-- environment.py   Multi-turn env and episodic-sum rubric
+            +-- load.py          Config loading and seed datasets
+            +-- render.py        Observation-to-messages renderers
     +-- rewards/                 match, math, judge, custom rewards
     +-- planning/                Planning-token detectors
     +-- registry/                Registries, builtins, dependency health

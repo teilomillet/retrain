@@ -98,7 +98,14 @@ retrain/
     load.py
     prompt.py
     rollout.py
+    timing.py
     verifiers.py
+    openenv/
+      actions.py
+      client.py
+      environment.py
+      load.py
+      render.py
   rewards/
     boxed.py
     create.py
@@ -231,6 +238,10 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `environments/timing.py`: environment observation timing extraction.
 - `environments/verifiers.py`: verifiers bridge loading, single-turn scoring,
   and multi-turn rollout orchestration.
+- `environments/openenv/`: native OpenEnv gym provider — WebSocket
+  wire-protocol client, completion-to-action parsing, observation renderers,
+  the multi-turn environment with episodic-sum scoring, and config/seed
+  dataset loading.
 - `registry/`: registry core, built-in factories, and dependency health probes.
 - `rewards/`: boxed-match, verifiers-backed, and custom rewards.
 - `planning/`: regex and semantic planning-token detectors.

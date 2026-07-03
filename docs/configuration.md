@@ -103,8 +103,9 @@ prefix_caching = true      # exact-prefix KV reuse for local PyTorch rollouts
 source = "math"            # built-in data source (ignored when [environment] is set)
 
 [environment]
-provider = ""              # "" | "verifiers"
+provider = ""              # "" | "verifiers" | "openenv"
 id = ""                    # verifiers env id (e.g. primeintellect/gsm8k)
+                           # or OpenEnv server URL (e.g. http://localhost:8765)
 args = {}                  # env kwargs as TOML object (or JSON string)
 max_turns = -1             # cap turns for multi-turn envs; -1 = no override
 auto_install = false       # install Prime Hub env automatically if missing
@@ -653,8 +654,8 @@ currently compute the RL and ECHO losses from one shared actor pass.
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `provider` | str | `""` | Optional environment provider. Use `"verifiers"` to load verifiers environments |
-| `id` | str | `""` | Environment ID (for example `primeintellect/gsm8k` or `primeintellect/wordle`) |
+| `provider` | str | `""` | Optional environment provider: `"verifiers"` for verifiers environments, `"openenv"` for a running OpenEnv gym server |
+| `id` | str | `""` | Environment ID (for example `primeintellect/gsm8k`) or, for `openenv`, the server base URL (for example `http://localhost:8765`) |
 | `args` | table / str | `{}` | Environment kwargs. Prefer TOML table (`args = { split = "train" }`); JSON string is also accepted |
 | `max_turns` | int | `-1` | Multi-turn safety cap. `-1` means use environment defaults |
 | `auto_install` | bool | `false` | If true, auto-install missing Prime Hub environments before loading |
@@ -664,6 +665,28 @@ currently compute the RL and ECHO losses from one shared actor pass.
 !!! note
     Not every Hub environment is trainable. Some are evaluation-only and do not expose a training dataset.
     retrain will now fail fast with an actionable error in that case.
+
+#### `provider = "openenv"`
+
+Trains against an already-running [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+gym server (reset/step over its WebSocket wire protocol) — no verifiers
+install required. Requires the `websockets` package (`pip install retrain[openenv]`).
+
+- `id` is the server base URL; retrain does not launch or manage the server.
+- Seeds are the dataset: example *i* uses `seed + i`, and its prompt is the
+  rendered `reset(seed)` observation. `[data] max_examples` caps the count
+  (default 100 when unset).
+- Rewards are the per-episode sum of step rewards from the server.
+- `args` accepts:
+  `renderer` — dotted path to a callable turning observations into chat
+  messages (renderers written for verifiers' OpenEnv integration work
+  unchanged); the default renderer JSON-dumps observations and states the
+  action schema on reset. `message_timeout_s` — WebSocket response timeout
+  (default 300).
+- Completions must be a single JSON action object; malformed completions
+  receive a corrective observation instead of crashing the rollout.
+- MCP tool environments are not supported on this provider; use the
+  verifiers integration for those.
 
 ### `[planning]`
 

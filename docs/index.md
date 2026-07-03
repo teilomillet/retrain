@@ -81,7 +81,13 @@ retrain
 │   ├── prompt.py       # Prompt previews, tokenization, observation masks
 │   ├── rollout.py      # Multi-turn rollout samples, timing, and scheduling
 │   ├── timing.py       # Environment observation timing extraction
-│   └── verifiers.py    # Verifiers bridge: loading, scoring, and rollouts
+│   ├── verifiers.py    # Verifiers bridge: loading, scoring, and rollouts
+│   └── openenv/        # Native OpenEnv gym provider (no verifiers needed)
+│       ├── client.py       # OpenEnv WebSocket wire-protocol client
+│       ├── actions.py      # Completion-to-action parsing
+│       ├── render.py       # Observation-to-messages renderers
+│       ├── environment.py  # Multi-turn env + episodic-sum rubric
+│       └── load.py         # Config loading and seed datasets
 ├── rewards/            # match, math, judge, custom reward functions
 ├── planning/           # Planning-token detectors (regex, semantic)
 ├── registry/           # Component registries, builtins, dependency health
