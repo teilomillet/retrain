@@ -283,6 +283,22 @@ def _echo_allowed_tokens(
     return max(0, min(max_tokens_per_step, ratio_cap))
 
 
+@dataclass(frozen=True)
+class _EchoStepPlan:
+    limit: EchoLimitStats
+    allowed_tokens: int
+    reference_completion_tokens: int
+    skipped_entropy_floor: bool
+    rl_completion_surprisal_mean: float
+    echo_completion_surprisal_mean: float
+
+    @property
+    def token_ratio(self) -> float:
+        if self.reference_completion_tokens <= 0:
+            return 0.0
+        return self.limit.kept_tokens / self.reference_completion_tokens
+
+
 def _add_echo_build_stats(
     left: EchoBuildStats,
     right: EchoBuildStats,
@@ -1023,6 +1039,68 @@ class _RolloutAccumulator:
     rollout_timing_metrics: dict[str, float] = field(default_factory=dict)
     sample_time_s: float = 0.0
     tl_grpo_ema: float | None = None
+
+
+def _prepare_echo_step_plan(
+    config: TrainConfig,
+    acc: _RolloutAccumulator,
+) -> _EchoStepPlan:
+    """Apply ECHO token limits and return the values logged for this step."""
+    rl_completion_surprisal_mean = (
+        acc.rl_completion_surprisal_sum / acc.rl_completion_token_count
+        if acc.rl_completion_token_count > 0
+        else 0.0
+    )
+    echo_completion_surprisal_mean = (
+        acc.sampled_completion_surprisal_sum / acc.sampled_completion_token_count
+        if acc.sampled_completion_token_count > 0
+        else rl_completion_surprisal_mean
+    )
+    if not config.echo_enabled:
+        return _EchoStepPlan(
+            limit=EchoLimitStats(),
+            allowed_tokens=0,
+            reference_completion_tokens=0,
+            skipped_entropy_floor=False,
+            rl_completion_surprisal_mean=rl_completion_surprisal_mean,
+            echo_completion_surprisal_mean=echo_completion_surprisal_mean,
+        )
+
+    reference_completion_tokens = acc.sampled_completion_token_count
+    allowed_tokens = _echo_allowed_tokens(
+        rl_completion_tokens=reference_completion_tokens,
+        max_tokens_per_step=config.echo_max_tokens_per_step,
+        max_token_ratio=config.echo_max_token_ratio,
+    )
+    if echo_completion_surprisal_mean < config.echo_entropy_floor:
+        acc.datum_echo_advantages = [
+            [0.0] * len(row) for row in acc.datum_echo_advantages
+        ]
+        return _EchoStepPlan(
+            limit=EchoLimitStats(
+                kept_datums=0,
+                kept_tokens=0,
+                truncated_tokens=acc.echo_build.candidate_tokens,
+            ),
+            allowed_tokens=allowed_tokens,
+            reference_completion_tokens=reference_completion_tokens,
+            skipped_entropy_floor=True,
+            rl_completion_surprisal_mean=rl_completion_surprisal_mean,
+            echo_completion_surprisal_mean=echo_completion_surprisal_mean,
+        )
+
+    acc.datum_echo_advantages, limit = limit_echo_masks(
+        acc.datum_echo_advantages,
+        max_positive_tokens=allowed_tokens,
+    )
+    return _EchoStepPlan(
+        limit=limit,
+        allowed_tokens=allowed_tokens,
+        reference_completion_tokens=reference_completion_tokens,
+        skipped_entropy_floor=False,
+        rl_completion_surprisal_mean=rl_completion_surprisal_mean,
+        echo_completion_surprisal_mean=echo_completion_surprisal_mean,
+    )
 
 
 def _run_multiturn_rollouts(
@@ -1782,13 +1860,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             # 10d. Rollout accumulation + post-rollout ECHO state
             acc = _RolloutAccumulator(tl_grpo_ema=tl_grpo_ema)
-            echo_limit = EchoLimitStats()
             echo_loss = 0.0
             echo_train_time = 0.0
-            echo_allowed = 0
-            echo_skipped_entropy_floor = False
             echo_joint_optimizer_step = False
-            echo_reference_completion_token_count = 0
             step_transform_params = _prepare_transform_params_for_step(
                 config.transform_params,
                 delight_eta_prev=delight_eta_ema,
@@ -1887,38 +1961,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     _apply_advantage_cap(acc.datum_advantages, config.adv_clip_max)
                 )
 
-            completion_surprisal_mean = (
-                acc.rl_completion_surprisal_sum / acc.rl_completion_token_count
-                if acc.rl_completion_token_count > 0
-                else 0.0
-            )
-            echo_completion_surprisal_mean = (
-                acc.sampled_completion_surprisal_sum / acc.sampled_completion_token_count
-                if acc.sampled_completion_token_count > 0
-                else completion_surprisal_mean
-            )
-            if config.echo_enabled:
-                echo_reference_completion_token_count = acc.sampled_completion_token_count
-                echo_allowed = _echo_allowed_tokens(
-                    rl_completion_tokens=echo_reference_completion_token_count,
-                    max_tokens_per_step=config.echo_max_tokens_per_step,
-                    max_token_ratio=config.echo_max_token_ratio,
-                )
-                if echo_completion_surprisal_mean < config.echo_entropy_floor:
-                    echo_skipped_entropy_floor = True
-                    acc.datum_echo_advantages = [
-                        [0.0] * len(row) for row in acc.datum_echo_advantages
-                    ]
-                    echo_limit = EchoLimitStats(
-                        kept_datums=0,
-                        kept_tokens=0,
-                        truncated_tokens=acc.echo_build.candidate_tokens,
-                    )
-                else:
-                    acc.datum_echo_advantages, echo_limit = limit_echo_masks(
-                        acc.datum_echo_advantages,
-                        max_positive_tokens=echo_allowed,
-                    )
+            echo_plan = _prepare_echo_step_plan(config, acc)
 
             rl_has_signal = _has_nonzero_advantage(acc.datum_advantages)
             echo_has_datums = bool(
@@ -1940,7 +1983,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             print(
                 f"Step {batch_idx}: submitting {num_datums} RL datums "
-                f"and {echo_limit.kept_datums if echo_has_datums else 0} ECHO datums..."
+                f"and {echo_plan.limit.kept_datums if echo_has_datums else 0} ECHO datums..."
             )
             train_start = time.perf_counter()
             loss_value, echo_loss, echo_joint_optimizer_step = _run_rl_echo_train_step(
@@ -2071,33 +2114,31 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["train_share"] = (
                 train_time / step_time if step_time > _PROMPT_PAD_EPS else 0.0
             )
-            echo_token_ratio = (
-                echo_limit.kept_tokens / echo_reference_completion_token_count
-                if echo_reference_completion_token_count > 0
-                else 0.0
-            )
+            echo_token_ratio = echo_plan.token_ratio
             metrics["rl/train_time_s"] = rl_train_time
             metrics["rl/completion_tokens"] = acc.rl_completion_token_count
-            metrics["rl/completion_surprisal_mean"] = completion_surprisal_mean
+            metrics["rl/completion_surprisal_mean"] = (
+                echo_plan.rl_completion_surprisal_mean
+            )
             metrics["echo/enabled"] = int(config.echo_enabled)
             metrics["echo/loss"] = echo_loss
             metrics["echo/train_time_s"] = echo_train_time
             metrics["echo/weight"] = config.echo_weight
-            metrics["echo/allowed_tokens"] = echo_allowed
+            metrics["echo/allowed_tokens"] = echo_plan.allowed_tokens
             metrics["echo/reference_completion_tokens"] = (
-                echo_reference_completion_token_count
+                echo_plan.reference_completion_tokens
             )
             metrics["echo/completion_surprisal_mean"] = (
-                echo_completion_surprisal_mean
+                echo_plan.echo_completion_surprisal_mean
             )
             metrics["echo/candidate_datums"] = acc.echo_build.candidate_datums
             metrics["echo/candidate_tokens"] = acc.echo_build.candidate_tokens
             metrics["echo/observation_mask_datums"] = (
                 acc.echo_build.observation_mask_datums
             )
-            metrics["echo/kept_datums"] = echo_limit.kept_datums
-            metrics["echo/kept_tokens"] = echo_limit.kept_tokens
-            metrics["echo/truncated_tokens"] = echo_limit.truncated_tokens
+            metrics["echo/kept_datums"] = echo_plan.limit.kept_datums
+            metrics["echo/kept_tokens"] = echo_plan.limit.kept_tokens
+            metrics["echo/truncated_tokens"] = echo_plan.limit.truncated_tokens
             metrics["echo/token_ratio"] = echo_token_ratio
             metrics["echo/skipped_first_turns"] = acc.echo_build.skipped_first_turns
             metrics["echo/skipped_no_suffix"] = acc.echo_build.skipped_no_suffix
@@ -2105,9 +2146,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             metrics["echo/skipped_bad_observation_mask"] = (
                 acc.echo_build.skipped_bad_observation_mask
             )
-            metrics["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
+            metrics["echo/skipped_entropy_floor"] = int(echo_plan.skipped_entropy_floor)
             metrics["echo/entropy_floor"] = config.echo_entropy_floor
-            metrics["echo/mode_collapse_guard"] = int(echo_skipped_entropy_floor)
+            metrics["echo/mode_collapse_guard"] = int(echo_plan.skipped_entropy_floor)
             metrics["echo/joint_optimizer_step"] = int(echo_joint_optimizer_step)
             rss_mb = process_max_rss_mb()
             if rss_mb is not None:
@@ -2312,9 +2353,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             step_entry["adv_cap_fraction"] = adv_cap_fraction
             step_entry["adv_cap_magnitude"] = adv_cap_magnitude
             step_entry["echo/enabled"] = int(config.echo_enabled)
-            step_entry["echo/kept_tokens"] = echo_limit.kept_tokens
+            step_entry["echo/kept_tokens"] = echo_plan.limit.kept_tokens
             step_entry["echo/token_ratio"] = echo_token_ratio
-            step_entry["echo/skipped_entropy_floor"] = int(echo_skipped_entropy_floor)
+            step_entry["echo/skipped_entropy_floor"] = int(echo_plan.skipped_entropy_floor)
             if acc.adv_results:
                 for k in {k for r in acc.adv_results for k in r.extra_metrics}:
                     step_entry[k] = metrics.get(k, 0.0)
