@@ -28,6 +28,8 @@ retrain
 │   ├── init/           # Config templates and init command flows
 │   ├── plugins/        # Plugin listing and scaffold commands
 │   ├── status/         # Status and live top commands
+│   ├── trace/          # Flow trace preflight command
+│   ├── tree/           # Experiment tech-tree commands
 │   └── manual/         # Manual topics, rendering, sync, and dispatch
 ├── config/             # TrainConfig schema, TOML loading, CLI overrides
 │   ├── schema.py       # TrainConfig fields and derived params

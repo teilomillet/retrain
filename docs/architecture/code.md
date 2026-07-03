@@ -33,6 +33,13 @@ retrain/
     status/
       run.py
       top.py
+    trace/
+      run.py
+    tree/
+      run.py
+      node.py
+      note.py
+      eval.py
     manual/
       run.py
       render.py
@@ -103,6 +110,9 @@ Split code when it creates a stable place a maintainer would naturally search:
   interactive setup flow.
 - `commands/plugins/`: plugin discovery listing and plugin scaffold generation.
 - `commands/status/`: log status scanning and the live `top` dashboard alias.
+- `commands/trace/`: flow construction preflight and JSON/text trace output.
+- `commands/tree/`: experiment tech-tree dispatch plus node run, note, and
+  evaluation side effects.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
