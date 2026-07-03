@@ -21,6 +21,8 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file, save_file
 
+from retrain.tinker_runtime import load_tinker
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -65,11 +67,11 @@ def _resolve_tinker_path(tinker_path: str, local_dir: str | None = None) -> str:
         Local directory path containing the extracted adapter files.
     """
     try:
-        import tinker
-    except ImportError:
+        tinker = load_tinker()
+    except ImportError as exc:
         raise RuntimeError(
             "Tinker SDK required for tinker:// paths. Install with: uv add tinker"
-        )
+        ) from exc
 
     if local_dir is None:
         local_dir = tempfile.mkdtemp(prefix="retrain_squeeze_")

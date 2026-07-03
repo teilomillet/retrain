@@ -14,9 +14,19 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from retrain.logging_utils import JsonlLogger
+from retrain.tinker_runtime import (
+    SamplingClient,
+    load_tensor_data,
+    load_tinker,
+    load_tinker_types,
+)
 from retrain.tinker_throttle import NoOpThrottle, TinkerThrottle
+
+if TYPE_CHECKING:
+    import torch
 
 
 class TinkerTrainHelper:
@@ -39,7 +49,7 @@ class TinkerTrainHelper:
         sample_log_dir: str = "",
     ) -> None:
         """Create Tinker service client and LoRA training client."""
-        import tinker
+        tinker = load_tinker()
 
         if throttle_dir:
             self._throttle: TinkerThrottle | NoOpThrottle = TinkerThrottle(
@@ -61,7 +71,7 @@ class TinkerTrainHelper:
             base_model=model_name,
             rank=lora_rank,
         )
-        self.sampling_client = None
+        self.sampling_client: SamplingClient | None = None
         self._optim_beta1 = optim_beta1
         self._optim_beta2 = optim_beta2
         self._optim_eps = optim_eps
@@ -126,7 +136,7 @@ class TinkerTrainHelper:
         Returns list of groups, each group is a list of (token_ids, logprobs) tuples
         — same shape as LocalTrainHelper.sample().
         """
-        import tinker.types as types
+        types = load_tinker_types()
 
         if self.sampling_client is None:
             raise RuntimeError(
@@ -265,8 +275,9 @@ class TinkerTrainHelper:
         advantages=0 for prompt tokens (no gradient), advantages=1 for response.
         """
         import torch
-        import tinker.types as types
-        from tinker.types.tensor_data import TensorData
+
+        types = load_tinker_types()
+        TensorData = load_tensor_data()
 
         loss_fn = getattr(self, "sft_loss_fn", "importance_sampling")
 
@@ -357,7 +368,7 @@ class TinkerTrainHelper:
         self,
         data: list,
         new_logprobs_list: list,
-    ) -> tuple:
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         """PPO dual-clip loss matching the MaxRL paper (local PyTorch math).
 
         Args:
@@ -431,8 +442,9 @@ class TinkerTrainHelper:
     ) -> float:
         """Build datums, run forward-backward + optimizer step, return mean loss."""
         import torch
-        import tinker.types as types
-        from tinker.types.tensor_data import TensorData
+
+        types = load_tinker_types()
+        TensorData = load_tensor_data()
 
         with self._throttle:
             # Build datums
@@ -475,7 +487,7 @@ class TinkerTrainHelper:
                 fwd_result = fwd_future.result()
 
                 # Extract new logprobs as differentiable tensors
-                new_lp_list = []
+                new_lp_list: list[torch.Tensor] = []
                 for out in fwd_result.loss_fn_outputs:
                     lp = torch.tensor(
                         out["logprobs"].data, dtype=torch.float32
@@ -554,17 +566,18 @@ class TinkerTrainHelper:
         Requires the Tinker SDK to support load_state on the training client.
         Raises AttributeError with a clear message if not available.
         """
-        if not hasattr(self.training_client, "load_state"):
+        load_state = getattr(self.training_client, "load_state", None)
+        if not callable(load_state):
             raise AttributeError(
                 f"Tinker training client does not support load_state(). "
                 f"Cannot resume from checkpoint '{name}'. "
                 f"Check your Tinker SDK version supports checkpoint loading."
             )
         try:
-            self.training_client.load_state(name=name)
+            load_state(name=name)
         except TypeError:
             # Some SDK builds expose load_state(path_or_name) positionally only.
-            self.training_client.load_state(name)
+            load_state(name)
         print(f"Tinker checkpoint loaded: {name}")
 
     def save_adapter(self, path: str, name: str) -> str:
