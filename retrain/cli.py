@@ -1705,9 +1705,7 @@ def _run_diff(args: list[str]) -> None:
         sys.exit(1)
 
     if fmt == "json":
-        from dataclasses import asdict
-
-        print(json.dumps(asdict(result), indent=2))
+        print(json.dumps(result.to_dict(), indent=2))
     else:
         print(format_diff(result))
 

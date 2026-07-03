@@ -48,6 +48,23 @@ class DiffResult:
     curve_a: list[float] = field(default_factory=list)
     curve_b: list[float] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, object]:
+        """Return the JSON payload without recursive dataclass deep-copying."""
+        return {
+            "label_a": self.label_a,
+            "label_b": self.label_b,
+            "final_a": dict(self.final_a),
+            "final_b": dict(self.final_b),
+            "perf_a": dict(self.perf_a),
+            "perf_b": dict(self.perf_b),
+            "wall_time_a": self.wall_time_a,
+            "wall_time_b": self.wall_time_b,
+            "steps_a": self.steps_a,
+            "steps_b": self.steps_b,
+            "curve_a": list(self.curve_a),
+            "curve_b": list(self.curve_b),
+        }
+
 
 _SPARKLINE_CHARS = " ▁▂▃▄▅▆▇█"
 

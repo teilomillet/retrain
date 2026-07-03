@@ -1,7 +1,9 @@
 """Tests for retrain.diff — run comparison and sparkline rendering."""
 
 import json
+from dataclasses import asdict, fields
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -149,6 +151,24 @@ class TestDiffRuns:
         assert result.perf_a["mean_step_time_s"] == pytest.approx(1.0)
         assert result.perf_a["mean_sample_share"] == pytest.approx(0.6)
 
+    def test_to_dict_matches_dataclass_shape_and_copies_mutables(self, tmp_path):
+        _write_metrics(tmp_path / "a", _make_entries(3))
+        _write_metrics(tmp_path / "b", _make_entries(3, cr_end=0.7))
+
+        result = diff_runs(tmp_path / "a", tmp_path / "b")
+        payload = result.to_dict()
+        assert payload == asdict(result)
+        assert set(payload) == {field.name for field in fields(type(result))}
+
+        final_a = cast(dict[str, float], payload["final_a"])
+        curve_a = cast(list[float], payload["curve_a"])
+        assert isinstance(final_a, dict)
+        assert isinstance(curve_a, list)
+        final_a["loss"] = 999.0
+        curve_a.append(999.0)
+        assert result.final_a["loss"] != 999.0
+        assert result.curve_a[-1] != 999.0
+
     def test_diff_missing_run(self, tmp_path):
         _write_metrics(tmp_path / "a", _make_entries(5))
         with pytest.raises(FileNotFoundError):
@@ -268,6 +288,7 @@ class TestDiffCli:
         assert "final_a" in payload
         assert "final_b" in payload
         assert "curve_a" in payload
+        assert payload == diff_runs(tmp_path / "a", tmp_path / "b").to_dict()
 
     def test_diff_bad_args(self, capsys):
         from retrain.cli import _run_diff
