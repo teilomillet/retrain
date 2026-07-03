@@ -186,7 +186,7 @@ class TestTlGrpoBranchingIntegration:
 
     def test_ema_baseline_restores_signal_to_delayed_reward_turns(self):
         """Full pipeline: EMA baseline gives nonzero advantages to set_price turns."""
-        from retrain.verifiers_bridge import _compute_tl_grpo_advantages
+        from retrain.environments.verifiers import _compute_tl_grpo_advantages
 
         # Play a short episode: set_price → wait → accept → advance to end
         ops_episode = [

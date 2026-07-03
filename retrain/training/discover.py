@@ -54,8 +54,8 @@ from retrain.training.runner import (
     build_run_result,
     failed_run_result,
 )
-from retrain.type_defs import ExampleInfoLike, PromptLike
-from retrain.verifiers_bridge import (
+from retrain.types import ExampleInfoLike, PromptLike
+from retrain.environments.verifiers import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
     load_examples_from_environment,

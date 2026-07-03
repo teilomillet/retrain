@@ -150,7 +150,7 @@ def render_quickstart(cli_name: str) -> list[str]:
 
 
 def render_environment(cli_name: str) -> list[str]:
-    from retrain.verifiers_bridge import _FALLBACK_TRAINING_ENVS
+    from retrain.environments.verifiers import _FALLBACK_TRAINING_ENVS
 
     lines = [
         f"    {cli_name} uses verifiers environments for RLVR training data.",

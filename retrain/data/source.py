@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from retrain.type_defs import ExampleInfoLike, PromptLike
+from retrain.types import ExampleInfoLike, PromptLike
 
 
 @dataclass

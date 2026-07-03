@@ -25,7 +25,7 @@ import types
 from typing import TYPE_CHECKING, Protocol, cast
 
 from retrain.data.source import Example
-from retrain.type_defs import ExampleInfoLike, JSONObject, PromptLike
+from retrain.types import ExampleInfoLike, JSONObject, PromptLike
 
 if TYPE_CHECKING:
     from retrain.backends import TrainHelper

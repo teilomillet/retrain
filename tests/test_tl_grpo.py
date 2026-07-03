@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from retrain.verifiers_bridge import (
+from retrain.environments.verifiers import (
     _compute_tl_grpo_advantages,
     _run_tl_grpo_branching,
     VerifiersTurnSample,

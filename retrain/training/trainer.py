@@ -62,7 +62,7 @@ from retrain.training.sft import (
     select_sft_batch_indices,
     tokenize_sft_dataset,
 )
-from retrain.type_defs import ExampleInfoLike, PromptLike
+from retrain.types import ExampleInfoLike, PromptLike
 from retrain.training.log import (
     StepLoggingContext,
     WandbRunLike,
@@ -80,7 +80,7 @@ from retrain.training.signals import (
     prepare_transform_params_for_step,
 )
 from retrain.training.state import load_trainer_state, save_trainer_state
-from retrain.verifiers_bridge import (
+from retrain.environments.verifiers import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
     load_examples_from_environment,

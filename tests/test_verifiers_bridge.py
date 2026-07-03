@@ -1,4 +1,4 @@
-"""Unit tests for retrain.verifiers_bridge helper functions."""
+"""Unit tests for retrain.environments.verifiers helper functions."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from typing import cast
 
 import pytest
 
-from retrain import verifiers_bridge as bridge_mod
+from retrain.environments import verifiers as bridge_mod
 from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
-from retrain.verifiers_bridge import (
+from retrain.environments.verifiers import (
     StateDict,
     VerifiersRolloutTiming,
     _coerce_float_list,

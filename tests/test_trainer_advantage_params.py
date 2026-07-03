@@ -16,7 +16,7 @@ from retrain.training.backpressure import NoOpBackPressure
 from retrain.config import TrainConfig
 from retrain.data.source import Example
 from retrain.training.flow import build_flow
-from retrain.verifiers_bridge import VerifiersRolloutTiming, VerifiersTurnSample
+from retrain.environments.verifiers import VerifiersRolloutTiming, VerifiersTurnSample
 
 
 class _FakeTokenizer:

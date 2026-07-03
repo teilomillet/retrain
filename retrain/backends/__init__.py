@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from retrain.type_defs import EnrichedSampleBatch, SampleBatch
+from retrain.types import EnrichedSampleBatch, SampleBatch
 
 type RuntimeMetric = int | float | str
 

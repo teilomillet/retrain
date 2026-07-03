@@ -7,8 +7,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from retrain.type_defs import PromptLike
-from retrain.verifiers_bridge import encode_prompt_for_sampling, prompt_preview
+from retrain.types import PromptLike
+from retrain.environments.verifiers import encode_prompt_for_sampling, prompt_preview
 
 
 class _ConvertIdsToTokens(Protocol):

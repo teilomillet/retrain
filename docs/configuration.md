@@ -820,7 +820,7 @@ max_examples = 100   # only load first 100 problems
 !!! note
     To train on a different dataset, you can either:
     1. Use a verifiers environment via `[environment]` (no code changes), or
-    2. Add a custom data source in `retrain/data.py` that returns `list[Example]`.
+    2. Add a custom data source under `retrain/data/` that returns `list[Example]`.
 
 ## Environment variables
 

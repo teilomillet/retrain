@@ -1631,7 +1631,9 @@ ARCHITECTURE
         +-- log.py               Buffered JSONL append logging
     +-- metrics/                 Metrics JSONL readers and summaries
         +-- scan.py              One-pass metrics file scanning
-    +-- data.py                  MATH dataset loader
+    +-- data/                    Example protocol and built-in MATH source
+        +-- source.py            Example shape and data-source protocol
+        +-- math.py              MATH dataset loader
 
 PLUGINS
     retrain supports seven plugin types. Each is specified as a dotted

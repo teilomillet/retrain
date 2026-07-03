@@ -81,7 +81,9 @@ retrain
 ├── process/            # Process-local runtime measurements
 │   └── metrics.py      # Peak RSS and related process telemetry
 ├── inference_engine/       # Pluggable inference (PyTorch, MAX, vLLM, SGLang, TensorRT-LLM, MLX-LM)
-└── data.py             # MATH dataset loader
+└── data/               # Example protocol and built-in MATH source
+    ├── source.py       # Example shape and data-source protocol
+    └── math.py         # MATH dataset loader
 ```
 
 ## Features
