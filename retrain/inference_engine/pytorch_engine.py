@@ -468,7 +468,7 @@ class PyTorchEngine(InferenceEngine):
         if not (self.prefix_caching and self.sample_use_cache):
             return None
         prompt_key = tuple(int(token_id) for token_id in prompt_ids)
-        for key in sorted(self._prefix_cache, key=len, reverse=True):
+        for key in sorted(self._prefix_cache.keys(), key=lambda item: len(item), reverse=True):
             if len(key) >= len(prompt_key):
                 continue
             if prompt_key[:len(key)] != key:

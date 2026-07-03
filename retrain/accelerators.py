@@ -38,7 +38,7 @@ def module_available(module_name: str) -> bool:
         return False
 
 
-def accelerator_status() -> dict[str, int]:
+def accelerator_status() -> dict[str, object]:
     """Return import availability flags for optional accelerator packages."""
     return {
         f"accelerator_{name}_available": int(module_available(module))

@@ -18,7 +18,6 @@ import os
 import time
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
-from typing import cast
 
 import torch
 import torch.nn.functional as F
@@ -324,12 +323,7 @@ class LocalTrainHelper:
         self._accelerator_metrics = install_cudnn_causal_conv1d_shim(
             enabled=self.cudnn_causal_conv1d_shim,
         )
-        self._accelerator_metrics.update(
-            cast(
-                dict[str, object],
-                dict(accelerator_status()),
-            )
-        )
+        self._accelerator_metrics.update(accelerator_status())
         self._accelerator_metrics.update(
             apply_liger_kernel_if_available(
                 model_name,
