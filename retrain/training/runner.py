@@ -74,32 +74,6 @@ class TrainingRunResult:
         }
 
 
-def _run_id_for(config: TrainConfig) -> str:
-    log_dir = Path(config.log_dir)
-    name = log_dir.name.strip()
-    if name:
-        return name
-    return "run"
-
-
-def _latest_metrics(log_dir: Path) -> dict[str, object]:
-    metrics_path = log_dir / "metrics.jsonl"
-    if not metrics_path.is_file():
-        return {}
-    return scan_metrics_file(metrics_path).last or {}
-
-
-def _artifact_map(log_dir: Path, policy_ref: str = "") -> dict[str, str]:
-    artifacts: dict[str, str] = {}
-    if log_dir.is_dir():
-        for path in sorted(log_dir.iterdir()):
-            if path.is_file():
-                artifacts[path.name] = str(path)
-    if policy_ref:
-        artifacts.setdefault("policy_ref", policy_ref)
-    return artifacts
-
-
 def build_run_result(
     config: TrainConfig,
     *,
@@ -110,14 +84,27 @@ def build_run_result(
 ) -> TrainingRunResult:
     """Collect metrics/artifacts for a completed run."""
     log_dir = Path(config.log_dir)
+    metrics_path = log_dir / "metrics.jsonl"
+    metrics: dict[str, object] = {}
+    if metrics_path.is_file():
+        metrics = scan_metrics_file(metrics_path).last or {}
+
+    artifacts: dict[str, str] = {}
+    if log_dir.is_dir():
+        for path in sorted(log_dir.iterdir()):
+            if path.is_file():
+                artifacts[path.name] = str(path)
+    if policy_ref:
+        artifacts.setdefault("policy_ref", policy_ref)
+
     return TrainingRunResult(
         policy_ref=policy_ref,
-        run_id=_run_id_for(config),
+        run_id=log_dir.name.strip() or "run",
         status=status,
         failure_status=failure_status,
         error_message=error_message,
-        metrics=_latest_metrics(log_dir),
-        artifacts=_artifact_map(log_dir, policy_ref=policy_ref),
+        metrics=metrics,
+        artifacts=artifacts,
     )
 
 
