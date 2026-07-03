@@ -22,6 +22,7 @@ import types
 from typing import TYPE_CHECKING, Protocol, cast
 
 from retrain.environments import load as env_load
+from retrain.environments import branch as tl_branch
 from retrain.environments import prompt as prompt_utils
 from retrain.types import ExampleInfoLike, JSONObject, PromptLike
 
@@ -34,7 +35,6 @@ if TYPE_CHECKING:
 _FALLBACK_TRAINING_ENVS = env_load.FALLBACK_TRAINING_ENVS
 
 StateDict = dict[str, object]
-ForkExecute = Callable[[list[object]], Mapping[str, object]]
 
 
 class _Rubric(Protocol):
@@ -502,309 +502,6 @@ def is_multiturn_environment(env: object) -> bool:
     return isinstance(env, vf.MultiTurnEnv)
 
 
-def _compute_tl_grpo_advantages(
-    states: list[StateDict],
-    branch_rewards: list[list[list[float]]],
-    turn_weight: float = 0.5,
-    outcome_baseline: float | None = None,
-) -> None:
-    """TL-GRPO per-turn advantage estimation from branching rewards.
-
-    Compares alternative actions branched from the *same* kernel state at each
-    turn.  ``branch_rewards[i][t]`` is a list of ``G`` reward-deltas for
-    rollout ``i``, turn ``t`` (index 0 = primary action).
-
-    When ``outcome_baseline`` is provided, the outcome advantage is computed as
-    ``R_episode - baseline`` instead of using the group-normalized advantage
-    from ``score_group``.  This is necessary for ``group_size=1`` where the
-    group-normalized advantage is always 0.
-
-    Overwrites ``state["turn_advantages"]`` (previously set by MT-GRPO in
-    ``score_group``).
-    """
-    eps = 1e-8
-    if outcome_baseline is not None:
-        outcome_advantages: list[float] = [
-            _coerce_reward(s.get("reward")) - outcome_baseline for s in states
-        ]
-    else:
-        outcome_advantages = [
-            _coerce_reward(s.get("advantage")) for s in states
-        ]
-
-    for i, state in enumerate(states):
-        if i >= len(branch_rewards):
-            state["turn_advantages"] = []
-            continue
-
-        rollout_branches = branch_rewards[i]
-        outcome_adv = outcome_advantages[i]
-        turn_advs: list[float] = []
-
-        for group_rewards in rollout_branches:
-            if len(group_rewards) < 2:
-                turn_advs.append(turn_weight * outcome_adv)
-                continue
-
-            primary_reward = group_rewards[0]
-            mean_r = sum(group_rewards) / len(group_rewards)
-            var_r = sum((r - mean_r) ** 2 for r in group_rewards) / len(
-                group_rewards
-            )
-            std_r = var_r**0.5
-            turn_local = (primary_reward - mean_r) / (std_r + eps)
-            turn_advs.append(turn_local + turn_weight * outcome_adv)
-
-        state["turn_advantages"] = turn_advs
-
-
-def _fork_and_measure(
-    fork_execute: ForkExecute,
-    ops_before: list[object],
-    alt_op: object,
-    pre_cumulative: float,
-    continuation: list[object] | None = None,
-) -> float:
-    """Execute an alternative action in a forked kernel, return reward delta.
-
-    When *continuation* is provided, the primary trajectory's next K actions
-    are appended after the alternative.  This captures delayed effects (e.g.
-    a price change that only affects the next customer interaction).
-    """
-    ops = ops_before + [alt_op]
-    if continuation:
-        ops = ops + list(continuation)
-    alt_snapshot = fork_execute(ops)
-    run = alt_snapshot.get("run")
-    run_map: Mapping[str, object] = (
-        cast(Mapping[str, object], run) if isinstance(run, Mapping) else {}
-    )
-    alt_cum = _coerce_reward(run_map.get("cumulative_reward", 0.0))
-    return alt_cum - pre_cumulative
-
-
-# -- Fallback action-space alternatives (vending domain). ------------------
-# Used only when the kernel response doesn't include legal_actions.
-_FALLBACK_ACTION_SPACE: list[dict[str, object]] = [
-    {"kind": "act", "action": {"type": "accept_customer"}},
-    {"kind": "act", "action": {"type": "reject_customer"}},
-    {"kind": "act", "action": {"type": "schedule_restock"}},
-    {"kind": "wait"},
-]
-
-
-def _get_legal_actions_at_turn(
-    fork_execute: ForkExecute,
-    ops_before: list[object],
-) -> list[dict[str, object]]:
-    """Get the kernel's legal actions at the state before a turn.
-
-    Falls back to the hardcoded vending action list if the kernel response
-    doesn't include legal_actions.
-    """
-    try:
-        snapshot = fork_execute(ops_before)
-        # legal_actions can be at top level or nested in model_view
-        model_view = snapshot.get("model_view")
-        model_view_map: Mapping[str, object] = (
-            cast(Mapping[str, object], model_view)
-            if isinstance(model_view, Mapping)
-            else {}
-        )
-        legal = snapshot.get("legal_actions")
-        if not legal:
-            legal = model_view_map.get("legal_actions")
-        if legal:
-            legal_actions = (
-                list(legal)
-                if isinstance(legal, Sequence) and not isinstance(legal, (str, bytes))
-                else []
-            )
-            if legal_actions:
-                actions: list[dict[str, object]] = [
-                    {"kind": "act", "action": a} for a in legal_actions
-                ]
-                actions.append({"kind": "wait"})
-                return actions
-    except (ValueError, RuntimeError):
-        pass
-    return list(_FALLBACK_ACTION_SPACE)
-
-
-def _resolve_fork_execute(env_obj: object) -> ForkExecute | None:
-    fork_execute = getattr(env_obj, "fork_execute", None)
-    if callable(fork_execute):
-        return cast(ForkExecute, fork_execute)
-
-    client = getattr(env_obj, "client", None)
-    client_execute = getattr(client, "execute", None)
-    if callable(client_execute):
-        return cast(ForkExecute, client_execute)
-
-    return None
-
-
-def _run_tl_grpo_branching(
-    state: StateDict,
-    turns: list["VerifiersTurnSample"],
-    env: object,
-    helper: "TrainHelper",
-    tokenizer: object,
-    *,
-    branch_mode: str = "action_space",
-    branch_size: int = 4,
-    lookahead_steps: int = 0,
-    max_tokens: int = 768,
-    temperature: float = 0.7,
-    top_p: float = 0.95,
-) -> list[list[float]]:
-    """Run TL-GRPO branching from a completed primary rollout.
-
-    Two branch modes:
-
-    ``action_space`` (default)
-        Enumerates legal kernel actions directly — guaranteed diversity,
-        zero LLM cost.  Best for domains where the LLM is too confident
-        to produce diverse samples.
-
-    ``llm``
-        Samples ``branch_size - 1`` alternative completions from the LLM.
-        Useful when the action space is too large to enumerate or when
-        the LLM's uncertainty is the signal of interest.
-
-    When ``lookahead_steps > 0``, appends the next K valid operations from
-    the primary trajectory after each alternative.  This captures delayed
-    effects — e.g. a price change whose reward only materialises when a
-    customer arrives 2 turns later.  The primary action at turn t also
-    gets the same continuation so the comparison is fair.
-
-    Returns ``branch_rewards[turn_idx]`` — a list of reward-deltas
-    where index 0 is the primary action's delta.
-    """
-    turn_log = cast(
-        list[dict[str, object]], state.get("turn_log") or []
-    )
-    env_obj = state.get("env")
-
-    # fork_execute: replay an operation sequence from scratch without
-    # mutating the primary rollout.  Works with both subprocess and HTTP envs.
-    fork_execute = _resolve_fork_execute(env_obj)
-    if fork_execute is None:
-        return []
-
-    # Collect ALL valid operations upfront so we can build continuations.
-    all_valid_ops: list[object] = []
-    valid_op_indices: list[int] = []  # turn index → position in all_valid_ops
-    for t, entry in enumerate(turn_log):
-        if entry.get("valid") and entry.get("operation") is not None:
-            valid_op_indices.append(len(all_valid_ops))
-            all_valid_ops.append(entry["operation"])
-        else:
-            valid_op_indices.append(-1)
-
-    branch_rewards: list[list[float]] = []
-    valid_ops_so_far: list[object] = []
-
-    for t, entry in enumerate(turn_log):
-        primary_delta = float(
-            cast(int | float, entry.get("reward_delta", 0.0))
-        )
-
-        if not entry.get("valid") or entry.get("operation") is None:
-            branch_rewards.append([primary_delta])
-            continue
-
-        ops_before = list(valid_ops_so_far)
-        vop_idx = valid_op_indices[t]
-
-        # Continuation: next K valid operations from the primary trajectory.
-        continuation: list[object] | None = None
-        if lookahead_steps > 0:
-            continuation = list(
-                all_valid_ops[vop_idx + 1 : vop_idx + 1 + lookahead_steps]
-            )
-            if not continuation:
-                continuation = None
-
-        # Pre-action cumulative reward (deterministic replay invariant).
-        cum_reward = float(
-            cast(int | float, entry.get("cumulative_reward", 0.0))
-        )
-        pre_cumulative = cum_reward - primary_delta
-
-        # When using lookahead, re-measure the primary action WITH
-        # continuation so that primary and alternatives are compared
-        # on equal footing.
-        if continuation:
-            try:
-                primary_with_lookahead = _fork_and_measure(
-                    fork_execute,
-                    ops_before,
-                    entry["operation"],
-                    pre_cumulative,
-                    continuation=continuation,
-                )
-            except (ValueError, RuntimeError):
-                primary_with_lookahead = primary_delta
-            group_rewards: list[float] = [primary_with_lookahead]
-        else:
-            group_rewards = [primary_delta]
-
-        if branch_mode == "action_space":
-            # Enumerate kernel actions — skip the primary action itself.
-            # Cap at branch_size alternatives to control cost.
-            import random as _rng
-            primary_op = cast(dict[str, object], entry["operation"])
-            legal_actions = _get_legal_actions_at_turn(fork_execute, ops_before)
-            alt_actions = [a for a in legal_actions if a != primary_op]
-            if len(alt_actions) > branch_size - 1:
-                alt_actions = _rng.sample(alt_actions, branch_size - 1)
-            for alt_op in alt_actions:
-                try:
-                    delta = _fork_and_measure(
-                        fork_execute, ops_before, alt_op, pre_cumulative,
-                        continuation=continuation,
-                    )
-                    group_rewards.append(delta)
-                except (ValueError, RuntimeError):
-                    group_rewards.append(0.0)
-
-        elif branch_mode == "llm":
-            # Sample from the LLM (original approach).
-            extract_operation = getattr(
-                getattr(env, "domain", None), "extract_operation", None,
-            )
-            if extract_operation is None or t >= len(turns):
-                branch_rewards.append([primary_delta])
-                valid_ops_so_far.append(entry["operation"])
-                continue
-
-            tokenizer_typed = cast(_Tokenizer, tokenizer)
-            num_alts = branch_size - 1
-            sampled = helper.sample(
-                [turns[t].prompt_ids], num_alts, max_tokens, temperature, top_p,
-            )
-            alt_ids_list = [list(sampled[0][j][0]) for j in range(num_alts)]
-            alt_texts = tokenizer_typed.batch_decode(
-                alt_ids_list, skip_special_tokens=True,
-            )
-            for alt_text in alt_texts:
-                try:
-                    alt_op = extract_operation(alt_text)
-                    delta = _fork_and_measure(
-                        fork_execute, ops_before, alt_op, pre_cumulative,
-                        continuation=continuation,
-                    )
-                    group_rewards.append(delta)
-                except (ValueError, RuntimeError):
-                    group_rewards.append(0.0)
-
-        branch_rewards.append(group_rewards)
-        valid_ops_so_far.append(entry["operation"])
-
-    return branch_rewards
-
-
 def run_multiturn_group(
     env: object,
     *,
@@ -1117,7 +814,7 @@ def run_multiturn_group(
             if tl_grpo:
                 branch_started = time.perf_counter()
                 for i, state in enumerate(states):
-                    br = _run_tl_grpo_branching(
+                    br = tl_branch.run(
                         state,
                         per_rollout_turns[i],
                         env,
@@ -1131,7 +828,7 @@ def run_multiturn_group(
                         top_p=top_p,
                     )
                     all_branch_rewards.append(br)
-                _compute_tl_grpo_advantages(
+                tl_branch.compute_advantages(
                     states,
                     all_branch_rewards,
                     outcome_baseline=tl_grpo_outcome_baseline,

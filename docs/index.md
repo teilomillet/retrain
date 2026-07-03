@@ -65,9 +65,10 @@ retrain
 │   ├── planning.py     # Strategic planning-token detection
 │   └── pipeline.py     # Composable advantage pipeline
 ├── environments/       # Training environment integrations
+│   ├── branch.py       # TL-GRPO branching and turn advantages
 │   ├── load.py         # Verifiers args, loading, dataset conversion
 │   ├── prompt.py       # Prompt previews, tokenization, observation masks
-│   └── verifiers.py    # Verifiers bridge: rollouts and scoring
+│   └── verifiers.py    # Verifiers bridge: rollout scheduling and scoring
 ├── rewards/            # match, math, judge, custom reward functions
 ├── planning/           # Planning-token detectors (regex, semantic)
 ├── registry/           # Component registries, builtins, dependency health

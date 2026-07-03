@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from retrain.environments.verifiers import (
-    _compute_tl_grpo_advantages,
-    _run_tl_grpo_branching,
-    VerifiersTurnSample,
+from retrain.environments.branch import (
+    compute_advantages as _compute_tl_grpo_advantages,
+    run as _run_tl_grpo_branching,
 )
+from retrain.environments.verifiers import VerifiersTurnSample
 
 
 # ---------------------------------------------------------------------------

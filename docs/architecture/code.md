@@ -83,6 +83,7 @@ retrain/
     planning.py
     pipeline.py
   environments/
+    branch.py
     load.py
     prompt.py
     verifiers.py
@@ -198,11 +199,13 @@ Split code when it creates a stable place a maintainer would naturally search:
   evaluation side effects.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
+- `environments/branch.py`: TL-GRPO branch rewards and turn-level advantages.
 - `environments/load.py`: verifiers environment argument parsing, loading, and
   dataset row conversion.
 - `environments/prompt.py`: prompt preview, tokenizer encoding, and observation
   token masks.
-- `environments/verifiers.py`: multi-turn rollout execution and rubric scoring.
+- `environments/verifiers.py`: multi-turn rollout execution, scheduling, and
+  rubric scoring.
 - `registry/`: registry core, built-in factories, and dependency health probes.
 - `rewards/`: boxed-match, verifiers-backed, and custom rewards.
 - `planning/`: regex and semantic planning-token detectors.
