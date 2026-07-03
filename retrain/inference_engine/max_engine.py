@@ -12,13 +12,22 @@ Two modes based on whether inference_url is provided:
 Both modes return full token IDs + per-token logprobs.
 """
 
+from __future__ import annotations
+
 import asyncio
 import uuid
 
 from retrain.inference_engine.base import InferenceEngine, SampleResult
+from retrain.inference_engine.max_runtime import (
+    TextGenerationOutput,
+    generation_factories,
+    load_tokenizer,
+    local_factories,
+    output_factory,
+)
 
 
-def create_max_engine(model_name, inference_url=""):
+def create_max_engine(model_name: str, inference_url: str = "") -> InferenceEngine:
     """Factory: create the right MAXEngine variant.
 
     Args:
@@ -30,8 +39,7 @@ def create_max_engine(model_name, inference_url=""):
     """
     if inference_url:
         return MAXServeEngine(model_name, inference_url)
-    else:
-        return MAXLocalEngine(model_name)
+    return MAXLocalEngine(model_name)
 
 
 class MAXServeEngine(InferenceEngine):
@@ -41,30 +49,37 @@ class MAXServeEngine(InferenceEngine):
     and continuous batching. Wraps OpenAIEngine with MAX-specific defaults.
     """
 
-    def __init__(self, model_name, base_url):
+    def __init__(self, model_name: str, base_url: str) -> None:
         from retrain.inference_engine.openai_engine import OpenAIEngine
 
         self.model_name = model_name
-        self._engine = OpenAIEngine(
+        self._engine: OpenAIEngine = OpenAIEngine(
             base_url=base_url,
             model_name=model_name,
             engine_type="max",
         )
         print(f"MAXServeEngine ready ({model_name} @ {base_url}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                 compute_entropy=False):
+    def generate(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        compute_entropy: bool = False,
+    ) -> list[list[SampleResult]]:
         return self._engine.generate(
             prompt_ids_list, num_samples, max_tokens, temperature, top_p
         )
 
-    def reload_weights(self, adapter_path):
+    def reload_weights(self, adapter_path: str) -> None:
         self._engine.reload_weights(adapter_path)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         self._engine.shutdown()
 
-    def performance_counters(self):
+    def performance_counters(self) -> dict[str, int]:
         return self._engine.performance_counters()
 
 
@@ -79,35 +94,35 @@ class MAXLocalEngine(InferenceEngine):
     MAXServeEngine (provide --inference-url).
     """
 
-    def __init__(self, model_name):
-        from max.entrypoints.llm import LLM
-        from max.pipelines import PipelineConfig
-        from transformers import AutoTokenizer
-
+    def __init__(self, model_name: str) -> None:
         self.model_name = model_name
 
         print(f"Loading MAX inference engine (in-process): {model_name}...")
+        LLM, PipelineConfig = local_factories()
         config = PipelineConfig(model_path=model_name)
         self._llm = LLM(config)
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self._tokenizer = load_tokenizer(model_name)
         self._prompt_decode_calls = 0
         print(f"MAXLocalEngine ready ({model_name}).")
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                 compute_entropy=False):
+    def generate(
+        self,
+        prompt_ids_list: list[list[int]],
+        num_samples: int,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        compute_entropy: bool = False,
+    ) -> list[list[SampleResult]]:
         """Generate completions with per-token logprobs via MAX pipeline."""
-        from max.interfaces.pipeline_variants.text_generation import (
-            TextGenerationRequest,
-        )
-        from max.interfaces.sampling_params import SamplingParams
-
-        results = []
+        TextGenerationRequest, SamplingParams = generation_factories()
+        results: list[list[SampleResult]] = []
 
         for prompt_ids in prompt_ids_list:
             self._prompt_decode_calls += 1
             prompt_text = self._tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-            requests = []
+            requests: list[object] = []
             for _ in range(num_samples):
                 req = TextGenerationRequest(
                     model_name=self.model_name,
@@ -126,12 +141,12 @@ class MAXLocalEngine(InferenceEngine):
                 )
                 requests.append(req)
 
-            group = []
+            group: list[SampleResult] = []
             for req in requests:
                 output = self._generate_with_logprobs(req)
                 token_ids = output.tokens if output.tokens else []
 
-                logprobs = []
+                logprobs: list[float] = []
                 if output.log_probabilities:
                     for lp in output.log_probabilities:
                         if lp and lp.token_log_probabilities:
@@ -146,7 +161,7 @@ class MAXLocalEngine(InferenceEngine):
 
         return results
 
-    def _generate_with_logprobs(self, request):
+    def _generate_with_logprobs(self, request: object) -> TextGenerationOutput:
         """Submit a request through the pipeline and return full output."""
         loop = asyncio.new_event_loop()
         try:
@@ -154,35 +169,34 @@ class MAXLocalEngine(InferenceEngine):
         finally:
             loop.close()
 
-    async def _async_generate(self, request):
+    async def _async_generate(self, request: object) -> TextGenerationOutput:
         """Collect full TextGenerationOutput with tokens + logprobs."""
-        from max.interfaces.pipeline_variants.text_generation import (
-            TextGenerationOutput,
-        )
-
-        chunks = []
+        TextGenerationOutputFactory = output_factory()
+        chunks: list[object] = []
         async for chunk in self._llm._pipeline.generate_async(request):
             chunks.append(chunk)
 
         if chunks:
-            return TextGenerationOutput.merge(chunks)
+            return TextGenerationOutputFactory.merge(chunks)
 
-        return TextGenerationOutput(
+        return TextGenerationOutputFactory(
             request_id=str(uuid.uuid4()),
             tokens=[],
             final_status=None,
             log_probabilities=None,
         )
 
-    def reload_weights(self, adapter_path):
+    def reload_weights(self, adapter_path: str) -> None:
         """In-process MAX doesn't support dynamic LoRA reload yet."""
-        print(f"Warning: in-process MAX adapter reload not yet supported. "
-              f"Use --inference-url to point at max serve for dynamic LoRA.")
+        print(
+            "Warning: in-process MAX adapter reload not yet supported. "
+            "Use --inference-url to point at max serve for dynamic LoRA."
+        )
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         del self._llm
 
-    def performance_counters(self):
+    def performance_counters(self) -> dict[str, int]:
         return {
             "engine_prompt_decode_calls": self._prompt_decode_calls,
         }
