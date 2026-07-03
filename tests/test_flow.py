@@ -455,10 +455,7 @@ class TestTraceCLI:
             capture_output=True, text=True,
         )
         assert result.returncode == 0
-        # CLI may print dotenv messages before JSON; find the JSON object
-        stdout = result.stdout
-        json_start = stdout.index("{")
-        payload = json.loads(stdout[json_start:])
+        payload = json.loads(result.stdout)
         assert payload["ok"] is True
         assert "probe_cases_run" in payload
         assert "issues" in payload

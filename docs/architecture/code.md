@@ -10,6 +10,14 @@ Prefer package-scoped modules with short names:
 
 ```text
 retrain/
+  commands/
+    top.py
+    name.py
+    manual/
+      run.py
+      render.py
+      sync.py
+      topic.py
   config/
     schema.py
     load.py
@@ -66,6 +74,8 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `config/override.py`: CLI override parsing and coercion.
 - `config/validate/`: focused validation passes for bounds, modes, runtime
   compatibility, defaults, and warnings.
+- `commands/manual/`: manual command parsing, auto-block rendering, topic
+  lookup, and sync checks.
 - `training/signals.py`: reward ties, advantage caps, and algorithm parameters.
 - `training/telemetry.py`: pure builders for metrics, wandb payloads, and
   emergence rows.
@@ -109,6 +119,7 @@ Internal imports should use the package path that matches the tree. Prefer:
 ```python
 from retrain.training.signals import apply_advantage_cap
 from retrain.training.telemetry import build_step_metrics
+from retrain.commands.manual import run as run_manual_command
 from retrain.config import TrainConfig, load_config
 from retrain.backends.tinker.runtime import load_tinker
 from retrain.io.log import JsonlLogger

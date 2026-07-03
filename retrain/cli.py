@@ -26,6 +26,10 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from retrain.commands import manual as _man_command
+from retrain.commands.name import resolve as _resolve_cli_name
+from retrain.commands.top import print_help as _print_top_help
+
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
 
@@ -175,515 +179,53 @@ _INIT_TEMPLATES: dict[str, tuple[str, str]] = {
 }
 
 
-_TOPIC_TO_SECTION = {
-    "quickstart": "QUICKSTART",
-    "environment": "ENVIRONMENT",
-    "environments": "ENVIRONMENT",
-    "troubleshooting": "TROUBLESHOOTING",
-    "commands": "COMMANDS",
-    "options": "OPTIONS",
-    "configuration": "CONFIGURATION",
-    "campaign": "CAMPAIGN MODE",
-    "squeeze": "SQUEEZE MODE",
-    "inference": "INFERENCE ENGINES",
-    "validation": "VALIDATION",
-    "diff": "DIFF MODE",
-    "logging": "LOGGING",
-    "examples": "EXAMPLES",
-    "advantages": "ADVANTAGE PIPELINE",
-    "metrics": "METRICS GUIDE",
-    "benchmark": "BENCHMARKING",
-    "benchmarking": "BENCHMARKING",
-    "capacity": "CAPACITY PLANNING",
-    "capacity-planning": "CAPACITY PLANNING",
-    "architecture": "ARCHITECTURE",
-    "files": "FILES",
-    "plugins": "PLUGINS",
-    "glossary": "GLOSSARY",
-    "tree": "TREE MODE",
-}
-
-_AUTO_BLOCK_NAMES = (
-    "COMMANDS",
-    "OPTIONS",
-    "QUICKSTART",
-    "ENVIRONMENT",
-)
-
-
-def _print_top_help(cli_name: str) -> None:
-    """Print concise top-level help with strong manual discoverability."""
-    print(f"{cli_name} — TOML-first RLVR trainer")
-    print()
-    print("Usage:")
-    print(f"  {cli_name} [config.toml] [--flag value ...]")
-    print(f"  {cli_name} backends [--json]")
-    print(f"  {cli_name} doctor")
-    print(
-        f"  {cli_name} migrate-config <config.toml> "
-        "[--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]"
-    )
-    print(f"  {cli_name} init [--template NAME] [--list] [--interactive]")
-    print(
-        f"  {cli_name} init-plugin --kind KIND --name NAME "
-        "[--output-dir DIR] [--with-test]"
-    )
-    print(f"  {cli_name} plugins [--json] [config.toml]")
-    print(f"  {cli_name} status [logdir] [--json] [--all] [--watch]")
-    print(f"  {cli_name} top [logdir]")
-    print(f"  {cli_name} explain [config.toml] [--json]")
-    print(f"  {cli_name} diff <run_a> <run_b> [--json]")
-    print(f"  {cli_name} benchmark <config.toml|run_dir> [--repeat N] [--output-dir DIR] [--json]")
-    print(f"  {cli_name} trace [config.toml] [--json]")
-    print(
-        f"  {cli_name} tree [tree.toml] [--json]"
-        "  (view | next | show | run | note | eval | reset)"
-    )
-    print(f"  {cli_name} man")
-    print()
-    print("Manual:")
-    print(f"  {cli_name} man")
-    print(f"  {cli_name} man --topic quickstart")
-    print(f"  {cli_name} man --path")
-    print(f"  {cli_name} man --sync")
-    print(f"  {cli_name} man --check")
-    print()
-    print("Tip: read docs/configuration.md for full TOML reference.")
-
-
-def _resolve_cli_name() -> str:
-    """Best-effort CLI binary name for help text."""
-    name = Path(sys.argv[0]).name.strip()
-    if (
-        not name
-        or name in {"python", "python3", "pytest", "py.test"}
-        or name.endswith(".py")
-        or "pytest" in name
-    ):
-        return "retrain"
-    return name
-
-
 def _manual_path() -> Path:
     """Location of the editable bundled manual file."""
     return Path(__file__).with_name("retrain.man")
 
 
 def _load_manual_text(cli_name: str) -> str:
-    """Load manual text and substitute runtime command name."""
-    path = _manual_path()
-    if not path.is_file():
-        # Backward-compat fallback for older installs.
-        legacy = Path(__file__).with_name("vauban.man")
-        if legacy.is_file():
-            path = legacy
-    if path.is_file():
-        text = path.read_text()
-    else:
-        text = (
-            "RETRAIN(1)\n\nNAME\n"
-            "    retrain - manual file missing (reinstall package)\n"
-        )
-    return text.replace("{{CLI}}", cli_name).rstrip() + "\n"
+    return _man_command.load_text(cli_name, _manual_path)
 
 
 def _is_manual_heading(line: str) -> bool:
-    s = line.strip()
-    if not s or s != line:
-        return False
-    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-()")
-    return all(ch in allowed for ch in s) and any(ch.isalpha() for ch in s)
+    return _man_command.is_heading(line)
 
 
 def _extract_manual_section(manual_text: str, heading: str) -> str | None:
-    """Extract one heading section from manual text."""
-    wanted = heading.strip().upper()
-    lines = manual_text.splitlines()
-
-    start = None
-    for i, line in enumerate(lines):
-        if _is_manual_heading(line) and line.strip().upper() == wanted:
-            start = i
-            break
-    if start is None:
-        return None
-
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        if _is_manual_heading(lines[i]) and lines[i].strip().upper() != wanted:
-            end = i
-            break
-    return "\n".join(lines[start:end]).rstrip() + "\n"
+    return _man_command.extract_section(manual_text, heading)
 
 
 def _render_commands_block(cli_name: str) -> list[str]:
-    return [
-        f"    {cli_name} [config.toml]",
-        "        Run one training job.",
-        "        If config.toml is omitted, uses ./retrain.toml when present.",
-        "",
-        f"    {cli_name} campaign.toml",
-        "        Runs campaign mode when [campaign] exists in TOML.",
-        "        Generates conditions x seeds matrix of training runs.",
-        "        Set parallel = true in [campaign] for concurrent execution.",
-        "        max_workers limits concurrent subprocess count.",
-        "",
-        f"    {cli_name} squeeze.toml",
-        "        Runs squeeze mode when [squeeze] exists in TOML.",
-        "        Analyzes LoRA rank via SVD and optionally compresses.",
-        "",
-        f"    {cli_name} doctor",
-        "        Checks optional dependencies for configured components.",
-        "",
-        f"    {cli_name} backends [--json]",
-        "        Prints backend metadata (capabilities, deps, option schema).",
-        "        --json            machine-readable JSON output.",
-        "",
-        f"    {cli_name} migrate-config <config.toml> [--check|--write|--output PATH] [--backup] [--stdin|--stdout] [--json]",
-        "        Migrates legacy [backend] prime_rl_* keys into [backend.options].",
-        "        Default mode previews a unified diff and does not write files.",
-        "        --check           exits 1 when migration is required.",
-        "        --write           writes migration in place.",
-        "        --output PATH     writes migrated config to a new path.",
-        "        --backup          writes <config>.bak before in-place write.",
-        "        --stdin           reads source TOML from stdin.",
-        "        --stdout          prints migrated TOML instead of a diff.",
-        "        --json            machine-readable report.",
-        "",
-        f"    {cli_name} init [--template NAME] [--list] [--interactive]",
-        "        Writes a starter config in the current directory.",
-        "        Templates: default, quickstart, experiment, campaign.",
-        "        --template NAME   selects a template (default: default).",
-        "        --list            shows available templates.",
-        "        --interactive/-i  guided setup with prompts.",
-        "",
-        f"    {cli_name} init-plugin --kind KIND --name NAME [--output-dir DIR] [--with-test]",
-        "        Scaffolds a student-friendly plugin module.",
-        "        Kinds: transform, advantage, algorithm, reward, planning, data,",
-        "               backend, inference, backpressure.",
-        "        --with-test       also generates a smoke test template.",
-        "",
-        f"    {cli_name} plugins [--json] [config.toml]",
-        "        Lists built-ins + discovered plugin modules.",
-        "        If config.toml is provided, uses its [plugins] search_paths.",
-        "",
-        f"    {cli_name} status [logdir] [--json] [--all] [--watch]",
-        "        Scans log directories for run and campaign status.",
-        "        Defaults to ./logs when no path is given.",
-        "        Shows only active campaigns by default (last 24h).",
-        "        --json            machine-readable JSON output.",
-        "        --all             show all campaigns including old dead/done.",
-        "        --active          show only active campaigns (default).",
-        "        --watch           refresh every 5 seconds (Ctrl-C to stop).",
-        "",
-        f"    {cli_name} top [logdir]",
-        "        Live dashboard: alias for status --watch --active.",
-        "",
-        f"    {cli_name} explain [config.toml] [--json]",
-        "        Dry-run preview: shows what a config would do.",
-        "        Works for single runs, campaigns, and squeeze configs.",
-        "        --json            machine-readable JSON output.",
-        "",
-        f"    {cli_name} diff <run_a> <run_b> [--json]",
-        "        Compares metrics between two training runs.",
-        f"    {cli_name} diff <campaign_dir> <cond_a> <cond_b> [--json]",
-        "        Compares two conditions in a campaign (averaged across seeds).",
-        "        --json            machine-readable JSON output.",
-        "",
-        f"    {cli_name} benchmark <config.toml> [--repeat N] [--output-dir DIR] [--json]",
-        "        Runs one or more benchmark repetitions with isolated log/adapters.",
-        "        Disables wandb by default to reduce measurement noise.",
-        f"    {cli_name} benchmark <run_dir|suite_dir> [--json]",
-        "        Summarizes an existing run or benchmark suite directory.",
-        "        --repeat N        number of repeated executions (config mode only).",
-        "        --output-dir DIR  benchmark suite root (config mode only).",
-        "        --json            machine-readable JSON output.",
-        "",
-        f"    {cli_name} trace [config.toml] [--json]",
-        "        Pre-flight validation: build flow, trace with synthetic data.",
-        "        Catches incompatible modes, missing data, and unsupported",
-        "        uncertainty kinds before committing GPU time.",
-        "        --json            machine-readable JSON output.",
-        "",
-        f"    {cli_name} man",
-        "        Shows this manual.",
-        "        --topic <name>    prints one section.",
-        "        --path            prints the manual file path.",
-        "        --list-topics     lists supported topic names.",
-        "        --sync            refreshes auto-generated manual blocks.",
-        "        --check           exits non-zero if auto blocks are stale.",
-        "        --json            outputs JSON (full manual or single topic).",
-    ]
+    return _man_command.render_commands(cli_name)
 
 
 def _render_options_block() -> list[str]:
-    from retrain.config import _CLI_FLAG_MAP
-
-    # Keep only canonical flags for readability; skip alias here and add below.
-    canonical = sorted(k for k in _CLI_FLAG_MAP if k != "--resume")
-    lines = [
-        "    TrainConfig fields are exposed as --kebab-case CLI flags.",
-        "    Flags override TOML values.",
-        "",
-        "    Common examples:",
-        "        retrain config.toml --seed 42 --max-steps 50",
-        "        retrain config.toml --lr 1e-4 --batch-size 16",
-        "        retrain config.toml --advantage-mode grpo",
-        "        retrain config.toml --advantage-param scale=2.0 --transform-param cap=0.1",
-        "        retrain config.toml --inference-engine vllm --inference-url http://localhost:8000",
-        "        retrain config.toml --backend prime_rl --backend-opt transport=zmq --backend-opt zmq_port=7777",
-        "",
-        "    All flags (sorted):",
-    ]
-    for flag in canonical:
-        lines.append(f"        {flag}")
-
-    lines.extend(
-        [
-            "",
-            "    Special flags:",
-            "        --backend-opt K=V    backend-specific option override (repeatable).",
-            "        --algorithm-param K=V algorithm plugin params (repeatable).",
-            "        --advantage-param K=V advantage plugin params (repeatable).",
-            "        --transform-param K=V transform plugin params (repeatable).",
-            "        --resume VALUE    alias for --resume-from VALUE",
-            "",
-            "    Unknown flags produce an error with close-match suggestions.",
-        ]
-    )
-    return lines
+    return _man_command.render_options()
 
 
 def _render_quickstart_block(cli_name: str) -> list[str]:
-    return [
-        "    cp retrain.toml my_run.toml",
-        f"    {cli_name} my_run.toml",
-        f"    {cli_name} my_run.toml --seed 42 --max-steps 50",
-    ]
+    return _man_command.render_quickstart(cli_name)
 
 
 def _render_environment_block(cli_name: str) -> list[str]:
-    from retrain.verifiers_bridge import _FALLBACK_TRAINING_ENVS
-
-    lines = [
-        f"    {cli_name} uses verifiers environments for RLVR training data.",
-        "    Set [environment].provider = \"verifiers\" and specify a Hub ID.",
-        "",
-        "    Trainable verifiers examples:",
-    ]
-    for env_id in _FALLBACK_TRAINING_ENVS:
-        lines.append(f"        {env_id}")
-    lines.extend(
-        [
-            "",
-            "    Caveat:",
-            "        Some hub environments are eval-only and do not expose training",
-            f"        datasets. In that case {cli_name} fails fast with actionable guidance.",
-        ]
-    )
-    return lines
+    return _man_command.render_environment(cli_name)
 
 
 def _replace_auto_block(text: str, name: str, rendered_lines: list[str]) -> str:
-    start = f"<<AUTO:{name}>>"
-    end = f"<<END:AUTO:{name}>>"
-    lines = text.splitlines()
-    out: list[str] = []
-    i = 0
-    replaced = False
-    while i < len(lines):
-        line = lines[i]
-        if line.strip() == start:
-            replaced = True
-            out.append(line)
-            out.extend(rendered_lines)
-            i += 1
-            while i < len(lines) and lines[i].strip() != end:
-                i += 1
-            if i >= len(lines):
-                raise ValueError(f"Missing block end marker: {end}")
-            out.append(lines[i])
-            i += 1
-            continue
-        out.append(line)
-        i += 1
-
-    if not replaced:
-        raise ValueError(f"Missing block markers for {name}: {start} ... {end}")
-
-    return "\n".join(out).rstrip() + "\n"
+    return _man_command.replace_auto_block(text, name, rendered_lines)
 
 
 def _sync_manual_file(cli_name: str) -> tuple[Path, bool]:
-    """Refresh auto-generated blocks in the editable manual."""
-    path = _manual_path()
-    original = path.read_text() if path.is_file() else _load_manual_text(cli_name)
-
-    updated = original
-    rendered = {
-        "COMMANDS": _render_commands_block(cli_name),
-        "OPTIONS": _render_options_block(),
-        "QUICKSTART": _render_quickstart_block(cli_name),
-        "ENVIRONMENT": _render_environment_block(cli_name),
-    }
-    for name in _AUTO_BLOCK_NAMES:
-        updated = _replace_auto_block(updated, name, rendered[name])
-
-    changed = updated != original
-    if changed:
-        path.write_text(updated)
-    return path, changed
+    return _man_command.sync_file(cli_name, _manual_path)
 
 
 def _check_manual_file(cli_name: str) -> tuple[Path, bool]:
-    """Check whether auto-generated manual blocks are up to date."""
-    path = _manual_path()
-    original = path.read_text() if path.is_file() else _load_manual_text(cli_name)
-
-    updated = original
-    rendered = {
-        "COMMANDS": _render_commands_block(cli_name),
-        "OPTIONS": _render_options_block(),
-        "QUICKSTART": _render_quickstart_block(cli_name),
-        "ENVIRONMENT": _render_environment_block(cli_name),
-    }
-    for name in _AUTO_BLOCK_NAMES:
-        updated = _replace_auto_block(updated, name, rendered[name])
-    return path, updated == original
+    return _man_command.check_file(cli_name, _manual_path)
 
 
 def _run_man(args: list[str]) -> None:
-    """Print manual text (or JSON view) from bundled editable file."""
-    fmt = "text"
-    topic: str | None = None
-    show_path = False
-    list_topics = False
-    sync = False
-    check = False
-    i = 0
-    while i < len(args):
-        arg = args[i]
-        if arg == "--json":
-            fmt = "json"
-        elif arg == "--path":
-            show_path = True
-        elif arg == "--list-topics":
-            list_topics = True
-        elif arg == "--sync":
-            sync = True
-        elif arg == "--check":
-            check = True
-        elif arg in ("--format", "-f"):
-            i += 1
-            if i >= len(args):
-                print("Flag --format requires a value: text|json", file=sys.stderr)
-                sys.exit(1)
-            fmt = args[i]
-        elif arg.startswith("--format="):
-            fmt = arg.split("=", 1)[1]
-        elif arg in ("--topic", "-t"):
-            i += 1
-            if i >= len(args):
-                print("Flag --topic requires a value.", file=sys.stderr)
-                sys.exit(1)
-            topic = args[i]
-        elif arg.startswith("--topic="):
-            topic = arg.split("=", 1)[1]
-        else:
-            print(f"Unknown man flag: {arg}", file=sys.stderr)
-            sys.exit(1)
-        i += 1
-
-    if fmt not in ("text", "json", "troff", "html"):
-        print(f"Unsupported format '{fmt}'. Use text|json|troff|html.", file=sys.stderr)
-        sys.exit(1)
-
-    cli_name = _resolve_cli_name()
-    if sync and check:
-        print("Flags --sync and --check cannot be used together.", file=sys.stderr)
-        sys.exit(1)
-
-    manual_path = _manual_path()
-    if sync:
-        try:
-            manual_path, changed = _sync_manual_file(cli_name)
-        except ValueError as exc:
-            print(f"Manual sync failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-        status = "updated" if changed else "already up to date"
-        print(f"{manual_path} ({status})")
-        return
-
-    if check:
-        try:
-            manual_path, up_to_date = _check_manual_file(cli_name)
-        except ValueError as exc:
-            print(f"Manual check failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-        if up_to_date:
-            print(f"{manual_path} (up to date)")
-            return
-        print(
-            f"{manual_path} (out of date). Run: {cli_name} man --sync",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    manual_text = _load_manual_text(cli_name)
-
-    if show_path:
-        print(str(manual_path))
-        return
-
-    if list_topics:
-        for name in sorted(_TOPIC_TO_SECTION):
-            print(name)
-        return
-
-    section_name: str | None = None
-    section_text: str | None = None
-    if topic is not None:
-        section_name = _TOPIC_TO_SECTION.get(topic.lower(), topic.upper())
-        section_text = _extract_manual_section(manual_text, section_name)
-        if section_text is None:
-            print(
-                f"Unknown topic '{topic}'. Available: {sorted(_TOPIC_TO_SECTION)}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    if fmt in ("troff", "html"):
-        from retrain.man_export import parse_manual, to_html, to_troff
-
-        source = section_text if section_text is not None else manual_text
-        sections = parse_manual(source)
-        formatter = to_troff if fmt == "troff" else to_html
-        print(formatter(sections).rstrip())
-        return
-
-    if fmt == "json":
-        if section_text is None:
-            payload = {
-                "tool": cli_name,
-                "path": str(manual_path),
-                "topics": sorted(_TOPIC_TO_SECTION),
-                "manual": manual_text,
-            }
-        else:
-            payload = {
-                "tool": cli_name,
-                "path": str(manual_path),
-                "topic": topic,
-                "section": section_name,
-                "content": section_text,
-            }
-        print(json.dumps(payload, indent=2))
-        return
-
-    if section_text is None:
-        print(manual_text.rstrip())
-    else:
-        print(section_text.rstrip())
+    _man_command.run(args, cli_name=_resolve_cli_name(), manual_path=_manual_path)
 
 
 def _customize_toml(
@@ -1172,7 +714,7 @@ def _load_dotenv() -> None:
         if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
             val = val[1:-1]
         os.environ[key] = val
-    print("Loaded .env")
+    print("Loaded .env", file=sys.stderr)
 
 
 def _is_squeeze(path: str) -> bool:

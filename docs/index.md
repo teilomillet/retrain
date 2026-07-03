@@ -20,6 +20,10 @@ RLVR (Reinforcement Learning with Verifiable Rewards) training framework for LLM
 ```
 retrain
 ├── cli.py              # Entry point and command dispatch
+├── commands/           # CLI command implementation packages
+│   ├── name.py         # CLI display-name resolution
+│   ├── top.py          # Top-level help text
+│   └── manual/         # Manual topics, rendering, sync, and dispatch
 ├── config/             # TrainConfig schema, TOML loading, CLI overrides
 │   ├── schema.py       # TrainConfig fields and derived params
 │   ├── load.py         # TOML loader

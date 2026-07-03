@@ -107,7 +107,6 @@ retrain --seed 42 --lr 1e-4 --wandb-project my-run
 === "Local backend"
 
     ```
-    Loaded .env
     Loading tokenizer for Qwen/Qwen3-4B-Instruct-2507 ...
     Loading vocabulary table...
     Vocabulary table: 151936 entries
@@ -126,7 +125,6 @@ retrain --seed 42 --lr 1e-4 --wandb-project my-run
 === "Tinker backend"
 
     ```
-    Loaded .env
     Loading tokenizer for Qwen/Qwen3-4B-Instruct-2507 ...
     Loading vocabulary table...
     Vocabulary table: 151936 entries
