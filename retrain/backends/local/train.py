@@ -40,6 +40,7 @@ from retrain.backends.local.lora import (
     patch_fast as _patch_fast_lora,
 )
 from retrain.backends.local import batch as local_batch
+from retrain.backends.local import device as local_device
 from retrain.backends.local import metrics as local_metrics
 from retrain.backends.local import sft as local_sft
 from retrain.backends.local.checkpointing import (
@@ -64,7 +65,6 @@ from retrain.kernels.logprobs import (
 from retrain.training.loss import compute_policy_loss as _compute_policy_loss
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 from retrain.backends.torch import (
-    parse_device_spec as _parse_device,
     reset_cuda_peak as _reset_cuda_peak,
     timer_start as _timer_start,
     timer_stop as _timer_stop,
@@ -221,55 +221,14 @@ class LocalTrainHelper:
         self._compiled_selective_ce_fallback_reason = ""
         self._compiled_selective_ce_available: bool | None = None
 
-        # Parse all devices from comma-separated spec
-        raw_devices = [d.strip() for d in devices.split(",") if d.strip()]
-        parsed_devices = [_parse_device(d) for d in raw_devices]
-
-        # Determine split mode: need >1 device and CUDA available
-        cuda_devices = [d for d in parsed_devices if d.startswith("cuda")]
-        self.split_mode = len(cuda_devices) > 1 and torch.cuda.is_available()
-
-        # Non-PyTorch engines manage their own inference independently.
-        # Server engines use a remote process; MAX engine uses its own in-process model.
-        self._server_engine = engine_type in (
-            "vllm",
-            "sglang",
-            "trtllm",
-            "mlx",
-            "openai",
-        )
-        self._external_engine = engine_type in (
-            "max",
-            "vllm",
-            "sglang",
-            "trtllm",
-            "mlx",
-            "openai",
-        )
-
-        if self._external_engine:
-            # Server handles inference — all local GPUs for training
-            device = parsed_devices[-1] if parsed_devices else "cuda:0"
-            if device.startswith("cuda") and not torch.cuda.is_available():
-                print("CUDA not available, falling back to CPU")
-                device = "cpu"
-            self.infer_device = device  # not used for sampling, but kept for compat
-            self.train_device = device
-            self.split_mode = False
-        elif self.split_mode:
-            self.infer_device = cuda_devices[0]   # first GPU for inference
-            self.train_device = cuda_devices[-1]   # last GPU for training
-        else:
-            # Single-model mode: use first device (with CUDA fallback)
-            device = parsed_devices[0] if parsed_devices else "cuda:0"
-            if device.startswith("cuda") and not torch.cuda.is_available():
-                print("CUDA not available, falling back to CPU")
-                device = "cpu"
-            self.infer_device = device
-            self.train_device = device
-
-        self.use_amp = self.train_device != "cpu"
-        dtype = torch.bfloat16 if self.train_device != "cpu" else torch.float32
+        device_plan = local_device.resolve(devices, engine_type)
+        self.infer_device = device_plan.infer_device
+        self.train_device = device_plan.train_device
+        self.split_mode = device_plan.split_mode
+        self._server_engine = device_plan.server_engine
+        self._external_engine = device_plan.external_engine
+        self.use_amp = device_plan.use_amp
+        dtype = device_plan.dtype
         self.amp_dtype = dtype
 
         # Configure the allocator before the first training-model allocation so
