@@ -103,6 +103,79 @@ class TestScanRun:
         assert result.process_max_rss_mb == pytest.approx(1024.0)
         assert not result.completed
 
+    def test_scan_run_skips_bad_and_non_object_metric_rows(self, tmp_path):
+        run_dir = tmp_path / "run1"
+        metrics_path = run_dir / "metrics.jsonl"
+        metrics_path.parent.mkdir(parents=True)
+        metrics_path.write_text(
+            "\n".join(
+                [
+                    "not json",
+                    "[]",
+                    json.dumps(
+                        {
+                            "step": 2,
+                            "condition": "clean",
+                            "loss": 0.4,
+                            "mean_reward": 0.7,
+                            "correct_rate": 0.5,
+                            "step_time_s": 2.5,
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+
+        result = scan_run(run_dir)
+
+        assert result is not None
+        assert result.step == 2
+        assert result.condition == "clean"
+        assert result.wall_time_s == pytest.approx(2.5)
+
+    def test_scan_run_uses_legacy_time_s_for_wall_time(self, tmp_path):
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [
+                {"step": 0, "condition": "sft", "time_s": 1.25},
+                {"step": 1, "condition": "sft", "step_time_s": 2.5},
+            ],
+        )
+
+        result = scan_run(run_dir)
+
+        assert result is not None
+        assert result.step == 1
+        assert result.wall_time_s == pytest.approx(3.75)
+
+    def test_scan_run_defaults_malformed_metric_field_types(self, tmp_path):
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [
+                {
+                    "step": "2",
+                    "condition": 123,
+                    "loss": "0.4",
+                    "mean_reward": None,
+                    "correct_rate": [0.5],
+                    "step_time_s": 2.5,
+                }
+            ],
+        )
+
+        result = scan_run(run_dir)
+
+        assert result is not None
+        assert result.step == -1
+        assert result.condition == ""
+        assert result.loss == 0.0
+        assert result.mean_reward == 0.0
+        assert result.correct_rate == 0.0
+        assert result.wall_time_s == pytest.approx(2.5)
+
     def test_completed_run(self, tmp_path):
         run_dir = tmp_path / "run1"
         _write_metrics(

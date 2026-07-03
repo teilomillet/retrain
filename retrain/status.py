@@ -14,6 +14,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
+
 
 _STALE_SECONDS = 300  # 5 minutes without progress → stale
 _COND_MAX_WIDTH = 30  # max display width for condition labels
@@ -151,6 +153,21 @@ def _truncate_condition(label: str, max_width: int = _COND_MAX_WIDTH) -> str:
     return "..." + label[-(max_width - 3):]
 
 
+def _metric_float(row: dict[str, object], key: str, default: float = 0.0) -> float:
+    value = float_or_none(row.get(key))
+    return default if value is None else value
+
+
+def _metric_int(row: dict[str, object], key: str, default: int = -1) -> int:
+    value = int_or_none(row.get(key))
+    return default if value is None else value
+
+
+def _metric_str(row: dict[str, object], key: str, default: str = "") -> str:
+    value = row.get(key)
+    return value if isinstance(value, str) else default
+
+
 def _read_run_pid(run_dir: Path) -> int:
     """Read the run's PID, preferring ``run.pid`` file over log parsing.
 
@@ -192,36 +209,24 @@ def scan_run(run_dir: Path) -> RunSummary | None:
 
     summary = RunSummary(path=str(run_dir))
 
-    # Read metrics.jsonl
-    wall_time = 0.0
-    last_entry: dict | None = None
     try:
-        with open(metrics_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                last_entry = entry
-                wall_time += entry.get("step_time_s", 0.0)
+        metrics = scan_metrics_file(metrics_path)
     except OSError:
         return None
 
+    last_entry = metrics.last
     if last_entry is not None:
-        summary.step = last_entry.get("step", -1)
-        summary.condition = last_entry.get("condition", "")
-        summary.correct_rate = last_entry.get("correct_rate", 0.0)
-        summary.loss = last_entry.get("loss", 0.0)
-        summary.mean_reward = last_entry.get("mean_reward", 0.0)
-        summary.latest_step_time_s = last_entry.get("step_time_s", 0.0)
-        summary.tokens_per_second = last_entry.get("tokens_per_second", 0.0)
-        summary.sample_share = last_entry.get("sample_share", 0.0)
-        summary.train_share = last_entry.get("train_share", 0.0)
-        summary.process_max_rss_mb = last_entry.get("process_max_rss_mb", 0.0)
-    summary.wall_time_s = wall_time
+        summary.step = _metric_int(last_entry, "step")
+        summary.condition = _metric_str(last_entry, "condition")
+        summary.correct_rate = _metric_float(last_entry, "correct_rate")
+        summary.loss = _metric_float(last_entry, "loss")
+        summary.mean_reward = _metric_float(last_entry, "mean_reward")
+        summary.latest_step_time_s = _metric_float(last_entry, "step_time_s")
+        summary.tokens_per_second = _metric_float(last_entry, "tokens_per_second")
+        summary.sample_share = _metric_float(last_entry, "sample_share")
+        summary.train_share = _metric_float(last_entry, "train_share")
+        summary.process_max_rss_mb = _metric_float(last_entry, "process_max_rss_mb")
+    summary.wall_time_s = metrics.wall_time_s
 
     # Check trainer_state.json for completion
     state_path = run_dir / "trainer_state.json"
