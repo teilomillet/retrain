@@ -82,6 +82,7 @@ retrain/
     planning.py
     pipeline.py
   environments/
+    load.py
     prompt.py
     verifiers.py
   rewards/
@@ -195,8 +196,11 @@ Split code when it creates a stable place a maintainer would naturally search:
   evaluation side effects.
 - `commands/manual/`: manual command parsing, auto-block rendering, topic
   lookup, and sync checks.
-- `environments/verifiers.py`: verifiers environment loading, prompt rendering,
-  multi-turn rollouts, and rubric scoring.
+- `environments/load.py`: verifiers environment argument parsing, loading, and
+  dataset row conversion.
+- `environments/prompt.py`: prompt preview, tokenizer encoding, and observation
+  token masks.
+- `environments/verifiers.py`: multi-turn rollout execution and rubric scoring.
 - `registry/`: registry core, built-in factories, and dependency health probes.
 - `rewards/`: boxed-match, verifiers-backed, and custom rewards.
 - `planning/`: regex and semantic planning-token detectors.
@@ -220,8 +224,6 @@ Split code when it creates a stable place a maintainer would naturally search:
   Prometheus, JSON, server, and snapshot-type modules.
 - `tree/`, `diff/`, and `benchmark/`: command-domain packages for experiment
   trees, comparisons, and repeated runs.
-- `environments/prompt.py`: prompt preview, tokenizer encoding, and observation
-  token masks.
 - `backends/tinker/train.py`: Tinker backend training implementation.
 - `backends/tinker/runtime.py`: Tinker SDK loading and runtime checks.
 - `backends/unsloth/train.py`: Unsloth-backed local training implementation.
