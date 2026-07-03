@@ -191,33 +191,12 @@ for _backend_name, _backend_definition in get_builtin_backend_definitions().item
 
 # -- inference_engine (for doctor diagnostics) -----------------------------
 
-@inference_engine.register("pytorch")
-def _ie_pytorch(config: TrainConfig) -> None:
-    pass
+def _noop_inference_engine(config: TrainConfig) -> None:
+    """Reserve inference-engine names; construction lives in retrain.inference_engine."""
 
-@inference_engine.register("max")
-def _ie_max(config: TrainConfig) -> None:
-    pass
 
-@inference_engine.register("vllm")
-def _ie_vllm(config: TrainConfig) -> None:
-    pass
-
-@inference_engine.register("sglang")
-def _ie_sglang(config: TrainConfig) -> None:
-    pass
-
-@inference_engine.register("trtllm")
-def _ie_trtllm(config: TrainConfig) -> None:
-    pass
-
-@inference_engine.register("mlx")
-def _ie_mlx(config: TrainConfig) -> None:
-    pass
-
-@inference_engine.register("openai")
-def _ie_openai(config: TrainConfig) -> None:
-    pass
+for _engine_name in ("pytorch", "max", "vllm", "sglang", "trtllm", "mlx", "openai"):
+    inference_engine.register(_engine_name)(_noop_inference_engine)
 
 
 # -- reward ----------------------------------------------------------------
