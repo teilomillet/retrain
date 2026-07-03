@@ -437,9 +437,10 @@ def run_benchmark_suite(
             raise RuntimeError(
                 f"Benchmark run {run_dir.name} failed ({failure_status}): {error_message}"
             )
-        if hasattr(result, "to_dict"):
+        result_to_dict = getattr(result, "to_dict", None)
+        if callable(result_to_dict):
             meta = {"trainer": run_config.trainer}
-            meta.update(result.to_dict())
+            meta.update(result_to_dict())
             meta_path.write_text(json.dumps(meta), encoding="utf-8")
 
         run_summaries.append(summarize_run(run_dir))

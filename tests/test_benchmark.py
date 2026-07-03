@@ -31,8 +31,23 @@ class _FakeRunResult:
         }
 
 
+@dataclass
+class _NonCallableToDictRunResult:
+    policy_ref: str
+    ok: bool = True
+    failure_status: str = ""
+    error_message: str = ""
+    to_dict: int = 1
+
+
 class _FakeRunner:
-    def run(self, config: TrainConfig) -> _FakeRunResult:
+    def __init__(self, *, result_has_callable_to_dict: bool = True) -> None:
+        self._result_has_callable_to_dict = result_has_callable_to_dict
+
+    def run(
+        self,
+        config: TrainConfig,
+    ) -> _FakeRunResult | _NonCallableToDictRunResult:
         run_dir = config.log_dir
         emergence_dir = f"{run_dir}/emergence"
         from pathlib import Path
@@ -88,6 +103,8 @@ class _FakeRunner:
             encoding="utf-8",
         )
         assert config.wandb_project == ""
+        if not self._result_has_callable_to_dict:
+            return _NonCallableToDictRunResult(policy_ref=config.adapter_path)
         return _FakeRunResult(policy_ref=config.adapter_path)
 
 
@@ -264,6 +281,29 @@ def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
     assert suite.aggregates["engine_adapter_reload_failures"].mean == 0.0
     assert suite.aggregates["mean_engine_prompt_prefill_s"].mean == 0.2
     assert suite.aggregates["mean_rollout_env_dbt_total_s"].mean == 0.25
+
+
+def test_run_benchmark_suite_tolerates_non_callable_to_dict(tmp_path) -> None:
+    config = TrainConfig(
+        log_dir=str(tmp_path / "base-log"),
+        adapter_path=str(tmp_path / "base-adapter"),
+    )
+
+    suite = run_benchmark_suite(
+        config,
+        repeats=1,
+        output_dir=tmp_path / "bench",
+        runner_factory=lambda cfg: _FakeRunner(result_has_callable_to_dict=False),
+        disable_wandb=True,
+    )
+
+    assert suite.repeats == 1
+    meta = json.loads((tmp_path / "bench" / "repeat_01" / "run_meta.json").read_text())
+    assert meta == {
+        "trainer": "retrain",
+        "run_id": "repeat_01",
+        "status": "running",
+    }
 
 
 def test_summarize_suite_reads_repeat_directories(tmp_path) -> None:
