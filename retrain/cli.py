@@ -21,6 +21,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from retrain.commands import manual as manual_command
 from retrain.commands.benchmark import run as run_benchmark
@@ -37,8 +38,8 @@ from retrain.commands.plugins.scaffold import run as run_init_plugin
 from retrain.commands.help import print_help
 from retrain.commands.status.run import run as run_status
 from retrain.commands.status.top import run as run_top
-from retrain.commands.trace import run as run_trace
-from retrain.commands.tree import run as run_tree
+from retrain.commands.trace.run import run as run_trace
+from retrain.commands.tree.run import run as run_tree
 
 
 def _manual_path() -> Path:
@@ -66,6 +67,30 @@ def _load_dotenv() -> None:
     print("Loaded .env", file=sys.stderr)
 
 
+def _commands(cli_name: str) -> dict[str, Callable[[list[str]], None]]:
+    """Named commands; anything else is a config path or override flags."""
+    return {
+        "help": lambda rest: print_help(cli_name),
+        "-h": lambda rest: print_help(cli_name),
+        "--help": lambda rest: print_help(cli_name),
+        "man": lambda rest: manual_command.run(rest, cli_name=cli_name, manual_path=_manual_path),
+        "manual": lambda rest: manual_command.run(rest, cli_name=cli_name, manual_path=_manual_path),
+        "backends": run_backends,
+        "doctor": lambda rest: run_doctor(),
+        "migrate-config": run_migrate_config,
+        "init": lambda rest: run_init(args=rest, cli_name=cli_name),
+        "init-plugin": lambda rest: run_init_plugin(args=rest, cli_name=cli_name),
+        "plugins": run_plugins,
+        "status": run_status,
+        "top": run_top,
+        "explain": run_explain,
+        "diff": run_diff,
+        "benchmark": run_benchmark,
+        "trace": run_trace,
+        "tree": run_tree,
+    }
+
+
 def main() -> None:
     """Single entry point: retrain config.toml"""
     _load_dotenv()
@@ -73,65 +98,11 @@ def main() -> None:
     args = sys.argv[1:]
     cli_name = resolve_cli_name()
 
-    if args and args[0] in ("-h", "--help", "help"):
-        print_help(cli_name)
-        sys.exit(0)
-
-    if args and args[0] in ("man", "manual"):
-        manual_command.run(args[1:], cli_name=cli_name, manual_path=_manual_path)
-        sys.exit(0)
-
-    if args and args[0] == "backends":
-        run_backends(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "doctor":
-        run_doctor()
-        sys.exit(0)
-
-    if args and args[0] == "migrate-config":
-        run_migrate_config(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "init":
-        run_init(args=args[1:], cli_name=cli_name)
-        sys.exit(0)
-
-    if args and args[0] == "init-plugin":
-        run_init_plugin(args=args[1:], cli_name=cli_name)
-        sys.exit(0)
-
-    if args and args[0] == "plugins":
-        run_plugins(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "status":
-        run_status(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "top":
-        run_top(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "explain":
-        run_explain(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "diff":
-        run_diff(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "benchmark":
-        run_benchmark(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "trace":
-        run_trace(args[1:])
-        sys.exit(0)
-
-    if args and args[0] == "tree":
-        run_tree(args[1:])
-        sys.exit(0)
+    if args:
+        command = _commands(cli_name).get(args[0])
+        if command is not None:
+            command(args[1:])
+            sys.exit(0)
 
     # Parse CLI overrides
     from retrain.config import parse_cli_overrides

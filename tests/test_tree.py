@@ -564,7 +564,7 @@ class TestFormatNext:
 class TestCliTree:
     def test_view(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree([str(tree_path)])
         out = capsys.readouterr().out
@@ -573,7 +573,7 @@ class TestCliTree:
 
     def test_next(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["next", str(tree_path)])
         out = capsys.readouterr().out
@@ -581,7 +581,7 @@ class TestCliTree:
 
     def test_note(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["note", "a", "test note", str(tree_path)])
         out = capsys.readouterr().out
@@ -595,7 +595,7 @@ class TestCliTree:
 
     def test_eval_no_nodes(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["eval", str(tree_path)])
         out = capsys.readouterr().out
@@ -603,20 +603,20 @@ class TestCliTree:
 
     def test_unknown_node_note(self, tmp_path):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         with pytest.raises(SystemExit):
             _run_tree(["note", "nonexistent", "text", str(tree_path)])
 
     def test_unknown_node_run(self, tmp_path):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         with pytest.raises(SystemExit):
             _run_tree(["run", "nonexistent", str(tree_path)])
 
     def test_help(self, capsys):
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["--help"])
         out = capsys.readouterr().out
@@ -805,7 +805,7 @@ notes = "Some important note"
 class TestCliTreeShow:
     def test_show(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["show", "a", str(tree_path)])
         out = capsys.readouterr().out
@@ -814,7 +814,7 @@ class TestCliTreeShow:
 
     def test_show_unknown_node(self, tmp_path):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         with pytest.raises(SystemExit):
             _run_tree(["show", "nonexistent", str(tree_path)])
@@ -828,7 +828,7 @@ class TestCliTreeShow:
 class TestCliTreeReset:
     def test_reset(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         # Set up state first
         tree = load_tree(tree_path)
@@ -852,7 +852,7 @@ class TestCliTreeReset:
 class TestCliTreeJson:
     def test_view_json(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree([str(tree_path), "--json"])
         out = capsys.readouterr().out
@@ -862,7 +862,7 @@ class TestCliTreeJson:
 
     def test_show_json(self, tmp_path, capsys):
         tree_path = _write_tree(tmp_path)
-        from retrain.commands.tree import run as _run_tree
+        from retrain.commands.tree.run import run as _run_tree
 
         _run_tree(["show", "a", str(tree_path), "--json"])
         out = capsys.readouterr().out

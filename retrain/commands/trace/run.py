@@ -43,11 +43,11 @@ def run(args: list[str]) -> None:
             "probe_cases_passed": result.probe_cases_passed,
             "issues": [
                 {
-                    "severity": i.severity,
-                    "category": i.category,
-                    "message": i.message,
+                    "severity": issue.severity,
+                    "category": issue.category,
+                    "message": issue.message,
                 }
-                for i in result.issues
+                for issue in result.issues
             ],
             "flow": {
                 "condition_label": flow.condition_label,
