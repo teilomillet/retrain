@@ -702,6 +702,71 @@ def _keep_uniform_group(
     return False
 
 
+def _init_wandb(config: TrainConfig) -> WandbRunLike | None:
+    """Start a wandb run mirroring the config, or None when unconfigured."""
+    if not config.wandb_project:
+        return None
+    import wandb as wandb_module
+
+    wandb = cast(WandbModuleLike, wandb_module)
+    condition_label = _condition_label(config)
+    run_name = config.wandb_run_name or Path(config.log_dir).name or condition_label
+    wandb_tags = (
+        [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
+        if config.wandb_tags
+        else None
+    )
+    wandb_config: dict[str, str | int | float] = {
+        "algorithm_mode": config.algorithm_mode,
+        "advantage_mode": config.advantage_mode,
+        "transform_mode": config.transform_mode,
+        "uncertainty_kind": config.uncertainty_kind,
+        "condition": condition_label,
+        "model": config.model,
+        "lora_rank": config.lora_rank,
+        "lr": config.lr,
+        "batch_size": config.batch_size,
+        "group_size": config.group_size,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+        "gtpo_beta": config.gtpo_beta,
+        "hicra_alpha": config.hicra_alpha,
+        "sepa_steps": config.sepa_steps,
+        "sepa_delay_steps": config.sepa_delay_steps,
+        "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
+        "max_steps": config.max_steps,
+        "backend": config.backend,
+        "seed": config.seed,
+        "batch_advantage_norm": int(config.batch_advantage_norm),
+        "clip_eps": config.clip_eps,
+        "clip_eps_high": config.clip_eps_high,
+        "policy_loss_mode": config.policy_loss_mode,
+        "kl_cov_percent": config.kl_cov_percent,
+        "kl_cov_coef": config.kl_cov_coef,
+        "clip_cov_ratio": config.clip_cov_ratio,
+        "clip_cov_min": config.clip_cov_min,
+        "clip_cov_max": config.clip_cov_max,
+        "adv_clip_max": config.adv_clip_max,
+        "sft_warmup_steps": config.sft_warmup_steps,
+        "tl_grpo": int(config.tl_grpo),
+        "echo_enabled": int(config.echo_enabled),
+        "echo_weight": config.echo_weight,
+        "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
+        "echo_max_token_ratio": config.echo_max_token_ratio,
+        "echo_entropy_floor": config.echo_entropy_floor,
+    }
+    run = wandb.init(
+        project=config.wandb_project,
+        name=run_name,
+        config=wandb_config,
+        entity=config.wandb_entity or None,
+        group=config.wandb_group or None,
+        tags=wandb_tags,
+    )
+    print(f"Wandb initialized: {config.wandb_project}/{run_name}")
+    return run
+
+
 def _save_trainer_state(
     path: Path,
     *,
@@ -827,7 +892,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     )
 
     wandb_run: WandbRunLike | None = None
-    wandb_enabled = False
     backend_for_cleanup = getattr(flow, "backend", None)
 
     try:
@@ -928,68 +992,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         # 8. Optional wandb
         # -----------------------------------------------------------------------
-        wandb_enabled = bool(config.wandb_project)
-        if wandb_enabled:
-            import wandb as wandb_module
-
-            wandb = cast(WandbModuleLike, wandb_module)
-
-            condition_label = _condition_label(config)
-            default_run_name = Path(config.log_dir).name or condition_label
-            run_name = config.wandb_run_name or default_run_name
-            wandb_tags = (
-                [t.strip() for t in config.wandb_tags.split(",") if t.strip()]
-                if config.wandb_tags
-                else None
-            )
-            wandb_config: dict[str, str | int | float] = {
-                "algorithm_mode": config.algorithm_mode,
-                "advantage_mode": config.advantage_mode,
-                "transform_mode": config.transform_mode,
-                "uncertainty_kind": config.uncertainty_kind,
-                "condition": condition_label,
-                "model": config.model,
-                "lora_rank": config.lora_rank,
-                "lr": config.lr,
-                "batch_size": config.batch_size,
-                "group_size": config.group_size,
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
-                "gtpo_beta": config.gtpo_beta,
-                "hicra_alpha": config.hicra_alpha,
-                "sepa_steps": config.sepa_steps,
-                "sepa_delay_steps": config.sepa_delay_steps,
-                "sepa_correct_rate_gate": config.sepa_correct_rate_gate,
-                "max_steps": config.max_steps,
-                "backend": config.backend,
-                "seed": config.seed,
-                "batch_advantage_norm": int(config.batch_advantage_norm),
-                "clip_eps": config.clip_eps,
-                "clip_eps_high": config.clip_eps_high,
-                "policy_loss_mode": config.policy_loss_mode,
-                "kl_cov_percent": config.kl_cov_percent,
-                "kl_cov_coef": config.kl_cov_coef,
-                "clip_cov_ratio": config.clip_cov_ratio,
-                "clip_cov_min": config.clip_cov_min,
-                "clip_cov_max": config.clip_cov_max,
-                "adv_clip_max": config.adv_clip_max,
-                "sft_warmup_steps": config.sft_warmup_steps,
-                "tl_grpo": int(config.tl_grpo),
-                "echo_enabled": int(config.echo_enabled),
-                "echo_weight": config.echo_weight,
-                "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
-                "echo_max_token_ratio": config.echo_max_token_ratio,
-                "echo_entropy_floor": config.echo_entropy_floor,
-            }
-            wandb_run = wandb.init(
-                project=config.wandb_project,
-                name=run_name,
-                config=wandb_config,
-                entity=config.wandb_entity or None,
-                group=config.wandb_group or None,
-                tags=wandb_tags,
-            )
-            print(f"Wandb initialized: {config.wandb_project}/{run_name}")
+        wandb_run = _init_wandb(config)
 
         # -----------------------------------------------------------------------
         # 9. Training loop
@@ -2098,7 +2101,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             )
 
             # Wandb
-            if wandb_enabled and wandb_run is not None:
+            if wandb_run is not None:
                 wandb_metrics: dict[str, int | float | str] = {
                     "train/loss": loss_value,
                     "train/reported_loss": loss_value,
@@ -2282,7 +2285,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
         return final_path
     finally:
-        if wandb_enabled and wandb_run is not None:
+        if wandb_run is not None:
             try:
                 wandb_run.finish()
             except Exception:
