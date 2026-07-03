@@ -454,6 +454,11 @@ def run_benchmark_suite(
 
 
 def format_run_summary(summary: RunBenchmarkSummary) -> str:
+    peak_rss = (
+        f"{summary.peak_process_max_rss_mb:.3f}"
+        if summary.peak_process_max_rss_mb is not None
+        else "n/a"
+    )
     lines = [
         f"run: {summary.label}",
         f"path: {summary.path}",
@@ -465,9 +470,7 @@ def format_run_summary(summary: RunBenchmarkSummary) -> str:
         f"mean_sample_share: {summary.mean_sample_share:.3f}",
         f"mean_train_share: {summary.mean_train_share:.3f}",
         f"mean_tokens_per_second: {summary.mean_tokens_per_second:.3f}",
-        f"peak_process_max_rss_mb: "
-        f"{summary.peak_process_max_rss_mb:.3f}" if summary.peak_process_max_rss_mb is not None
-        else "peak_process_max_rss_mb: n/a",
+        f"peak_process_max_rss_mb: {peak_rss}",
         f"generations_bytes: {summary.generations_bytes}",
     ]
     for key in (
@@ -543,13 +546,14 @@ def format_suite_summary(summary: BenchmarkSuiteSummary) -> str:
     lines.append("")
     lines.append("runs:")
     for run in summary.runs:
+        rss = (
+            f"{run.peak_process_max_rss_mb:.3f}"
+            if run.peak_process_max_rss_mb is not None
+            else "n/a"
+        )
         lines.append(
             f"  {run.label}: step={run.mean_step_time_s:.3f}s "
             f"sample={run.mean_sample_share:.3f} train={run.mean_train_share:.3f} "
-            f"tok/s={run.mean_tokens_per_second:.3f} rss="
-            f"{run.peak_process_max_rss_mb:.3f}" if run.peak_process_max_rss_mb is not None
-            else f"  {run.label}: step={run.mean_step_time_s:.3f}s "
-            f"sample={run.mean_sample_share:.3f} train={run.mean_train_share:.3f} "
-            f"tok/s={run.mean_tokens_per_second:.3f} rss=n/a"
+            f"tok/s={run.mean_tokens_per_second:.3f} rss={rss}"
         )
     return "\n".join(lines)

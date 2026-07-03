@@ -7,7 +7,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from retrain.benchmark import run_benchmark_suite, summarize_run, summarize_suite
+from retrain.benchmark import (
+    format_run_summary,
+    format_suite_summary,
+    run_benchmark_suite,
+    summarize_run,
+    summarize_suite,
+)
 from retrain.config import TrainConfig
 
 
@@ -147,6 +153,8 @@ def test_summarize_run_reads_perf_fields(tmp_path) -> None:
     assert summary.mean_rollout_trajectory_step_s == 1.25
     assert summary.mean_rollout_env_dbt_total_s == 0.75
 
+    assert "peak_process_max_rss_mb: 512.000" in format_run_summary(summary)
+
 
 def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
     run_dir = tmp_path / "run"
@@ -273,3 +281,4 @@ def test_summarize_suite_reads_repeat_directories(tmp_path) -> None:
 
     assert suite.repeats == 2
     assert suite.aggregates["wall_time_s"].mean == 1.5
+    assert "rss=n/a" in format_suite_summary(suite)
