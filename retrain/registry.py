@@ -24,7 +24,7 @@ from retrain.backends.catalog import (
 )
 from retrain.training.backpressure import BackPressure
 from retrain.config import TrainConfig
-from retrain.data import DataSource
+from retrain.data.source import DataSource
 from retrain.plugins.resolve import resolve_dotted_attribute
 from retrain.planning.types import PlanningDetector
 from retrain.rewards.types import RewardFunction
@@ -267,7 +267,7 @@ def _detector_semantic(config: TrainConfig) -> PlanningDetector:
 
 @data_source.register("math")
 def _data_math(config: TrainConfig) -> DataSource:
-    from retrain.data import MathDataSource
+    from retrain.data.math import MathDataSource
     return MathDataSource(config.max_examples)
 
 

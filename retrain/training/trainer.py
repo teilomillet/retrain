@@ -29,7 +29,7 @@ from retrain.training.backpressure import (
     StepObservation,
 )
 from retrain.config import TrainConfig
-from retrain.data import Example
+from retrain.data.source import Example
 from retrain.training.echo import (
     EchoBuildStats,
     EchoLimitStats,

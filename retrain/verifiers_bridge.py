@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import types
 from typing import TYPE_CHECKING, Protocol, cast
 
-from retrain.data import Example
+from retrain.data.source import Example
 from retrain.type_defs import ExampleInfoLike, JSONObject, PromptLike
 
 if TYPE_CHECKING:

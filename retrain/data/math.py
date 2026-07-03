@@ -1,30 +1,9 @@
-"""Data source for MATH training."""
+"""Built-in MATH dataset source."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
-
+from retrain.data.source import Example
 from retrain.rewards.boxed import extract_boxed
-from retrain.type_defs import ExampleInfoLike, PromptLike
-
-
-@dataclass
-class Example:
-    """A single training example: prompt + reference answer."""
-    prompt: PromptLike
-    reference: str
-    task: str = "default"
-    info: ExampleInfoLike = None
-    example_id: int | str = -1
-
-
-@runtime_checkable
-class DataSource(Protocol):
-    """Any object that can load training examples."""
-
-    def load(self) -> list[Example]: ...
-
 
 _DEFAULT_SUBJECTS = [
     "intermediate_algebra",
