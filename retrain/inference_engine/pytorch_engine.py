@@ -408,7 +408,7 @@ class PyTorchEngine(InferenceEngine):
                         num_samples,
                     )
                     return outputs
-                except Exception:  # noqa: BLE001 - exact-prefix reuse must fall back.
+                except Exception:  # Exact-prefix reuse must fall back to normal sampling.
                     self._prefix_cache_fallbacks += 1
 
         self._prefix_cache_misses += 1
@@ -481,7 +481,7 @@ class PyTorchEngine(InferenceEngine):
                 fallback_input_ids=generated,
                 fallback_attention_mask=torch.ones_like(generated),
             )
-        except Exception:  # noqa: BLE001 - cache advance must not break sampling.
+        except Exception:  # Cache advance must not break sampling.
             self._prefix_cache_fallbacks += 1
             return past_key_values
         finally:

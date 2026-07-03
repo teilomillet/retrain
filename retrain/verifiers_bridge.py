@@ -1207,7 +1207,7 @@ def run_multiturn_group(
                         await cleanup_openenv_state(state)
                     else:
                         await env_typed.cleanup(state)
-                except Exception as exc:  # noqa: BLE001 - preserve rollout failures.
+                except Exception as exc:  # Preserve rollout failures.
                     cleanup_error = cleanup_error or exc
             if cleanup_error is not None and not active_exception:
                 raise cleanup_error

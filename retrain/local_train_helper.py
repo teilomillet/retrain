@@ -587,7 +587,7 @@ class LocalTrainHelper:
                 memory = getattr(torch.cuda, "memory")
                 setter = getattr(memory, "_set_allocator_settings")
             setter("expandable_segments:True")
-        except Exception as exc:  # noqa: BLE001 - allocator tuning must not kill runs
+        except Exception as exc:  # Allocator tuning must not kill runs.
             metrics["set_failed"] = 1
             print(f"cuda_expandable_segments setup failed: {exc}")
             return
@@ -666,7 +666,7 @@ class LocalTrainHelper:
             )
 
             loss = LigerFusedLinearCrossEntropyLoss(reduction="none")
-        except Exception:  # noqa: BLE001 - optional accelerator path.
+        except Exception:  # Optional accelerator path.
             return None
         self._liger_fused_ce_loss = loss
         return loss
@@ -1131,7 +1131,7 @@ class LocalTrainHelper:
         if future is not None:
             try:
                 future.result()
-            except Exception:  # noqa: BLE001 - cleanup should not mask failures.
+            except Exception:  # Cleanup should not mask failures.
                 pass
 
         executor = getattr(self, "_train_executor", None)
@@ -1145,7 +1145,7 @@ class LocalTrainHelper:
         if engine is not None:
             try:
                 engine.shutdown()
-            except Exception:  # noqa: BLE001 - best-effort cleanup.
+            except Exception:  # Best-effort cleanup.
                 pass
 
         for name in (
@@ -1159,19 +1159,19 @@ class LocalTrainHelper:
             if hasattr(self, name):
                 try:
                     delattr(self, name)
-                except Exception:  # noqa: BLE001 - best-effort cleanup.
+                except Exception:  # Best-effort cleanup.
                     pass
 
         gc.collect()
         if torch.cuda.is_available():
             try:
                 torch.cuda.synchronize()
-            except Exception:  # noqa: BLE001 - CUDA may be recovering from OOM.
+            except Exception:  # CUDA may be recovering from OOM.
                 pass
             try:
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
-            except Exception:  # noqa: BLE001 - cleanup must not raise.
+            except Exception:  # Cleanup must not raise.
                 pass
 
     def _record_selective_logprob_path(self, path: str) -> None:
@@ -1316,7 +1316,7 @@ class LocalTrainHelper:
                     bias,
                     target_ids,
                 )
-        except Exception as exc:  # noqa: BLE001 - optional compiler path.
+        except Exception as exc:  # Optional compiler path.
             self._compiled_selective_ce_available = False
             return self._reject_compiled_selective_ce(type(exc).__name__)
 
@@ -1332,7 +1332,7 @@ class LocalTrainHelper:
             return cached
         try:
             try:
-                import unsloth  # type: ignore[import-not-found]  # noqa: F401
+                import unsloth  # type: ignore[import-not-found]
             except Exception:
                 pass
             from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
@@ -1341,7 +1341,7 @@ class LocalTrainHelper:
             from unsloth_zoo.loss_utils import (  # type: ignore[import-not-found]
                 unsloth_fused_ce_loss,
             )
-        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+        except Exception as exc:  # Optional accelerator path.
             self._unsloth_fused_ce_available = False
             self._unsloth_fused_ce_unavailable_reason = type(exc).__name__
             return None
@@ -1365,7 +1365,7 @@ class LocalTrainHelper:
             total_gb = torch.cuda.get_device_properties(device).total_memory / (
                 1024**3
             )
-        except Exception:  # noqa: BLE001 - diagnostic/tuning fallback only.
+        except Exception:  # Diagnostic/tuning fallback only.
             return 0.0
         if total_gb <= 16:
             return 0.25
@@ -1389,7 +1389,7 @@ class LocalTrainHelper:
         self._unsloth_fused_ce_runtime_disabled = True
         try:
             torch._dynamo.reset()
-        except Exception:  # noqa: BLE001 - best-effort compiler cleanup.
+        except Exception:  # Best-effort compiler cleanup.
             pass
         return reason
 
@@ -1459,7 +1459,7 @@ class LocalTrainHelper:
                 input_ids,
                 attention_mask,
             )
-        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+        except Exception as exc:  # Optional accelerator path.
             if self._is_cuda_oom_exception(exc):
                 raise
             reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
@@ -1501,7 +1501,7 @@ class LocalTrainHelper:
                 shift_labels=True,
                 ignore_index=ignore_index,
             )
-        except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+        except Exception as exc:  # Optional accelerator path.
             if self._is_cuda_oom_exception(exc):
                 raise
             reason = self._disable_unsloth_fused_ce_after_runtime_failure(exc)
@@ -1538,7 +1538,7 @@ class LocalTrainHelper:
                 )
         except TypeError:
             supported = False
-        except Exception:  # noqa: BLE001 - fall back to the hidden-state path.
+        except Exception:  # Fall back to the hidden-state path.
             supported = False
         else:
             logits = getattr(outputs, "logits", None)

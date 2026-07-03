@@ -71,7 +71,7 @@ def install_cudnn_causal_conv1d_shim(*, enabled: bool) -> dict[str, object]:
         import torch
         import torch.nn.functional as F
         import cudnn  # type: ignore[import-not-found]
-    except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+    except Exception as exc:  # Optional accelerator path: report and continue.
         report["cudnn_causal_conv1d_shim_error"] = f"{type(exc).__name__}: {exc}"
         return report
 
@@ -266,6 +266,6 @@ def apply_liger_kernel_if_available(
         patcher()
         report["liger_kernel_applied"] = 1
         return report
-    except Exception as exc:  # noqa: BLE001 - optional accelerator path.
+    except Exception as exc:  # Optional accelerator path: report and continue.
         report["liger_kernel_error"] = f"{type(exc).__name__}: {exc}"
         return report

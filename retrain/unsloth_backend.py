@@ -326,7 +326,7 @@ class UnslothTrainHelper(LocalTrainHelper):
                 )
                 or 0
             )
-        except Exception:  # noqa: BLE001 - diagnostics only.
+        except Exception:  # Diagnostics only.
             return 0
 
     def _resolve_qwen35_gated_delta_patch(self) -> tuple[str, int]:

@@ -36,7 +36,7 @@ def _cuda_capability(device: str | None) -> tuple[int, int]:
         if not torch.cuda.is_available():
             return (0, 0)
         return tuple(torch.cuda.get_device_capability(torch.device(device)))
-    except Exception:  # noqa: BLE001 - diagnostic only.
+    except Exception:  # Diagnostic only.
         return (0, 0)
 
 

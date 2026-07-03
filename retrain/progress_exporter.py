@@ -357,7 +357,7 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
 class _ExporterHandler(BaseHTTPRequestHandler):
     root: Path = Path(".")
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         snapshots = collect_run_snapshots(self.root)
         if self.path in ("/metrics", "/metrics/"):
             payload = render_prometheus_text(snapshots).encode("utf-8")
@@ -399,7 +399,7 @@ class _ExporterHandler(BaseHTTPRequestHandler):
             return
         self.send_error(HTTPStatus.NOT_FOUND, "not found")
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+    def log_message(self, format: str, *args: object) -> None:
         return
 
 
