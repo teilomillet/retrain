@@ -1,4 +1,4 @@
-"""Token-id helpers shared by model-specific runtime code."""
+"""Token id parsing shared by model-specific runtime code."""
 
 from __future__ import annotations
 

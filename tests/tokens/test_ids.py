@@ -1,11 +1,11 @@
-"""Tests for shared token-id helpers."""
+"""Tests for shared token id parsing."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 from retrain.gemma4_text import eos_token_ids
-from retrain.token_ids import coerce_token_id_set, model_eos_token_ids
+from retrain.tokens.ids import coerce_token_id_set, model_eos_token_ids
 
 
 def test_coerce_token_id_set_handles_none_scalar_and_iterables() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from retrain.token_ids import model_eos_token_ids
+from retrain.tokens.ids import model_eos_token_ids
 
 
 DEFAULT_LORA_TARGET_MODULES = (
