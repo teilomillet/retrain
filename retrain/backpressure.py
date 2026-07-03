@@ -209,7 +209,6 @@ class USLBackPressure:
         self.p_star = 1.0
         self.fitted_lambda = 1.0  # recovered serial throughput coefficient
         self.ema_throughput = 0.0
-        self.prev_ema_throughput = 0.0
         self.regime = "warmup"
         self.last_batch_size = min_batch_size
         self.last_group_size = min_group_size
@@ -258,7 +257,6 @@ class USLBackPressure:
         throughput = total_tokens / step_time if step_time > self.eps else 0.0
 
         # Update EMA — seed on first real (non-skipped) observation
-        self.prev_ema_throughput = self.ema_throughput
         if not self._ema_initialized:
             self.ema_throughput = throughput
             self._ema_initialized = True
@@ -449,7 +447,6 @@ class USLBackPressure:
         self.p_star = 1.0
         self.fitted_lambda = 1.0
         self.ema_throughput = 0.0
-        self.prev_ema_throughput = 0.0
         self.regime = "warmup"
         self.last_batch_size = self.min_batch_size
         self.last_group_size = self.min_group_size
