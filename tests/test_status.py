@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from dataclasses import fields
 from pathlib import Path
 from unittest.mock import patch
 
@@ -213,6 +214,7 @@ class TestScanRun:
             [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
         )
         result = scan_run(run_dir)
+        assert result is not None
         d = result.to_dict()
         assert d["step"] == 0
         assert d["condition"] == "test"
@@ -456,6 +458,7 @@ class TestCampaignWithStepProgress:
         )
 
         result = scan_campaign(campaign_dir)
+        assert result is not None
         text = format_campaign(result)
         # Active run shows step/max_steps
         assert "42/100" in text
@@ -487,6 +490,7 @@ class TestCampaignWithStepProgress:
         os.utime(metrics_path, (old_time, old_time))
 
         result = scan_campaign(campaign_dir)
+        assert result is not None
         text = format_campaign(result)
         assert "13 \u2717" in text
 
@@ -506,6 +510,7 @@ class TestCampaignWithStepProgress:
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
         # Don't create any metrics
         result = scan_campaign(campaign_dir)
+        assert result is not None
         text = format_campaign(result)
         assert "\u2014" in text  # em-dash
 
@@ -750,6 +755,7 @@ class TestRunnerPidOverridesStaleness:
         os.utime(metrics_path, (old_time, old_time))
 
         result = scan_campaign(campaign_dir)
+        assert result is not None
         text = format_campaign(result)
         # Should show step/max (alive), NOT step ✗ (dead)
         assert "13/100" in text
@@ -914,3 +920,26 @@ class TestTrainerField:
         run = RunSummary(path="logs/train", trainer="command")
         d = run.to_dict()
         assert d["trainer"] == "command"
+
+    def test_run_to_dict_exports_all_dataclass_fields(self):
+        """RunSummary JSON shape stays aligned with the dataclass contract."""
+        run = RunSummary(path="logs/train", trainer="command")
+        assert set(run.to_dict()) == {f.name for f in fields(RunSummary)}
+
+    def test_campaign_to_dict_exports_flat_matrix(self):
+        """Campaign matrix exports scores, not nested RunSummary objects."""
+        run = RunSummary(path="r1", correct_rate=0.75)
+        camp = CampaignSummary(
+            path="logs/campaign",
+            conditions=["cond"],
+            seeds=[1, 2],
+            runs=[run],
+            matrix={"cond": {1: run, 2: None}},
+            status="partial",
+        )
+
+        payload = camp.to_dict()
+
+        assert set(payload) == {f.name for f in fields(CampaignSummary)}
+        assert payload["runs"] == [run.to_dict()]
+        assert payload["matrix"] == {"cond": {1: 0.75, 2: None}}

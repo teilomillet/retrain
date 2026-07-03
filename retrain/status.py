@@ -11,7 +11,7 @@ import json
 import os
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from retrain.metrics_scan import float_or_none, int_or_none, scan_metrics_file
@@ -95,8 +95,27 @@ class RunSummary:
     train_share: float = 0.0
     process_max_rss_mb: float = 0.0
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "condition": self.condition,
+            "step": self.step,
+            "max_steps": self.max_steps,
+            "correct_rate": self.correct_rate,
+            "loss": self.loss,
+            "mean_reward": self.mean_reward,
+            "wall_time_s": self.wall_time_s,
+            "completed": self.completed,
+            "stale": self.stale,
+            "pid": self.pid,
+            "alive": self.alive,
+            "trainer": self.trainer,
+            "latest_step_time_s": self.latest_step_time_s,
+            "tokens_per_second": self.tokens_per_second,
+            "sample_share": self.sample_share,
+            "train_share": self.train_share,
+            "process_max_rss_mb": self.process_max_rss_mb,
+        }
 
 
 @dataclass
@@ -120,17 +139,31 @@ class CampaignSummary:
     runner_alive: bool = False
     last_activity: float = 0.0  # epoch timestamp of most recent metrics write
 
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        d["runs"] = [r.to_dict() for r in self.runs]
-        # Flatten matrix to serialisable form (step values)
+    def to_dict(self) -> dict[str, object]:
+        # Matrix cells contain RunSummary objects for display; JSON output keeps
+        # only the compact score view used by the CLI status API.
         flat_matrix: dict[str, dict[int, float | None]] = {}
         for cond, seeds in self.matrix.items():
             flat_matrix[cond] = {}
             for seed, run in seeds.items():
                 flat_matrix[cond][seed] = run.correct_rate if run is not None else None
-        d["matrix"] = flat_matrix
-        return d
+        return {
+            "path": self.path,
+            "conditions": list(self.conditions),
+            "seeds": list(self.seeds),
+            "max_steps": self.max_steps,
+            "num_runs": self.num_runs,
+            "completed": self.completed,
+            "failed": self.failed,
+            "runs": [r.to_dict() for r in self.runs],
+            "matrix": flat_matrix,
+            "status": self.status,
+            "campaign_toml": self.campaign_toml,
+            "timestamp": self.timestamp,
+            "runner_pid": self.runner_pid,
+            "runner_alive": self.runner_alive,
+            "last_activity": self.last_activity,
+        }
 
 
 def format_time(seconds: float) -> str:
