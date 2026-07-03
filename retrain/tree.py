@@ -381,21 +381,22 @@ def evaluate_node(tree: Tree, node_id: str) -> str | None:
 # ASCII rendering
 # ---------------------------------------------------------------------------
 
-_STATUS_ICONS = {
+_STATUS_ICONS: dict[str, str] = {
     "pending": "[ ]",
     "locked": "[#]",
     "running": "[~]",
-    "done": {
-        "success": "[✓]",
-        "failure": "[✗]",
-    },
     "skipped": "[-]",
+}
+
+_DONE_STATUS_ICONS: dict[str, str] = {
+    "success": "[✓]",
+    "failure": "[✗]",
 }
 
 
 def _icon(status: str, outcome: str = "") -> str:
     if status == "done":
-        return _STATUS_ICONS["done"].get(outcome, "[?]")
+        return _DONE_STATUS_ICONS.get(outcome, "[?]")
     return _STATUS_ICONS.get(status, "[?]")
 
 
