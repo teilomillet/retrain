@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from retrain.delight_campaign_summary import (
+from retrain.campaign.delight import (
     SUMMARY_JSON_NAME,
     SUMMARY_MD_NAME,
     render_delight_summary,

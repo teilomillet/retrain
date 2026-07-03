@@ -1,4 +1,4 @@
-"""Tests for retrain.progress_exporter."""
+"""Tests for retrain.status.export."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from retrain.progress_exporter import _render_runs_json, collect_run_snapshots, render_prometheus_text
+from retrain.status.export import _render_runs_json, collect_run_snapshots, render_prometheus_text
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

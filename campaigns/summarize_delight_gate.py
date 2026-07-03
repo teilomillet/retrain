@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from retrain.delight_campaign_summary import main
+from retrain.campaign.delight import main
 
 
 if __name__ == "__main__":

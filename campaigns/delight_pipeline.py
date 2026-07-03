@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from retrain.campaign import run_campaign
-from retrain.delight_campaign_summary import summarize_delight_campaign, write_delight_summary
+from retrain.campaign.delight import summarize_delight_campaign, write_delight_summary
 
 
 def main(argv: list[str] | None = None) -> int:
