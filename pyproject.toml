@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-local = ["torch>=2.4.0", "hf_transfer>=0.1.6"]
+local = ["torch>=2.4.0"]
 cuda-accelerated = [
     "torch>=2.4.0",
     "flash-linear-attention[cuda]",

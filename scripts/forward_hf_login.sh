@@ -14,6 +14,10 @@ set -euo pipefail
 # the remote's token file over SSH stdin: it never appears in argv, `ps`, or
 # shell history on either side. huggingface_hub reads that file in every process
 # afterwards, so `retrain` authenticates on the node with nothing else to set.
+#
+# On an ephemeral / untrusted node, forward a READ-scoped token rather than your
+# default (which may carry write access):
+#   HF_TOKEN=hf_readonly scripts/forward_hf_login.sh <ssh-target>
 
 target="${1:-}"
 if [ -z "$target" ]; then
