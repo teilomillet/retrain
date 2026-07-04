@@ -1,4 +1,4 @@
-"""Guard behavior for the hf_transfer auto-enable (retrain/_hf_transfer.py)."""
+"""Guard behavior for the hf_transfer auto-enable (retrain/io/hub.py)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-import retrain._hf_transfer as hft
+import retrain.io.hub as hft
 
 FLAG = "HF_HUB_ENABLE_HF_TRANSFER"
 
