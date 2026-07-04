@@ -9,8 +9,10 @@ Inspired by Jane Street's "getting from tested to battle-tested":
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -18,7 +20,12 @@ import pytest
 
 import retrain.training.sft as sft_module
 from retrain.config import TrainConfig, load_config
-from retrain.training.sft import SftExample, load_sft_jsonl, tokenize_sft_batch
+from retrain.training.sft import (
+    SftExample,
+    load_sft_dataset,
+    load_sft_jsonl,
+    tokenize_sft_batch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +175,71 @@ class TestGenericSftJsonl:
         assert len(batch.tokens) == 3
         assert batch.supervised_tokens > 0
         assert batch.total_tokens >= batch.supervised_tokens
+
+    def test_load_sft_dataset_records_file_provenance(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        data_path = data_dir / "sft.jsonl"
+        payload = json.dumps({"text": "plain next-token text"}) + "\n\n"
+        data_path.write_text(payload)
+
+        dataset = load_sft_dataset(data_path)
+
+        assert len(dataset.examples) == 1
+        assert dataset.provenance.data_path == str(data_path.resolve())
+        assert dataset.provenance.data_sha256 == hashlib.sha256(
+            payload.encode("utf-8")
+        ).hexdigest()
+        assert dataset.provenance.data_rows == 1
+        assert dataset.provenance.data_bytes == len(payload.encode("utf-8"))
+        assert dataset.provenance.data_root == str(data_dir.resolve())
+        assert dataset.provenance.data_path_status == "scratch"
+        assert any(
+            "scratch/tmp" in warning
+            for warning in dataset.provenance.data_warnings
+        )
+
+    def test_load_sft_dataset_records_git_tracking_status(self, tmp_path):
+        repo_dir = tmp_path / "repo"
+        data_dir = repo_dir / "data"
+        data_dir.mkdir(parents=True)
+        data_path = data_dir / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        try:
+            subprocess.run(
+                ["git", "init"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            pytest.skip("git is unavailable")
+
+        untracked = load_sft_dataset(data_path)
+
+        assert untracked.provenance.git_root == str(repo_dir.resolve())
+        assert untracked.provenance.git_tracked is False
+        assert any(
+            "not tracked by git" in warning
+            for warning in untracked.provenance.data_warnings
+        )
+
+        subprocess.run(
+            ["git", "add", "data/sft.jsonl"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        staged = load_sft_dataset(data_path)
+
+        assert staged.provenance.git_root == str(repo_dir.resolve())
+        assert staged.provenance.git_tracked is True
+        assert not any(
+            "not tracked by git" in warning
+            for warning in staged.provenance.data_warnings
+        )
 
     def test_message_sft_disables_thinking_when_supported(self):
         tokenizer = _ThinkingTokenizer()

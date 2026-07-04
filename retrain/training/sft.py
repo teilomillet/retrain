@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import random
+import subprocess
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +31,29 @@ class SftExample:
     prompt: str = ""
     completion: str = ""
     text: str = ""
+
+
+@dataclass(frozen=True)
+class SftDataProvenance:
+    """Provenance for the exact SFT JSONL file used by a run."""
+
+    data_path: str
+    data_sha256: str
+    data_rows: int
+    data_bytes: int
+    data_path_status: str
+    data_root: str = ""
+    git_root: str = ""
+    git_tracked: bool | None = None
+    data_warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SftDataset:
+    """Loaded SFT examples plus file-level provenance."""
+
+    examples: list[SftExample]
+    provenance: SftDataProvenance
 
 
 @dataclass(frozen=True)
@@ -94,61 +120,185 @@ def _coerce_messages(raw: object, *, path: Path, line_no: int) -> list[dict[str,
     return messages
 
 
-def load_sft_jsonl(path: str | Path) -> list[SftExample]:
-    """Load supported SFT JSONL rows with line-numbered validation errors."""
-    sft_path = Path(path)
-    examples: list[SftExample] = []
-    with open(sft_path) as f:
-        for line_no, line in enumerate(f, start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise _row_error(sft_path, line_no, f"invalid JSON: {exc.msg}") from exc
-            if not isinstance(row, Mapping):
-                raise _row_error(sft_path, line_no, "row must be a JSON object.")
-            row_map = cast(Mapping[str, object], row)
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
-            if "messages" in row_map:
-                examples.append(
-                    SftExample(
-                        messages=_coerce_messages(
-                            row_map["messages"],
-                            path=sft_path,
-                            line_no=line_no,
-                        )
+
+def _named_data_root(path: Path) -> Path | None:
+    for parent in (path.parent, *path.parents):
+        if parent.name in {"data", "datasets"}:
+            return parent
+    return None
+
+
+def _is_scratch_path(path: Path) -> bool:
+    scratch_roots = {
+        Path(tempfile.gettempdir()).resolve(),
+        Path("/tmp").resolve(),
+        Path("/private/tmp").resolve(),
+    }
+    return any(_is_relative_to(path, root) for root in scratch_roots)
+
+
+def _git_tracking(path: Path) -> tuple[str, bool | None]:
+    try:
+        root_proc = subprocess.run(
+            ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return "", None
+    if root_proc.returncode != 0:
+        return "", None
+
+    git_root = Path(root_proc.stdout.strip()).resolve()
+    try:
+        relative_path = path.relative_to(git_root)
+    except ValueError:
+        return str(git_root), None
+
+    tracked_proc = subprocess.run(
+        ["git", "-C", str(git_root), "ls-files", "--error-unmatch", str(relative_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return str(git_root), tracked_proc.returncode == 0
+
+
+def _build_sft_data_provenance(
+    path: Path,
+    *,
+    raw_bytes: bytes,
+    data_rows: int,
+) -> SftDataProvenance:
+    data_root = _named_data_root(path)
+    git_root, git_tracked = _git_tracking(path)
+    scratch = _is_scratch_path(path)
+    if scratch:
+        status = "scratch"
+    elif data_root is None:
+        status = "outside_data_root"
+    else:
+        status = "data_root"
+
+    warnings: list[str] = []
+    if scratch:
+        warnings.append(
+            f"SFT data resolves under scratch/tmp ({path}); move durable training "
+            "data under a tracked data/ or datasets/ root."
+        )
+    if data_root is None:
+        warnings.append(
+            f"SFT data resolves outside a data/ or datasets/ root ({path})."
+        )
+    if git_tracked is None:
+        warnings.append(
+            f"SFT data git tracking could not be verified for {path}; "
+            "keep durable training data in a git checkout when possible."
+        )
+    if git_tracked is False:
+        warnings.append(
+            f"SFT data is not tracked by git in {git_root}: {path}."
+        )
+
+    return SftDataProvenance(
+        data_path=str(path),
+        data_sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        data_rows=int(data_rows),
+        data_bytes=len(raw_bytes),
+        data_path_status=status,
+        data_root=str(data_root) if data_root else "",
+        git_root=git_root,
+        git_tracked=git_tracked,
+        data_warnings=tuple(warnings),
+    )
+
+
+def _load_sft_jsonl_rows(path: Path, text: str) -> list[SftExample]:
+    examples: list[SftExample] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise _row_error(path, line_no, f"invalid JSON: {exc.msg}") from exc
+        if not isinstance(row, Mapping):
+            raise _row_error(path, line_no, "row must be a JSON object.")
+        row_map = cast(Mapping[str, object], row)
+
+        if "messages" in row_map:
+            examples.append(
+                SftExample(
+                    messages=_coerce_messages(
+                        row_map["messages"],
+                        path=path,
+                        line_no=line_no,
                     )
                 )
-                continue
-
-            if "prompt" in row_map or "completion" in row_map:
-                prompt = row_map.get("prompt")
-                completion = row_map.get("completion")
-                if not isinstance(prompt, str):
-                    raise _row_error(sft_path, line_no, "'prompt' must be a string.")
-                if not isinstance(completion, str) or not completion:
-                    raise _row_error(
-                        sft_path,
-                        line_no,
-                        "'completion' must be a non-empty string.",
-                    )
-                examples.append(SftExample(prompt=prompt, completion=completion))
-                continue
-
-            if "text" in row_map:
-                text = row_map.get("text")
-                if not isinstance(text, str) or not text:
-                    raise _row_error(sft_path, line_no, "'text' must be a non-empty string.")
-                examples.append(SftExample(text=text))
-                continue
-
-            raise _row_error(
-                sft_path,
-                line_no,
-                "expected one of 'messages', 'prompt'+'completion', or 'text'.",
             )
+            continue
+
+        if "prompt" in row_map or "completion" in row_map:
+            prompt = row_map.get("prompt")
+            completion = row_map.get("completion")
+            if not isinstance(prompt, str):
+                raise _row_error(path, line_no, "'prompt' must be a string.")
+            if not isinstance(completion, str) or not completion:
+                raise _row_error(
+                    path,
+                    line_no,
+                    "'completion' must be a non-empty string.",
+                )
+            examples.append(SftExample(prompt=prompt, completion=completion))
+            continue
+
+        if "text" in row_map:
+            text_value = row_map.get("text")
+            if not isinstance(text_value, str) or not text_value:
+                raise _row_error(path, line_no, "'text' must be a non-empty string.")
+            examples.append(SftExample(text=text_value))
+            continue
+
+        raise _row_error(
+            path,
+            line_no,
+            "expected one of 'messages', 'prompt'+'completion', or 'text'.",
+        )
     return examples
+
+
+def load_sft_dataset(path: str | Path) -> SftDataset:
+    """Load SFT JSONL rows and provenance from the exact parsed bytes."""
+
+    sft_path = Path(path).expanduser().resolve(strict=True)
+    raw_bytes = sft_path.read_bytes()
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Invalid SFT JSONL file {sft_path}: expected UTF-8 text.") from exc
+    examples = _load_sft_jsonl_rows(sft_path, text)
+    return SftDataset(
+        examples=examples,
+        provenance=_build_sft_data_provenance(
+            sft_path,
+            raw_bytes=raw_bytes,
+            data_rows=len(examples),
+        ),
+    )
+
+
+def load_sft_jsonl(path: str | Path) -> list[SftExample]:
+    """Load supported SFT JSONL rows with line-numbered validation errors."""
+
+    return load_sft_dataset(path).examples
 
 
 def build_sft_example_order(
@@ -364,6 +514,7 @@ def build_sft_artifact_manifest(
     batch_size: int,
     max_tokens: int,
     loss_fn: str,
+    data_provenance: SftDataProvenance | None = None,
     latest_metrics: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a self-describing manifest for an SFT LoRA adapter."""
@@ -371,6 +522,33 @@ def build_sft_artifact_manifest(
     adapter_files: list[str] = []
     if adapter_dir.is_dir():
         adapter_files = sorted(path.name for path in adapter_dir.iterdir() if path.is_file())
+
+    sft_payload: dict[str, object] = {
+        "data_path": config.sft_data_path,
+        "examples": int(examples_count),
+        "batch_size": int(batch_size),
+        "max_tokens": int(max_tokens),
+        "max_steps": int(config.max_steps),
+        "lr": float(config.sft_lr if config.sft_lr > 0 else config.lr),
+        "loss_fn": loss_fn,
+        "batch_order": config.sft_batch_order,
+        "length_bucket_size": int(config.sft_length_bucket_size),
+    }
+    if data_provenance is not None:
+        sft_payload.update(
+            {
+                "configured_data_path": config.sft_data_path,
+                "data_path": data_provenance.data_path,
+                "data_sha256": data_provenance.data_sha256,
+                "data_rows": data_provenance.data_rows,
+                "data_bytes": data_provenance.data_bytes,
+                "data_path_status": data_provenance.data_path_status,
+                "data_root": data_provenance.data_root,
+                "git_root": data_provenance.git_root,
+                "git_tracked": data_provenance.git_tracked,
+                "data_warnings": list(data_provenance.data_warnings),
+            }
+        )
 
     return {
         "schema_version": 1,
@@ -385,17 +563,7 @@ def build_sft_artifact_manifest(
             "from": config.log_dir,
             "checkpoint_path": str(adapter_dir),
         },
-        "sft": {
-            "data_path": config.sft_data_path,
-            "examples": int(examples_count),
-            "batch_size": int(batch_size),
-            "max_tokens": int(max_tokens),
-            "max_steps": int(config.max_steps),
-            "lr": float(config.sft_lr if config.sft_lr > 0 else config.lr),
-            "loss_fn": loss_fn,
-            "batch_order": config.sft_batch_order,
-            "length_bucket_size": int(config.sft_length_bucket_size),
-        },
+        "sft": sft_payload,
         "lora": {
             "rank": int(config.lora_rank),
             "alpha": int(config.lora_alpha if config.lora_alpha else config.lora_rank * 2),

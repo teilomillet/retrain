@@ -1,5 +1,6 @@
 """Tests for the pluggable training runner system."""
 
+import hashlib
 import json
 from dataclasses import MISSING, fields
 from typing import cast
@@ -364,9 +365,19 @@ class TestSftRunner:
             adapter_path / "final"
         )
         manifest = json.loads((log_dir / "sft_manifest.json").read_text())
+        data_bytes = data_path.read_bytes()
         assert manifest["kind"] == "retrain_sft_adapter"
         assert manifest["base_model"] == "fake-model"
         assert manifest["adapter_path"] == str(adapter_path / "final")
+        assert manifest["sft"]["configured_data_path"] == str(data_path)
+        assert manifest["sft"]["data_path"] == str(data_path.resolve())
+        assert manifest["sft"]["data_sha256"] == hashlib.sha256(data_bytes).hexdigest()
+        assert manifest["sft"]["data_rows"] == 1
+        assert manifest["sft"]["data_bytes"] == len(data_bytes)
+        assert manifest["sft"]["data_path_status"] == "scratch"
+        assert any(
+            "scratch/tmp" in warning for warning in manifest["sft"]["data_warnings"]
+        )
         assert manifest["huggingface"]["format"] == "peft_lora_adapter"
         assert manifest["ergonomics"]["no_rl_rollouts"] is True
         adapter_manifest = json.loads(

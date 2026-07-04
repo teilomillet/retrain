@@ -42,7 +42,7 @@ class SftRunner:
             build_sft_artifact_manifest,
             build_sft_example_order,
             effective_sft_loss_fn,
-            load_sft_jsonl,
+            load_sft_dataset,
             select_sft_batch_indices,
             tokenize_sft_dataset,
             write_sft_artifact_manifest,
@@ -61,9 +61,12 @@ class SftRunner:
         metrics_logger = JsonlLogger(str(log_dir / "metrics.jsonl"))
         steps_logger = JsonlLogger(str(emergence_dir / "steps.jsonl"))
 
-        examples = load_sft_jsonl(config.sft_data_path)
+        dataset = load_sft_dataset(config.sft_data_path)
+        examples = dataset.examples
         if not examples:
             raise RuntimeError("SFT dataset is empty — cannot fine-tune with zero examples.")
+        for warning in dataset.provenance.data_warnings:
+            print(f"WARNING: {warning}")
 
         if config.seed >= 0:
             import random
@@ -88,6 +91,8 @@ class SftRunner:
         print(f"  model         : {config.model}")
         print(f"  backend       : {config.backend}")
         print(f"  examples      : {len(examples)}")
+        print(f"  data_path     : {dataset.provenance.data_path}")
+        print(f"  data_sha256   : {dataset.provenance.data_sha256}")
         print(f"  max_steps     : {config.max_steps}")
         print(f"  adapter_path  : {config.adapter_path}")
 
@@ -250,6 +255,7 @@ class SftRunner:
                 batch_size=batch_size,
                 max_tokens=max_tokens,
                 loss_fn=loss_fn,
+                data_provenance=dataset.provenance,
                 latest_metrics=last_metrics,
             )
             manifest_paths = write_sft_artifact_manifest(
