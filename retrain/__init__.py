@@ -5,6 +5,13 @@ and their registration decorators, plus the TrainingFlow used by
 ``retrain trace``.
 """
 
+# Enable hf_transfer for fast Hub downloads before anything imports
+# huggingface_hub (which reads the flag once, at its import). Guarded: a no-op
+# when the package is absent, and never overrides an explicit user setting.
+from retrain._hf_transfer import enable_if_available as _enable_hf_transfer
+
+_enable_hf_transfer()
+
 from retrain.advantages import (
     AlgorithmContext as AlgorithmContext,
     AlgorithmOutput as AlgorithmOutput,
