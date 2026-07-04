@@ -60,6 +60,7 @@ class SftRunner:
             checkpoint_recoverability_wandb_metrics,
             upload_checkpoint_artifact,
         )
+        from retrain.training.resume import contract_for_capabilities
 
         if not config.sft_data_path:
             raise ValueError(
@@ -150,8 +151,13 @@ class SftRunner:
             f"reports_sync_loss={backend_caps.reports_sync_loss}, "
             f"preserves_token_advantages={backend_caps.preserves_token_advantages}, "
             f"supports_checkpoint_resume={backend_caps.supports_checkpoint_resume}, "
-            f"resume_runtime_dependent={backend_caps.resume_runtime_dependent}"
+            f"resume_runtime_dependent={backend_caps.resume_runtime_dependent}, "
+            f"checkpoint_resume_mode={backend_caps.checkpoint_resume_mode}"
         )
+        resume_contract = contract_for_capabilities(backend_caps)
+        print(f"Checkpoint resume mode: {resume_contract.mode}")
+        if resume_contract.warning:
+            print(f"Checkpoint resume warning: {resume_contract.warning}")
         print(f"SFT loss: {loss_fn}")
 
         if config.resume_from:
@@ -303,6 +309,8 @@ class SftRunner:
                         current_group_size=1,
                         checkpoint_name=checkpoint_name,
                         checkpoint_path=policy_ref,
+                        resume_mode=resume_contract.mode,
+                        resume_warning=resume_contract.warning,
                         sepa_state={},
                     )
                     print(f"Saved checkpoint: {checkpoint_name}")
@@ -328,6 +336,8 @@ class SftRunner:
                 current_group_size=1,
                 checkpoint_name="final",
                 checkpoint_path=policy_ref,
+                resume_mode=resume_contract.mode,
+                resume_warning=resume_contract.warning,
                 sepa_state={},
             )
             manifest = build_sft_artifact_manifest(

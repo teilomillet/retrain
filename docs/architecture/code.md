@@ -238,6 +238,8 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `commands/init/`: starter config templates, noninteractive init, and the TTY
   interactive setup flow.
 - `commands/plugins/`: plugin discovery listing and plugin scaffold generation.
+- `commands/resume_check.py`: checkpoint/log-directory preflight before a
+  resume restart.
 - `commands/status/`: log status scanning and the live `top` dashboard alias.
 - `commands/trace/`: flow construction preflight and JSON/text trace output.
 - `commands/tree/`: experiment tech-tree dispatch plus node run, note, and
@@ -272,6 +274,9 @@ Split code when it creates a stable place a maintainer would naturally search:
   emergence rows.
 - `training/log.py`: side effects for recording one training step.
 - `training/warmup.py`: supervised warmup data loading, stepping, and logging.
+- `training/resume.py`: shared checkpoint resume-mode labels and warnings.
+- `training/resume_check.py`: local preflight checks for resume directories and
+  downloaded checkpoint artifacts.
 - `training/trainer.py`: the main RL orchestration path.
 - `training/discover.py`: test-time training over a single problem.
 - `training/discovery/`: candidate archive, prompt memory rendering, and

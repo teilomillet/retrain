@@ -59,6 +59,7 @@ def test_train_shuts_down_backend_when_flow_trace_fails(tmp_path, monkeypatch) -
                 preserves_token_advantages=True,
                 supports_checkpoint_resume=True,
                 resume_runtime_dependent=False,
+                checkpoint_resume_mode="adapter_only",
             )
             self.backend_capability_source = "builtin"
             self.backend = backend
@@ -120,6 +121,7 @@ def test_train_closes_loggers_when_tokenizer_load_fails(tmp_path, monkeypatch) -
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            checkpoint_resume_mode="adapter_only",
         ),
         backend_capability_source="builtin",
         planning_detector=object(),

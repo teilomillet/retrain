@@ -124,8 +124,44 @@ class TestLoadTrainerState:
         assert state["tl_grpo_ema"] == pytest.approx(0.4)
         assert state["delight_eta_ema"] == pytest.approx(1.25)
 
+    def test_roundtrip_resume_contract_fields(self, tmp_path):
+        save_trainer_state(
+            tmp_path,
+            step=39,
+            example_idx=320,
+            total_correct=95,
+            total_completions=640,
+            current_batch_size=8,
+            current_group_size=16,
+            checkpoint_name="checkpoint_step_40",
+            resume_mode="adapter_only",
+            resume_warning="optimizer/scaler/RNG state is not restored",
+            sepa_state={},
+        )
+
+        state = load_trainer_state(str(tmp_path))
+
+        assert state["resume_mode"] == "adapter_only"
+        assert "optimizer/scaler/RNG" in state["resume_warning"]
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="trainer_state.json"):
+            load_trainer_state(str(tmp_path))
+
+    def test_resume_contract_fields_must_be_strings(self, tmp_path):
+        payload = {
+            "step": 1,
+            "example_idx": 2,
+            "total_correct": 0,
+            "total_completions": 1,
+            "current_batch_size": 1,
+            "current_group_size": 1,
+            "checkpoint_name": "checkpoint_step_2",
+            "resume_mode": 123,
+        }
+        (tmp_path / TRAINER_STATE_FILE).write_text(json.dumps(payload))
+
+        with pytest.raises(ValueError, match="resume_mode"):
             load_trainer_state(str(tmp_path))
 
     def test_resume_step_is_next(self, tmp_path):

@@ -99,6 +99,13 @@ COMMANDS
         Lists built-ins + discovered plugin modules.
         If config.toml is provided, uses its [plugins] search_paths.
 
+    retrain resume-check <logdir> [--config config.toml] [--json]
+        Preflights a checkpoint/log directory before resuming.
+        Checks trainer_state.json, checkpoint payload, step bounds,
+        resume mode, and local SFT data recoverability.
+        --config PATH     checks target max_steps and SFT data pins.
+        --json            machine-readable JSON output.
+
     retrain status [logdir] [--json] [--all] [--watch]
         Scans log directories for run and campaign status.
         Defaults to ./logs when no path is given.

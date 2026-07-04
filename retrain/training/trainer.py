@@ -49,6 +49,7 @@ from retrain.training.recoverability import (
     announce_checkpoint_recoverability,
     upload_checkpoint_artifact,
 )
+from retrain.training.resume import contract_for_capabilities
 from retrain.training.telemetry import RolloutTelemetry
 from retrain.training.signals import (
     apply_advantage_cap,
@@ -159,7 +160,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             backend_caps.preserves_token_advantages,
             backend_caps.supports_checkpoint_resume,
             backend_caps.resume_runtime_dependent,
+            backend_caps.checkpoint_resume_mode,
         )
+        resume_contract = contract_for_capabilities(backend_caps)
+        print(f"Checkpoint resume mode: {resume_contract.mode}")
+        if resume_contract.warning:
+            print(f"Checkpoint resume warning: {resume_contract.warning}")
 
         # -----------------------------------------------------------------------
         # 4. Load tokenizer + lazy token/prompt caches
@@ -306,6 +312,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         current_group_size=current_group_size,
                         checkpoint_name=checkpoint_name,
                         checkpoint_path=checkpoint_path,
+                        resume_mode=resume_contract.mode,
+                        resume_warning=resume_contract.warning,
                         sepa_state=sepa_controller.state_dict(),
                         tl_grpo_ema=tl_grpo_ema,
                         delight_eta_ema=delight_eta_ema,
@@ -569,6 +577,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     current_group_size=current_group_size,
                     checkpoint_name=ckpt_name,
                     checkpoint_path=checkpoint_path,
+                    resume_mode=resume_contract.mode,
+                    resume_warning=resume_contract.warning,
                     sepa_state=sepa_controller.state_dict(),
                     tl_grpo_ema=tl_grpo_ema,
                     delight_eta_ema=delight_eta_ema,
@@ -596,6 +606,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             current_group_size=current_group_size,
             checkpoint_name="final",
             checkpoint_path=final_path,
+            resume_mode=resume_contract.mode,
+            resume_warning=resume_contract.warning,
             sepa_state=sepa_controller.state_dict(),
             tl_grpo_ema=tl_grpo_ema,
             delight_eta_ema=delight_eta_ema,

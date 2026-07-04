@@ -56,6 +56,7 @@ from retrain.training.runner import (
     build_run_result,
     failed_run_result,
 )
+from retrain.training.resume import contract_for_capabilities
 from retrain.types import ExampleInfoLike, PromptLike
 from retrain.environments.verifiers import (
     encode_prompt_for_sampling,
@@ -215,7 +216,12 @@ class TTTDiscoverRunner:
                 backend_caps.preserves_token_advantages,
                 backend_caps.supports_checkpoint_resume,
                 backend_caps.resume_runtime_dependent,
+                backend_caps.checkpoint_resume_mode,
             )
+            resume_contract = contract_for_capabilities(backend_caps)
+            print(f"Checkpoint resume mode: {resume_contract.mode}")
+            if resume_contract.warning:
+                print(f"Checkpoint resume warning: {resume_contract.warning}")
 
             print(f"Loading tokenizer for {config.model} ...")
             tokenizer = AutoTokenizer.from_pretrained(
@@ -642,6 +648,8 @@ class TTTDiscoverRunner:
                 current_group_size=current_group_size,
                 checkpoint_name="final",
                 checkpoint_path=final_path,
+                resume_mode=resume_contract.mode,
+                resume_warning=resume_contract.warning,
                 sepa_state=sepa_controller.state_dict(),
             )
 

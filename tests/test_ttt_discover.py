@@ -271,5 +271,7 @@ class TestTTTDiscoverRunner:
         state = json.loads(state_path.read_text())
         assert state["checkpoint_name"] == "final"
         assert state["checkpoint_path"] == str(tmp_path / "adapter")
+        assert state["resume_mode"] == "adapter_only"
+        assert "optimizer/scaler/RNG" in state["resume_warning"]
         summary = json.loads(summary_path.read_text())
         assert summary["best_reward"] == pytest.approx(2.0)

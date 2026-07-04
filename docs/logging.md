@@ -114,8 +114,17 @@ checkpoint path from the dead machine no longer exists, retrain automatically
 uses the artifact-local `adapter/` directory when it is present. Then run:
 
 ```bash
+retrain resume-check logs/restored-run --config config.toml
 retrain --resume logs/restored-run
 ```
+
+For local and Unsloth runs this is adapter-only recovery: retrain restores the
+trainer counters and LoRA weights, but not optimizer/scaler/RNG state. Check
+`retrain status --json` for the saved `resume_mode` and `resume_warning`.
+`retrain resume-check` performs the same local preflight before a restart:
+it checks `trainer_state.json`, checkpoint payload files, step bounds from
+`--config`, resume mode, and local SFT data recoverability without loading the
+model or contacting W&B.
 
 ### Live Recovery Drill
 

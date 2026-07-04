@@ -21,6 +21,16 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
     run_dir = tmp_path / "energy-rl-demo"
     run_dir.mkdir()
     (run_dir / "run_meta.json").write_text('{"trainer":"retrain"}', encoding="utf-8")
+    (run_dir / "trainer_state.json").write_text(
+        json.dumps(
+            {
+                "checkpoint_name": "checkpoint_step_13",
+                "resume_mode": "adapter_only",
+                "resume_warning": "optimizer/scaler/RNG state is not restored",
+            }
+        ),
+        encoding="utf-8",
+    )
     _write_jsonl(
         run_dir / "metrics.jsonl",
         [
@@ -75,6 +85,8 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
     assert snapshot.trainer == "retrain"
     assert snapshot.metrics_present is True
     assert snapshot.active is True
+    assert snapshot.resume_mode == "adapter_only"
+    assert "optimizer/scaler/RNG" in snapshot.resume_warning
     assert snapshot.latest_step == 12
     assert snapshot.latest_mean_reward == 0.42
     assert snapshot.latest_loss == -0.3

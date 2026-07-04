@@ -439,7 +439,17 @@ For `trainer = "sft"`, `resume.from` has two modes. If it points at a log
 directory containing `trainer_state.json`, retrain restores the saved checkpoint
 and continues from the next SFT step. If it points directly at an adapter
 directory, retrain loads that adapter as initialization and starts SFT at step
-0.
+0. Local and Unsloth SFT resume is `adapter_only`: trainer counters and LoRA
+weights are restored, but optimizer/scaler/RNG state is not.
+
+Before restarting a job, run a local preflight:
+
+```bash
+retrain resume-check logs/my-model-sft --config training.toml
+```
+
+This checks the resume directory, checkpoint payload, target `max_steps`, resume
+mode, and SFT data recoverability without loading the model.
 
 The same run also writes:
 
@@ -799,7 +809,7 @@ Optional section for LoRA-Squeeze rank analysis. In campaign TOMLs, triggers aut
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `from` | str | `""` | Path to log directory containing `trainer_state.json` |
+| `from` | str | `""` | Path to log directory containing `trainer_state.json`; local/Unsloth restore is adapter-only, not optimizer-exact |
 
 ### `[logging]`
 
@@ -844,6 +854,8 @@ retrain config.toml --transform-param cap=0.1 --advantage-param scale=2.0
 | `--resume` | `resume_from` |
 
 The `--resume` flag is special: it sets `resume_from` and is not a direct TOML key.
+Use `retrain resume-check <log_dir> --config <config.toml>` before a restart to
+verify that the checkpoint directory and target config line up.
 
 Repeatable plugin-param flags:
 

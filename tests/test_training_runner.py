@@ -416,6 +416,8 @@ class TestSftRunner:
         state = json.loads((log_dir / "trainer_state.json").read_text())
         assert state["checkpoint_name"] == "final"
         assert state["checkpoint_path"] == str(adapter_path / "final")
+        assert state["resume_mode"] == "adapter_only"
+        assert "optimizer/scaler/RNG" in state["resume_warning"]
         assert (log_dir / "latest_sampler_path.txt").read_text().strip() == str(
             adapter_path / "final"
         )
@@ -695,6 +697,8 @@ class TestSftRunner:
         assert state["example_idx"] == 4
         assert state["current_batch_size"] == 1
         assert state["checkpoint_path"] == str(adapter_path / "final")
+        assert state["resume_mode"] == "adapter_only"
+        assert "optimizer/scaler/RNG" in state["resume_warning"]
 
     def test_sft_resume_requires_callable_load_state(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"

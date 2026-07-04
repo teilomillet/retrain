@@ -61,6 +61,7 @@ def run(args: list[str]) -> None:
             f"preserves_token_advantages={caps.get('preserves_token_advantages')}, "
             f"supports_checkpoint_resume={caps.get('supports_checkpoint_resume')}, "
             f"resume_runtime_dependent={caps.get('resume_runtime_dependent')}, "
+            f"checkpoint_resume_mode={caps.get('checkpoint_resume_mode')}, "
             f"supports_echo_shared_forward={caps.get('supports_echo_shared_forward')}"
         )
         option_schema = _object_dict(

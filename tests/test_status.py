@@ -193,6 +193,28 @@ class TestScanRun:
         assert result.completed is True
         assert not result.stale
 
+    def test_scan_run_reads_resume_contract(self, tmp_path):
+        run_dir = tmp_path / "run1"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [{"step": 0, "condition": "grpo+none", "loss": 0.5}],
+        )
+        _write_trainer_state(
+            run_dir / "trainer_state.json",
+            {
+                "step": 0,
+                "checkpoint_name": "checkpoint_step_1",
+                "resume_mode": "adapter_only",
+                "resume_warning": "optimizer/scaler/RNG state is not restored",
+            },
+        )
+
+        result = scan_run(run_dir)
+
+        assert result is not None
+        assert result.resume_mode == "adapter_only"
+        assert "optimizer/scaler/RNG" in result.resume_warning
+
     def test_stale_run(self, tmp_path):
         run_dir = tmp_path / "run1"
         metrics_path = run_dir / "metrics.jsonl"
@@ -890,6 +912,23 @@ class TestTrainerField:
         text = format_run(run)
         assert "trainer=retrain" in text
 
+    def test_format_run_shows_resume_contract(self):
+        run = RunSummary(
+            path="logs/train",
+            condition="grpo+none",
+            step=10,
+            correct_rate=0.25,
+            loss=0.5,
+            wall_time_s=120.0,
+            resume_mode="adapter_only",
+            resume_warning="optimizer/scaler/RNG state is not restored",
+        )
+
+        text = format_run(run)
+
+        assert "resume=adapter_only" in text
+        assert "resume_warning=optimizer-state-not-restored" in text
+
     def test_format_run_hides_trainer_when_empty(self):
         """format_run omits trainer tag when empty."""
         run = RunSummary(
@@ -921,6 +960,8 @@ class TestTrainerField:
         run = RunSummary(path="logs/train", trainer="command")
         d = run.to_dict()
         assert d["trainer"] == "command"
+        assert d["resume_mode"] == ""
+        assert d["resume_warning"] == ""
 
     def test_run_to_dict_exports_all_dataclass_fields(self):
         """RunSummary JSON shape stays aligned with the dataclass contract."""

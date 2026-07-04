@@ -126,7 +126,7 @@ Use `retrain man --topic capacity` only when you are sizing longer runs.
 - Pluggable rewards (match, math, judge, custom)
 - Campaign sweeps from one TOML
 - LoRA-Squeeze rank analysis/compression
-- Checkpoint resume and run status tooling
+- Checkpoint resume with explicit adapter-only/exact status and preflight tooling
 
 ## Common Config Patterns
 

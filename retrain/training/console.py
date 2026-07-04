@@ -51,6 +51,7 @@ def print_backend_capability_summary(
     preserves_token_advantages: bool,
     supports_checkpoint_resume: bool,
     resume_runtime_dependent: bool,
+    checkpoint_resume_mode: str,
 ) -> None:
     """Print backend capability metadata for run-time diagnostics."""
     print(
@@ -60,7 +61,8 @@ def print_backend_capability_summary(
         f"reports_sync_loss={reports_sync_loss}, "
         f"preserves_token_advantages={preserves_token_advantages}, "
         f"supports_checkpoint_resume={supports_checkpoint_resume}, "
-        f"resume_runtime_dependent={resume_runtime_dependent}"
+        f"resume_runtime_dependent={resume_runtime_dependent}, "
+        f"checkpoint_resume_mode={checkpoint_resume_mode}"
     )
     if not reports_sync_loss:
         print("Backend note: loss is reported as placeholder by backend design.")

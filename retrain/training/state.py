@@ -26,6 +26,8 @@ class TrainerState(TypedDict):
     current_group_size: int
     checkpoint_name: str
     checkpoint_path: NotRequired[str]
+    resume_mode: NotRequired[str]
+    resume_warning: NotRequired[str]
     sepa: SEPAStateDict
     tl_grpo_ema: NotRequired[float]
     delight_eta_ema: NotRequired[float]
@@ -42,6 +44,8 @@ def save_trainer_state(
     current_group_size: int,
     checkpoint_name: str,
     checkpoint_path: str | None = None,
+    resume_mode: str = "",
+    resume_warning: str = "",
     sepa_state: SEPAStateDict,
     tl_grpo_ema: float | None = None,
     delight_eta_ema: float | None = None,
@@ -60,6 +64,10 @@ def save_trainer_state(
     }
     if checkpoint_path:
         state["checkpoint_path"] = checkpoint_path
+    if resume_mode:
+        state["resume_mode"] = resume_mode
+    if resume_warning:
+        state["resume_warning"] = resume_warning
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema
     if delight_eta_ema is not None:
@@ -107,6 +115,12 @@ def load_trainer_state(resume_dir: str) -> TrainerState:
             fallback_path = latest_sampler_path.read_text().strip()
             if fallback_path:
                 state["checkpoint_path"] = _resolve_checkpoint_path(path, fallback_path)
+    resume_mode = _optional_str_field(payload_map, "resume_mode")
+    if resume_mode:
+        state["resume_mode"] = resume_mode
+    resume_warning = _optional_str_field(payload_map, "resume_warning")
+    if resume_warning:
+        state["resume_warning"] = resume_warning
     tl_grpo_ema = _optional_float_field(payload_map, "tl_grpo_ema")
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema

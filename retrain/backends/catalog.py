@@ -26,6 +26,11 @@ from retrain.backends.create import (
     create_tinker,
     create_unsloth,
 )
+from retrain.training.resume import (
+    RESUME_ADAPTER_ONLY,
+    RESUME_EXACT,
+    normalize_resume_mode,
+)
 
 
 BackendFactory = Callable[["TrainConfig"], "TrainHelper"]
@@ -39,6 +44,7 @@ class BackendCapabilities:
     preserves_token_advantages: bool
     supports_checkpoint_resume: bool
     resume_runtime_dependent: bool
+    checkpoint_resume_mode: str = RESUME_ADAPTER_ONLY
     supports_echo_shared_forward: bool = False
 
 
@@ -65,6 +71,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            checkpoint_resume_mode=RESUME_ADAPTER_ONLY,
             supports_echo_shared_forward=True,
         ),
         option_schema=local_option_schema(),
@@ -79,6 +86,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            checkpoint_resume_mode=RESUME_ADAPTER_ONLY,
             supports_echo_shared_forward=True,
         ),
         option_schema=unsloth_option_schema(),
@@ -93,6 +101,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=True,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=True,
+            checkpoint_resume_mode=RESUME_EXACT,
             supports_echo_shared_forward=False,
         ),
         option_schema={},
@@ -107,6 +116,7 @@ _BUILTIN_BACKENDS: dict[str, BackendDefinition] = {
             preserves_token_advantages=False,
             supports_checkpoint_resume=True,
             resume_runtime_dependent=False,
+            checkpoint_resume_mode=RESUME_ADAPTER_ONLY,
             supports_echo_shared_forward=False,
         ),
         option_schema=prime_rl_option_schema(),
@@ -118,6 +128,7 @@ _PLUGIN_DEFAULT_CAPABILITIES = BackendCapabilities(
     preserves_token_advantages=False,
     supports_checkpoint_resume=True,
     resume_runtime_dependent=False,
+    checkpoint_resume_mode=RESUME_ADAPTER_ONLY,
 )
 _PLUGIN_CAPABILITIES_HOOKS = (
     "retrain_backend_capabilities",
@@ -148,11 +159,19 @@ def _coerce_backend_capabilities(raw: object) -> BackendCapabilities | None:
     if isinstance(raw, Mapping):
         payload = cast(Mapping[str, object], raw)
         try:
+            supports_resume = bool(payload["supports_checkpoint_resume"])
             return BackendCapabilities(
                 reports_sync_loss=bool(payload["reports_sync_loss"]),
                 preserves_token_advantages=bool(payload["preserves_token_advantages"]),
-                supports_checkpoint_resume=bool(payload["supports_checkpoint_resume"]),
+                supports_checkpoint_resume=supports_resume,
                 resume_runtime_dependent=bool(payload["resume_runtime_dependent"]),
+                checkpoint_resume_mode=normalize_resume_mode(
+                    payload.get(
+                        "checkpoint_resume_mode",
+                        payload.get("resume_mode", RESUME_ADAPTER_ONLY),
+                    ),
+                    supports_resume=supports_resume,
+                ),
                 supports_echo_shared_forward=bool(
                     payload.get("supports_echo_shared_forward", False)
                 ),
@@ -250,6 +269,7 @@ def _capabilities_to_payload(caps: BackendCapabilities) -> dict[str, object]:
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
         "resume_runtime_dependent": caps.resume_runtime_dependent,
+        "checkpoint_resume_mode": caps.checkpoint_resume_mode,
         "supports_echo_shared_forward": caps.supports_echo_shared_forward,
     }
 

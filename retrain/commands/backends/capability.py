@@ -22,6 +22,7 @@ def payload(
         "preserves_token_advantages": caps.preserves_token_advantages,
         "supports_checkpoint_resume": caps.supports_checkpoint_resume,
         "resume_runtime_dependent": caps.resume_runtime_dependent,
+        "checkpoint_resume_mode": caps.checkpoint_resume_mode,
         "supports_echo_shared_forward": caps.supports_echo_shared_forward,
     }
 
@@ -34,5 +35,6 @@ def summary(capabilities: dict[str, object]) -> str:
         f"preserves_token_advantages={capabilities['preserves_token_advantages']}, "
         f"supports_checkpoint_resume={capabilities['supports_checkpoint_resume']}, "
         f"resume_runtime_dependent={capabilities['resume_runtime_dependent']}, "
+        f"checkpoint_resume_mode={capabilities['checkpoint_resume_mode']}, "
         f"supports_echo_shared_forward={capabilities['supports_echo_shared_forward']}"
     )

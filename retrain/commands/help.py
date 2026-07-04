@@ -21,6 +21,7 @@ def print_help(cli_name: str) -> None:
         "[--output-dir DIR] [--with-test]"
     )
     print(f"  {cli_name} plugins [--json] [config.toml]")
+    print(f"  {cli_name} resume-check <logdir> [--config config.toml] [--json]")
     print(f"  {cli_name} status [logdir] [--json] [--all] [--watch]")
     print(f"  {cli_name} top [logdir]")
     print(f"  {cli_name} explain [config.toml] [--json]")

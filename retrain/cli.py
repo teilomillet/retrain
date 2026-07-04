@@ -36,6 +36,7 @@ from retrain.commands.name import resolve as resolve_cli_name
 from retrain.commands.plugins.run import run as run_plugins
 from retrain.commands.plugins.scaffold import run as run_init_plugin
 from retrain.commands.help import print_help
+from retrain.commands.resume_check import run as run_resume_check
 from retrain.commands.status.run import run as run_status
 from retrain.commands.status.top import run as run_top
 from retrain.commands.trace.run import run as run_trace
@@ -81,6 +82,7 @@ def _commands(cli_name: str) -> dict[str, Callable[[list[str]], None]]:
         "init": lambda rest: run_init(args=rest, cli_name=cli_name),
         "init-plugin": lambda rest: run_init_plugin(args=rest, cli_name=cli_name),
         "plugins": run_plugins,
+        "resume-check": run_resume_check,
         "status": run_status,
         "top": run_top,
         "explain": run_explain,

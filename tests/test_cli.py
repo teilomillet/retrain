@@ -62,6 +62,7 @@ class TestTopHelp:
         assert "retrain benchmark" in captured.out
         assert "retrain init-plugin" in captured.out
         assert "retrain plugins" in captured.out
+        assert "retrain resume-check" in captured.out
         assert "retrain man --path" in captured.out
         assert "retrain man --sync" in captured.out
         assert "retrain man --check" in captured.out
@@ -404,6 +405,9 @@ class TestExplainCommand:
         assert "grpo+none" in out
         assert "50" in out
         assert "batch_size" in out
+        assert "resume mode" in out
+        assert "adapter_only" in out
+        assert "optimizer/scaler/RNG" in out
 
     def test_explain_single_json(self, tmp_path, capsys):
         p = self._write_single_toml(tmp_path)
@@ -412,6 +416,9 @@ class TestExplainCommand:
         assert payload["mode"] == "single"
         assert payload["backend"] == "local"
         assert payload["backend_capabilities"]["reports_sync_loss"] is True
+        assert payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        assert payload["resume_mode"] == "adapter_only"
+        assert "optimizer/scaler/RNG" in payload["resume_warning"]
         assert payload["condition"] == "grpo+none"
         assert payload["max_steps"] == 50
         assert payload["datums_per_step"] == 32  # 4 * 8
@@ -424,6 +431,8 @@ class TestExplainCommand:
         assert "grpo+none" in out
         assert "maxrl+gtpo_sepa" in out
         assert "4" in out  # total_runs = 2 conditions x 2 seeds
+        assert "resume mode" in out
+        assert "adapter_only" in out
 
     def test_explain_campaign_json(self, tmp_path, capsys):
         p = self._write_campaign_toml(tmp_path)
@@ -432,6 +441,8 @@ class TestExplainCommand:
         assert payload["mode"] == "campaign"
         assert payload["backend"] == "local"
         assert payload["backend_capabilities"]["source"] == "builtin"
+        assert payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        assert payload["resume_mode"] == "adapter_only"
         assert payload["total_runs"] == 4
         assert len(payload["conditions"]) == 2
 

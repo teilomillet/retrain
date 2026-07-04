@@ -79,15 +79,28 @@ def _infer_phase(run_name: str, metrics_entry: JsonObject | None) -> str:
     return "train"
 
 
-def _completed_from_state(path: Path) -> bool:
+def _read_trainer_state(path: Path) -> JsonObject | None:
     state_path = path / TRAINER_STATE_FILE
     if not state_path.is_file():
-        return False
+        return None
     try:
         payload = json.loads(state_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        return None
+    return cast(JsonObject, payload) if isinstance(payload, dict) else None
+
+
+def _completed_from_state(state: JsonObject | None) -> bool:
+    if state is None:
         return False
-    return payload.get("checkpoint_name") == "final"
+    return state.get("checkpoint_name") == "final"
+
+
+def _state_str(state: JsonObject | None, key: str) -> str:
+    if state is None:
+        return ""
+    value = state.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _trainer_name(path: Path) -> str:
@@ -134,7 +147,8 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
 
     sample_event_age_seconds = _event_age(latest_diag_row)
     sample_result_age_seconds = _event_age(latest_result_row)
-    completed = _completed_from_state(path)
+    trainer_state = _read_trainer_state(path)
+    completed = _completed_from_state(trainer_state)
     active = (
         not completed
         and (
@@ -179,6 +193,8 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         metrics_present=latest_metrics is not None,
         completed=completed,
         active=active,
+        resume_mode=_state_str(trainer_state, "resume_mode"),
+        resume_warning=_state_str(trainer_state, "resume_warning"),
         latest_step=int_or_none(latest_metrics.get("step")) if latest_metrics else None,
         latest_mean_reward=float_or_none(latest_metrics.get("mean_reward")) if latest_metrics else None,
         latest_loss=float_or_none(latest_metrics.get("loss")) if latest_metrics else None,

@@ -6,15 +6,20 @@ retrain supports four training backends: **local** (PyTorch/PEFT on your GPUs), 
 
 `retrain doctor`, `retrain explain`, and trainer startup report capability metadata:
 
-| Backend | reports_sync_loss | preserves_token_advantages | supports_checkpoint_resume | resume_runtime_dependent | supports_echo_shared_forward |
-|---------|-------------------|----------------------------|----------------------------|--------------------------|------------------------------|
-| `local` | `true` | `true` | `true` | `false` | `true` |
-| `unsloth` | `true` | `true` | `true` | `false` | `true` |
-| `tinker` | `true` | `true` | `true` | `true` | `false` |
-| `prime_rl` | `false` | `false` | `true` | `false` | `false` |
+| Backend | reports_sync_loss | preserves_token_advantages | supports_checkpoint_resume | checkpoint_resume_mode | resume_runtime_dependent | supports_echo_shared_forward |
+|---------|-------------------|----------------------------|----------------------------|------------------------|--------------------------|------------------------------|
+| `local` | `true` | `true` | `true` | `adapter_only` | `false` | `true` |
+| `unsloth` | `true` | `true` | `true` | `adapter_only` | `false` | `true` |
+| `tinker` | `true` | `true` | `true` | `exact` | `true` | `false` |
+| `prime_rl` | `false` | `false` | `true` | `adapter_only` | `false` | `false` |
 
 - `reports_sync_loss=false` means the backend returns a placeholder loss value by design.
 - `preserves_token_advantages=false` means token-level advantages are aggregated before backend transport.
+- `checkpoint_resume_mode=adapter_only` means retrain restores trainer counters
+  and checkpoint weights, but optimizer/scaler/RNG state is not restored.
+- `checkpoint_resume_mode=exact` means the backend reports a full checkpoint
+  restore path. When `resume_runtime_dependent=true`, verify the deployed SDK
+  and runtime before relying on exact continuation.
 - Uncertainty kinds (e.g. `surprisal`, `predictive_variance`, `shannon_entropy`) are discovered
   from backend data, not declared statically. The advantage pipeline inspects what data the
   backend provides (logprobs, token distributions) and raises a diagnostic error if the required
@@ -47,6 +52,8 @@ Capabilities can be provided as:
 
 - `BackendCapabilities(...)`
 - dict with keys: `reports_sync_loss`, `preserves_token_advantages`, `supports_checkpoint_resume`, `resume_runtime_dependent`
+  and optional `checkpoint_resume_mode` (`adapter_only`, `exact`, or
+  `unsupported`)
 
 Option schema can be provided as:
 
@@ -543,7 +550,7 @@ If CUDA is not available, local backend falls back to CPU automatically.
 
 ## Checkpoint resume
 
-Both backends support resuming from checkpoints:
+Trainer-style backends support resuming from checkpoints:
 
 ```toml
 [resume]
@@ -556,7 +563,8 @@ Or via CLI:
 retrain --resume logs/train
 ```
 
-This restores:
+For local/Unsloth/PRIME-RL, the resume contract is `adapter_only`. This
+restores:
 
 - Training step counter
 - Dataset position (example index)
@@ -564,6 +572,13 @@ This restores:
 - Batch and group sizes
 - SEPA controller state
 - LoRA adapter weights
+
+It does not restore optimizer/scaler/RNG state, so optimizer dynamics re-warm
+after resume. `retrain explain`, trainer startup, `trainer_state.json`, and
+`retrain status --json` expose `resume_mode` and `resume_warning` so this is
+visible before and after a run. Use `retrain resume-check <log_dir> --config
+<config.toml>` to validate the checkpoint payload and target step bounds before
+restarting.
 
 The resume directory must contain a `trainer_state.json` file (created automatically by `save_every` checkpoints and at the end of training).
 

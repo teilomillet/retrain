@@ -7,6 +7,7 @@ import tomllib
 
 from retrain.commands.backends.capability import payload as capability_payload
 from retrain.commands.backends.capability import summary as capability_summary
+from retrain.training.resume import contract_for_capability_payload
 
 
 def explain_campaign(config_path: str, fmt: str) -> None:
@@ -35,12 +36,15 @@ def explain_campaign(config_path: str, fmt: str) -> None:
         backend_name,
         backend_options,
     )
+    resume_contract = contract_for_capability_payload(backend_capabilities)
 
     info = {
         "mode": "campaign",
         "config": config_path,
         "backend": backend_name,
         "backend_capabilities": backend_capabilities,
+        "resume_mode": resume_contract.mode,
+        "resume_warning": resume_contract.warning,
         "conditions": condition_labels,
         "seeds": seeds,
         "max_steps": max_steps,
@@ -55,6 +59,9 @@ def explain_campaign(config_path: str, fmt: str) -> None:
     print(f"  config        : {config_path}")
     print(f"  backend       : {backend_name}")
     print(f"  backend caps  : {capability_summary(backend_capabilities)}")
+    print(f"  resume mode   : {resume_contract.mode}")
+    if resume_contract.warning:
+        print(f"  resume warning: {resume_contract.warning}")
     print(f"  conditions    : {', '.join(condition_labels)}")
     print(f"  seeds         : {seeds}")
     print(f"  max_steps     : {max_steps}")

@@ -16,6 +16,8 @@ class RunSnapshot:
     metrics_present: bool
     completed: bool
     active: bool
+    resume_mode: str
+    resume_warning: str
     latest_step: int | None
     latest_mean_reward: float | None
     latest_loss: float | None

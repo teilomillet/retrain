@@ -27,6 +27,7 @@ retrain
 │   ├── doctor/         # Dependency probes and warnings
 │   ├── init/           # Config templates and init command flows
 │   ├── plugins/        # Plugin listing and scaffold commands
+│   ├── resume_check.py # Resume directory preflight command
 │   ├── status/         # Status and live top commands
 │   ├── trace/          # Flow trace preflight command
 │   ├── tree/           # Experiment tech-tree commands
@@ -62,6 +63,8 @@ retrain
 │   ├── prompts.py      # Prompt batch selection for training steps
 │   ├── sft.py          # SFT dataset and tokenization helpers
 │   ├── warmup.py       # Supervised warmup phase for the RL trainer
+│   ├── resume.py       # Shared resume-mode contract labels
+│   ├── resume_check.py # Checkpoint/log-directory resume preflight
 │   ├── state.py        # Checkpoint state serialization
 │   ├── sepa.py         # SEPA scheduler (linear / auto)
 │   ├── echo.py         # ECHO datums, caps, and shared-step helpers
@@ -169,7 +172,7 @@ retrain
 | **Campaigns** | Sweep conditions x seeds from a single TOML with wandb groups |
 | **Capacity Planning** | Formula-driven sizing for memory, worker count, and wall time |
 | **LoRA-Squeeze** | Train at high rank, auto-analyze optimal rank via SVD after first run |
-| **Checkpoint resume** | Trainer step, counters, SEPA state, and adapter weights saved and restored |
+| **Checkpoint resume** | Trainer counters and adapter weights saved/restored with explicit resume-mode warnings and preflight checks |
 | **wandb integration** | Structured metric prefixes (`train/`, `train/entropy/`, `train/backpressure/`) |
 
 ## Quick links

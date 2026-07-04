@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from retrain.commands.backends.capability import payload as capability_payload
 from retrain.commands.backends.capability import summary as capability_summary
+from retrain.training.resume import contract_for_capability_payload
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
@@ -88,6 +89,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         config.backend,
         config.backend_options,
     )
+    resume_contract = contract_for_capability_payload(backend_capabilities)
 
     info: dict = {
         "mode": "single",
@@ -97,6 +99,8 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "backend": config.backend,
         "backend_options": dict(config.backend_options),
         "backend_capabilities": backend_capabilities,
+        "resume_mode": resume_contract.mode,
+        "resume_warning": resume_contract.warning,
         "condition": condition,
         "algorithm_mode": config.algorithm_mode,
         "advantage_mode": config.advantage_mode,
@@ -150,6 +154,9 @@ def explain_single(config_path: str | None, fmt: str) -> None:
     print(f"  trainer       : {config.trainer}")
     print(f"  backend       : {config.backend}")
     print(f"  backend caps  : {capability_summary(backend_capabilities)}")
+    print(f"  resume mode   : {resume_contract.mode}")
+    if resume_contract.warning:
+        print(f"  resume warning: {resume_contract.warning}")
     if not backend_capabilities["reports_sync_loss"]:
         print("  note          : loss is reported as placeholder by backend design")
     print(f"  condition     : {condition}")

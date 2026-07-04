@@ -84,6 +84,8 @@ class RunSummary:
     pid: int = 0
     alive: bool = False
     trainer: str = ""
+    resume_mode: str = ""
+    resume_warning: str = ""
     latest_step_time_s: float = 0.0
     tokens_per_second: float = 0.0
     sample_share: float = 0.0
@@ -105,6 +107,8 @@ class RunSummary:
             "pid": self.pid,
             "alive": self.alive,
             "trainer": self.trainer,
+            "resume_mode": self.resume_mode,
+            "resume_warning": self.resume_warning,
             "latest_step_time_s": self.latest_step_time_s,
             "tokens_per_second": self.tokens_per_second,
             "sample_share": self.sample_share,
@@ -244,6 +248,12 @@ def scan_run(run_dir: Path) -> RunSummary | None:
             if state.get("checkpoint_name") == "final":
                 summary.completed = True
             summary.max_steps = state.get("step", -1) + 1 if summary.completed else -1
+            resume_mode = state.get("resume_mode")
+            if isinstance(resume_mode, str):
+                summary.resume_mode = resume_mode
+            resume_warning = state.get("resume_warning")
+            if isinstance(resume_warning, str):
+                summary.resume_warning = resume_warning
         except (json.JSONDecodeError, OSError):
             pass
 

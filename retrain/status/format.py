@@ -119,11 +119,30 @@ def format_run(run: RunSummary) -> str:
         perf_parts.append(f"rss={run.process_max_rss_mb:.0f}MB")
     perf_tag = f"  {'  '.join(perf_parts)}" if perf_parts else ""
     trainer_tag = f"  trainer={run.trainer}" if run.trainer else ""
+    resume_parts: list[str] = []
+    if run.resume_mode:
+        resume_parts.append(f"resume={run.resume_mode}")
+    warning_label = _resume_warning_label(run.resume_warning)
+    if warning_label:
+        resume_parts.append(f"resume_warning={warning_label}")
+    resume_tag = f"  {'  '.join(resume_parts)}" if resume_parts else ""
     return (
         f"  {run.path:40s}  {cond:20s}  step={run.step:>4d}  "
         f"cr={run.correct_rate:.1%}  loss={run.loss:.4f}  "
-        f"time={t:>8s}  [{status}]{perf_tag}{trainer_tag}"
+        f"time={t:>8s}  [{status}]{perf_tag}{trainer_tag}{resume_tag}"
     )
+
+
+def _resume_warning_label(warning: str) -> str:
+    if not warning:
+        return ""
+    if "optimizer/scaler/RNG" in warning:
+        return "optimizer-state-not-restored"
+    if "runtime-dependent" in warning:
+        return "runtime-dependent"
+    if "unsupported" in warning:
+        return "unsupported"
+    return "warning"
 
 
 def format_campaign(camp: CampaignSummary) -> str:

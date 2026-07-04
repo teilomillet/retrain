@@ -11,30 +11,58 @@ from retrain.backends.catalog import (
     normalize_backend_options,
     resolve_backend_capabilities,
 )
+from retrain.training.resume import (
+    RESUME_ADAPTER_ONLY,
+    RESUME_EXACT,
+    RESUME_UNSUPPORTED,
+    contract_for_capabilities,
+    normalize_resume_mode,
+)
 
 
-def _as_tuple(backend_name: str) -> tuple[bool, bool, bool, bool]:
+def _as_tuple(backend_name: str) -> tuple[bool, bool, bool, bool, str]:
     caps = resolve_backend_capabilities(backend_name, {})
     return (
         caps.reports_sync_loss,
         caps.preserves_token_advantages,
         caps.supports_checkpoint_resume,
         caps.resume_runtime_dependent,
+        caps.checkpoint_resume_mode,
     )
 
 
 def test_builtin_capabilities_match_spec() -> None:
-    assert _as_tuple("local") == (True, True, True, False)
-    assert _as_tuple("unsloth") == (True, True, True, False)
-    assert _as_tuple("tinker") == (True, True, True, True)
-    assert _as_tuple("prime_rl") == (False, False, True, False)
+    assert _as_tuple("local") == (True, True, True, False, RESUME_ADAPTER_ONLY)
+    assert _as_tuple("unsloth") == (True, True, True, False, RESUME_ADAPTER_ONLY)
+    assert _as_tuple("tinker") == (True, True, True, True, RESUME_EXACT)
+    assert _as_tuple("prime_rl") == (False, False, True, False, RESUME_ADAPTER_ONLY)
     assert backend_capability_source("local") == "builtin"
     assert resolve_backend_capabilities("unsloth", {}).supports_echo_shared_forward
 
 
 def test_plugin_capabilities_use_conservative_defaults() -> None:
-    assert _as_tuple("my_backend.Factory") == (True, False, True, False)
+    assert _as_tuple("my_backend.Factory") == (
+        True,
+        False,
+        True,
+        False,
+        RESUME_ADAPTER_ONLY,
+    )
     assert backend_capability_source("my_backend.Factory") == "plugin/default"
+
+
+def test_resume_contracts_warn_for_non_exact_modes() -> None:
+    local_contract = contract_for_capabilities(resolve_backend_capabilities("local", {}))
+    assert local_contract.mode == RESUME_ADAPTER_ONLY
+    assert "optimizer/scaler/RNG" in local_contract.warning
+
+    tinker_contract = contract_for_capabilities(resolve_backend_capabilities("tinker", {}))
+    assert tinker_contract.mode == RESUME_EXACT
+    assert "runtime-dependent" in tinker_contract.warning
+
+    assert normalize_resume_mode("exact") == RESUME_EXACT
+    assert normalize_resume_mode("not-a-mode") == RESUME_ADAPTER_ONLY
+    assert normalize_resume_mode("exact", supports_resume=False) == RESUME_UNSUPPORTED
 
 
 def test_resolver_accepts_backend_options_for_builtins() -> None:
@@ -167,6 +195,7 @@ def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
             "preserves_token_advantages": True,
             "supports_checkpoint_resume": True,
             "resume_runtime_dependent": True,
+            "checkpoint_resume_mode": "exact",
         }
         retrain_backend_option_schema = {
             "workers": BackendOptionSpec(value_type=int, default=2),
@@ -189,6 +218,7 @@ def test_plugin_capability_hook_and_option_schema(monkeypatch) -> None:
     )
     assert caps.reports_sync_loss is False
     assert caps.resume_runtime_dependent is True
+    assert caps.checkpoint_resume_mode == RESUME_EXACT
     assert (
         backend_capability_source("plugin_mod.PluginFactory", {"workers": "4"})
         == "plugin/hook"
@@ -211,3 +241,4 @@ def test_backends_catalog_payload_shape() -> None:
     unsloth = next(item for item in builtins if item["name"] == "unsloth")
     capabilities = cast(dict[str, object], unsloth["capabilities"])
     assert capabilities["supports_echo_shared_forward"] is True
+    assert capabilities["checkpoint_resume_mode"] == RESUME_ADAPTER_ONLY
