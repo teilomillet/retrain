@@ -179,6 +179,7 @@ OPTIONS
         --bp-peak-gflops
         --bp-throttle-margin
         --bp-warmup-steps
+        --checkpoint-artifacts
         --clip-cov-max
         --clip-cov-min
         --clip-cov-ratio

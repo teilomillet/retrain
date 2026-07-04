@@ -127,6 +127,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "log_dir": config.log_dir,
         "adapter_path": config.adapter_path,
         "wandb_project": config.wandb_project or "(disabled)",
+        "checkpoint_artifacts": config.checkpoint_artifacts,
         "warnings": [str(w.message) for w in caught],
     }
 
@@ -195,6 +196,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
     print(f"  log_dir       : {config.log_dir}")
     print(f"  adapter_path  : {config.adapter_path}")
     print(f"  wandb         : {info['wandb_project']}")
+    print(f"  ckpt artifacts: {config.checkpoint_artifacts}")
     if caught:
         print("\nWarnings:")
         for w in caught:

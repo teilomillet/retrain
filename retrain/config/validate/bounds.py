@@ -155,3 +155,18 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
             "generation_top_surprisal_limit must be >= 0. "
             "Try: generation_top_surprisal_limit = 5"
         )
+    if config.checkpoint_artifacts not in ("auto", "off", "wandb"):
+        errors.append(
+            "checkpoint_artifacts must be 'auto', 'off', or 'wandb'. "
+            "Use 'wandb' to fail when checkpoint artifact upload is not durable."
+        )
+    if config.checkpoint_artifacts == "wandb" and not config.wandb_project:
+        errors.append(
+            "checkpoint_artifacts='wandb' requires wandb_project so checkpoints "
+            "can be mirrored to W&B Artifacts."
+        )
+    if config.checkpoint_artifacts == "wandb" and config.save_every <= 0:
+        errors.append(
+            "checkpoint_artifacts='wandb' requires save_every > 0 so a "
+            "preempted run has periodic checkpoints to recover from."
+        )

@@ -169,6 +169,7 @@ class TrainConfig:
     wandb_entity: str = ""
     wandb_group: str = ""
     wandb_tags: str = ""
+    checkpoint_artifacts: str = "auto"  # "auto", "off", or "wandb"
     log_generations: bool = True
     generation_log_samples_per_prompt: int = 1
     generation_top_surprisal_limit: int = 0

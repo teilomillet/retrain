@@ -149,6 +149,7 @@ wandb_run_name = ""
 wandb_entity = ""
 wandb_group = ""
 wandb_tags = ""            # comma-separated
+checkpoint_artifacts = "auto"  # auto | off | wandb
 strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 ```
 
@@ -810,6 +811,7 @@ Optional section for LoRA-Squeeze rank analysis. In campaign TOMLs, triggers aut
 | `wandb_entity` | str | `""` | wandb entity / team |
 | `wandb_group` | str | `""` | wandb group for organizing related runs |
 | `wandb_tags` | str | `""` | Comma-separated wandb tags |
+| `checkpoint_artifacts` | str | `"auto"` | `auto` uploads checkpoints to W&B Artifacts when `wandb_project` is set; `wandb` requires live artifact upload and `save_every > 0`; `off` leaves checkpoints local only |
 | `strategic_grams` | str | `""` | Custom planning token grams as JSON array or CSV. Empty = use defaults |
 
 ## CLI overrides
@@ -838,6 +840,7 @@ retrain config.toml --transform-param cap=0.1 --advantage-param scale=2.0
 | `--wandb-group` | `wandb_group` |
 | `--wandb-tags` | `wandb_tags` |
 | `--wandb-run-name` | `wandb_run_name` |
+| `--checkpoint-artifacts` | `checkpoint_artifacts` |
 | `--resume` | `resume_from` |
 
 The `--resume` flag is special: it sets `resume_from` and is not a direct TOML key.

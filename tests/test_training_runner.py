@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sys
 from dataclasses import MISSING, fields
 from typing import cast
 from unittest.mock import patch
@@ -292,6 +293,60 @@ class _FakeBackendRegistry:
         return self.helper
 
 
+class _FakeWandbArtifact:
+    def __init__(
+        self,
+        name: str,
+        artifact_type: str,
+        metadata: dict[str, object] | None = None,
+    ):
+        self.name = name
+        self.type = artifact_type
+        self.metadata = metadata or {}
+        self.files = []
+        self.dirs = []
+
+    def add_file(self, local_path: str, *, name: str | None = None):
+        self.files.append((local_path, name))
+
+    def add_dir(self, local_path: str, *, name: str | None = None):
+        self.dirs.append((local_path, name))
+
+
+class _FakeWandbRun:
+    def __init__(self):
+        self.id = "sft-run"
+        self.logs = []
+        self.artifacts = []
+        self.finished = False
+
+    def log(self, data, *, step=None):
+        self.logs.append((dict(data), step))
+
+    def log_artifact(self, artifact, *, aliases=None):
+        self.artifacts.append((artifact, aliases))
+
+    def finish(self):
+        self.finished = True
+
+
+class _FakeWandbModule:
+    def __init__(self, run):
+        self.run = run
+        self.init_kwargs = {}
+        self.created_artifacts = []
+
+    def init(self, **kwargs):
+        self.init_kwargs = kwargs
+        return self.run
+
+    def Artifact(self, name, artifact_type=None, metadata=None, **kwargs):
+        artifact_type = artifact_type or kwargs.get("type", "")
+        artifact = _FakeWandbArtifact(name, artifact_type, metadata)
+        self.created_artifacts.append(artifact)
+        return artifact
+
+
 class TestSftRunner:
     def test_runs_sft_without_rl_dataset_or_environment(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"
@@ -410,6 +465,113 @@ class TestSftRunner:
         assert result.artifacts["sft_data_recoverability.json"] == str(
             log_dir / "sft_data_recoverability.json"
         )
+
+    def test_sft_runner_logs_wandb_checkpoint_artifacts(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "hello"}) + "\n")
+        adapter_path = tmp_path / "adapter"
+        log_dir = tmp_path / "logs"
+        helper = _FakeSftHelper()
+        wandb_run = _FakeWandbRun()
+        fake_wandb = _FakeWandbModule(wandb_run)
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
+
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=1,
+            save_every=1,
+            batch_size=1,
+            lr=1e-4,
+            model="fake-model",
+            adapter_path=str(adapter_path),
+            log_dir=str(log_dir),
+            wandb_project="proj",
+        )
+
+        result = SftRunner().run(config)
+
+        assert result.ok
+        assert fake_wandb.init_kwargs["project"] == "proj"
+        assert wandb_run.finished is True
+        assert any(
+            entry["train/recoverability/checkpoint_artifacts_enabled"] == 1
+            and entry["train/sft"] == 1
+            for entry, _ in wandb_run.logs
+        )
+        assert len(wandb_run.artifacts) == 2
+        checkpoint_artifact, checkpoint_aliases = wandb_run.artifacts[0]
+        assert checkpoint_artifact.metadata["checkpoint_name"] == "checkpoint_step_1"
+        assert checkpoint_aliases == ["latest", "checkpoint_step_1"]
+        final_artifact, final_aliases = wandb_run.artifacts[-1]
+        assert final_artifact.metadata["checkpoint_name"] == "final"
+        assert final_aliases == ["latest", "final"]
+        assert "sft_manifest.json" in [name for _, name in final_artifact.files]
+
+    def test_sft_runner_finishes_wandb_when_strict_recoverability_fails(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "hello"}) + "\n")
+        adapter_path = tmp_path / "adapter"
+        log_dir = tmp_path / "logs"
+        helper = _FakeSftHelper()
+        wandb_run = _FakeWandbRun()
+        fake_wandb = _FakeWandbModule(wandb_run)
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setenv("WANDB_MODE", "offline")
+        monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
+
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=1,
+            save_every=1,
+            batch_size=1,
+            lr=1e-4,
+            model="fake-model",
+            adapter_path=str(adapter_path),
+            log_dir=str(log_dir),
+            wandb_project="proj",
+            checkpoint_artifacts="wandb",
+        )
+
+        result = SftRunner().run(config)
+
+        assert not result.ok
+        assert result.failure_status == "exception:RuntimeError"
+        assert "not live" in result.error_message
+        assert wandb_run.finished is True
+        assert helper.shutdown_called is True
 
     def test_sft_resume_from_loads_initial_adapter(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"

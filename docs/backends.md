@@ -574,6 +574,17 @@ directly still works as initialization, but starts the SFT loop from step 0.
 
 **Local backend:** Checkpoints are saved to `adapter_path` as subdirectories (e.g., `checkpoint_step_20/`, `final/`). LoRA weights are restored via `safetensors` or `.bin` files. Optimizer state (Adam momentum) is not restored -- the optimizer re-warms.
 
+For machines with ephemeral disks, set `[logging] wandb_project` to mirror
+saved checkpoints and the final adapter to W&B Artifacts. Use
+`checkpoint_artifacts = "wandb"` when a run should fail rather than continue
+without live checkpoint artifact upload. Keep `save_every > 0`; otherwise W&B
+can only receive the final adapter after a completed run and cannot recover a
+preempted mid-run job.
+
+Downloaded W&B artifacts are self-contained for local/Unsloth adapter resume:
+if the original checkpoint path is gone, `retrain --resume` falls back to the
+artifact-local `adapter/` directory.
+
 **Unsloth backend:** Checkpoint semantics match the local adapter path: retrain
 saves and restores LoRA adapter directories under `adapter_path`. Optimizer state
 is not restored.

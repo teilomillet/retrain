@@ -45,6 +45,10 @@ from retrain.training.log import (
     init_wandb,
     record_training_step,
 )
+from retrain.training.recoverability import (
+    announce_checkpoint_recoverability,
+    upload_checkpoint_artifact,
+)
 from retrain.training.telemetry import RolloutTelemetry
 from retrain.training.signals import (
     apply_advantage_cap,
@@ -197,6 +201,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         condition_label = _condition_label(config)
         wandb_run = init_wandb(config, condition_label=condition_label)
+        announce_checkpoint_recoverability(config, wandb_run)
 
         # -----------------------------------------------------------------------
         # 9. Training loop
@@ -280,7 +285,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # SFT warmup: supervised training from oracle demonstrations
             # =================================================================
             if batch_idx < config.sft_warmup_steps and sft_data and sft_data.examples:
-                run_sft_warmup_step(
+                warmup_checkpoint = run_sft_warmup_step(
                     helper,
                     config,
                     sft_data,
@@ -289,6 +294,29 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     steps_logger=steps_logger,
                     wandb_run=wandb_run,
                 )
+                if warmup_checkpoint is not None:
+                    checkpoint_name, checkpoint_path = warmup_checkpoint
+                    save_trainer_state(
+                        log_path,
+                        step=batch_idx,
+                        example_idx=example_idx,
+                        total_correct=total_correct,
+                        total_completions=total_completions,
+                        current_batch_size=current_batch_size,
+                        current_group_size=current_group_size,
+                        checkpoint_name=checkpoint_name,
+                        checkpoint_path=checkpoint_path,
+                        sepa_state=sepa_controller.state_dict(),
+                        tl_grpo_ema=tl_grpo_ema,
+                        delight_eta_ema=delight_eta_ema,
+                    )
+                    upload_checkpoint_artifact(
+                        config,
+                        wandb_run,
+                        checkpoint_name=checkpoint_name,
+                        checkpoint_path=checkpoint_path,
+                        step=batch_idx,
+                    )
                 continue  # Skip the RL pipeline for this step
 
             # Back pressure warmup sweep
@@ -546,6 +574,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     delight_eta_ema=delight_eta_ema,
                 )
                 print(f"Saved checkpoint: {ckpt_name}")
+                upload_checkpoint_artifact(
+                    config,
+                    wandb_run,
+                    checkpoint_name=ckpt_name,
+                    checkpoint_path=checkpoint_path,
+                    step=batch_idx,
+                )
 
         # -----------------------------------------------------------------------
         # Final
@@ -564,6 +599,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             sepa_state=sepa_controller.state_dict(),
             tl_grpo_ema=tl_grpo_ema,
             delight_eta_ema=delight_eta_ema,
+        )
+        upload_checkpoint_artifact(
+            config,
+            wandb_run,
+            checkpoint_name="final",
+            checkpoint_path=final_path,
+            step=config.max_steps - 1,
         )
         final_rate = (
             100.0 * total_correct / total_completions if total_completions > 0 else 0.0

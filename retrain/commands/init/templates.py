@@ -31,7 +31,8 @@ adapter_path = "adapters/my_run"
 
 [logging]
 log_dir = "logs/train"
-# wandb_project = ""         # uncomment to enable wandb
+# wandb_project = ""         # uncomment to enable wandb + checkpoint artifacts
+checkpoint_artifacts = "auto"
 """
 
 
@@ -100,6 +101,7 @@ adapter_path = "adapters/experiment"
 [logging]
 log_dir = "logs/experiment"
 wandb_project = ""           # set your project name to enable wandb
+checkpoint_artifacts = "auto"
 """
 
 CAMPAIGN_TOML = """\
@@ -136,7 +138,8 @@ adapter_path = "adapters/campaign"
 
 [logging]
 log_dir = "logs/campaign"
-# wandb_project = ""         # uncomment to enable wandb
+# wandb_project = ""         # uncomment to enable wandb + checkpoint artifacts
+checkpoint_artifacts = "auto"
 """
 
 

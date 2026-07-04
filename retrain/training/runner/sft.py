@@ -54,6 +54,12 @@ class SftRunner:
             load_trainer_state,
             save_trainer_state,
         )
+        from retrain.training.log import WandbRunLike, init_wandb
+        from retrain.training.recoverability import (
+            announce_checkpoint_recoverability,
+            checkpoint_recoverability_wandb_metrics,
+            upload_checkpoint_artifact,
+        )
 
         if not config.sft_data_path:
             raise ValueError(
@@ -202,7 +208,10 @@ class SftRunner:
 
         policy_ref = ""
         last_metrics: dict[str, int | float | str] = {}
+        wandb_run: WandbRunLike | None = None
         try:
+            wandb_run = init_wandb(config, condition_label="sft")
+            announce_checkpoint_recoverability(config, wandb_run)
             for step in range(start_step, config.max_steps):
                 step_start = time.perf_counter()
                 indices = select_sft_batch_indices(
@@ -253,6 +262,23 @@ class SftRunner:
 
                 metrics_logger.log(metrics)
                 steps_logger.log(metrics)
+                if wandb_run is not None:
+                    wandb_metrics: dict[str, int | float | str] = {
+                        "train/loss": loss,
+                        "train/sft": 1,
+                        "train/step": step,
+                        "train/lr": lr,
+                        "train/datums": len(batch),
+                        "train/tokens": tokenized.total_tokens,
+                        "train/supervised_tokens": tokenized.supervised_tokens,
+                        "train/sft_dataset_coverage": metrics[
+                            "sft_dataset_coverage"
+                        ],
+                    }
+                    wandb_metrics.update(
+                        checkpoint_recoverability_wandb_metrics(config, wandb_run)
+                    )
+                    wandb_run.log(wandb_metrics, step=step)
                 last_metrics = dict(metrics)
                 print(
                     f"Step {step} [SFT] | loss={loss:.4f} | "
@@ -280,6 +306,13 @@ class SftRunner:
                         sepa_state={},
                     )
                     print(f"Saved checkpoint: {checkpoint_name}")
+                    upload_checkpoint_artifact(
+                        config,
+                        wandb_run,
+                        checkpoint_name=checkpoint_name,
+                        checkpoint_path=policy_ref,
+                        step=step,
+                    )
 
             policy_ref = helper.save_adapter(
                 config.adapter_path,
@@ -313,8 +346,20 @@ class SftRunner:
                 policy_ref,
                 manifest,
             )
+            upload_checkpoint_artifact(
+                config,
+                wandb_run,
+                checkpoint_name="final",
+                checkpoint_path=policy_ref,
+                step=config.max_steps - 1,
+            )
             print(f"SFT manifest: {manifest_paths['log_manifest']}")
         finally:
+            if wandb_run is not None:
+                try:
+                    wandb_run.finish()
+                except Exception:
+                    pass
             shutdown = getattr(helper, "shutdown", None)
             if callable(shutdown):
                 shutdown()

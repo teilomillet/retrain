@@ -151,6 +151,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "wandb_entity": "wandb_entity",
         "wandb_group": "wandb_group",
         "wandb_tags": "wandb_tags",
+        "checkpoint_artifacts": "checkpoint_artifacts",
         "log_generations": "log_generations",
         "generation_log_samples_per_prompt": "generation_log_samples_per_prompt",
         "generation_top_surprisal_limit": "generation_top_surprisal_limit",

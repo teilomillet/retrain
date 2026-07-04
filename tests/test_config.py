@@ -1,6 +1,7 @@
 """Tests for retrain.config — TrainConfig and TOML loading."""
 
 import warnings
+from typing import cast
 
 import pytest
 
@@ -29,6 +30,7 @@ class TestDefaults:
         assert c.inference_engine == "pytorch"
         assert c.prefix_caching is True
         assert c.log_dir == "logs/train"
+        assert c.checkpoint_artifacts == "auto"
         assert c.uncertainty_kind == "surprisal"
         assert c.log_generations is True
         assert c.generation_log_samples_per_prompt == 1
@@ -111,6 +113,7 @@ ema_decay = 0.95
 log_dir = "logs/custom"
 wandb_project = "my-project"
 wandb_run_name = "run-1"
+checkpoint_artifacts = "wandb"
 log_generations = false
 generation_log_samples_per_prompt = 2
 generation_top_surprisal_limit = 3
@@ -154,6 +157,7 @@ min_prompt_overlap = 0.75
         assert c.log_dir == "logs/custom"
         assert c.wandb_project == "my-project"
         assert c.wandb_run_name == "run-1"
+        assert c.checkpoint_artifacts == "wandb"
         assert c.log_generations is False
         assert c.generation_log_samples_per_prompt == 2
         assert c.generation_top_surprisal_limit == 3
@@ -245,6 +249,32 @@ min_prompt_overlap = 0.75
         assert c.wandb_entity == "my-team"
         assert c.wandb_group == "sweep-1"
         assert c.wandb_tags == "baseline,seed42"
+
+    def test_checkpoint_artifacts_from_toml(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            '[logging]\n'
+            'wandb_project = "my-proj"\n'
+            'checkpoint_artifacts = "wandb"\n'
+        )
+        c = load_config(str(toml))
+        assert c.checkpoint_artifacts == "wandb"
+
+    def test_checkpoint_artifacts_reject_invalid_mode(self):
+        with pytest.raises(ValueError, match="checkpoint_artifacts"):
+            TrainConfig(checkpoint_artifacts="sometimes")
+
+    def test_checkpoint_artifacts_wandb_requires_project(self):
+        with pytest.raises(ValueError, match="requires wandb_project"):
+            TrainConfig(checkpoint_artifacts="wandb")
+
+    def test_checkpoint_artifacts_wandb_requires_periodic_checkpoints(self):
+        with pytest.raises(ValueError, match="requires save_every > 0"):
+            TrainConfig(
+                wandb_project="my-proj",
+                checkpoint_artifacts="wandb",
+                save_every=0,
+            )
 
     def test_wandb_defaults_from_env(self, monkeypatch):
         monkeypatch.setenv("SOMA_WANDB_PROJECT", "soma-default")
@@ -538,7 +568,7 @@ class TestValidation:
         )
         assert c.uncertainty_kind == "predictive_variance"
         assert isinstance(c.algorithm_params["transform_params"], dict)
-        nested = c.algorithm_params["transform_params"]
+        nested = cast(dict[str, object], c.algorithm_params["transform_params"])
         assert nested["uncertainty_metric"] == "predictive_variance"
 
     def test_inactive_algorithm_params_do_not_override_uncertainty_kind(self):
@@ -855,6 +885,13 @@ class TestValidationWarnings:
             TrainConfig(save_every=0)
         msgs = [str(x.message) for x in w]
         assert any("disables periodic" in m for m in msgs)
+
+    def test_wandb_artifacts_save_every_zero_warns_about_preemption(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TrainConfig(wandb_project="my-proj", save_every=0)
+        msgs = [str(x.message) for x in w]
+        assert any("W&B will only receive the final adapter" in m for m in msgs)
 
 
 # ---------------------------------------------------------------------------

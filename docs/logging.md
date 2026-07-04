@@ -84,6 +84,37 @@ wandb_run_name = ""          # defaults to condition label
 wandb_entity = ""            # team or user
 wandb_group = ""             # for grouping related runs
 wandb_tags = ""              # comma-separated
+checkpoint_artifacts = "auto"
+```
+
+With the default `checkpoint_artifacts = "auto"`, setting `wandb_project` also
+uploads every saved checkpoint and the final adapter as W&B Artifacts. The
+artifact contains the adapter payload when it is on local disk, plus
+`trainer_state.json`, `latest_sampler_path.txt`, and SFT reproducibility files
+when they exist.
+
+For spot or otherwise ephemeral machines, use fail-closed mode:
+
+```toml
+[logging]
+wandb_project = "my-project"
+checkpoint_artifacts = "wandb"
+```
+
+`checkpoint_artifacts = "wandb"` requires a live W&B run and raises if artifact
+upload is unavailable, W&B is offline, or `save_every = 0`. Without periodic
+checkpoints, W&B can still receive the final adapter after a completed run, but
+it cannot recover a preempted mid-run job. Without W&B, retrain prints a
+local-only warning because checkpoints saved under `adapter_path` and `log_dir`
+can disappear with the machine.
+
+To resume after downloading a checkpoint artifact, restore the artifact contents
+to a log directory so `trainer_state.json` is present. If the original
+checkpoint path from the dead machine no longer exists, retrain automatically
+uses the artifact-local `adapter/` directory when it is present. Then run:
+
+```bash
+retrain --resume logs/restored-run
 ```
 
 ### Metric prefixes
@@ -98,6 +129,7 @@ All wandb metrics use structured prefixes:
 | `train/entropy/` | `exec_mean`, `exec_var`, `plan_mean`, `plan_var` |
 | `train/surprisal/` | `exec_mean`, `exec_var`, `plan_mean`, `plan_var` |
 | `train/backpressure/` | `action`, `regime`, `p_star`, `sigma`, `kappa`, `utilization`, `throughput`, `warmup` |
+| `train/recoverability/` | `checkpoint_artifacts_enabled`, `checkpoint_artifacts_live`, `periodic_checkpoints_enabled`, `preemption_resume_ready`, `local_only`, `latest_checkpoint_uploaded` |
 
 ### Run config
 
@@ -108,6 +140,7 @@ The wandb run config records all hyperparameters:
 - `max_tokens`, `temperature`, `gtpo_beta`, `hicra_alpha`
 - `sepa_steps`, `sepa_delay_steps`, `sepa_correct_rate_gate`
 - `max_steps`, `backend`, `seed`
+- `checkpoint_artifacts`
 
 ### Squeeze metrics
 

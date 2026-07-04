@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,11 @@ from retrain.training.log import (
     StepLoggingContext,
     init_wandb,
     record_training_step,
+)
+from retrain.training.recoverability import (
+    announce_checkpoint_recoverability,
+    checkpoint_recoverability_wandb_metrics,
+    upload_checkpoint_artifact,
 )
 from retrain.training.telemetry import EchoStepPlan
 
@@ -64,18 +71,74 @@ class _ListLogger:
 
 class _WandbRun:
     def __init__(self) -> None:
+        self.id = "test-run"
         self.entries: list[tuple[dict[str, object], int | None]] = []
+        self.artifacts: list[tuple[object, list[str] | None]] = []
 
     def log(
         self,
-        data: dict[str, object],
+        data: Mapping[str, object],
         *,
         step: int | None = None,
     ) -> None:
-        self.entries.append((data, step))
+        self.entries.append((dict(data), step))
+
+    def log_artifact(
+        self,
+        artifact: object,
+        *,
+        aliases: list[str] | None = None,
+    ) -> None:
+        self.artifacts.append((artifact, aliases))
 
     def finish(self) -> None:
         pass
+
+
+class _FailingArtifactWandbRun(_WandbRun):
+    def log_artifact(
+        self,
+        artifact: object,
+        *,
+        aliases: list[str] | None = None,
+    ) -> None:
+        _ = artifact, aliases
+        raise RuntimeError("upload unavailable")
+
+
+class _FakeArtifact:
+    def __init__(
+        self,
+        name: str,
+        artifact_type: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self.name = name
+        self.type = artifact_type
+        self.metadata = metadata or {}
+        self.files: list[tuple[str, str | None]] = []
+        self.dirs: list[tuple[str, str | None]] = []
+
+    def add_file(self, local_path: str, *, name: str | None = None) -> None:
+        self.files.append((local_path, name))
+
+    def add_dir(self, local_path: str, *, name: str | None = None) -> None:
+        self.dirs.append((local_path, name))
+
+
+class _FakeWandbModule:
+    def __init__(self) -> None:
+        self.created: list[_FakeArtifact] = []
+
+    def Artifact(
+        self,
+        name: str,
+        artifact_type: str,
+        metadata: dict[str, object] | None = None,
+    ) -> _FakeArtifact:
+        artifact = _FakeArtifact(name, artifact_type, metadata)
+        self.created.append(artifact)
+        return artifact
 
 
 def test_init_wandb_returns_none_when_disabled() -> None:
@@ -184,4 +247,147 @@ def test_record_training_step_writes_all_step_outputs(capsys) -> None:
     assert steps_logger.entries[0]["dg_eta"] == pytest.approx(0.6)
     assert wandb_run.entries[0][1] == 7
     assert wandb_run.entries[0][0]["train/dg_eta"] == pytest.approx(0.6)
+    assert (
+        wandb_run.entries[0][0][
+            "train/recoverability/checkpoint_artifacts_enabled"
+        ]
+        == 1
+    )
+    assert wandb_run.entries[0][0]["train/recoverability/local_only"] == 0
     assert "Step 7 [grpo+none] | loss=0.2500" in capsys.readouterr().out
+
+
+def test_recoverability_metrics_show_preemption_not_ready_without_periodic_checkpoints() -> None:
+    with pytest.warns(UserWarning, match="save_every=0"):
+        config = TrainConfig(wandb_project="proj", save_every=0)
+
+    metrics = checkpoint_recoverability_wandb_metrics(config, _WandbRun())
+
+    assert metrics["train/recoverability/checkpoint_artifacts_live"] == 1
+    assert metrics["train/recoverability/periodic_checkpoints_enabled"] == 0
+    assert metrics["train/recoverability/preemption_resume_ready"] == 0
+
+
+def test_auto_checkpoint_artifacts_warn_when_periodic_checkpoints_disabled(
+    capsys,
+) -> None:
+    with pytest.warns(UserWarning, match="save_every=0"):
+        config = TrainConfig(wandb_project="proj", save_every=0)
+
+    announce_checkpoint_recoverability(config, _WandbRun())
+
+    out = capsys.readouterr().out
+    assert "save_every=0 means only the final adapter will be uploaded" in out
+    assert "Spot/preemptible runs cannot resume mid-run" in out
+
+
+def test_upload_checkpoint_artifact_adds_adapter_and_state(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    checkpoint = tmp_path / "adapters" / "checkpoint_step_2"
+    checkpoint.mkdir(parents=True)
+    (checkpoint / "adapter_model.safetensors").write_text("fake")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "trainer_state.json").write_text('{"step": 1}\n')
+    (log_dir / "latest_sampler_path.txt").write_text(f"{checkpoint}\n")
+
+    fake_wandb = _FakeWandbModule()
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    wandb_run = _WandbRun()
+    config = TrainConfig(
+        wandb_project="proj",
+        log_dir=str(log_dir),
+        adapter_path=str(tmp_path / "adapters"),
+    )
+
+    result = upload_checkpoint_artifact(
+        config,
+        wandb_run,
+        checkpoint_name="checkpoint_step_2",
+        checkpoint_path=str(checkpoint),
+        step=1,
+    )
+
+    assert result.uploaded is True
+    assert result.artifact_name == "retrain-test-run-checkpoints"
+    assert len(wandb_run.artifacts) == 1
+    artifact, aliases = wandb_run.artifacts[0]
+    assert isinstance(artifact, _FakeArtifact)
+    assert artifact.name == "retrain-test-run-checkpoints"
+    assert artifact.metadata["checkpoint_name"] == "checkpoint_step_2"
+    assert (str(checkpoint), "adapter") in artifact.dirs
+    assert ("trainer_state.json" in [name for _, name in artifact.files])
+    assert ("latest_sampler_path.txt" in [name for _, name in artifact.files])
+    assert aliases == ["latest", "checkpoint_step_2"]
+    assert (
+        wandb_run.entries[-1][0][
+            "train/recoverability/latest_checkpoint_uploaded"
+        ]
+        == 1
+    )
+
+
+def test_upload_checkpoint_artifact_auto_warns_on_failure(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    fake_wandb = _FakeWandbModule()
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    wandb_run = _FailingArtifactWandbRun()
+    config = TrainConfig(
+        wandb_project="proj",
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapters"),
+    )
+
+    result = upload_checkpoint_artifact(
+        config,
+        wandb_run,
+        checkpoint_name="checkpoint_step_2",
+        checkpoint_path="tinker://checkpoint_step_2",
+        step=1,
+    )
+
+    assert result.uploaded is False
+    assert result.reason == "RuntimeError"
+    assert "WARNING: W&B checkpoint artifact upload failed" in capsys.readouterr().out
+    assert (
+        wandb_run.entries[-1][0][
+            "train/recoverability/latest_checkpoint_uploaded"
+        ]
+        == 0
+    )
+
+
+def test_upload_checkpoint_artifact_required_raises_on_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    fake_wandb = _FakeWandbModule()
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    config = TrainConfig(
+        wandb_project="proj",
+        checkpoint_artifacts="wandb",
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapters"),
+    )
+
+    with pytest.raises(RuntimeError, match="upload failed"):
+        upload_checkpoint_artifact(
+            config,
+            _FailingArtifactWandbRun(),
+            checkpoint_name="checkpoint_step_2",
+            checkpoint_path="tinker://checkpoint_step_2",
+            step=1,
+        )
+
+
+def test_required_checkpoint_artifacts_reject_offline_wandb(monkeypatch) -> None:
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    config = TrainConfig(wandb_project="proj", checkpoint_artifacts="wandb")
+
+    with pytest.raises(RuntimeError, match="not live"):
+        announce_checkpoint_recoverability(config, _WandbRun())

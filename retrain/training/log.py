@@ -13,6 +13,7 @@ from retrain.backends.catalog import BackendCapabilities
 from retrain.training.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
 from retrain.training.rollouts import RuntimeCounters
+from retrain.training.recoverability import checkpoint_recoverability_wandb_metrics
 from retrain.training.telemetry import (
     EchoStepPlan,
     MetricValue,
@@ -144,6 +145,7 @@ def init_wandb(
         "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
         "echo_max_token_ratio": config.echo_max_token_ratio,
         "echo_entropy_floor": config.echo_entropy_floor,
+        "checkpoint_artifacts": config.checkpoint_artifacts,
     }
     run = wandb.init(
         project=config.wandb_project,
@@ -236,13 +238,19 @@ def record_training_step(
     )
 
     if wandb_run is not None:
-        wandb_run.log(
+        wandb_metrics: dict[str, object] = dict(
             build_wandb_metrics(
                 step_log,
                 adv_results=rollout.adv_results,
                 batch_norm_metrics=batch_norm_metrics,
                 metrics=metrics,
-            ),
+            )
+        )
+        wandb_metrics.update(
+            checkpoint_recoverability_wandb_metrics(config, wandb_run)
+        )
+        wandb_run.log(
+            wandb_metrics,
             step=context.step,
         )
 

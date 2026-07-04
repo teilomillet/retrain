@@ -11,6 +11,7 @@ from retrain.config import TrainConfig
 from retrain.io.log import JsonlLogger
 from retrain.process.metrics import max_rss_mb
 from retrain.training.log import WandbRunLike
+from retrain.training.recoverability import checkpoint_recoverability_wandb_metrics
 from retrain.training.sft import (
     SftExample,
     SftTokenizedExample,
@@ -80,7 +81,7 @@ def run_sft_warmup_step(
     metrics_logger: JsonlLogger,
     steps_logger: JsonlLogger,
     wandb_run: WandbRunLike | None,
-) -> None:
+) -> tuple[str, str] | None:
     """Run one supervised warmup step from oracle demonstrations."""
     step_start = time.perf_counter()
     helper.checkpoint(f"step_{step}")
@@ -152,18 +153,21 @@ def run_sft_warmup_step(
     steps_logger.log(metrics)
 
     if wandb_run is not None:
-        wandb_run.log(
-            {
-                "train/loss": loss,
-                "train/sft_signal": sft_signal,
-                "train/sft_warmup": 1,
-                "train/step": step,
-                "train/lr": effective_lr,
-            },
-            step=step,
+        wandb_metrics: dict[str, int | float | str] = {
+            "train/loss": loss,
+            "train/sft_signal": sft_signal,
+            "train/sft_warmup": 1,
+            "train/step": step,
+            "train/lr": effective_lr,
+        }
+        wandb_metrics.update(
+            checkpoint_recoverability_wandb_metrics(config, wandb_run)
         )
+        wandb_run.log(wandb_metrics, step=step)
 
     if config.save_every > 0 and (step + 1) % config.save_every == 0:
         ckpt_name = f"checkpoint_step_{step + 1}"
-        helper.save_adapter(config.adapter_path, ckpt_name)
+        checkpoint_path = helper.save_adapter(config.adapter_path, ckpt_name)
         print(f"Saved checkpoint: {ckpt_name}")
+        return ckpt_name, checkpoint_path
+    return None

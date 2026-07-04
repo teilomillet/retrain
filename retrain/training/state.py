@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import NotRequired, TypedDict, cast
@@ -11,6 +12,7 @@ from retrain.training.sepa import SEPAStateDict
 
 
 TRAINER_STATE_FILE = "trainer_state.json"
+_URI_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 
 
 class TrainerState(TypedDict):
@@ -98,13 +100,13 @@ def load_trainer_state(resume_dir: str) -> TrainerState:
     }
     checkpoint_path = _optional_str_field(payload_map, "checkpoint_path")
     if checkpoint_path:
-        state["checkpoint_path"] = checkpoint_path
+        state["checkpoint_path"] = _resolve_checkpoint_path(path, checkpoint_path)
     else:
         latest_sampler_path = path / "latest_sampler_path.txt"
         if latest_sampler_path.is_file():
             fallback_path = latest_sampler_path.read_text().strip()
             if fallback_path:
-                state["checkpoint_path"] = fallback_path
+                state["checkpoint_path"] = _resolve_checkpoint_path(path, fallback_path)
     tl_grpo_ema = _optional_float_field(payload_map, "tl_grpo_ema")
     if tl_grpo_ema is not None:
         state["tl_grpo_ema"] = tl_grpo_ema
@@ -142,3 +144,20 @@ def _optional_float_field(payload: Mapping[str, object], key: str) -> float | No
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"Trainer state field '{key}' must be a number.")
     return float(value)
+
+
+def _resolve_checkpoint_path(resume_dir: Path, checkpoint_path: str) -> str:
+    """Prefer artifact-local adapter payloads when original paths disappeared."""
+    if _URI_RE.match(checkpoint_path):
+        return checkpoint_path
+    original_path = Path(checkpoint_path).expanduser()
+    if original_path.exists():
+        return checkpoint_path
+    if not original_path.is_absolute():
+        relative_to_resume = resume_dir / original_path
+        if relative_to_resume.exists():
+            return str(relative_to_resume)
+    artifact_adapter = resume_dir / "adapter"
+    if artifact_adapter.exists():
+        return str(artifact_adapter)
+    return checkpoint_path

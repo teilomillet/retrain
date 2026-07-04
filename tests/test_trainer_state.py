@@ -628,3 +628,27 @@ class TestResumeIntegration:
         assert saved["checkpoint_name"] == "checkpoint_step_60"
         # Resume would call helper.load_state("checkpoint_step_60")
         assert saved["checkpoint_name"] == f"checkpoint_step_{saved['step'] + 1}"
+
+    def test_resume_uses_artifact_local_adapter_when_original_path_missing(self, tmp_path):
+        """Downloaded W&B artifacts are resumable even if the original path died."""
+        resume_dir = tmp_path / "downloaded_artifact"
+        lost_checkpoint = tmp_path / "dead_machine" / "checkpoint_step_20"
+        artifact_adapter = resume_dir / "adapter"
+        artifact_adapter.mkdir(parents=True)
+
+        save_trainer_state(
+            resume_dir,
+            step=19,
+            example_idx=160,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=8,
+            current_group_size=16,
+            checkpoint_name="checkpoint_step_20",
+            checkpoint_path=str(lost_checkpoint),
+            sepa_state={},
+        )
+
+        saved = load_trainer_state(str(resume_dir))
+
+        assert saved["checkpoint_path"] == str(artifact_adapter)

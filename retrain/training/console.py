@@ -26,6 +26,7 @@ def print_config_summary(config: TrainConfig) -> None:
     ]
     if config.wandb_project:
         lines.append(f"  wandb         : {config.wandb_project}")
+    lines.append(f"  ckpt_artifacts: {config.checkpoint_artifacts}")
     if config.resume_from:
         lines.append(f"  resume_from   : {config.resume_from}")
     if config.echo_enabled:

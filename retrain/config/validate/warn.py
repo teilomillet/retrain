@@ -31,6 +31,13 @@ def emit_warnings(config: TrainConfig) -> None:
             "save_every=0 disables periodic checkpoints.",
             stacklevel=2,
         )
+        if config.wandb_project and config.checkpoint_artifacts != "off":
+            warnings.warn(
+                "checkpoint_artifacts is enabled but save_every=0, so W&B "
+                "will only receive the final adapter. Spot/preemptible runs "
+                "cannot resume mid-run; set save_every > 0.",
+                stacklevel=2,
+            )
     if config.weight_decay < 0:
         warnings.warn(
             f"weight_decay={config.weight_decay} is negative — this is unusual.",
