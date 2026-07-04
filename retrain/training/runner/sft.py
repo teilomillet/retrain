@@ -49,7 +49,11 @@ class SftRunner:
             write_sft_artifact_manifest,
             write_sft_run_snapshot_artifacts,
         )
-        from retrain.training.state import save_trainer_state
+        from retrain.training.state import (
+            TRAINER_STATE_FILE,
+            load_trainer_state,
+            save_trainer_state,
+        )
 
         if not config.sft_data_path:
             raise ValueError(
@@ -104,6 +108,27 @@ class SftRunner:
         print(f"  max_steps     : {config.max_steps}")
         print(f"  adapter_path  : {config.adapter_path}")
 
+        resume_state = None
+        resume_checkpoint_ref = ""
+        start_step = 0
+        resume_batch_size: int | None = None
+        if config.resume_from:
+            resume_state_path = Path(config.resume_from) / TRAINER_STATE_FILE
+            if resume_state_path.is_file():
+                resume_state = load_trainer_state(config.resume_from)
+                start_step = resume_state["step"] + 1
+                if start_step > config.max_steps:
+                    raise ValueError(
+                        "SFT resume checkpoint is beyond configured max_steps: "
+                        f"checkpoint step {resume_state['step']}, "
+                        f"max_steps {config.max_steps}."
+                    )
+                resume_batch_size = resume_state["current_batch_size"]
+                resume_checkpoint_ref = (
+                    resume_state.get("checkpoint_path", "")
+                    or resume_state.get("checkpoint_name", "")
+                )
+
         helper = get_registry("backend").create(config.backend, config)
         loss_fn = effective_sft_loss_fn(config)
         setattr(helper, "sft_loss_fn", loss_fn)
@@ -129,14 +154,30 @@ class SftRunner:
                 raise RuntimeError(
                     "trainer='sft' resume_from requires a backend with load_state()."
                 )
-            print(f"Loading SFT initial adapter from {config.resume_from} ...")
-            load_state(config.resume_from)
+            if resume_state is not None:
+                if not resume_checkpoint_ref:
+                    raise RuntimeError(
+                        "trainer='sft' resume_from log dir did not provide "
+                        "a checkpoint path or name."
+                    )
+                print(
+                    "Resuming SFT from "
+                    f"{config.resume_from} at step {resume_state['step']} "
+                    f"(checkpoint: {resume_checkpoint_ref}), "
+                    f"continuing from step {start_step} ..."
+                )
+                load_state(resume_checkpoint_ref)
+            else:
+                print(f"Loading SFT initial adapter from {config.resume_from} ...")
+                load_state(config.resume_from)
 
         print(f"Loading tokenizer for {config.model} ...")
         tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
 
         batch_size = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
         batch_size = min(max(1, batch_size), len(examples))
+        if resume_batch_size is not None and resume_batch_size > 0:
+            batch_size = min(resume_batch_size, len(examples))
         max_tokens = config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens
         lr = config.sft_lr if config.sft_lr > 0 else config.lr
         print("Tokenizing SFT dataset ...")
@@ -162,7 +203,7 @@ class SftRunner:
         policy_ref = ""
         last_metrics: dict[str, int | float | str] = {}
         try:
-            for step in range(config.max_steps):
+            for step in range(start_step, config.max_steps):
                 step_start = time.perf_counter()
                 indices = select_sft_batch_indices(
                     order,

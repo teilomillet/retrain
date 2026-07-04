@@ -169,7 +169,7 @@ retrain
 | **Campaigns** | Sweep conditions x seeds from a single TOML with wandb groups |
 | **Capacity Planning** | Formula-driven sizing for memory, worker count, and wall time |
 | **LoRA-Squeeze** | Train at high rank, auto-analyze optimal rank via SVD after first run |
-| **Checkpoint resume** | Full trainer state (step, SEPA, optimizer) saved and restored |
+| **Checkpoint resume** | Trainer step, counters, SEPA state, and adapter weights saved and restored |
 | **wandb integration** | Structured metric prefixes (`train/`, `train/entropy/`, `train/backpressure/`) |
 
 ## Quick links

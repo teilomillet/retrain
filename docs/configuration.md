@@ -408,9 +408,10 @@ save_every = 20
 log_dir = "logs/my-model-sft"
 ```
 
-The SFT run writes `trainer_state.json` in `log_dir`, including the final
-adapter checkpoint path. A later RL run can continue training the same LoRA by
-pointing `[resume].from` at that SFT log directory:
+The SFT run writes `trainer_state.json` in `log_dir`, including the latest
+adapter checkpoint path and step. A later SFT run can resume remaining SFT
+steps from that log directory, and a later RL run can continue training the
+same LoRA by pointing `[resume].from` at the SFT log directory:
 
 ```toml
 [backend]
@@ -432,6 +433,12 @@ lr = 1e-5
 [resume]
 from = "logs/my-model-sft"
 ```
+
+For `trainer = "sft"`, `resume.from` has two modes. If it points at a log
+directory containing `trainer_state.json`, retrain restores the saved checkpoint
+and continues from the next SFT step. If it points directly at an adapter
+directory, retrain loads that adapter as initialization and starts SFT at step
+0.
 
 The same run also writes:
 

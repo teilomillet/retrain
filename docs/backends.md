@@ -567,6 +567,11 @@ This restores:
 
 The resume directory must contain a `trainer_state.json` file (created automatically by `save_every` checkpoints and at the end of training).
 
+Standalone SFT uses the same log-directory resume contract. With
+`trainer = "sft"`, `resume.from = "logs/sft-run"` restores the saved adapter
+checkpoint and continues from the next SFT step. Passing an adapter directory
+directly still works as initialization, but starts the SFT loop from step 0.
+
 **Local backend:** Checkpoints are saved to `adapter_path` as subdirectories (e.g., `checkpoint_step_20/`, `final/`). LoRA weights are restored via `safetensors` or `.bin` files. Optimizer state (Adam momentum) is not restored -- the optimizer re-warms.
 
 **Unsloth backend:** Checkpoint semantics match the local adapter path: retrain

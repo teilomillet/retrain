@@ -460,6 +460,80 @@ class TestSftRunner:
         assert helper.loaded == [str(resume_from)]
         assert len(helper.calls) == 1
 
+    def test_sft_resume_from_log_dir_continues_from_saved_step(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        data_path = tmp_path / "sft.jsonl"
+        rows = [
+            {"text": "first"},
+            {"text": "second"},
+            {"text": "third"},
+            {"text": "fourth"},
+        ]
+        data_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        adapter_path = tmp_path / "adapter"
+        checkpoint_path = adapter_path / "checkpoint_step_2"
+        resume_log_dir = tmp_path / "previous_logs"
+        log_dir = tmp_path / "logs"
+        helper = _FakeSftHelper()
+
+        from retrain.training.state import save_trainer_state
+        save_trainer_state(
+            resume_log_dir,
+            step=1,
+            example_idx=2,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=1,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_2",
+            checkpoint_path=str(checkpoint_path),
+            sepa_state={},
+        )
+
+        def fake_get_registry(name):
+            assert name == "backend"
+            return _FakeBackendRegistry(helper)
+
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr("retrain.registry.builtin.get_registry", fake_get_registry)
+
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=4,
+            save_every=0,
+            batch_size=1,
+            lr=1e-4,
+            model="fake-model",
+            adapter_path=str(adapter_path),
+            resume_from=str(resume_log_dir),
+            log_dir=str(log_dir),
+        )
+
+        result = SftRunner().run(config)
+
+        assert result.ok
+        assert helper.loaded == [str(checkpoint_path)]
+        assert len(helper.calls) == 2
+        metrics = [
+            json.loads(line)
+            for line in (log_dir / "metrics.jsonl").read_text().splitlines()
+        ]
+        assert [row["step"] for row in metrics] == [2, 3]
+        state = json.loads((log_dir / "trainer_state.json").read_text())
+        assert state["step"] == 3
+        assert state["example_idx"] == 4
+        assert state["current_batch_size"] == 1
+        assert state["checkpoint_path"] == str(adapter_path / "final")
+
     def test_sft_resume_requires_callable_load_state(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"
         data_path.write_text(
