@@ -247,6 +247,8 @@ OPTIONS
         --sft-batch-order
         --sft-batch-size
         --sft-data-path
+        --sft-data-rows
+        --sft-data-sha256
         --sft-length-bucket-size
         --sft-loss-fn
         --sft-lr

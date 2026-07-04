@@ -65,6 +65,8 @@ weight_decay = 0.0
 max_examples = 0           # 0 = use all examples
 save_every = 20
 sft_data_path = ""         # JSONL: messages, prompt/completion, or text rows
+sft_data_sha256 = ""       # optional exact-data pin from retrain explain
+sft_data_rows = 0          # optional row-count pin; 0 = unpinned
 sft_batch_size = 0         # 0 = trainer default
 sft_max_tokens = 0         # 0 = trainer default
 sft_lr = 0.0               # 0 = use lr
@@ -347,6 +349,8 @@ Nested plugin params tables under `[algorithm]`:
 | `save_every` | int | `20` | Checkpoint frequency (steps) |
 | `sft_warmup_steps` | int | `0` | Optional supervised warmup steps inside `trainer = "retrain"` before RL starts |
 | `sft_data_path` | str | `""` | SFT JSONL path. Required for `trainer = "sft"`; optional for warmup |
+| `sft_data_sha256` | str | `""` | Optional SHA256 pin for the exact SFT JSONL bytes. Mismatches fail before training |
+| `sft_data_rows` | int | `0` | Optional loaded-row-count pin for SFT data. `0` leaves the count unpinned |
 | `sft_batch_size` | int | `0` | SFT datums per optimizer step. `0` keeps the trainer default |
 | `sft_max_tokens` | int | `0` | SFT row token cap. `0` uses `max_tokens` for standalone SFT and `max_tokens + 512` for warmup compatibility |
 | `sft_lr` | float | `0.0` | SFT learning rate. `0` uses `lr` |
@@ -393,6 +397,9 @@ batch_size = 4
 max_tokens = 2048
 lr = 2e-5
 sft_data_path = "data/sft.jsonl"
+# Optional once retrain explain reports trusted values:
+# sft_data_sha256 = "..."
+# sft_data_rows = 1000
 sft_batch_size = 4
 sft_loss_fn = "auto"  # cross_entropy for standalone SFT
 save_every = 20
@@ -430,12 +437,27 @@ The same run also writes:
 
 - `log_dir/sft_manifest.json`
 - `adapter_path/final/retrain_sft_manifest.json`
+- `log_dir/resolved_config.json`
+- `log_dir/sft_data_recoverability.json`
+- `log_dir/sft_data.snapshot.jsonl` when the JSONL is small enough to copy
 
-Those manifests record the base model, LoRA rank/alpha, dataset path, final
-adapter checkpoint, latest resource metrics, and a PEFT loading snippet. The
+Those manifests record the base model, LoRA rank/alpha, dataset path, dataset
+SHA256, row count, byte count, tracking warnings, final adapter checkpoint,
+latest resource metrics, and a PEFT loading snippet. The
 adapter directory is the Hugging Face/PEFT artifact: it can be loaded with
 `PeftModel.from_pretrained(base_model, adapter_path)` or uploaded with
 `huggingface-cli upload`.
+
+`resolved_config.json` records the resolved `TrainConfig` including defaults,
+with conventional secret-shaped option keys redacted. `sft_data_recoverability.json`
+records whether retrain copied the exact JSONL into `sft_data.snapshot.jsonl`;
+large files are not copied, but the recoverability file still records their
+path, SHA256, row count, byte count, and reason they were left external.
+
+`retrain explain config.toml` loads configured SFT data, prints the resolved
+path, SHA256, row count, byte count, and git tracking status, and verifies
+`sft_data_sha256` / `sft_data_rows` when they are set. This makes the config a
+portable data contract instead of just a filename.
 
 ### Qwen3.5 Unsloth SFT Ergonomics
 

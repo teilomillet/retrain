@@ -20,11 +20,14 @@ import pytest
 
 import retrain.training.sft as sft_module
 from retrain.config import TrainConfig, load_config
+from retrain.training.warmup import load_sft_warmup_data
 from retrain.training.sft import (
     SftExample,
     load_sft_dataset,
     load_sft_jsonl,
     tokenize_sft_batch,
+    verify_sft_data_contract,
+    write_sft_run_snapshot_artifacts,
 )
 
 
@@ -55,6 +58,8 @@ model = "test-model"
 max_steps = 20
 sft_warmup_steps = 5
 sft_data_path = "/tmp/test_sft.jsonl"
+sft_data_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+sft_data_rows = 123
 sft_batch_size = 3
 sft_max_tokens = 256
 sft_loss_fn = "cross_entropy"
@@ -70,6 +75,8 @@ tl_grpo = true
         os.unlink(f.name)
         assert config.sft_warmup_steps == 5
         assert config.sft_data_path == "/tmp/test_sft.jsonl"
+        assert config.sft_data_sha256 == "a" * 64
+        assert config.sft_data_rows == 123
         assert config.sft_batch_size == 3
         assert config.sft_max_tokens == 256
         assert config.sft_loss_fn == "cross_entropy"
@@ -93,6 +100,22 @@ tl_grpo = true
         """Standalone SFT cannot start without a user dataset."""
         with pytest.raises(ValueError, match="sft_data_path"):
             TrainConfig(trainer="sft")
+
+    def test_sft_data_pin_config_is_validated(self):
+        with pytest.raises(ValueError, match="sft_data_sha256"):
+            TrainConfig(sft_data_sha256="not-a-sha")
+        with pytest.raises(ValueError, match="sft_data_rows"):
+            TrainConfig(sft_data_rows=-1)
+
+    def test_pinned_missing_sft_warmup_data_fails(self, tmp_path):
+        config = TrainConfig(
+            sft_warmup_steps=1,
+            sft_data_path=str(tmp_path / "missing.jsonl"),
+            sft_data_sha256="0" * 64,
+        )
+
+        with pytest.raises(FileNotFoundError, match="cannot verify"):
+            load_sft_warmup_data(config, _TinyTokenizer())
 
 
 class _TinyTokenizer:
@@ -240,6 +263,87 @@ class TestGenericSftJsonl:
             "not tracked by git" in warning
             for warning in staged.provenance.data_warnings
         )
+
+    def test_sft_data_contract_accepts_matching_pins(self, tmp_path):
+        data_path = tmp_path / "data" / "sft.jsonl"
+        data_path.parent.mkdir()
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        dataset = load_sft_dataset(data_path)
+        config = TrainConfig(
+            sft_data_path=str(data_path),
+            sft_data_sha256=dataset.provenance.data_sha256,
+            sft_data_rows=dataset.provenance.data_rows,
+        )
+
+        verify_sft_data_contract(config, dataset.provenance)
+
+    def test_sft_data_contract_rejects_mismatched_pins(self, tmp_path):
+        data_path = tmp_path / "data" / "sft.jsonl"
+        data_path.parent.mkdir()
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        dataset = load_sft_dataset(data_path)
+        config = TrainConfig(
+            sft_data_path=str(data_path),
+            sft_data_sha256="0" * 64,
+            sft_data_rows=dataset.provenance.data_rows + 1,
+        )
+
+        with pytest.raises(ValueError, match="SFT data contract mismatch") as exc_info:
+            verify_sft_data_contract(config, dataset.provenance)
+        message = str(exc_info.value)
+        assert "sft_data_sha256 mismatch" in message
+        assert "sft_data_rows mismatch" in message
+
+    def test_sft_snapshot_recoverability_records_large_data_without_copy(self, tmp_path):
+        data_path = tmp_path / "data" / "sft.jsonl"
+        data_path.parent.mkdir()
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        dataset = load_sft_dataset(data_path)
+        log_dir = tmp_path / "logs"
+        config = TrainConfig(sft_data_path=str(data_path), log_dir=str(log_dir))
+
+        paths = write_sft_run_snapshot_artifacts(
+            log_dir,
+            config,
+            dataset.provenance,
+            snapshot_max_bytes=1,
+        )
+
+        assert "resolved_config.json" in paths
+        assert "sft_data.snapshot.jsonl" not in paths
+        recoverability = json.loads((log_dir / "sft_data_recoverability.json").read_text())
+        assert recoverability["copied"] is False
+        assert recoverability["recoverable"] is False
+        assert recoverability["source_sha256"] == dataset.provenance.data_sha256
+        assert "exceeds snapshot_max_bytes" in recoverability["reason"]
+
+    def test_sft_snapshot_redacts_sensitive_config_values(self, tmp_path):
+        data_path = tmp_path / "data" / "sft.jsonl"
+        data_path.parent.mkdir()
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        dataset = load_sft_dataset(data_path)
+        log_dir = tmp_path / "logs"
+        config = TrainConfig(
+            sft_data_path=str(data_path),
+            log_dir=str(log_dir),
+        )
+        config.backend_options = {
+            "api_key": "secret-value",
+            "load_in_4bit": True,
+            "nested": {
+                "hf_token": "token-value",
+                "max_tokens": 123,
+            },
+        }
+
+        write_sft_run_snapshot_artifacts(log_dir, config, dataset.provenance)
+
+        resolved = json.loads((log_dir / "resolved_config.json").read_text())
+        options = resolved["config"]["backend_options"]
+        assert options["api_key"] == "<redacted>"
+        assert options["load_in_4bit"] is True
+        assert options["nested"]["hf_token"] == "<redacted>"
+        assert options["nested"]["max_tokens"] == 123
 
     def test_message_sft_disables_thinking_when_supported(self):
         tokenizer = _ThinkingTokenizer()

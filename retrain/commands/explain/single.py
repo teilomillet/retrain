@@ -3,9 +3,53 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from retrain.commands.backends.capability import payload as capability_payload
 from retrain.commands.backends.capability import summary as capability_summary
+
+if TYPE_CHECKING:
+    from retrain.config import TrainConfig
+
+
+def _should_load_sft_provenance(config: "TrainConfig") -> bool:
+    sft_data_path = str(getattr(config, "sft_data_path", ""))
+    if not sft_data_path:
+        return False
+    has_data_pins = bool(
+        getattr(config, "sft_data_sha256", "")
+        or int(getattr(config, "sft_data_rows", 0) or 0) > 0
+    )
+    if getattr(config, "trainer", "") == "sft" or has_data_pins:
+        return True
+    if int(getattr(config, "sft_warmup_steps", 0) or 0) > 0:
+        return Path(sft_data_path).exists()
+    return False
+
+
+def _sft_provenance_info(config: "TrainConfig") -> dict[str, object] | None:
+    if not _should_load_sft_provenance(config):
+        return None
+
+    from retrain.training.sft import load_sft_dataset, verify_sft_data_contract
+
+    dataset = load_sft_dataset(str(getattr(config, "sft_data_path")))
+    verify_sft_data_contract(config, dataset.provenance)
+    provenance = dataset.provenance
+    return {
+        "data_path": provenance.data_path,
+        "data_sha256": provenance.data_sha256,
+        "data_rows": provenance.data_rows,
+        "data_bytes": provenance.data_bytes,
+        "data_path_status": provenance.data_path_status,
+        "data_root": provenance.data_root,
+        "git_root": provenance.git_root,
+        "git_tracked": provenance.git_tracked,
+        "data_warnings": list(provenance.data_warnings),
+        "pinned_sha256": str(getattr(config, "sft_data_sha256", "")).strip(),
+        "pinned_rows": int(getattr(config, "sft_data_rows", 0) or 0),
+    }
 
 
 def explain_single(config_path: str | None, fmt: str) -> None:
@@ -39,6 +83,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         data_info = f"{config.environment_provider}:{config.environment_id}"
     if config.trainer == "sft":
         data_info = config.sft_data_path
+    sft_provenance = _sft_provenance_info(config)
     backend_capabilities = capability_payload(
         config.backend,
         config.backend_options,
@@ -63,6 +108,9 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "total_datums": total_datums,
         "sft_warmup_steps": config.sft_warmup_steps,
         "sft_data_path": config.sft_data_path,
+        "sft_data_sha256": config.sft_data_sha256,
+        "sft_data_rows": config.sft_data_rows,
+        "sft_data_provenance": sft_provenance,
         "sft_batch_size": config.sft_batch_size,
         "sft_max_tokens": config.sft_max_tokens,
         "sft_loss_fn": sft_loss_fn,
@@ -125,6 +173,21 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         )
         if config.sft_data_path:
             print(f"  sft_data      : {config.sft_data_path}")
+        if sft_provenance is not None:
+            print(f"  sft_resolved  : {sft_provenance['data_path']}")
+            print(f"  sft_sha256    : {sft_provenance['data_sha256']}")
+            print(
+                "  sft_rows      : "
+                f"{sft_provenance['data_rows']} "
+                f"bytes={sft_provenance['data_bytes']}"
+            )
+            print(
+                "  sft_tracking  : "
+                f"{sft_provenance['data_path_status']} "
+                f"git_tracked={sft_provenance['git_tracked']}"
+            )
+            for warning in cast(list[str], sft_provenance["data_warnings"]):
+                print(f"  sft_warning   : {warning}")
     print(f"  seed          : {config.seed}")
     print(f"  lora          : rank={config.lora_rank} alpha={lora_alpha}")
     print(f"  data          : {data_info}")

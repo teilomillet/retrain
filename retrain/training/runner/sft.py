@@ -45,7 +45,9 @@ class SftRunner:
             load_sft_dataset,
             select_sft_batch_indices,
             tokenize_sft_dataset,
+            verify_sft_data_contract,
             write_sft_artifact_manifest,
+            write_sft_run_snapshot_artifacts,
         )
         from retrain.training.state import save_trainer_state
 
@@ -62,6 +64,12 @@ class SftRunner:
         steps_logger = JsonlLogger(str(emergence_dir / "steps.jsonl"))
 
         dataset = load_sft_dataset(config.sft_data_path)
+        verify_sft_data_contract(config, dataset.provenance)
+        snapshot_artifacts = write_sft_run_snapshot_artifacts(
+            log_dir,
+            config,
+            dataset.provenance,
+        )
         examples = dataset.examples
         if not examples:
             raise RuntimeError("SFT dataset is empty — cannot fine-tune with zero examples.")
@@ -256,6 +264,7 @@ class SftRunner:
                 max_tokens=max_tokens,
                 loss_fn=loss_fn,
                 data_provenance=dataset.provenance,
+                snapshot_artifacts=snapshot_artifacts,
                 latest_metrics=last_metrics,
             )
             manifest_paths = write_sft_artifact_manifest(

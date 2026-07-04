@@ -133,6 +133,8 @@ class TrainConfig:
     # SFT warmup (supervised fine-tuning before RL)
     sft_warmup_steps: int = 0
     sft_data_path: str = ""  # JSONL messages, prompt/completion, or text rows
+    sft_data_sha256: str = ""  # Optional exact-data contract
+    sft_data_rows: int = 0  # 0 = unpinned
     sft_batch_size: int = 0  # 0 = trainer default
     sft_max_tokens: int = 0  # 0 = trainer default
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase

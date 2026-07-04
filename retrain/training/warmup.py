@@ -16,9 +16,10 @@ from retrain.training.sft import (
     SftTokenizedExample,
     build_sft_example_order,
     build_sft_tokenized_batch,
-    load_sft_jsonl,
+    load_sft_dataset,
     select_sft_batch_indices,
     tokenize_sft_dataset,
+    verify_sft_data_contract,
 )
 
 
@@ -40,9 +41,16 @@ def load_sft_warmup_data(
         return None
     sft_path = Path(config.sft_data_path)
     if not sft_path.exists():
+        if config.sft_data_sha256 or config.sft_data_rows > 0:
+            raise FileNotFoundError(
+                f"SFT data path {sft_path} not found; cannot verify configured "
+                "sft_data_sha256/sft_data_rows pins."
+            )
         print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
         return None
-    examples = load_sft_jsonl(sft_path)
+    dataset = load_sft_dataset(sft_path)
+    verify_sft_data_contract(config, dataset.provenance)
+    examples = dataset.examples
     token_limit = (
         config.sft_max_tokens
         if config.sft_max_tokens > 0

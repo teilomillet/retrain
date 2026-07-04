@@ -83,6 +83,16 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
         errors.append(
             "sft_lr must be >= 0. Try: sft_lr = 2e-5"
         )
+    if config.sft_data_sha256:
+        checksum = config.sft_data_sha256.strip().lower()
+        if len(checksum) != 64 or any(ch not in "0123456789abcdef" for ch in checksum):
+            errors.append(
+                "sft_data_sha256 must be a 64-character hexadecimal SHA256 digest."
+            )
+    if config.sft_data_rows < 0:
+        errors.append(
+            "sft_data_rows must be >= 0. Use 0 to leave the row count unpinned."
+        )
     if config.sft_loss_fn not in ("auto", "importance_sampling", "cross_entropy"):
         errors.append(
             "sft_loss_fn must be 'auto', 'importance_sampling', or 'cross_entropy'."

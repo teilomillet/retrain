@@ -63,6 +63,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "tl_grpo_ema_init": "tl_grpo_ema_init",
         "sft_warmup_steps": "sft_warmup_steps",
         "sft_data_path": "sft_data_path",
+        "sft_data_sha256": "sft_data_sha256",
+        "sft_data_rows": "sft_data_rows",
         "sft_batch_size": "sft_batch_size",
         "sft_max_tokens": "sft_max_tokens",
         "sft_lr": "sft_lr",

@@ -378,13 +378,38 @@ class TestSftRunner:
         assert any(
             "scratch/tmp" in warning for warning in manifest["sft"]["data_warnings"]
         )
+        assert manifest["reproducibility"]["artifacts"][
+            "resolved_config.json"
+        ] == str(log_dir / "resolved_config.json")
+        assert manifest["reproducibility"]["artifacts"][
+            "sft_data.snapshot.jsonl"
+        ] == str(log_dir / "sft_data.snapshot.jsonl")
+        assert manifest["reproducibility"]["artifacts"][
+            "sft_data_recoverability.json"
+        ] == str(log_dir / "sft_data_recoverability.json")
         assert manifest["huggingface"]["format"] == "peft_lora_adapter"
         assert manifest["ergonomics"]["no_rl_rollouts"] is True
+        resolved_config = json.loads((log_dir / "resolved_config.json").read_text())
+        assert resolved_config["kind"] == "retrain_resolved_config"
+        assert resolved_config["config"]["trainer"] == "sft"
+        assert resolved_config["config"]["sft_data_path"] == str(data_path)
+        assert (log_dir / "sft_data.snapshot.jsonl").read_bytes() == data_bytes
+        recoverability = json.loads((log_dir / "sft_data_recoverability.json").read_text())
+        assert recoverability["copied"] is True
+        assert recoverability["recoverable"] is True
+        assert recoverability["source_sha256"] == hashlib.sha256(data_bytes).hexdigest()
         adapter_manifest = json.loads(
             (adapter_path / "final" / "retrain_sft_manifest.json").read_text()
         )
         assert adapter_manifest["resume"]["from"] == str(log_dir)
         assert result.artifacts["sft_manifest.json"] == str(log_dir / "sft_manifest.json")
+        assert result.artifacts["resolved_config.json"] == str(log_dir / "resolved_config.json")
+        assert result.artifacts["sft_data.snapshot.jsonl"] == str(
+            log_dir / "sft_data.snapshot.jsonl"
+        )
+        assert result.artifacts["sft_data_recoverability.json"] == str(
+            log_dir / "sft_data_recoverability.json"
+        )
 
     def test_sft_resume_from_loads_initial_adapter(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"
@@ -484,6 +509,22 @@ class TestSftRunner:
         result = SftRunner().run(config)
         assert not result.ok
         assert result.failure_status == "exception:FileNotFoundError"
+
+    def test_sft_data_pin_mismatch_returns_failed_result(self, tmp_path):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        config = _bare_config(
+            trainer="sft",
+            sft_data_path=str(data_path),
+            sft_data_sha256="0" * 64,
+            log_dir=str(tmp_path / "logs"),
+        )
+
+        result = SftRunner().run(config)
+
+        assert not result.ok
+        assert result.failure_status == "exception:ValueError"
+        assert "sft_data_sha256 mismatch" in result.error_message
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +661,10 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
         assert "trainer" in output
 
     def test_explain_sft_json_uses_sft_datums(self, tmp_path, capsys):
+        data_path = tmp_path / "sft.jsonl"
+        data_content = json.dumps({"text": "plain next-token text"}) + "\n"
+        data_path.write_text(data_content)
+        data_sha256 = hashlib.sha256(data_content.encode("utf-8")).hexdigest()
         toml_content = f"""\
 [backend]
 backend = "local"
@@ -633,7 +678,9 @@ max_steps = 3
 batch_size = 8
 group_size = 16
 sft_batch_size = 2
-sft_data_path = "{tmp_path / 'sft.jsonl'}"
+sft_data_path = "{data_path}"
+sft_data_sha256 = "{data_sha256}"
+sft_data_rows = 1
 """
         config_file = tmp_path / "sft.toml"
         config_file.write_text(toml_content)
@@ -646,3 +693,74 @@ sft_data_path = "{tmp_path / 'sft.jsonl'}"
         assert data["condition"] == "sft"
         assert data["datums_per_step"] == 2
         assert data["total_datums"] == 6
+        assert data["sft_data_sha256"] == data_sha256
+        assert data["sft_data_rows"] == 1
+        assert data["sft_data_provenance"]["data_path"] == str(data_path.resolve())
+        assert data["sft_data_provenance"]["data_sha256"] == data_sha256
+        assert data["sft_data_provenance"]["data_rows"] == 1
+        assert data["sft_data_provenance"]["pinned_sha256"] == data_sha256
+        assert data["sft_data_provenance"]["pinned_rows"] == 1
+
+    def test_explain_text_includes_sft_provenance(self, tmp_path, capsys):
+        data_path = tmp_path / "sft.jsonl"
+        data_content = json.dumps({"text": "plain next-token text"}) + "\n"
+        data_path.write_text(data_content)
+        data_sha256 = hashlib.sha256(data_content.encode("utf-8")).hexdigest()
+        toml_content = f"""\
+[training]
+trainer = "sft"
+max_steps = 1
+sft_data_path = "{data_path}"
+sft_data_sha256 = "{data_sha256}"
+sft_data_rows = 1
+"""
+        config_file = tmp_path / "sft.toml"
+        config_file.write_text(toml_content)
+
+        from retrain.commands.explain.single import explain_single
+        explain_single(str(config_file), "text")
+        output = capsys.readouterr().out
+
+        assert "sft_resolved" in output
+        assert str(data_path.resolve()) in output
+        assert "sft_sha256" in output
+        assert data_sha256 in output
+        assert "sft_rows" in output
+
+    def test_explain_warmup_missing_unpinned_data_matches_runtime_skip(
+        self,
+        tmp_path,
+        capsys,
+    ):
+        missing_path = tmp_path / "missing.jsonl"
+        toml_content = f"""\
+[training]
+sft_warmup_steps = 1
+sft_data_path = "{missing_path}"
+"""
+        config_file = tmp_path / "warmup.toml"
+        config_file.write_text(toml_content)
+
+        from retrain.commands.explain.single import explain_single
+        explain_single(str(config_file), "json")
+        output = capsys.readouterr().out
+        data = json.loads(output)
+
+        assert data["sft_data_path"] == str(missing_path)
+        assert data["sft_data_provenance"] is None
+
+    def test_explain_sft_rejects_data_pin_mismatch(self, tmp_path):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
+        toml_content = f"""\
+[training]
+trainer = "sft"
+sft_data_path = "{data_path}"
+sft_data_sha256 = "{'0' * 64}"
+"""
+        config_file = tmp_path / "sft.toml"
+        config_file.write_text(toml_content)
+
+        from retrain.commands.explain.single import explain_single
+        with pytest.raises(ValueError, match="sft_data_sha256 mismatch"):
+            explain_single(str(config_file), "json")

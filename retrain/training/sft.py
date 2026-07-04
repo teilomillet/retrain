@@ -6,15 +6,33 @@ import hashlib
 import inspect
 import json
 import random
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, cast
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
+
+SFT_DATA_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
+_REDACTED_CONFIG_VALUE = "<redacted>"
+_SENSITIVE_CONFIG_KEYS = {
+    "api_key",
+    "apikey",
+    "auth_token",
+    "bearer_token",
+    "credential",
+    "credentials",
+    "hf_token",
+    "openai_api_key",
+    "password",
+    "passwd",
+    "refresh_token",
+    "secret",
+}
 
 
 @dataclass(frozen=True)
@@ -295,6 +313,33 @@ def load_sft_dataset(path: str | Path) -> SftDataset:
     )
 
 
+def verify_sft_data_contract(
+    config: "TrainConfig",
+    provenance: SftDataProvenance,
+) -> None:
+    """Fail fast when configured SFT data pins do not match loaded data."""
+
+    errors: list[str] = []
+    expected_sha = str(getattr(config, "sft_data_sha256", "")).strip().lower()
+    if expected_sha and expected_sha != provenance.data_sha256:
+        errors.append(
+            "sft_data_sha256 mismatch: "
+            f"expected {expected_sha}, got {provenance.data_sha256} "
+            f"for {provenance.data_path}"
+        )
+
+    expected_rows = int(getattr(config, "sft_data_rows", 0) or 0)
+    if expected_rows > 0 and expected_rows != provenance.data_rows:
+        errors.append(
+            "sft_data_rows mismatch: "
+            f"expected {expected_rows}, got {provenance.data_rows} "
+            f"for {provenance.data_path}"
+        )
+
+    if errors:
+        raise ValueError("SFT data contract mismatch:\n- " + "\n- ".join(errors))
+
+
 def load_sft_jsonl(path: str | Path) -> list[SftExample]:
     """Load supported SFT JSONL rows with line-numbered validation errors."""
 
@@ -515,6 +560,7 @@ def build_sft_artifact_manifest(
     max_tokens: int,
     loss_fn: str,
     data_provenance: SftDataProvenance | None = None,
+    snapshot_artifacts: Mapping[str, str] | None = None,
     latest_metrics: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a self-describing manifest for an SFT LoRA adapter."""
@@ -564,6 +610,9 @@ def build_sft_artifact_manifest(
             "checkpoint_path": str(adapter_dir),
         },
         "sft": sft_payload,
+        "reproducibility": {
+            "artifacts": dict(snapshot_artifacts or {}),
+        },
         "lora": {
             "rank": int(config.lora_rank),
             "alpha": int(config.lora_alpha if config.lora_alpha else config.lora_rank * 2),
@@ -609,4 +658,105 @@ def write_sft_artifact_manifest(
         adapter_path = adapter_dir / "retrain_sft_manifest.json"
         adapter_path.write_text(payload)
         paths["adapter_manifest"] = str(adapter_path)
+    return paths
+
+
+def _is_sensitive_config_key(key: object) -> bool:
+    normalized = str(key).lower()
+    return (
+        normalized in _SENSITIVE_CONFIG_KEYS
+        or normalized.endswith("_api_key")
+        or normalized.endswith("_password")
+        or normalized.endswith("_secret")
+        or normalized.endswith("_token")
+        or "credential" in normalized
+    )
+
+
+def _redact_config_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): (
+                _REDACTED_CONFIG_VALUE
+                if _is_sensitive_config_key(key)
+                else _redact_config_value(nested)
+            )
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_config_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_config_value(item) for item in value]
+    return value
+
+
+def _config_snapshot(config: "TrainConfig") -> dict[str, object]:
+    return {
+        field.name: _redact_config_value(getattr(config, field.name))
+        for field in fields(config)
+    }
+
+
+def write_sft_run_snapshot_artifacts(
+    log_dir: str | Path,
+    config: "TrainConfig",
+    provenance: SftDataProvenance,
+    *,
+    snapshot_max_bytes: int = SFT_DATA_SNAPSHOT_MAX_BYTES,
+) -> dict[str, str]:
+    """Write reproducibility artifacts beside an SFT run's logs."""
+
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, str] = {}
+
+    config_path = log_path / "resolved_config.json"
+    config_payload = {
+        "schema_version": 1,
+        "kind": "retrain_resolved_config",
+        "config": _config_snapshot(config),
+    }
+    config_path.write_text(json.dumps(config_payload, indent=2, sort_keys=True, default=str) + "\n")
+    paths["resolved_config.json"] = str(config_path)
+
+    source_path = Path(provenance.data_path)
+    snapshot_path = log_path / "sft_data.snapshot.jsonl"
+    copied = False
+    reason = ""
+    if provenance.data_bytes <= snapshot_max_bytes:
+        if source_path.resolve() != snapshot_path.resolve():
+            shutil.copyfile(source_path, snapshot_path)
+        copied = True
+        copied_sha256 = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+        if copied_sha256 != provenance.data_sha256:
+            raise RuntimeError(
+                "SFT data snapshot hash mismatch: "
+                f"expected {provenance.data_sha256}, got {copied_sha256}"
+            )
+        paths["sft_data.snapshot.jsonl"] = str(snapshot_path)
+    else:
+        reason = (
+            f"data_bytes {provenance.data_bytes} exceeds snapshot_max_bytes "
+            f"{snapshot_max_bytes}"
+        )
+
+    recoverability_path = log_path / "sft_data_recoverability.json"
+    recoverability = {
+        "schema_version": 1,
+        "kind": "retrain_sft_data_recoverability",
+        "source_path": provenance.data_path,
+        "source_sha256": provenance.data_sha256,
+        "source_rows": provenance.data_rows,
+        "source_bytes": provenance.data_bytes,
+        "source_path_status": provenance.data_path_status,
+        "source_git_root": provenance.git_root,
+        "source_git_tracked": provenance.git_tracked,
+        "snapshot_max_bytes": int(snapshot_max_bytes),
+        "copied": copied,
+        "snapshot_path": str(snapshot_path) if copied else "",
+        "recoverable": copied,
+        "reason": reason,
+    }
+    recoverability_path.write_text(json.dumps(recoverability, indent=2, sort_keys=True) + "\n")
+    paths["sft_data_recoverability.json"] = str(recoverability_path)
     return paths
