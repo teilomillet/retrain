@@ -117,6 +117,26 @@ uses the artifact-local `adapter/` directory when it is present. Then run:
 retrain --resume logs/restored-run
 ```
 
+### Live Recovery Drill
+
+Run this cheap opt-in drill after changing checkpoint artifact code or W&B
+plumbing:
+
+```bash
+uv pip install --python .venv/bin/python 'retrain[wandb]'
+.venv/bin/python scripts/wandb_recovery_drill.py
+```
+
+The drill uses a fake SFT backend and tokenizer, so it does not download a model
+or require a GPU. It still uses the real retrain SFT runner and real W&B
+Artifacts service. It uploads periodic checkpoints, downloads
+`checkpoint_step_1`, deletes the original local `log_dir` and `adapter_path`,
+then resumes from the downloaded artifact-local `adapter/`. Success ends with:
+
+```text
+DRILL_OK real_wandb_checkpoint_artifact_resume_succeeded
+```
+
 ### Metric prefixes
 
 All wandb metrics use structured prefixes:

@@ -97,22 +97,19 @@ def _log_squeeze_to_wandb(
         print("wandb not installed, skipping squeeze logging")
         return
 
-    wandb_kwargs: dict[str, object] = {
-        "project": wandb_project,
-        "name": "squeeze-analysis",
-        "job_type": "squeeze",
-        "tags": ["squeeze", f"rank-{analysis.recommended_rank}"],
-        "config": {
+    run = wandb.init(
+        project=wandb_project,
+        name="squeeze-analysis",
+        job_type="squeeze",
+        tags=["squeeze", f"rank-{analysis.recommended_rank}"],
+        config={
             "source_rank": analysis.layers[0].source_rank,
             "recommended_rank": analysis.recommended_rank,
             "min_variance_retention": analysis.min_variance_retention,
             "num_layers": len(analysis.layers),
         },
-    }
-    if wandb_entity:
-        wandb_kwargs["entity"] = wandb_entity
-
-    run = wandb.init(**wandb_kwargs)
+        entity=wandb_entity or None,
+    )
 
     # Variance table
     columns = ["rank", "mean_variance", "min_variance", "max_variance", "recommended"]
