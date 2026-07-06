@@ -117,6 +117,31 @@ installed on an upstream-supported device (SM90/SM100 as of FlashQLA v0.1.1)
 and a matched equivalence/performance probe passes; unsupported devices fail
 closed instead of silently becoming a different experiment.
 
+OScaR KV-cache quantization is available only as a guarded experiment for local
+PyTorch sampling:
+
+```toml
+[backend.options]
+sample_kv_quantization = "oscar"  # experimental; default is "off"
+sample_oscar_repo = "/opt/OScaR-KV-Quant"
+sample_oscar_bits = 2
+sample_oscar_quant_mode = "k-channel"
+sample_oscar_group_size = 0  # 0 chooses the upstream default for the bit width
+sample_oscar_kv_rotation = "hadamard"
+sample_oscar_kv_norm = "1"
+sample_oscar_residual_block_size = 128
+sample_oscar_attn_implementation = "sdpa"
+```
+
+This path is sampling-only and fail-closed: it requires
+`inference.engine = "pytorch"`, `sample_use_cache = true`, local split mode, a
+working upstream OScaR checkout, and a real `flash-attn` build with
+`flash_attn_with_kvcache`. Keep the training model on the standard HF/PEFT path.
+Do not treat this as production-ready until a full OScaR retrain optimizer step
+passes in the target environment; the initial A100 validation reached dense
+training, but OScaR was blocked by train-forward incompatibility and
+`flash-attn` ABI/runtime failures.
+
 On the shared-model one-GPU path, retrain temporarily disables gradient
 checkpointing during PyTorch sampling when `sample_use_cache = true`, then
 re-enables it before the train step. This keeps the train memory win without

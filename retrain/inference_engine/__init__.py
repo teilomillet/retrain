@@ -29,6 +29,8 @@ def create_engine(
     prefix_caching=True,
     attention_kernel="default",
     liger_kernel=True,
+    sample_kv_quantization="off",
+    sample_oscar_options=None,
 ):
     """Factory: create the right InferenceEngine based on engine_type.
 
@@ -61,6 +63,8 @@ def create_engine(
             prefix_caching=prefix_caching,
             attention_kernel=attention_kernel,
             liger_kernel=liger_kernel,
+            sample_kv_quantization=sample_kv_quantization,
+            sample_oscar_options=sample_oscar_options,
         )
 
     elif engine_type == "max":

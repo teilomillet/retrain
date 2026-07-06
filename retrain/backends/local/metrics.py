@@ -70,6 +70,12 @@ def runtime_metrics(owner: object) -> dict[str, object]:
         ),
         "local_train_grad_scaler_enabled": _grad_scaler_enabled(owner),
         "local_sample_use_cache": int(getattr(owner, "sample_use_cache", True)),
+        "local_sample_kv_quantization": str(
+            getattr(owner, "sample_kv_quantization", "off")
+        ),
+        "local_sample_kv_quantization_oscar": int(
+            getattr(owner, "sample_kv_quantization", "off") == "oscar"
+        ),
         "local_train_microbatch_size": int(
             getattr(owner, "train_microbatch_size", 0)
         ),

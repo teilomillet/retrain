@@ -58,6 +58,11 @@ from retrain.models.gemma4 import (
     forward_logits,
     parse_lora_target_module_suffixes,
 )
+from retrain.models.oscar_qwen3 import (
+    OscarQwen3Options,
+    normalize_sample_kv_quantization,
+    oscar_options_from_mapping,
+)
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
 
 
@@ -106,6 +111,15 @@ class LocalTrainHelper:
                  lora_fast_linear=False,
                  lora_freeze_a=False,
                  qwen35_gated_delta_kernel="auto",
+                 sample_kv_quantization="off",
+                 sample_oscar_repo="",
+                 sample_oscar_bits=2,
+                 sample_oscar_quant_mode="k-channel",
+                 sample_oscar_group_size=0,
+                 sample_oscar_kv_rotation="hadamard",
+                 sample_oscar_kv_norm="1",
+                 sample_oscar_residual_block_size=128,
+                 sample_oscar_attn_implementation="sdpa",
                  trust_remote_code=False):
         self.adapter_path = adapter_path
         self.model_name = model_name
@@ -141,6 +155,46 @@ class LocalTrainHelper:
             "set_failed": 0,
         }
         self.sample_use_cache = bool(sample_use_cache)
+        self.sample_kv_quantization = normalize_sample_kv_quantization(
+            sample_kv_quantization
+        )
+        self.sample_oscar_options = OscarQwen3Options(
+            repo=str(sample_oscar_repo or ""),
+            bits=int(sample_oscar_bits),
+            quant_mode=str(sample_oscar_quant_mode or "k-channel"),
+            group_size=int(sample_oscar_group_size),
+            kv_rotation=str(sample_oscar_kv_rotation or "hadamard"),
+            kv_norm=str(sample_oscar_kv_norm or "1"),
+            residual_block_size=int(sample_oscar_residual_block_size),
+            attn_implementation=str(sample_oscar_attn_implementation or "sdpa"),
+        )
+        # Reuse the central validator for range checks.
+        self.sample_oscar_options = oscar_options_from_mapping(
+            {
+                "sample_oscar_repo": self.sample_oscar_options.repo,
+                "sample_oscar_bits": self.sample_oscar_options.bits,
+                "sample_oscar_quant_mode": self.sample_oscar_options.quant_mode,
+                "sample_oscar_group_size": self.sample_oscar_options.group_size,
+                "sample_oscar_kv_rotation": self.sample_oscar_options.kv_rotation,
+                "sample_oscar_kv_norm": self.sample_oscar_options.kv_norm,
+                "sample_oscar_residual_block_size": (
+                    self.sample_oscar_options.residual_block_size
+                ),
+                "sample_oscar_attn_implementation": (
+                    self.sample_oscar_options.attn_implementation
+                ),
+            }
+        )
+        if self.sample_kv_quantization == "oscar":
+            if engine_type != "pytorch":
+                raise ValueError(
+                    "sample_kv_quantization='oscar' is only supported with "
+                    "inference.engine='pytorch'."
+                )
+            if not self.sample_use_cache:
+                raise ValueError(
+                    "sample_kv_quantization='oscar' requires sample_use_cache=true."
+                )
         self.gradient_checkpointing = bool(gradient_checkpointing)
         self.gradient_checkpointing_use_reentrant = str(
             gradient_checkpointing_use_reentrant or "auto"
@@ -220,6 +274,14 @@ class LocalTrainHelper:
         self.use_amp = device_plan.use_amp
         dtype = device_plan.dtype
         self.amp_dtype = dtype
+        if self.sample_kv_quantization == "oscar" and not self.split_mode:
+            raise ValueError(
+                "sample_kv_quantization='oscar' is sampling-only and requires "
+                "local split mode so the training model remains the standard "
+                "HF/PEFT model. Use [backend] devices = 'cuda:0,cuda:0' for "
+                "an experimental same-GPU split, or provide separate CUDA "
+                "devices for train and inference."
+            )
 
         # Configure the allocator before the first training-model allocation so
         # every training segment can use the expandable policy.
@@ -316,6 +378,8 @@ class LocalTrainHelper:
                 prefix_caching=self.prefix_caching,
                 attention_kernel=self.attention_kernel,
                 liger_kernel=self.liger_kernel,
+                sample_kv_quantization=self.sample_kv_quantization,
+                sample_oscar_options=self.sample_oscar_options,
             )
         elif self.split_mode:
             self._train_executor = ThreadPoolExecutor(max_workers=1)
@@ -331,6 +395,8 @@ class LocalTrainHelper:
                 prefix_caching=self.prefix_caching,
                 attention_kernel=self.attention_kernel,
                 liger_kernel=self.liger_kernel,
+                sample_kv_quantization=self.sample_kv_quantization,
+                sample_oscar_options=self.sample_oscar_options,
             )
             # Initial sync: copy LoRA weights from train to infer
             self._do_initial_sync()
@@ -348,6 +414,8 @@ class LocalTrainHelper:
                 prefix_caching=self.prefix_caching,
                 attention_kernel=self.attention_kernel,
                 liger_kernel=self.liger_kernel,
+                sample_kv_quantization=self.sample_kv_quantization,
+                sample_oscar_options=self.sample_oscar_options,
             )
 
         # Optimizer (only for train_model)

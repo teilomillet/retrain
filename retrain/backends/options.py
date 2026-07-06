@@ -46,6 +46,43 @@ def local_option_schema() -> dict[str, BackendOptionSpec]:
             default="auto",
         ),
         "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
+        "sample_kv_quantization": BackendOptionSpec(
+            value_type=str,
+            default="off",
+            choices=("off", "oscar"),
+        ),
+        "sample_oscar_repo": BackendOptionSpec(value_type=str, default=""),
+        "sample_oscar_bits": BackendOptionSpec(
+            value_type=int,
+            default=2,
+            choices=(2, 4),
+        ),
+        "sample_oscar_quant_mode": BackendOptionSpec(
+            value_type=str,
+            default="k-channel",
+        ),
+        "sample_oscar_group_size": BackendOptionSpec(
+            value_type=int,
+            default=0,
+            validator=_validate_non_negative_int,
+        ),
+        "sample_oscar_kv_rotation": BackendOptionSpec(
+            value_type=str,
+            default="hadamard",
+        ),
+        "sample_oscar_kv_norm": BackendOptionSpec(
+            value_type=str,
+            default="1",
+        ),
+        "sample_oscar_residual_block_size": BackendOptionSpec(
+            value_type=int,
+            default=128,
+            validator=_validate_positive_int,
+        ),
+        "sample_oscar_attn_implementation": BackendOptionSpec(
+            value_type=str,
+            default="sdpa",
+        ),
         "gradient_checkpointing": BackendOptionSpec(value_type=bool, default=True),
         "gradient_checkpointing_use_reentrant": BackendOptionSpec(
             value_type=str,

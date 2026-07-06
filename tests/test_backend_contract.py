@@ -222,6 +222,34 @@ def test_local_backend_contract(monkeypatch):
         == "auto"
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_kv_quantization"]
+        == "off"
+    )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_repo"] == ""
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_bits"] == 2
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_quant_mode"]
+        == "k-channel"
+    )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_group_size"] == 0
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_kv_rotation"]
+        == "hadamard"
+    )
+    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_kv_norm"] == "1"
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "sample_oscar_residual_block_size"
+        ]
+        == 128
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
+            "sample_oscar_attn_implementation"
+        ]
+        == "sdpa"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
@@ -385,6 +413,41 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_coef"] == 0.5
+
+
+def test_local_backend_passes_oscar_sampling_options(monkeypatch):
+    _FakeLocalTrainHelper.init_calls.clear()
+    fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.backends.local", fake_mod)
+
+    cfg = TrainConfig(
+        backend="local",
+        backend_options={
+            "sample_use_cache": True,
+            "sample_kv_quantization": "oscar",
+            "sample_oscar_repo": "/opt/OScaR-KV-Quant",
+            "sample_oscar_bits": 2,
+            "sample_oscar_quant_mode": "k-channel",
+            "sample_oscar_group_size": 32,
+            "sample_oscar_kv_rotation": "hadamard",
+            "sample_oscar_kv_norm": "1",
+            "sample_oscar_residual_block_size": 128,
+            "sample_oscar_attn_implementation": "sdpa",
+        },
+    )
+    backend.create("local", cfg)
+
+    kwargs = _FakeLocalTrainHelper.init_calls[-1]["kwargs"]
+    assert kwargs["sample_use_cache"] is True
+    assert kwargs["sample_kv_quantization"] == "oscar"
+    assert kwargs["sample_oscar_repo"] == "/opt/OScaR-KV-Quant"
+    assert kwargs["sample_oscar_bits"] == 2
+    assert kwargs["sample_oscar_quant_mode"] == "k-channel"
+    assert kwargs["sample_oscar_group_size"] == 32
+    assert kwargs["sample_oscar_kv_rotation"] == "hadamard"
+    assert kwargs["sample_oscar_kv_norm"] == "1"
+    assert kwargs["sample_oscar_residual_block_size"] == 128
+    assert kwargs["sample_oscar_attn_implementation"] == "sdpa"
 
 
 def test_unsloth_backend_contract(monkeypatch):

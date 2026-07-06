@@ -123,6 +123,37 @@ def create_local(config: "TrainConfig") -> "TrainHelper":
         qwen35_gated_delta_kernel=str(
             config.backend_options.get("qwen35_gated_delta_kernel", "auto")
         ),
+        sample_kv_quantization=str(
+            config.backend_options.get("sample_kv_quantization", "off")
+        ),
+        sample_oscar_repo=str(config.backend_options.get("sample_oscar_repo", "")),
+        sample_oscar_bits=backend_option_int(
+            config.backend_options,
+            "sample_oscar_bits",
+            2,
+        ),
+        sample_oscar_quant_mode=str(
+            config.backend_options.get("sample_oscar_quant_mode", "k-channel")
+        ),
+        sample_oscar_group_size=backend_option_int(
+            config.backend_options,
+            "sample_oscar_group_size",
+            0,
+        ),
+        sample_oscar_kv_rotation=str(
+            config.backend_options.get("sample_oscar_kv_rotation", "hadamard")
+        ),
+        sample_oscar_kv_norm=str(
+            config.backend_options.get("sample_oscar_kv_norm", "1")
+        ),
+        sample_oscar_residual_block_size=backend_option_int(
+            config.backend_options,
+            "sample_oscar_residual_block_size",
+            128,
+        ),
+        sample_oscar_attn_implementation=str(
+            config.backend_options.get("sample_oscar_attn_implementation", "sdpa")
+        ),
         trust_remote_code=bool(config.backend_options.get("trust_remote_code", False)),
     )
     setattr(helper, "sft_loss_fn", effective_sft_loss_fn(config))

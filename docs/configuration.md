@@ -162,7 +162,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `cuda_expandable_segments`, `sample_use_cache`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`, `lora_detach_input`, `lora_fast_linear`, `lora_freeze_a`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `cuda_expandable_segments`, `sample_use_cache`, `sample_kv_quantization`, `sample_oscar_repo`, `sample_oscar_bits`, `sample_oscar_quant_mode`, `sample_oscar_group_size`, `sample_oscar_kv_rotation`, `sample_oscar_kv_norm`, `sample_oscar_residual_block_size`, `sample_oscar_attn_implementation`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`, `lora_detach_input`, `lora_fast_linear`, `lora_freeze_a`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -180,6 +180,15 @@ sample_use_cache = true    # faster PyTorch sampling with per-step allocator cle
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 cudnn_causal_conv1d_shim = false  # opt-in Qwen3.5 GatedDelta fast path via cuDNN frontend
 qwen35_gated_delta_kernel = "auto"  # auto | off | torch | flash_qla; explicit supported-GPU experiment
+sample_kv_quantization = "off"  # off | oscar; OScaR is experimental sampling-only
+sample_oscar_repo = ""  # path to upstream OScaR-KV-Quant checkout when enabled
+sample_oscar_bits = 2  # 2 | 4
+sample_oscar_quant_mode = "k-channel"
+sample_oscar_group_size = 0  # 0 chooses the upstream default for the bit width
+sample_oscar_kv_rotation = "hadamard"
+sample_oscar_kv_norm = "1"
+sample_oscar_residual_block_size = 128
+sample_oscar_attn_implementation = "sdpa"
 train_selective_suffix_logits = false  # optional: compute logits only for weighted suffix tokens
 train_compile_selective_ce = "off"  # off | auto | require; compile selected CE on CUDA
 train_compile_selective_ce_min_tokens = 128  # avoid compile overhead for tiny target sets
@@ -222,6 +231,15 @@ Explicit `flash_qla` requires `flash-qla`, an upstream-supported device
 (SM90/SM100 as of FlashQLA v0.1.1), and a matched equivalence/performance gate
 before being used for claims; unsupported devices fail closed instead of
 silently switching kernels.
+`sample_kv_quantization = "oscar"` is an experimental OScaR KV-cache
+quantization path for local PyTorch sampling only. It is default-off and
+fail-closed: it requires `inference.engine = "pytorch"`, `sample_use_cache =
+true`, local split mode, an upstream OScaR checkout, and a working `flash-attn`
+install exposing `flash_attn_with_kvcache`. The training model remains the
+standard HF/PEFT model. Do not use this option for quality or throughput claims
+until a full OScaR retrain optimizer step passes on the target host; the first
+A100 validation passed dense training but did not complete the OScaR retrain
+step because of OScaR train-forward and `flash-attn` ABI/runtime blockers.
 `train_selective_suffix_logits` is useful for RL rows where only completion or
 ECHO tokens carry weight. Set `train_logprob_chunk_size` to a positive value
 such as `256` when you want to force the safer hidden-state/chunked logprob

@@ -10,6 +10,7 @@ Supports two weight-sync modes:
 """
 
 import time
+from collections.abc import Mapping
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -21,6 +22,14 @@ from retrain.kernels.accelerators import (
     from_pretrained_attention_kwargs,
 )
 from retrain.models.gemma4 import is_gemma4_text_model, unwrap_peft_model
+from retrain.models.oscar_qwen3 import (
+    OscarQwen3Options,
+    load_oscar_qwen3_causal_lm,
+    normalize_sample_kv_quantization,
+    oscar_dynamic_cache_class,
+    oscar_options_from_mapping,
+    prepare_oscar_runtime,
+)
 from retrain.inference_engine.base import InferenceEngine, SampleResult
 from retrain.inference_engine.pytorch.sample import (
     sample_next_token as _sample_next_token,
@@ -48,6 +57,8 @@ class PyTorchEngine(InferenceEngine):
         prefix_caching=True,
         attention_kernel="default",
         liger_kernel=True,
+        sample_kv_quantization="off",
+        sample_oscar_options=None,
     ):
         """Load a PEFT-wrapped model for inference.
 
@@ -65,8 +76,38 @@ class PyTorchEngine(InferenceEngine):
         self.prefix_caching = bool(prefix_caching)
         self.attention_kernel = str(attention_kernel or "default")
         self.liger_kernel = bool(liger_kernel)
+        self.sample_kv_quantization = normalize_sample_kv_quantization(
+            sample_kv_quantization
+        )
+        self.sample_oscar_options = (
+            sample_oscar_options
+            if isinstance(sample_oscar_options, OscarQwen3Options)
+            else oscar_options_from_mapping(sample_oscar_options)
+            if isinstance(sample_oscar_options, Mapping)
+            else oscar_options_from_mapping({})
+        )
         self._accelerator_metrics: dict[str, object] = accelerator_status()
-        self._last_generation_metrics: dict[str, float | int] = {}
+        self._oscar_dynamic_cache_cls = None
+        if self.sample_kv_quantization == "oscar":
+            if not self.sample_use_cache:
+                raise ValueError(
+                    "sample_kv_quantization='oscar' requires sample_use_cache=true."
+                )
+            if existing_model is not None:
+                raise ValueError(
+                    "sample_kv_quantization='oscar' requires PyTorchEngine to load "
+                    "the upstream OScaR Qwen3 model; existing_model uses the standard "
+                    "HF model path."
+                )
+            # OScaR cache objects are not yet validated with retrain's detached
+            # exact-prefix cache. Disable that separate cache layer until it is
+            # measured instead of silently storing custom cache internals.
+            self.prefix_caching = False
+            self._accelerator_metrics.update(
+                prepare_oscar_runtime(self.sample_oscar_options)
+            )
+            self._oscar_dynamic_cache_cls = oscar_dynamic_cache_class()
+        self._last_generation_metrics: dict[str, float | int | str] = {}
         self._prefix_cache: dict[
             tuple[int, ...],
             tuple[object, int],
@@ -94,12 +135,20 @@ class PyTorchEngine(InferenceEngine):
                 )
             )
             print(f"Loading infer model: {model_name} on {device}...")
-            model_kwargs = from_pretrained_attention_kwargs(self.attention_kernel)
-            base = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=dtype,
-                **model_kwargs,
-            )
+            if self.sample_kv_quantization == "oscar":
+                base, oscar_metrics = load_oscar_qwen3_causal_lm(
+                    model_name,
+                    dtype=dtype,
+                    options=self.sample_oscar_options,
+                )
+                self._accelerator_metrics.update(oscar_metrics)
+            else:
+                model_kwargs = from_pretrained_attention_kwargs(self.attention_kernel)
+                base = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=dtype,
+                    **model_kwargs,
+                )
             self.model = get_peft_model(base, peft_config)
             self.model.to(device)
 
@@ -127,7 +176,7 @@ class PyTorchEngine(InferenceEngine):
             for prompt_ids in prompt_ids_list:
                 generated = torch.tensor([prompt_ids] * num_samples, device=self.device)
                 attention_mask = torch.ones_like(generated, device=self.device)
-                past_key_values = None
+                past_key_values = self._initial_past_key_values()
                 token_steps = []
                 logprob_steps = []
                 entropy_steps = [] if compute_entropy else None
@@ -148,6 +197,7 @@ class PyTorchEngine(InferenceEngine):
                             attention_mask,
                             num_samples,
                             use_cache,
+                            past_key_values,
                         )
                     else:
                         model_kwargs = {
@@ -310,6 +360,7 @@ class PyTorchEngine(InferenceEngine):
         attention_mask,
         num_samples,
         use_cache,
+        past_key_values=None,
     ):
         cached = self._find_prefix_cache(prompt_ids, num_samples)
         if use_cache and cached is not None:
@@ -344,13 +395,16 @@ class PyTorchEngine(InferenceEngine):
                     self._prefix_cache_fallbacks += 1
 
         self._prefix_cache_misses += 1
+        model_kwargs = {
+            "input_ids": generated,
+            "attention_mask": attention_mask,
+            "use_cache": use_cache,
+            "logits_to_keep": 1,
+        }
+        if use_cache and past_key_values is not None:
+            model_kwargs["past_key_values"] = past_key_values
         outputs = self._forward_model(
-            {
-                "input_ids": generated,
-                "attention_mask": attention_mask,
-                "use_cache": use_cache,
-                "logits_to_keep": 1,
-            },
+            model_kwargs,
             fallback_input_ids=generated,
             fallback_attention_mask=attention_mask,
         )
@@ -360,6 +414,11 @@ class PyTorchEngine(InferenceEngine):
             num_samples,
         )
         return outputs
+
+    def _initial_past_key_values(self):
+        if self._oscar_dynamic_cache_cls is None or not self.sample_use_cache:
+            return None
+        return self._oscar_dynamic_cache_cls()
 
     def _find_prefix_cache(self, prompt_ids, num_samples):
         if not (self.prefix_caching and self.sample_use_cache):
@@ -505,6 +564,10 @@ class PyTorchEngine(InferenceEngine):
                 generated_tokens / wall_s if wall_s > 0 else 0.0
             ),
             "engine_sample_use_cache": int(self.sample_use_cache),
+            "engine_sample_kv_quantization": self.sample_kv_quantization,
+            "engine_sample_kv_quantization_oscar": int(
+                self.sample_kv_quantization == "oscar"
+            ),
             **self._prefix_cache_metrics(),
         }
 

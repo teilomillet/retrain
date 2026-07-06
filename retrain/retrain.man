@@ -431,6 +431,34 @@ CONFIGURATION
         sample_use_cache = true
             Use KV-cache during local PyTorch sampling. Set false only for
             memory-fit probes where slower generation is acceptable.
+        sample_kv_quantization = "off"
+            off or oscar. OScaR is an experimental local PyTorch sampling-only
+            KV-cache quantization path, not a train-model path.
+        sample_oscar_repo = ""
+            Path to an upstream OScaR-KV-Quant checkout when OScaR is enabled.
+        sample_oscar_bits = 2
+            OScaR KV bit width. Must be 2 or 4.
+        sample_oscar_quant_mode = "k-channel"
+            OScaR quantization mode passed to the upstream Qwen3 fork.
+        sample_oscar_group_size = 0
+            0 chooses the upstream default for the selected bit width.
+        sample_oscar_kv_rotation = "hadamard"
+            OScaR KV rotation mode.
+        sample_oscar_kv_norm = "1"
+            OScaR KV normalization mode.
+        sample_oscar_residual_block_size = 128
+            OScaR residual cache block size.
+        sample_oscar_attn_implementation = "sdpa"
+            Attention implementation requested before OScaR patching.
+        OScaR warning:
+            sample_kv_quantization = "oscar" is default-off and fail-closed.
+            It requires inference.engine = "pytorch", sample_use_cache = true,
+            local split mode, an upstream OScaR checkout, and a working
+            flash-attn build exposing flash_attn_with_kvcache. Do not use it
+            for quality or throughput claims until a full OScaR retrain
+            optimizer step passes on the target host; the first A100 validation
+            passed dense training but did not complete the OScaR retrain step
+            because of OScaR train-forward and flash-attn ABI/runtime blockers.
         gradient_checkpointing = true
             Enable train-time gradient checkpointing. Set false in throughput
             sweeps when VRAM headroom is available.
