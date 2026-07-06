@@ -384,7 +384,9 @@ class TestCoerceFloatList:
 
 
 class TestRunMultiturnGroup:
-    def test_default_temperature_keeps_active_rollouts_batched(self, monkeypatch):
+    def test_default_temperature_collapses_identical_rollouts_to_samples(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(
             bridge_mod,
             "_require_verifiers",
@@ -411,8 +413,8 @@ class TestRunMultiturnGroup:
         assert [len(rollout_turns) for rollout_turns in turns] == [1, 1, 1]
         assert recorder.calls == [
             {
-                "prompt_count": 3,
-                "num_samples": 1,
+                "prompt_count": 1,
+                "num_samples": 3,
                 "max_tokens": 4,
                 "temperature": 0.8,
                 "top_p": 0.95,

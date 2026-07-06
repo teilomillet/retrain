@@ -31,7 +31,16 @@ class _RecordingHelper:
                 "top_p": top_p,
             }
         )
-        return [[([100 + idx], [-0.1])] for idx, _row in enumerate(prompt_ids_batch)]
+        return [
+            [
+                (
+                    [100 + (sample_idx if num_samples > 1 else prompt_idx)],
+                    [-0.1],
+                )
+                for sample_idx in range(num_samples)
+            ]
+            for prompt_idx, _row in enumerate(prompt_ids_batch)
+        ]
 
 
 def _helper() -> tuple[TrainHelper, _RecordingHelper]:
@@ -79,6 +88,37 @@ def test_sample_active_rollouts_batches_equal_temperatures() -> None:
     assert groups == [[([100], [-0.1])], [([101], [-0.1])], [([100], [-0.1])]]
     assert [call["temperature"] for call in recorder.calls] == [0.5, 0.8]
     assert [call["prompt_ids_batch"] for call in recorder.calls] == [[[1], [2]], [[3]]]
+
+
+def test_sample_active_rollouts_collapses_identical_prompts_to_num_samples() -> None:
+    helper, recorder = _helper()
+
+    groups = sample_active_rollouts(
+        helper=helper,
+        active=[
+            (0, "a", [1, 2], None),
+            (1, "a", [1, 2], None),
+            (2, "a", [1, 2], None),
+        ],
+        rollout_temps=[0.7, 0.7, 0.7],
+        max_tokens=4,
+        top_p=0.9,
+    )
+
+    assert groups == [
+        [([100], [-0.1])],
+        [([101], [-0.1])],
+        [([102], [-0.1])],
+    ]
+    assert recorder.calls == [
+        {
+            "prompt_ids_batch": [[1, 2]],
+            "num_samples": 3,
+            "max_tokens": 4,
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+    ]
 
 
 def test_rollout_scheduler_preserves_order_with_bounded_workers() -> None:

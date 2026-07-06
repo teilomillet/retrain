@@ -172,15 +172,37 @@ def sample_active_rollouts(
         nonlocal batch_positions, batch_prompt_ids, batch_temperature
         if batch_temperature is None:
             return
-        groups = helper.sample(
-            batch_prompt_ids,
-            1,
-            max_tokens,
-            batch_temperature,
-            top_p,
-        )
-        for position, group in zip(batch_positions, groups):
-            sampled_groups[position] = group
+        grouped_positions: dict[tuple[int, ...], list[int]] = {}
+        grouped_prompts: dict[tuple[int, ...], list[int]] = {}
+        for position, prompt_ids in zip(batch_positions, batch_prompt_ids):
+            key = tuple(prompt_ids)
+            grouped_positions.setdefault(key, []).append(position)
+            grouped_prompts.setdefault(key, prompt_ids)
+
+        if all(len(positions) == 1 for positions in grouped_positions.values()):
+            groups = helper.sample(
+                batch_prompt_ids,
+                1,
+                max_tokens,
+                batch_temperature,
+                top_p,
+            )
+            for position, group in zip(batch_positions, groups):
+                sampled_groups[position] = group
+        else:
+            for key, positions in grouped_positions.items():
+                groups = helper.sample(
+                    [grouped_prompts[key]],
+                    len(positions),
+                    max_tokens,
+                    batch_temperature,
+                    top_p,
+                )
+                samples = groups[0] if groups else []
+                for offset, position in enumerate(positions):
+                    sampled_groups[position] = (
+                        [samples[offset]] if offset < len(samples) else []
+                    )
         batch_positions = []
         batch_prompt_ids = []
         batch_temperature = None

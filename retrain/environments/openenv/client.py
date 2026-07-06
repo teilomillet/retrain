@@ -84,7 +84,10 @@ async def _default_connect(url: str) -> Transport:
             "Install it with: pip install retrain[openenv]"
         ) from None
     connect = getattr(module, "connect")
-    return cast(Transport, await connect(url))
+    try:
+        return cast(Transport, await connect(url, ping_interval=None))
+    except TypeError:
+        return cast(Transport, await connect(url))
 
 
 class OpenEnvClient:

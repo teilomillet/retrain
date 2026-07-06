@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+import types
 
 import pytest
 
 from retrain.environments.openenv.client import (
     OpenEnvClient,
     StepResult,
+    _default_connect,
     http_url,
     ws_url,
 )
@@ -96,3 +99,44 @@ class TestRequests:
         asyncio.run(client.close())
         asyncio.run(client.close())
         assert transport.closed
+
+
+class TestDefaultConnect:
+    def test_default_connect_disables_websocket_keepalive(self, monkeypatch):
+        transport = _FakeTransport([])
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def connect(url: str, **kwargs: object) -> _FakeTransport:
+            calls.append((url, kwargs))
+            return transport
+
+        module = types.ModuleType("websockets.asyncio.client")
+        module.connect = connect  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "websockets.asyncio.client", module)
+
+        result = asyncio.run(_default_connect("ws://localhost:8771/ws"))
+
+        assert result is transport
+        assert calls == [("ws://localhost:8771/ws", {"ping_interval": None})]
+
+    def test_default_connect_keeps_older_websockets_compatible(self, monkeypatch):
+        transport = _FakeTransport([])
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        async def connect(url: str, **kwargs: object) -> _FakeTransport:
+            calls.append((url, kwargs))
+            if kwargs:
+                raise TypeError("unexpected keyword argument")
+            return transport
+
+        module = types.ModuleType("websockets.asyncio.client")
+        module.connect = connect  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "websockets.asyncio.client", module)
+
+        result = asyncio.run(_default_connect("ws://localhost:8771/ws"))
+
+        assert result is transport
+        assert calls == [
+            ("ws://localhost:8771/ws", {"ping_interval": None}),
+            ("ws://localhost:8771/ws", {}),
+        ]
