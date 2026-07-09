@@ -28,6 +28,7 @@ from retrain.environments.openenv.render import (
 from retrain.types import JSONObject, PromptMessage
 
 StateDict = dict[str, object]
+_MISSING = object()
 
 _CORRECTIVE_MESSAGE = (
     "Your last message was not a valid action. Respond with exactly one "
@@ -196,16 +197,38 @@ class OpenEnvEnvironment:
 
 
 def _completion_text(step: object) -> str:
-    """Extract assistant text from a trajectory step's completion messages."""
-    completion = getattr(step, "completion", step)
+    """Extract assistant text without stringifying trajectory bookkeeping."""
+    completion = (
+        cast(Mapping[str, object], step).get("completion", _MISSING)
+        if isinstance(step, Mapping)
+        else getattr(step, "completion", _MISSING)
+    )
+    if completion is _MISSING:
+        raise ValueError("Trajectory step is missing required 'completion' data.")
     if isinstance(completion, str):
         return completion
-    if isinstance(completion, list):
-        chunks: list[str] = []
-        for message in cast(list[object], completion):
-            if isinstance(message, dict):
-                content = cast(dict[str, object], message).get("content")
-                if content:
-                    chunks.append(str(content))
-        return "\n".join(chunks)
-    return str(completion)
+    if not isinstance(completion, list):
+        raise TypeError(
+            "Trajectory step 'completion' must be text or a list of messages, "
+            f"got {type(completion).__name__}."
+        )
+
+    chunks: list[str] = []
+    for message in cast(list[object], completion):
+        content = (
+            cast(Mapping[str, object], message).get("content")
+            if isinstance(message, Mapping)
+            else getattr(message, "content", None)
+        )
+        if content is None:
+            continue
+        if not isinstance(content, str):
+            raise TypeError(
+                "Trajectory completion message content must be text, "
+                f"got {type(content).__name__}."
+            )
+        if content:
+            chunks.append(content)
+    if not chunks:
+        raise ValueError("Trajectory step completion contains no textual content.")
+    return "\n".join(chunks)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from retrain.environments.openenv.client import StepResult
 from retrain.environments.openenv.environment import OpenEnvEnvironment
 
@@ -103,6 +105,68 @@ class TestEpisode:
         first_prompt, second_prompt = asyncio.run(run())
         assert [m["role"] for m in first_prompt] == ["user"]
         assert [m["role"] for m in second_prompt] == ["user", "assistant", "user"]
+
+    def test_mapping_trajectory_step_extracts_only_completion(self):
+        client = _FakeClient(step_rewards=[1.0])
+        env = _env(client)
+
+        async def run() -> None:
+            state = await env.init_state(input={})
+            state = await env.setup_state(state)
+            await env.add_trajectory_step(
+                state,
+                {
+                    "prompt": [{"role": "user", "content": "large prompt"}],
+                    "completion": [
+                        {"role": "assistant", "content": '{"tool": "go"}'}
+                    ],
+                    "tokens": {"prompt_ids": list(range(32))},
+                },
+            )
+            await env.cleanup(state)
+
+        asyncio.run(run())
+        assert client.actions == [{"tool": "go"}]
+
+    def test_object_message_completion_is_supported(self):
+        client = _FakeClient(step_rewards=[1.0])
+        env = _env(client)
+
+        async def run() -> None:
+            state = await env.init_state(input={})
+            state = await env.setup_state(state)
+            await env.add_trajectory_step(
+                state,
+                SimpleNamespace(
+                    completion=[SimpleNamespace(content='{"tool": "go"}')]
+                ),
+            )
+            await env.cleanup(state)
+
+        asyncio.run(run())
+        assert client.actions == [{"tool": "go"}]
+
+    def test_missing_completion_fails_without_stringifying_step(self):
+        client = _FakeClient(step_rewards=[1.0])
+        env = _env(client)
+
+        async def run() -> None:
+            state = await env.init_state(input={})
+            state = await env.setup_state(state)
+            initial_messages = list(state["messages"])
+            with pytest.raises(ValueError, match="missing required 'completion'"):
+                await env.add_trajectory_step(
+                    state,
+                    {
+                        "prompt": [{"role": "user", "content": "large prompt"}],
+                        "tokens": {"prompt_ids": list(range(32))},
+                    },
+                )
+            assert state["messages"] == initial_messages
+            assert client.actions == []
+            await env.cleanup(state)
+
+        asyncio.run(run())
 
     def test_render_completion_excludes_initial_prompt(self):
         client = _FakeClient(step_rewards=[1.0])

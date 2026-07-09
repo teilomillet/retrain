@@ -8,6 +8,7 @@ absent.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -85,7 +86,12 @@ def _fresh_env() -> OpenEnvEnvironment:
     )
 
 
-def _run(env: OpenEnvEnvironment, *, num_rollouts: int = 2, max_turns: int = -1):
+def _run(
+    env: OpenEnvEnvironment,
+    *,
+    num_rollouts: int = 2,
+    max_turns: int = -1,
+):
     return run_multiturn_group(
         env,
         helper=cast(TrainHelper, _DummyHelper()),
@@ -134,6 +140,24 @@ class TestOpenEnvRollout:
         )
         assert [len(rollout_turns) for rollout_turns in turns] == [1]
         assert rewards == [0.25]  # only the first step's reward accrued
+
+    def test_mapping_trajectory_step_preserves_only_assistant_completion(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "retrain.environments.verifiers._optional_verifiers",
+            lambda: SimpleNamespace(TrajectoryStep=dict),
+        )
+        rewards, _, _, _, _, _, _, _ = _run(
+            _fresh_env(),
+            num_rollouts=1,
+        )
+        assert rewards == [1.25]
+        assert len(_ScriptedClient.instances) == 1
+        assert _ScriptedClient.instances[0].actions == [
+            {"tool": "advance"},
+            {"tool": "advance"},
+        ]
 
     def test_infra_errors_propagate_and_still_clean_up(self):
         class _ExplodingClient(_ScriptedClient):
