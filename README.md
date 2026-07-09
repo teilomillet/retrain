@@ -4,6 +4,8 @@
 
 If you are new, start with install -> explore commands -> run a tiny config.
 
+**Field report:** retrain ran every experiment in [Why Trained Open Models Score Zero on Spider 2.0-DBT](https://teilo.xyz/posts/quaero-spider2-negative-result/) — 140 training configs and 94 tracked runs over four weeks, from 4B to 35B, capacity gates to resumable SFT. The result was negative; the trainer held up. The paper doubles as a worked example of running a real training campaign with retrain.
+
 ## Install
 
 Requires Python 3.12+.
