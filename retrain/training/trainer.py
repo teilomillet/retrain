@@ -64,7 +64,11 @@ from retrain.training.signals import (
     prepare_transform_params_for_step,
 )
 from retrain.training.state import load_trainer_state, save_trainer_state
-from retrain.training.warmup import load_sft_warmup_data, run_sft_warmup_step
+from retrain.training.warmup import (
+    load_sft_warmup_data,
+    run_sft_warmup_step,
+    verify_sft_warmup_resume_schedule,
+)
 from retrain.environments.verifiers import (
     encode_prompt_for_sampling,
     is_multiturn_environment,
@@ -249,6 +253,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         delight_eta_ema: float | None = None
         optimizer_batch_captured = False
 
+        # Load and bind warmup data before restoring a checkpoint. A resume
+        # that would re-enter warmup must prove the same tokenized traversal
+        # before the backend mutates or loads model state.
+        sft_data = load_sft_warmup_data(config, tokenizer)
+
         # -----------------------------------------------------------------------
         # 10b. Resume from checkpoint (if requested)
         # -----------------------------------------------------------------------
@@ -260,6 +269,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             total_completions = saved["total_completions"]
             current_batch_size = saved["current_batch_size"]
             current_group_size = saved["current_group_size"]
+            verify_sft_warmup_resume_schedule(
+                saved.get("sft_schedule"),
+                sft_data,
+                start_step=start_step,
+                warmup_steps=config.sft_warmup_steps,
+            )
 
             # Restore SEPA controller state
             if "sepa" in saved:
@@ -291,11 +306,6 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 bs *= 2
             if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
                 warmup_batch_sizes.append(config.bp_max_batch_size)
-
-        # -----------------------------------------------------------------------
-        # SFT warmup data (load once if configured)
-        # -----------------------------------------------------------------------
-        sft_data = load_sft_warmup_data(config, tokenizer)
 
         for batch_idx in range(start_step, config.max_steps):
             step_start = time.perf_counter()
@@ -330,6 +340,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                         sepa_state=sepa_controller.state_dict(),
                         tl_grpo_ema=tl_grpo_ema,
                         delight_eta_ema=delight_eta_ema,
+                        sft_schedule=sft_data.schedule_contract,
                     )
                     upload_checkpoint_artifact(
                         config,
@@ -664,6 +675,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     sepa_state=sepa_controller.state_dict(),
                     tl_grpo_ema=tl_grpo_ema,
                     delight_eta_ema=delight_eta_ema,
+                    sft_schedule=(
+                        sft_data.schedule_contract if sft_data is not None else None
+                    ),
                 )
                 print(f"Saved checkpoint: {ckpt_name}")
                 upload_checkpoint_artifact(
@@ -699,6 +713,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             sepa_state=sepa_controller.state_dict(),
             tl_grpo_ema=tl_grpo_ema,
             delight_eta_ema=delight_eta_ema,
+            sft_schedule=(
+                sft_data.schedule_contract if sft_data is not None else None
+            ),
         )
         upload_checkpoint_artifact(
             config,

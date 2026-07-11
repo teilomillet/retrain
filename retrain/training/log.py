@@ -139,6 +139,7 @@ def init_wandb(
         "clip_cov_max": config.clip_cov_max,
         "adv_clip_max": config.adv_clip_max,
         "sft_warmup_steps": config.sft_warmup_steps,
+        "sft_reshuffle_each_epoch": int(config.sft_reshuffle_each_epoch),
         "tl_grpo": int(config.tl_grpo),
         "echo_enabled": int(config.echo_enabled),
         "echo_weight": config.echo_weight,

@@ -71,11 +71,14 @@ class SftRunner:
             build_sft_tokenized_batch,
             build_sft_artifact_manifest,
             build_sft_example_order,
+            build_sft_resume_schedule_contract,
+            build_sft_schedule_metrics,
             effective_sft_loss_fn,
             load_sft_dataset,
             select_sft_batch_indices,
             tokenize_sft_dataset,
             verify_sft_data_contract,
+            verify_sft_resume_schedule_contract,
             write_sft_artifact_manifest,
             write_sft_run_snapshot_artifacts,
         )
@@ -154,6 +157,8 @@ class SftRunner:
             resume_state_path = Path(config.resume_from) / TRAINER_STATE_FILE
             if resume_state_path.is_file():
                 resume_state = load_trainer_state(config.resume_from)
+                if "sft_schedule" not in resume_state:
+                    verify_sft_resume_schedule_contract(None, {})
                 start_step = resume_state["step"] + 1
                 if start_step > config.max_steps:
                     raise ValueError(
@@ -168,6 +173,10 @@ class SftRunner:
                 )
 
         helper = get_registry("backend").create(config.backend, config)
+        if config.resume_from and not callable(getattr(helper, "load_state", None)):
+            raise RuntimeError(
+                "trainer='sft' resume_from requires a backend with load_state()."
+            )
         loss_fn = effective_sft_loss_fn(config)
         setattr(helper, "sft_loss_fn", loss_fn)
 
@@ -190,29 +199,6 @@ class SftRunner:
         if resume_contract.warning:
             print(f"Checkpoint resume warning: {resume_contract.warning}")
         print(f"SFT loss: {loss_fn}")
-
-        if config.resume_from:
-            load_state = getattr(helper, "load_state", None)
-            if not callable(load_state):
-                raise RuntimeError(
-                    "trainer='sft' resume_from requires a backend with load_state()."
-                )
-            if resume_state is not None:
-                if not resume_checkpoint_ref:
-                    raise RuntimeError(
-                        "trainer='sft' resume_from log dir did not provide "
-                        "a checkpoint path or name."
-                    )
-                print(
-                    "Resuming SFT from "
-                    f"{config.resume_from} at step {resume_state['step']} "
-                    f"(checkpoint: {resume_checkpoint_ref}), "
-                    f"continuing from step {start_step} ..."
-                )
-                load_state(resume_checkpoint_ref)
-            else:
-                print(f"Loading SFT initial adapter from {config.resume_from} ...")
-                load_state(config.resume_from)
 
         print(f"Loading tokenizer for {config.model} ...")
         tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
@@ -237,11 +223,49 @@ class SftRunner:
             batch_order=config.sft_batch_order,
             length_bucket_size=config.sft_length_bucket_size,
         )
+        epoch_order_cache = {0: order}
+        epoch_order_sha256_cache: dict[int, str] = {}
+        schedule_contract = build_sft_resume_schedule_contract(
+            config,
+            dataset.provenance,
+            batch_size=batch_size,
+            max_tokens=max_tokens,
+            example_order=order,
+        )
+        if resume_state is not None:
+            verify_sft_resume_schedule_contract(
+                resume_state.get("sft_schedule"),
+                schedule_contract,
+            )
         print(
             "SFT batching: "
             f"order={config.sft_batch_order}, "
-            f"length_bucket_size={config.sft_length_bucket_size or len(tokenized_examples)}"
+            f"length_bucket_size={config.sft_length_bucket_size or len(tokenized_examples)}, "
+            f"reshuffle_each_epoch={config.sft_reshuffle_each_epoch}"
         )
+
+        if config.resume_from:
+            load_state = getattr(helper, "load_state", None)
+            if not callable(load_state):
+                raise RuntimeError(
+                    "trainer='sft' resume_from requires a backend with load_state()."
+                )
+            if resume_state is not None:
+                if not resume_checkpoint_ref:
+                    raise RuntimeError(
+                        "trainer='sft' resume_from log dir did not provide "
+                        "a checkpoint path or name."
+                    )
+                print(
+                    "Resuming SFT from "
+                    f"{config.resume_from} at step {resume_state['step']} "
+                    f"(checkpoint: {resume_checkpoint_ref}), "
+                    f"continuing from step {start_step} ..."
+                )
+                load_state(resume_checkpoint_ref)
+            else:
+                print(f"Loading SFT initial adapter from {config.resume_from} ...")
+                load_state(config.resume_from)
 
         policy_ref = ""
         last_metrics: dict[str, int | float | str] = {}
@@ -255,6 +279,12 @@ class SftRunner:
                     order,
                     batch_size=batch_size,
                     step=step,
+                    seed=config.seed,
+                    lengths=token_lengths,
+                    batch_order=config.sft_batch_order,
+                    length_bucket_size=config.sft_length_bucket_size,
+                    reshuffle_each_epoch=config.sft_reshuffle_each_epoch,
+                    epoch_order_cache=epoch_order_cache,
                 )
                 batch = [tokenized_examples[idx] for idx in indices]
                 tokenized = build_sft_tokenized_batch(batch)
@@ -285,6 +315,9 @@ class SftRunner:
                     "sft_loss_fn": loss_fn,
                     "sft_batch_order": config.sft_batch_order,
                     "sft_length_bucket_size": int(config.sft_length_bucket_size),
+                    "sft_reshuffle_each_epoch": int(
+                        config.sft_reshuffle_each_epoch
+                    ),
                     "lr": lr,
                     "datums": len(batch),
                     "tokens": tokenized.total_tokens,
@@ -302,6 +335,21 @@ class SftRunner:
                     "train_time_s": train_elapsed,
                     "train_time_semantics": train_time_semantics,
                 }
+                metrics.update(
+                    build_sft_schedule_metrics(
+                        order,
+                        indices,
+                        batch_size=batch_size,
+                        step=step,
+                        seed=config.seed,
+                        lengths=token_lengths,
+                        batch_order=config.sft_batch_order,
+                        length_bucket_size=config.sft_length_bucket_size,
+                        reshuffle_each_epoch=config.sft_reshuffle_each_epoch,
+                        epoch_order_cache=epoch_order_cache,
+                        epoch_order_sha256_cache=epoch_order_sha256_cache,
+                    )
+                )
                 if config.backend == "prime_rl":
                     metrics["train_submit_enqueue_time_s"] = train_elapsed
                     metrics["train_submit_enqueue_share"] = (
@@ -333,10 +381,32 @@ class SftRunner:
                         "train/sft_dataset_coverage": metrics[
                             "sft_dataset_coverage"
                         ],
+                        "train/sft/epoch": metrics["sft_epoch"],
+                        "train/sft/epoch_end": metrics["sft_epoch_end"],
+                        "train/sft/epoch_seed": metrics["sft_epoch_seed"],
+                        "train/sft/epoch_end_seed": metrics[
+                            "sft_epoch_end_seed"
+                        ],
+                        "train/sft/epoch_sample_offset": metrics[
+                            "sft_epoch_sample_offset"
+                        ],
+                        "train/sft/reshuffle_each_epoch": metrics[
+                            "sft_reshuffle_each_epoch"
+                        ],
+                        "train/sft/batch_indices_sha256": metrics[
+                            "sft_batch_indices_sha256"
+                        ],
+                        "train/sft/epoch_start_order_sha256": metrics[
+                            "sft_epoch_start_order_sha256"
+                        ],
                         "train/step_time_s": elapsed,
                         "train/train_time_s": train_elapsed,
                         "train/train_time_semantics": train_time_semantics,
                     }
+                    if "sft_epoch_end_order_sha256" in metrics:
+                        wandb_metrics["train/sft/epoch_end_order_sha256"] = metrics[
+                            "sft_epoch_end_order_sha256"
+                        ]
                     if config.backend == "prime_rl":
                         wandb_metrics["train/train_submit_enqueue_time_s"] = (
                             train_elapsed
@@ -395,6 +465,7 @@ class SftRunner:
                         resume_mode=resume_contract.mode,
                         resume_warning=resume_contract.warning,
                         sepa_state={},
+                        sft_schedule=schedule_contract,
                     )
                     print(f"Saved checkpoint: {checkpoint_name}")
                     upload_checkpoint_artifact(
@@ -422,6 +493,7 @@ class SftRunner:
                 resume_mode=resume_contract.mode,
                 resume_warning=resume_contract.warning,
                 sepa_state={},
+                sft_schedule=schedule_contract,
             )
             manifest = build_sft_artifact_manifest(
                 config,

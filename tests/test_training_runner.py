@@ -422,6 +422,15 @@ class TestSftRunner:
         assert metrics[-1]["phase"] == "sft"
         assert metrics[-1]["backend"] == "unsloth"
         assert metrics[-1]["sft_loss_fn"] == "cross_entropy"
+        assert metrics[-1]["sft_reshuffle_each_epoch"] == 0
+        assert metrics[-1]["sft_epoch"] == 1
+        assert metrics[-1]["sft_epoch_end"] == 1
+        assert metrics[-1]["sft_epoch_sample_offset"] == 0
+        assert metrics[-1]["sft_epoch_seed"] == -1
+        assert metrics[-1]["sft_epoch_end_seed"] == -1
+        assert len(metrics[-1]["sft_batch_indices_sha256"]) == 64
+        assert len(metrics[-1]["sft_epoch_start_order_sha256"]) == 64
+        assert "sft_epoch_end_order_sha256" not in metrics[-1]
         assert metrics[-1]["sft_sequence_length_min"] > 0
         assert metrics[-1]["sft_sequence_length_p95"] > 0
         assert metrics[-1]["sft_logical_padded_tokens"] >= metrics[-1]["tokens"]
@@ -449,6 +458,12 @@ class TestSftRunner:
         assert state["checkpoint_path"] == str(adapter_path / "final")
         assert state["resume_mode"] == "adapter_only"
         assert "optimizer/scaler/RNG" in state["resume_warning"]
+        assert state["sft_schedule"]["data_sha256"] == hashlib.sha256(
+            data_path.read_bytes()
+        ).hexdigest()
+        assert state["sft_schedule"]["data_rows"] == 1
+        assert state["sft_schedule"]["reshuffle_each_epoch"] is False
+        assert len(state["sft_schedule"]["epoch_zero_order_sha256"]) == 64
         assert (log_dir / "latest_sampler_path.txt").read_text().strip() == str(
             adapter_path / "final"
         )
@@ -462,6 +477,13 @@ class TestSftRunner:
         assert manifest["sft"]["data_sha256"] == hashlib.sha256(data_bytes).hexdigest()
         assert manifest["sft"]["data_rows"] == 1
         assert manifest["sft"]["data_bytes"] == len(data_bytes)
+        assert manifest["sft"]["reshuffle_each_epoch"] is False
+        assert manifest["sft"]["seed"] == -1
+        assert manifest["sft"]["epoch_seed_rule"] == "fixed_seed"
+        assert manifest["sft"]["schedule_hash_algorithm"] == "sha256"
+        assert manifest["sft"]["schedule_hash_encoding"] == (
+            "uint64_be_concatenation"
+        )
         assert manifest["sft"]["data_path_status"] == "scratch"
         assert any(
             "scratch/tmp" in warning for warning in manifest["sft"]["data_warnings"]
@@ -563,6 +585,8 @@ class TestSftRunner:
         assert sft_log["train/backend/local/sequence_length_p95"] == 12
         assert sft_log["train/sft/sequence_length_p95"] > 0
         assert sft_log["train/sft/logical_padding_fraction"] == pytest.approx(0.0)
+        assert len(sft_log["train/sft/batch_indices_sha256"]) == 64
+        assert len(sft_log["train/sft/epoch_start_order_sha256"]) == 64
         assert sft_log["train/train_time_semantics"] == (
             "synchronous_optimizer_update"
         )
@@ -692,20 +716,6 @@ class TestSftRunner:
         log_dir = tmp_path / "logs"
         helper = _FakeSftHelper()
 
-        from retrain.training.state import save_trainer_state
-        save_trainer_state(
-            resume_log_dir,
-            step=1,
-            example_idx=2,
-            total_correct=0,
-            total_completions=0,
-            current_batch_size=1,
-            current_group_size=1,
-            checkpoint_name="checkpoint_step_2",
-            checkpoint_path=str(checkpoint_path),
-            sepa_state={},
-        )
-
         def fake_get_registry(name):
             assert name == "backend"
             return _FakeBackendRegistry(helper)
@@ -730,6 +740,34 @@ class TestSftRunner:
             resume_from=str(resume_log_dir),
             log_dir=str(log_dir),
         )
+        from retrain.training.sft import (
+            build_sft_example_order,
+            build_sft_resume_schedule_contract,
+            load_sft_dataset,
+        )
+        from retrain.training.state import save_trainer_state
+
+        dataset = load_sft_dataset(data_path)
+        schedule_contract = build_sft_resume_schedule_contract(
+            config,
+            dataset.provenance,
+            batch_size=1,
+            max_tokens=config.max_tokens,
+            example_order=build_sft_example_order(len(rows), config.seed),
+        )
+        save_trainer_state(
+            resume_log_dir,
+            step=1,
+            example_idx=2,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=1,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_2",
+            checkpoint_path=str(checkpoint_path),
+            sepa_state={},
+            sft_schedule=schedule_contract,
+        )
 
         result = SftRunner().run(config)
 
@@ -748,6 +786,139 @@ class TestSftRunner:
         assert state["checkpoint_path"] == str(adapter_path / "final")
         assert state["resume_mode"] == "adapter_only"
         assert "optimizer/scaler/RNG" in state["resume_warning"]
+        assert state["sft_schedule"] == schedule_contract
+
+    def test_sft_resume_from_legacy_log_dir_fails_closed(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "first"}) + "\n")
+        checkpoint_path = tmp_path / "adapter" / "checkpoint_step_1"
+        resume_log_dir = tmp_path / "previous_logs"
+        helper = _FakeSftHelper()
+
+        from retrain.training.state import save_trainer_state
+
+        save_trainer_state(
+            resume_log_dir,
+            step=0,
+            example_idx=1,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=1,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_1",
+            checkpoint_path=str(checkpoint_path),
+            sepa_state={},
+        )
+
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr(
+            "retrain.registry.builtin.get_registry",
+            lambda _name: _FakeBackendRegistry(helper),
+        )
+        config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=2,
+            model="fake-model",
+            adapter_path=str(tmp_path / "adapter"),
+            resume_from=str(resume_log_dir),
+            log_dir=str(tmp_path / "logs"),
+        )
+
+        result = SftRunner().run(config)
+
+        assert not result.ok
+        assert result.failure_status == "exception:ValueError"
+        assert "schedule contract is missing" in result.error_message
+        assert helper.loaded == []
+        assert helper.calls == []
+
+    def test_sft_resume_rejects_changed_seed_before_loading_checkpoint(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        data_path = tmp_path / "sft.jsonl"
+        data_path.write_text(json.dumps({"text": "first"}) + "\n")
+        checkpoint_path = tmp_path / "adapter" / "checkpoint_step_1"
+        resume_log_dir = tmp_path / "previous_logs"
+        helper = _FakeSftHelper()
+        current_config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=2,
+            seed=43,
+            model="fake-model",
+            adapter_path=str(tmp_path / "adapter"),
+            resume_from=str(resume_log_dir),
+            log_dir=str(tmp_path / "logs"),
+        )
+        saved_config = TrainConfig(
+            trainer="sft",
+            backend="unsloth",
+            sft_data_path=str(data_path),
+            sft_batch_size=1,
+            max_steps=2,
+            seed=42,
+            model="fake-model",
+            adapter_path=str(tmp_path / "adapter"),
+        )
+
+        from retrain.training.sft import (
+            build_sft_example_order,
+            build_sft_resume_schedule_contract,
+            load_sft_dataset,
+        )
+        from retrain.training.state import save_trainer_state
+
+        dataset = load_sft_dataset(data_path)
+        saved_schedule = build_sft_resume_schedule_contract(
+            saved_config,
+            dataset.provenance,
+            batch_size=1,
+            max_tokens=saved_config.max_tokens,
+            example_order=build_sft_example_order(1, saved_config.seed),
+        )
+        save_trainer_state(
+            resume_log_dir,
+            step=0,
+            example_idx=1,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=1,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_1",
+            checkpoint_path=str(checkpoint_path),
+            sepa_state={},
+            sft_schedule=saved_schedule,
+        )
+        monkeypatch.setattr(
+            "transformers.AutoTokenizer.from_pretrained",
+            lambda *args, **kwargs: _FakeTokenizer(),
+        )
+        monkeypatch.setattr(
+            "retrain.registry.builtin.get_registry",
+            lambda _name: _FakeBackendRegistry(helper),
+        )
+
+        result = SftRunner().run(current_config)
+
+        assert not result.ok
+        assert result.failure_status == "exception:ValueError"
+        assert "seed: saved 42, current 43" in result.error_message
+        assert helper.loaded == []
+        assert helper.calls == []
 
     def test_sft_resume_requires_callable_load_state(self, tmp_path, monkeypatch):
         data_path = tmp_path / "sft.jsonl"
@@ -984,6 +1155,7 @@ sft_data_rows = 1
         assert data["total_datums"] == 6
         assert data["sft_data_sha256"] == data_sha256
         assert data["sft_data_rows"] == 1
+        assert data["sft_reshuffle_each_epoch"] is False
         assert data["sft_data_provenance"]["data_path"] == str(data_path.resolve())
         assert data["sft_data_provenance"]["data_sha256"] == data_sha256
         assert data["sft_data_provenance"]["data_rows"] == 1
@@ -1015,6 +1187,7 @@ sft_data_rows = 1
         assert "sft_sha256" in output
         assert data_sha256 in output
         assert "sft_rows" in output
+        assert "reshuffle_each_epoch=False" in output
 
     def test_explain_warmup_missing_unpinned_data_matches_runtime_skip(
         self,

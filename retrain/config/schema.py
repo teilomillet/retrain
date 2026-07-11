@@ -143,6 +143,9 @@ class TrainConfig:
     sft_loss_fn: str = "auto"  # "auto", "importance_sampling", or "cross_entropy"
     sft_batch_order: str = "shuffle"  # "shuffle", "length", "length_desc", "length_bucket"
     sft_length_bucket_size: int = 0  # 0 = full tokenized traversal for length_bucket
+    # Opt in to deriving each epoch's traversal from (seed, epoch). The false
+    # default preserves the legacy behavior that cycles one fixed permutation.
+    sft_reshuffle_each_epoch: bool = False
 
     # ECHO: same-rollout supervised world-modeling on environment/tool tokens.
     echo_enabled: bool = False

@@ -144,6 +144,51 @@ class TestLoadTrainerState:
         assert state["resume_mode"] == "adapter_only"
         assert "optimizer/scaler/RNG" in state["resume_warning"]
 
+    def test_roundtrip_sft_schedule_contract(self, tmp_path):
+        schedule = {
+            "version": 1,
+            "seed": 42,
+            "batch_order": "length_bucket",
+            "reshuffle_each_epoch": True,
+            "data_sha256": "a" * 64,
+            "data_rows": 100,
+        }
+        save_trainer_state(
+            tmp_path,
+            step=39,
+            example_idx=320,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=8,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_40",
+            sepa_state={},
+            sft_schedule=schedule,
+        )
+
+        state = load_trainer_state(str(tmp_path))
+
+        assert state["sft_schedule"] == schedule
+
+    def test_sft_schedule_contract_must_be_object(self, tmp_path):
+        save_trainer_state(
+            tmp_path,
+            step=1,
+            example_idx=2,
+            total_correct=0,
+            total_completions=0,
+            current_batch_size=1,
+            current_group_size=1,
+            checkpoint_name="checkpoint_step_2",
+            sepa_state={},
+        )
+        payload = json.loads((tmp_path / TRAINER_STATE_FILE).read_text())
+        payload["sft_schedule"] = "not-an-object"
+        (tmp_path / TRAINER_STATE_FILE).write_text(json.dumps(payload))
+
+        with pytest.raises(ValueError, match="sft_schedule"):
+            load_trainer_state(str(tmp_path))
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="trainer_state.json"):
             load_trainer_state(str(tmp_path))

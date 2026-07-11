@@ -31,6 +31,7 @@ class TrainerState(TypedDict):
     sepa: SEPAStateDict
     tl_grpo_ema: NotRequired[float]
     delight_eta_ema: NotRequired[float]
+    sft_schedule: NotRequired[dict[str, object]]
 
 
 def save_trainer_state(
@@ -49,6 +50,7 @@ def save_trainer_state(
     sepa_state: SEPAStateDict,
     tl_grpo_ema: float | None = None,
     delight_eta_ema: float | None = None,
+    sft_schedule: Mapping[str, object] | None = None,
 ) -> None:
     """Write trainer-side state to JSON for checkpoint resume."""
     path.mkdir(parents=True, exist_ok=True)
@@ -72,6 +74,8 @@ def save_trainer_state(
         state["tl_grpo_ema"] = tl_grpo_ema
     if delight_eta_ema is not None:
         state["delight_eta_ema"] = delight_eta_ema
+    if sft_schedule is not None:
+        state["sft_schedule"] = dict(sft_schedule)
     tmp = path / f"{TRAINER_STATE_FILE}.tmp"
     tmp.write_text(json.dumps(state, indent=2) + "\n")
     tmp.replace(path / TRAINER_STATE_FILE)
@@ -127,6 +131,9 @@ def load_trainer_state(resume_dir: str) -> TrainerState:
     delight_eta_ema = _optional_float_field(payload_map, "delight_eta_ema")
     if delight_eta_ema is not None:
         state["delight_eta_ema"] = delight_eta_ema
+    sft_schedule = _optional_object_field(payload_map, "sft_schedule")
+    if sft_schedule is not None:
+        state["sft_schedule"] = sft_schedule
     return state
 
 
@@ -158,6 +165,18 @@ def _optional_float_field(payload: Mapping[str, object], key: str) -> float | No
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"Trainer state field '{key}' must be a number.")
     return float(value)
+
+
+def _optional_object_field(
+    payload: Mapping[str, object],
+    key: str,
+) -> dict[str, object] | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"Trainer state field '{key}' must be an object.")
+    return dict(cast(Mapping[str, object], value))
 
 
 def _resolve_checkpoint_path(resume_dir: Path, checkpoint_path: str) -> str:

@@ -220,6 +220,7 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "sft_loss_fn": sft_loss_fn,
         "sft_batch_order": config.sft_batch_order,
         "sft_length_bucket_size": config.sft_length_bucket_size,
+        "sft_reshuffle_each_epoch": config.sft_reshuffle_each_epoch,
         "echo_enabled": config.echo_enabled,
         "echo_weight": config.echo_weight,
         "echo_loss_fn": config.echo_loss_fn,
@@ -322,7 +323,8 @@ def explain_single(config_path: str | None, fmt: str) -> None:
             f"steps={config.max_steps if config.trainer == 'sft' else config.sft_warmup_steps} "
             f"batch={config.sft_batch_size or '(default)'} "
             f"loss={sft_loss_fn} "
-            f"order={config.sft_batch_order}"
+            f"order={config.sft_batch_order} "
+            f"reshuffle_each_epoch={config.sft_reshuffle_each_epoch}"
         )
         if config.sft_data_path:
             print(f"  sft_data      : {config.sft_data_path}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -26,6 +27,10 @@ from retrain.planning.types import PlanningDetector
 class _FakeTokenizer:
     vocab_size = 256
     added_tokens_encoder: dict[str, int] = {}
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        _ = add_special_tokens
+        return [ord(char) for char in text]
 
     def convert_ids_to_tokens(self, ids: list[int]) -> list[str]:
         return [str(i) for i in ids]
@@ -202,6 +207,84 @@ def _make_fake_flow(cfg, helper):
     )
     flow.backpressure = NoOpBackPressure()
     return flow
+
+
+def test_train_persists_sft_warmup_schedule(monkeypatch, tmp_path):
+    data_path = tmp_path / "sft.jsonl"
+    data_path.write_text(json.dumps({"text": "supervised target"}) + "\n")
+    helper = _EchoRecordingFakeHelper(adapter_path=str(tmp_path / "adapter"))
+
+    def fake_get_registry(kind: str):
+        if kind == "data_source":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    load=lambda: [
+                        Example(
+                            prompt="unused during warmup",
+                            reference="42",
+                            task="math",
+                            info={"id": 1},
+                        )
+                    ]
+                )
+            )
+        if kind == "reward":
+            return SimpleNamespace(
+                create=lambda _name, _cfg: SimpleNamespace(
+                    score=lambda _response, _reference: 0.0
+                )
+            )
+        raise AssertionError(f"Unexpected registry kind: {kind}")
+
+    monkeypatch.setattr(
+        trainer_mod.AutoTokenizer,
+        "from_pretrained",
+        staticmethod(lambda _model, **_kw: _FakeTokenizer()),
+    )
+    monkeypatch.setattr(trainer_mod, "get_registry", fake_get_registry)
+    saved_schedules: list[object] = []
+    real_save_trainer_state = trainer_mod.save_trainer_state
+
+    def capture_save(*args, **kwargs):
+        saved_schedules.append(kwargs.get("sft_schedule"))
+        return real_save_trainer_state(*args, **kwargs)
+
+    monkeypatch.setattr(trainer_mod, "save_trainer_state", capture_save)
+    config = TrainConfig(
+        backend="local",
+        model="fake/model",
+        max_steps=1,
+        batch_size=1,
+        group_size=2,
+        max_tokens=8,
+        save_every=1,
+        log_dir=str(tmp_path / "logs"),
+        adapter_path=str(tmp_path / "adapter"),
+        sft_warmup_steps=1,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        sft_reshuffle_each_epoch=True,
+        seed=19,
+    )
+
+    final_path = trainer_mod.train(
+        config,
+        flow=_make_fake_flow(config, helper),
+    )
+
+    assert final_path == str(Path(config.adapter_path) / "final")
+    assert len(helper.sft_calls) == 1
+    assert len(saved_schedules) == 2
+    for schedule in saved_schedules:
+        assert isinstance(schedule, dict)
+        assert schedule["data_sha256"] == hashlib.sha256(
+            data_path.read_bytes()
+        ).hexdigest()
+        assert schedule["seed"] == 19
+        assert schedule["reshuffle_each_epoch"] is True
+
+    state = json.loads((Path(config.log_dir) / "trainer_state.json").read_text())
+    assert state["sft_schedule"] == saved_schedules[-1]
 
 
 def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):

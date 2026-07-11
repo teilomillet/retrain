@@ -73,6 +73,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_loss_fn": "sft_loss_fn",
         "sft_batch_order": "sft_batch_order",
         "sft_length_bucket_size": "sft_length_bucket_size",
+        "sft_reshuffle_each_epoch": "sft_reshuffle_each_epoch",
     },
     "echo": {
         "enabled": "echo_enabled",

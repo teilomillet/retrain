@@ -73,6 +73,9 @@ sft_batch_size = 0         # 0 = trainer default
 sft_max_tokens = 0         # 0 = trainer default
 sft_lr = 0.0               # 0 = use lr
 sft_loss_fn = "auto"       # auto | importance_sampling | cross_entropy
+sft_batch_order = "shuffle" # shuffle | length | length_desc | length_bucket
+sft_length_bucket_size = 0 # 0 = full tokenized traversal
+sft_reshuffle_each_epoch = false # true derives a new order from seed + epoch
 
 [optimizer_batch]
 capture = false             # one-step local source-run capture
@@ -412,6 +415,9 @@ Nested plugin params tables under `[algorithm]`:
 | `sft_max_tokens` | int | `0` | SFT row token cap. `0` uses `max_tokens` for standalone SFT and `max_tokens + 512` for warmup compatibility |
 | `sft_lr` | float | `0.0` | SFT learning rate. `0` uses `lr` |
 | `sft_loss_fn` | str | `"auto"` | SFT loss. `"auto"` resolves to `cross_entropy` for `trainer = "sft"` and preserves historical `importance_sampling` warmup behavior for `trainer = "retrain"` |
+| `sft_batch_order` | str | `"shuffle"` | Tokenized example ordering: random shuffle, global length order, descending length order, or shuffled length buckets |
+| `sft_length_bucket_size` | int | `0` | Window size for `length_bucket`. `0` uses the full tokenized traversal |
+| `sft_reshuffle_each_epoch` | bool | `false` | Opt in to rebuilding the configured ordering from `seed + epoch` at each epoch boundary. The default preserves the legacy fixed-permutation cycle |
 
 !!! note
     The quickstart template intentionally uses `max_tokens = 1024` for low-cost smoke tests.
@@ -471,6 +477,7 @@ sft_data_path = "data/sft.jsonl"
 # sft_audit_sha256 = "..."
 sft_batch_size = 4
 sft_loss_fn = "auto"  # cross_entropy for standalone SFT
+sft_reshuffle_each_epoch = true
 save_every = 20
 
 [logging]
@@ -509,6 +516,35 @@ and continues from the next SFT step. If it points directly at an adapter
 directory, retrain loads that adapter as initialization and starts SFT at step
 0. Local and Unsloth SFT resume is `adapter_only`: trainer counters and LoRA
 weights are restored, but optimizer/scaler/RNG state is not.
+
+SFT example selection is derived from the absolute sample position
+`step * sft_batch_size`. This keeps resumed step selection deterministic even
+when the dataset size is not divisible by the batch size: a boundary-crossing
+batch consumes the tail of one epoch and the head of the next epoch's seeded
+ordering when `sft_reshuffle_each_epoch = true`; the default `false` keeps the
+legacy fixed order. Each JSONL step records SHA256 fingerprints for
+the selected index sequence and the relevant epoch order or orders. These hash
+unsigned 64-bit big-endian indices in sequence, making schedule comparisons
+cheap without logging the full permutation.
+
+Each new standalone-SFT checkpoint also stores an `sft_schedule` contract in
+`trainer_state.json`. Log-directory continuation fails closed unless the
+dataset SHA256 and row count, seed, effective batch size, batching policy and
+bucket size, per-epoch reshuffle flag, the SFT warmup phase boundary,
+tokenizer/model inputs, and exact
+epoch-zero order fingerprint still match. A configured audit SHA256 is bound
+too, so resume cannot silently substitute a different corpus decision. The
+dataset may move to another path when its bytes are unchanged. Older SFT
+trainer states do not contain enough
+evidence to prove the original traversal, so they cannot be continued as a
+saved step; point `resume.from` directly at their adapter to start a new SFT
+schedule from step 0, or restart the run.
+
+Checkpoints produced by the main RL trainer also store this contract when an
+SFT warmup dataset is loaded. A resume that would re-enter the warmup verifies
+the saved contract before loading backend state; legacy or mismatched warmup
+checkpoints fail closed. The warmup boundary itself is part of the contract, so
+lowering or increasing it cannot silently remove or add supervised steps.
 
 Before restarting a job, run a local preflight:
 

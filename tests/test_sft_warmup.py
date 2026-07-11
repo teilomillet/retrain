@@ -20,7 +20,10 @@ import pytest
 
 import retrain.training.sft as sft_module
 from retrain.config import TrainConfig, load_config
-from retrain.training.warmup import load_sft_warmup_data
+from retrain.training.warmup import (
+    load_sft_warmup_data,
+    verify_sft_warmup_resume_schedule,
+)
 from retrain.training.sft import (
     SftExample,
     SftTokenizedExample,
@@ -46,6 +49,7 @@ class TestSftWarmupConfig:
         config = TrainConfig()
         assert config.sft_warmup_steps == 0
         assert config.sft_data_path == ""
+        assert config.sft_reshuffle_each_epoch is False
 
     def test_parse_from_toml(self):
         """TOML config loads SFT fields."""
@@ -67,6 +71,7 @@ sft_max_tokens = 256
 sft_loss_fn = "cross_entropy"
 sft_batch_order = "length_bucket"
 sft_length_bucket_size = 64
+sft_reshuffle_each_epoch = true
 tl_grpo = true
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
@@ -84,6 +89,7 @@ tl_grpo = true
         assert config.sft_loss_fn == "cross_entropy"
         assert config.sft_batch_order == "length_bucket"
         assert config.sft_length_bucket_size == 64
+        assert config.sft_reshuffle_each_epoch is True
         assert config.tl_grpo is True
 
     def test_sft_steps_cannot_exceed_max_steps(self):
@@ -129,6 +135,116 @@ class _TinyTokenizer:
 
     def encode(self, text, add_special_tokens=False):
         return [ord(ch) for ch in text]
+
+
+def test_warmup_data_carries_exact_resume_schedule(tmp_path):
+    data_path = tmp_path / "sft.jsonl"
+    data_path.write_text(json.dumps({"text": "supervised target"}) + "\n")
+    config = TrainConfig(
+        model="test-model",
+        max_tokens=128,
+        sft_warmup_steps=3,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        sft_reshuffle_each_epoch=True,
+        seed=17,
+    )
+
+    data = load_sft_warmup_data(config, _TinyTokenizer())
+
+    assert data is not None
+    assert data.schedule_contract["data_sha256"] == hashlib.sha256(
+        data_path.read_bytes()
+    ).hexdigest()
+    assert data.schedule_contract["data_rows"] == 1
+    assert data.schedule_contract["batch_size"] == 1
+    assert data.schedule_contract["max_tokens"] == 640
+    assert data.schedule_contract["reshuffle_each_epoch"] is True
+    assert data.schedule_contract["sft_warmup_steps"] == 3
+
+
+def test_mid_warmup_resume_requires_matching_schedule(tmp_path):
+    data_path = tmp_path / "sft.jsonl"
+    data_path.write_text(json.dumps({"text": "supervised target"}) + "\n")
+    original = TrainConfig(
+        model="test-model",
+        sft_warmup_steps=3,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        seed=17,
+    )
+    original_data = load_sft_warmup_data(original, _TinyTokenizer())
+    assert original_data is not None
+
+    with pytest.raises(ValueError, match="schedule contract is missing"):
+        verify_sft_warmup_resume_schedule(
+            None,
+            original_data,
+            start_step=1,
+            warmup_steps=3,
+        )
+
+    changed = TrainConfig(
+        model="test-model",
+        sft_warmup_steps=3,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        seed=18,
+    )
+    changed_data = load_sft_warmup_data(changed, _TinyTokenizer())
+    assert changed_data is not None
+    with pytest.raises(ValueError, match="seed: saved 17, current 18"):
+        verify_sft_warmup_resume_schedule(
+            original_data.schedule_contract,
+            changed_data,
+            start_step=1,
+            warmup_steps=3,
+        )
+
+
+def test_resume_after_warmup_does_not_require_schedule() -> None:
+    verify_sft_warmup_resume_schedule(
+        None,
+        None,
+        start_step=3,
+        warmup_steps=3,
+    )
+
+
+@pytest.mark.parametrize("changed_warmup_steps", [1, 5])
+def test_mid_warmup_resume_rejects_changed_phase_boundary(
+    tmp_path,
+    changed_warmup_steps,
+):
+    data_path = tmp_path / "sft.jsonl"
+    data_path.write_text(json.dumps({"text": "supervised target"}) + "\n")
+    original = TrainConfig(
+        model="test-model",
+        sft_warmup_steps=3,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        seed=17,
+    )
+    changed = TrainConfig(
+        model="test-model",
+        max_steps=5,
+        sft_warmup_steps=changed_warmup_steps,
+        sft_data_path=str(data_path),
+        sft_batch_size=1,
+        seed=17,
+    )
+    original_data = load_sft_warmup_data(original, _TinyTokenizer())
+    changed_data = load_sft_warmup_data(changed, _TinyTokenizer())
+    assert original_data is not None
+    assert changed_data is not None
+
+    with pytest.raises(ValueError, match="sft_warmup_steps"):
+        verify_sft_warmup_resume_schedule(
+            original_data.schedule_contract,
+            changed_data,
+            start_step=min(3, changed_warmup_steps),
+            warmup_steps=changed_warmup_steps,
+        )
 
 
 class _BoundaryMergingTokenizer:
