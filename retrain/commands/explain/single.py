@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -21,6 +22,8 @@ def _should_load_sft_provenance(config: "TrainConfig") -> bool:
     has_data_pins = bool(
         getattr(config, "sft_data_sha256", "")
         or int(getattr(config, "sft_data_rows", 0) or 0) > 0
+        or getattr(config, "sft_audit_path", "")
+        or getattr(config, "sft_audit_sha256", "")
     )
     if getattr(config, "trainer", "") == "sft" or has_data_pins:
         return True
@@ -36,7 +39,7 @@ def _sft_provenance_info(config: "TrainConfig") -> dict[str, object] | None:
     from retrain.training.sft import load_sft_dataset, verify_sft_data_contract
 
     dataset = load_sft_dataset(str(getattr(config, "sft_data_path")))
-    verify_sft_data_contract(config, dataset.provenance)
+    audit = verify_sft_data_contract(config, dataset.provenance)
     provenance = dataset.provenance
     return {
         "data_path": provenance.data_path,
@@ -50,6 +53,7 @@ def _sft_provenance_info(config: "TrainConfig") -> dict[str, object] | None:
         "data_warnings": list(provenance.data_warnings),
         "pinned_sha256": str(getattr(config, "sft_data_sha256", "")).strip(),
         "pinned_rows": int(getattr(config, "sft_data_rows", 0) or 0),
+        "audit": audit,
     }
 
 
@@ -208,6 +212,8 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "sft_data_path": config.sft_data_path,
         "sft_data_sha256": config.sft_data_sha256,
         "sft_data_rows": config.sft_data_rows,
+        "sft_audit_path": config.sft_audit_path,
+        "sft_audit_sha256": config.sft_audit_sha256,
         "sft_data_provenance": sft_provenance,
         "sft_batch_size": config.sft_batch_size,
         "sft_max_tokens": config.sft_max_tokens,
@@ -333,6 +339,15 @@ def explain_single(config_path: str | None, fmt: str) -> None:
                 f"{sft_provenance['data_path_status']} "
                 f"git_tracked={sft_provenance['git_tracked']}"
             )
+            audit_info = sft_provenance.get("audit")
+            if isinstance(audit_info, Mapping):
+                audit_map = cast(Mapping[str, object], audit_info)
+                print(
+                    "  sft_audit     : "
+                    f"{audit_map.get('status')} "
+                    f"mode={audit_map.get('corpus_mode')} "
+                    f"sha256={audit_map.get('audit_sha256')}"
+                )
             for warning in cast(list[str], sft_provenance["data_warnings"]):
                 print(f"  sft_warning   : {warning}")
     print(f"  seed          : {config.seed}")

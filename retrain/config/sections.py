@@ -65,6 +65,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_data_path": "sft_data_path",
         "sft_data_sha256": "sft_data_sha256",
         "sft_data_rows": "sft_data_rows",
+        "sft_audit_path": "sft_audit_path",
+        "sft_audit_sha256": "sft_audit_sha256",
         "sft_batch_size": "sft_batch_size",
         "sft_max_tokens": "sft_max_tokens",
         "sft_lr": "sft_lr",

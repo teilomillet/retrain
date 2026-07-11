@@ -347,7 +347,7 @@ def _verify_sft_config_data(result: ResumeCheckResult, config: TrainConfig) -> N
         from retrain.training.sft import load_sft_dataset, verify_sft_data_contract
 
         dataset = load_sft_dataset(config.sft_data_path)
-        verify_sft_data_contract(config, dataset.provenance)
+        audit = verify_sft_data_contract(config, dataset.provenance)
         sft_data = dict(result.sft_data)
         sft_data.update(
             {
@@ -355,6 +355,7 @@ def _verify_sft_config_data(result: ResumeCheckResult, config: TrainConfig) -> N
                 "config_data_sha256": dataset.provenance.data_sha256,
                 "config_data_rows": dataset.provenance.data_rows,
                 "config_data_contract_ok": True,
+                "config_audit_contract": audit,
                 "recoverable": True,
             }
         )

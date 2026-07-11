@@ -42,10 +42,15 @@ def load_sft_warmup_data(
         return None
     sft_path = Path(config.sft_data_path)
     if not sft_path.exists():
-        if config.sft_data_sha256 or config.sft_data_rows > 0:
+        if (
+            config.sft_data_sha256
+            or config.sft_data_rows > 0
+            or config.sft_audit_path
+            or config.sft_audit_sha256
+        ):
             raise FileNotFoundError(
                 f"SFT data path {sft_path} not found; cannot verify configured "
-                "sft_data_sha256/sft_data_rows pins."
+                "data/audit pins."
             )
         print(f"WARNING: SFT data path {sft_path} not found, skipping warmup")
         return None

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from retrain.config import TrainConfig
 
 from retrain.config.snapshot import config_snapshot
+from retrain.training.sft_audit import SFT_AUDIT_SCHEMA
 
 SFT_DATA_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
 
@@ -360,7 +361,7 @@ def load_sft_dataset(path: str | Path) -> SftDataset:
 def verify_sft_data_contract(
     config: "TrainConfig",
     provenance: SftDataProvenance,
-) -> None:
+) -> dict[str, object] | None:
     """Fail fast when configured SFT data pins do not match loaded data."""
 
     errors: list[str] = []
@@ -382,6 +383,10 @@ def verify_sft_data_contract(
 
     if errors:
         raise ValueError("SFT data contract mismatch:\n- " + "\n- ".join(errors))
+
+    from retrain.training.sft_audit import verify_sft_audit_contract
+
+    return verify_sft_audit_contract(config, provenance)
 
 
 def load_sft_jsonl(path: str | Path) -> list[SftExample]:
@@ -667,6 +672,14 @@ def build_sft_artifact_manifest(
                 "git_root": data_provenance.git_root,
                 "git_tracked": data_provenance.git_tracked,
                 "data_warnings": list(data_provenance.data_warnings),
+            }
+        )
+    if config.sft_audit_path:
+        sft_payload.update(
+            {
+                "audit_path": config.sft_audit_path,
+                "audit_sha256": config.sft_audit_sha256.strip().lower(),
+                "audit_schema": SFT_AUDIT_SCHEMA,
             }
         )
 

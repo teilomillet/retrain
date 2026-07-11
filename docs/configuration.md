@@ -67,6 +67,8 @@ save_every = 20
 sft_data_path = ""         # JSONL: messages, prompt/completion, or text rows
 sft_data_sha256 = ""       # optional exact-data pin from retrain explain
 sft_data_rows = 0          # optional row-count pin; 0 = unpinned
+sft_audit_path = ""        # optional retrain.sft_audit.v1 JSON
+sft_audit_sha256 = ""      # required exact audit-byte pin when path is set
 sft_batch_size = 0         # 0 = trainer default
 sft_max_tokens = 0         # 0 = trainer default
 sft_lr = 0.0               # 0 = use lr
@@ -404,6 +406,8 @@ Nested plugin params tables under `[algorithm]`:
 | `sft_data_path` | str | `""` | SFT JSONL path. Required for `trainer = "sft"`; optional for warmup |
 | `sft_data_sha256` | str | `""` | Optional SHA256 pin for the exact SFT JSONL bytes. Mismatches fail before training |
 | `sft_data_rows` | int | `0` | Optional loaded-row-count pin for SFT data. `0` leaves the count unpinned |
+| `sft_audit_path` | str | `""` | Optional `retrain.sft_audit.v1` JSON. When set, its exact hash, pass status, dataset binding, corpus mode, and patch lineage are verified before SFT |
+| `sft_audit_sha256` | str | `""` | Required SHA256 pin for the exact audit JSON bytes when `sft_audit_path` is set |
 | `sft_batch_size` | int | `0` | SFT datums per optimizer step. `0` keeps the trainer default |
 | `sft_max_tokens` | int | `0` | SFT row token cap. `0` uses `max_tokens` for standalone SFT and `max_tokens + 512` for warmup compatibility |
 | `sft_lr` | float | `0.0` | SFT learning rate. `0` uses `lr` |
@@ -463,6 +467,8 @@ sft_data_path = "data/sft.jsonl"
 # Optional once retrain explain reports trusted values:
 # sft_data_sha256 = "..."
 # sft_data_rows = 1000
+# sft_audit_path = "data/sft.audit.json"
+# sft_audit_sha256 = "..."
 sft_batch_size = 4
 sft_loss_fn = "auto"  # cross_entropy for standalone SFT
 save_every = 20
@@ -536,8 +542,24 @@ path, SHA256, row count, byte count, and reason they were left external.
 
 `retrain explain config.toml` loads configured SFT data, prints the resolved
 path, SHA256, row count, byte count, and git tracking status, and verifies
-`sft_data_sha256` / `sft_data_rows` when they are set. This makes the config a
-portable data contract instead of just a filename.
+`sft_data_sha256` / `sft_data_rows` when they are set. If `sft_audit_path` is
+configured, explain also verifies its externally pinned bytes and requires:
+
+```json
+{
+  "schema": "retrain.sft_audit.v1",
+  "status": "pass",
+  "audited_dataset": {"sha256": "...", "rows": 1000},
+  "corpus_mode": "replacement",
+  "lineage": {}
+}
+```
+
+`audited_dataset` must match the JSONL Retrain actually loaded. A
+`corpus_mode` of `"patch"` additionally requires `lineage.base` and
+`lineage.patch`, each with a valid `sha256` and positive `rows`. Retrain
+does not infer patch-versus-replacement semantics from paths. This makes the
+config a portable, fail-closed data contract instead of just a filename.
 
 For RL configs, the same preview includes `+echo` in the condition when ECHO
 is enabled, reports its weight and token caps, and shows the environment turn

@@ -135,6 +135,8 @@ class TrainConfig:
     sft_data_path: str = ""  # JSONL messages, prompt/completion, or text rows
     sft_data_sha256: str = ""  # Optional exact-data contract
     sft_data_rows: int = 0  # 0 = unpinned
+    sft_audit_path: str = ""  # Optional generic audit JSON
+    sft_audit_sha256: str = ""  # Required exact-audit pin when path is set
     sft_batch_size: int = 0  # 0 = trainer default
     sft_max_tokens: int = 0  # 0 = trainer default
     sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase

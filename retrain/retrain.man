@@ -257,6 +257,8 @@ OPTIONS
         --sepa-delay-steps
         --sepa-schedule
         --sepa-steps
+        --sft-audit-path
+        --sft-audit-sha256
         --sft-batch-order
         --sft-batch-size
         --sft-data-path
