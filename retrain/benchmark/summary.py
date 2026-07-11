@@ -33,7 +33,10 @@ class RunBenchmarkSummary:
     mean_sample_time_s: float
     mean_train_time_s: float
     mean_sample_share: float
-    mean_train_share: float
+    mean_train_share: float | None
+    train_time_semantics: str
+    mean_train_submit_enqueue_time_s: float | None
+    mean_train_submit_enqueue_share: float | None
     mean_tokens_per_step: float
     mean_tokens_per_second: float
     peak_process_max_rss_mb: float | None
@@ -141,6 +144,8 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
             "train_time_s",
             "sample_share",
             "train_share",
+            "train_submit_enqueue_time_s",
+            "train_submit_enqueue_share",
             "tokens_per_step",
             "tokens_per_second",
             "engine_generation_wall_s",
@@ -192,7 +197,18 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
         mean_sample_time_s=metrics_summary.mean("sample_time_s") or 0.0,
         mean_train_time_s=metrics_summary.mean("train_time_s") or 0.0,
         mean_sample_share=metrics_summary.mean("sample_share") or 0.0,
-        mean_train_share=metrics_summary.mean("train_share") or 0.0,
+        mean_train_share=metrics_summary.mean("train_share"),
+        train_time_semantics=(
+            str(last.get("train_time_semantics"))
+            if isinstance(last.get("train_time_semantics"), str)
+            else ""
+        ),
+        mean_train_submit_enqueue_time_s=metrics_summary.mean(
+            "train_submit_enqueue_time_s"
+        ),
+        mean_train_submit_enqueue_share=metrics_summary.mean(
+            "train_submit_enqueue_share"
+        ),
         mean_tokens_per_step=metrics_summary.mean("tokens_per_step") or 0.0,
         mean_tokens_per_second=metrics_summary.mean("tokens_per_second") or 0.0,
         peak_process_max_rss_mb=metrics_summary.maximum("process_max_rss_mb"),
@@ -298,9 +314,10 @@ def summarize_suite(root: Path) -> BenchmarkSuiteSummary:
         "wall_time_s",
         "mean_step_time_s",
         "mean_sample_time_s",
-        "mean_train_time_s",
         "mean_sample_share",
         "mean_train_share",
+        "mean_train_submit_enqueue_time_s",
+        "mean_train_submit_enqueue_share",
         "mean_tokens_per_step",
         "mean_tokens_per_second",
         "generations_bytes",
@@ -331,6 +348,18 @@ def summarize_suite(root: Path) -> BenchmarkSuiteSummary:
         stat = _summary_stat(values)
         if stat is not None:
             aggregates[field_name] = stat
+
+    # PRIME-RL's ``mean_train_time_s`` is client submit/enqueue latency, not
+    # optimizer duration. Keep the historical aggregate for synchronous (and
+    # legacy unlabeled) runs only; async runs have the explicit enqueue fields.
+    synchronous_train_times = [
+        run.mean_train_time_s
+        for run in runs
+        if run.train_time_semantics != "submit_enqueue_latency"
+    ]
+    synchronous_train_time_stat = _summary_stat(synchronous_train_times)
+    if synchronous_train_time_stat is not None:
+        aggregates["mean_train_time_s"] = synchronous_train_time_stat
 
     for field_name in (
         "peak_process_max_rss_mb",

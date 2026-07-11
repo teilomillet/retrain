@@ -15,6 +15,11 @@ def format_run_summary(summary: RunBenchmarkSummary) -> str:
         if summary.peak_process_max_rss_mb is not None
         else "n/a"
     )
+    train_share = (
+        f"{summary.mean_train_share:.3f}"
+        if summary.mean_train_share is not None
+        else "n/a"
+    )
     lines = [
         f"run: {summary.label}",
         f"path: {summary.path}",
@@ -24,11 +29,22 @@ def format_run_summary(summary: RunBenchmarkSummary) -> str:
         f"mean_sample_time_s: {summary.mean_sample_time_s:.3f}",
         f"mean_train_time_s: {summary.mean_train_time_s:.3f}",
         f"mean_sample_share: {summary.mean_sample_share:.3f}",
-        f"mean_train_share: {summary.mean_train_share:.3f}",
+        f"mean_train_share: {train_share}",
+        f"train_time_semantics: {summary.train_time_semantics or 'unspecified'}",
         f"mean_tokens_per_second: {summary.mean_tokens_per_second:.3f}",
         f"peak_process_max_rss_mb: {peak_rss}",
         f"generations_bytes: {summary.generations_bytes}",
     ]
+    if summary.mean_train_submit_enqueue_time_s is not None:
+        lines.append(
+            "mean_train_submit_enqueue_time_s: "
+            f"{summary.mean_train_submit_enqueue_time_s:.3f}"
+        )
+    if summary.mean_train_submit_enqueue_share is not None:
+        lines.append(
+            "mean_train_submit_enqueue_share: "
+            f"{summary.mean_train_submit_enqueue_share:.3f}"
+        )
     for key in (
         "mean_engine_generation_wall_s",
         "mean_engine_prompt_prefill_s",
@@ -107,9 +123,15 @@ def format_suite_summary(summary: BenchmarkSuiteSummary) -> str:
             if run.peak_process_max_rss_mb is not None
             else "n/a"
         )
+        if run.mean_train_share is not None:
+            train_label = f"train={run.mean_train_share:.3f}"
+        elif run.mean_train_submit_enqueue_share is not None:
+            train_label = f"enqueue={run.mean_train_submit_enqueue_share:.3f}"
+        else:
+            train_label = "train=n/a"
         lines.append(
             f"  {run.label}: step={run.mean_step_time_s:.3f}s "
-            f"sample={run.mean_sample_share:.3f} train={run.mean_train_share:.3f} "
+            f"sample={run.mean_sample_share:.3f} {train_label} "
             f"tok/s={run.mean_tokens_per_second:.3f} rss={rss}"
         )
     return "\n".join(lines)

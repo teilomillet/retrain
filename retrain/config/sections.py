@@ -157,6 +157,12 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "generation_top_surprisal_limit": "generation_top_surprisal_limit",
         "strategic_grams": "strategic_grams",
     },
+    "optimizer_batch": {
+        "capture": "optimizer_batch_capture",
+        "replay_path": "optimizer_batch_replay_path",
+        "expected_logical_sha256": "optimizer_batch_expected_logical_sha256",
+        "expected_manifest_sha256": "optimizer_batch_expected_manifest_sha256",
+    },
     "plugins": {
         "strict": "plugins_strict",
     },

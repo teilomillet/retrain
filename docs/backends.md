@@ -87,8 +87,12 @@ qwen35_gated_delta_kernel = "auto"  # auto | off | torch | flash_qla; explicit s
 ```
 
 This splits local train-step datums into smaller forward/backward chunks while
-preserving the token-weighted loss. Use it when sampling fits but training OOMs
-on the full datum batch. `cuda_empty_cache` defaults to `true` for the local
+preserving the token-weighted loss. RL, SFT, and hybrid RL+ECHO batches are
+padded inside each microbatch, not to the longest row in the whole logical
+batch. Sweep the largest value that fits and compare the emitted
+`train/backend/local/*` W&B timing, memory, and padding fields; size 1 is a
+memory-safe starting point, not a throughput default. Use it when sampling fits
+but training OOMs on the full datum batch. `cuda_empty_cache` defaults to `true` for the local
 backend because multi-step cache-on runs can otherwise hit allocator
 fragmentation even when one-step probes fit. It does not change model math; it
 trades allocator reuse for lower fragmentation pressure. `sample_use_cache =
@@ -169,6 +173,16 @@ Use `--continue-on-error` for full sweeps where OOM or server failures should
 be recorded as condition data instead of aborting the remaining matrix.
 Use `--isolate-conditions` for GPU-memory sweeps so each condition runs in a
 fresh child process with a fresh CUDA context.
+
+Fixed seeds do not make tool-environment optimizer rows identical. For a
+checkpointing systems ablation, use
+[Exact-Input Optimizer-Batch Replay](optimizer-batch-replay.md): capture the
+post-transform logical rows once, then replay them from the same content-pinned
+adapter with no environment or sampling. This is the required stronger gate
+when model-visible observations can vary across otherwise matched runs. V1
+requires PyTorch inference on exactly one local device so optimizer loss and
+timing are synchronous. Exact inputs admit a repeated runtime/memory comparison;
+they do not by themselves establish bitwise-identical CUDA updates.
 
 To compare local PyTorch inference against already-running vLLM and SGLang
 servers under the same config seed and quality gates:
@@ -559,6 +573,11 @@ Notes:
   `strict_advantages=false` is disallowed to prevent silent aggregation.
 - PRIME-RL `train_step()` reports a placeholder loss (`0.0`) because optimization
   runs asynchronously inside the PRIME-RL runtime.
+- The corresponding `train_time_s` measures only local batch submission/enqueue
+  latency, not remote optimizer duration. Metrics label this with
+  `train_time_semantics = "submit_enqueue_latency"`, duplicate the value under
+  `train_submit_enqueue_time_s`, and emit `train_submit_enqueue_share` instead
+  of the misleading synchronous `train_share`.
 
 ## Device allocation
 

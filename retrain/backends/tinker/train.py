@@ -349,9 +349,10 @@ class TinkerTrainHelper:
         echo_loss_fn: str,
         lr: float,
         weight_decay: float,
+        echo_rollout_denominator: int = 0,
     ) -> tuple[float, float]:
         """Reject ECHO until the remote API can provide strict shared-forward loss."""
-        _ = echo_full_observation_counts, echo_loss_fn
+        _ = echo_full_observation_counts, echo_loss_fn, echo_rollout_denominator
         if not echo_advantages:
             return self.train_step(
                 all_tokens,

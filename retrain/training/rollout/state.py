@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from retrain.advantages import AdvantageResult, EntropyStats
@@ -22,6 +22,14 @@ def accumulate_metric_totals(
 
 def has_nonzero_advantage(rows: list[list[float]]) -> bool:
     return any(abs(value) > 0.0 for row in rows for value in row)
+
+
+def count_nonzero_advantage_tokens(
+    rows: Sequence[Sequence[float]],
+) -> int:
+    """Count loss-bearing advantages in the exact provided rows."""
+
+    return sum(abs(value) > 0.0 for row in rows for value in row)
 
 
 def _echo_allowed_tokens(
@@ -53,12 +61,24 @@ class RolloutAccumulator:
     datum_logprobs: list[list[float]] = field(default_factory=list)
     datum_advantages: list[list[float]] = field(default_factory=list)
     datum_echo_advantages: list[list[float]] = field(default_factory=list)
+    datum_echo_terminal_masks: list[list[int]] = field(default_factory=list)
     datum_echo_full_observation_counts: list[int] = field(default_factory=list)
     echo_build: EchoBuildStats = field(default_factory=EchoBuildStats)
+    eligible_completion_token_count: int = 0
+    pre_optimizer_nonzero_advantage_token_count: int = 0
+    optimizer_nonzero_advantage_token_count: int = 0
     rl_completion_token_count: int = 0
     rl_completion_surprisal_sum: float = 0.0
     sampled_completion_token_count: int = 0
     sampled_completion_surprisal_sum: float = 0.0
+    echo_eligible_rollout_count: int = 0
+    optimizer_logical_batch_sha256: str = ""
+    optimizer_batch_capture_manifest: str = ""
+    optimizer_batch_payload_sha256: str = ""
+    optimizer_batch_manifest_sha256: str = ""
+    optimizer_batch_config_sha256: str = ""
+    optimizer_batch_contract_sha256: str = ""
+    optimizer_batch_initial_adapter_sha256: str = ""
     behavior_turns: int = 0
     behavior_invalid: int = 0
     behavior_actions: dict[str, int] = field(default_factory=dict)
@@ -66,6 +86,13 @@ class RolloutAccumulator:
     rollout_timing_metrics: dict[str, float] = field(default_factory=dict)
     sample_time_s: float = 0.0
     tl_grpo_ema: float | None = None
+
+    def refresh_optimizer_advantage_token_count(self) -> None:
+        """Record signal after all trainer-side advantage transforms."""
+
+        self.optimizer_nonzero_advantage_token_count = count_nonzero_advantage_tokens(
+            self.datum_advantages
+        )
 
 
 def prepare_echo_step_plan(
@@ -119,6 +146,7 @@ def prepare_echo_step_plan(
     acc.datum_echo_advantages, limit = limit_echo_masks(
         acc.datum_echo_advantages,
         max_positive_tokens=allowed_tokens,
+        terminal_observation_masks=acc.datum_echo_terminal_masks,
     )
     return EchoStepPlan(
         limit=limit,

@@ -27,7 +27,7 @@ class TrainConfig:
     backend_options: dict[str, object] = field(default_factory=dict)
 
     # Training runner
-    trainer: str = "retrain"       # "retrain", "command", or dotted plugin path
+    trainer: str = "retrain"       # built-in runner name or dotted plugin path
     trainer_command: str = ""      # shell command template for trainer = "command"
 
     # Model
@@ -173,6 +173,18 @@ class TrainConfig:
     log_generations: bool = True
     generation_log_samples_per_prompt: int = 1
     generation_top_surprisal_limit: int = 0
+
+    # Deterministic one-step optimizer-batch systems ablations. Capture records
+    # the exact trainer-logical rows submitted by the normal RL loop. Replay is
+    # intentionally a separate local-only runner that never touches data,
+    # environments, or sampling.
+    optimizer_batch_capture: bool = False
+    optimizer_batch_replay_path: str = ""
+    optimizer_batch_expected_logical_sha256: str = ""
+    optimizer_batch_expected_manifest_sha256: str = ""
+    optimizer_batch_allow_config_differences: list[str] = field(
+        default_factory=list
+    )
 
     # Plugin loading
     plugins_search_paths: list[str] = field(default_factory=lambda: ["plugins"])

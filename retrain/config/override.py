@@ -28,7 +28,11 @@ def _coerce_value(field_name: str, raw: object) -> object:
     if field_name in _MAPPING_OVERRIDE_FIELDS:
         return _coerce_mapping_value(field_name, raw)
 
-    if field_name == "plugins_search_paths":
+    if field_name in {
+        "plugins_search_paths",
+        "optimizer_batch_allow_config_differences",
+    }:
+        label = field_name
         if isinstance(raw, list):
             return [str(v) for v in raw]
         if isinstance(raw, str):
@@ -37,12 +41,10 @@ def _coerce_value(field_name: str, raw: object) -> object:
             if raw.strip().startswith("["):
                 loaded = json.loads(raw)
                 if not isinstance(loaded, list):
-                    raise ValueError(
-                        "plugins_search_paths JSON override must decode to a list."
-                    )
+                    raise ValueError(f"{label} JSON override must decode to a list.")
                 return [str(v) for v in loaded]
             return [p.strip() for p in raw.split(",") if p.strip()]
-        raise ValueError("plugins_search_paths override must be list or comma string.")
+        raise ValueError(f"{label} override must be list or comma string.")
 
     ftype = _FIELD_TYPES[field_name]
     if ftype is bool:

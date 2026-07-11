@@ -271,6 +271,20 @@ class _FakeSftHelper:
     def runtime_metrics(self):
         return {
             "fake_metric": 1,
+            "local_train_wall_s": 0.5,
+            "local_train_forward_s": 0.2,
+            "local_train_backward_s": 0.25,
+            "local_train_optimizer_s": 0.05,
+            "local_train_microbatches": 1,
+            "local_train_gpu_peak_memory_allocated_mb": 123.0,
+            "local_train_gpu_peak_memory_reserved_mb": 150.0,
+            "local_train_global_padded_tokens": 16,
+            "local_train_microbatch_padded_tokens": 12,
+            "local_train_padding_tokens_avoided": 4,
+            "local_train_padding_avoidance_fraction": 0.25,
+            "local_train_sequence_length_p95": 12,
+            "local_train_sequence_length_max": 12,
+            "optimizer/local_effective_rows_sha256": "e" * 64,
             "none_metric": None,
             "object_metric": object(),
             123: "bad_key",
@@ -408,10 +422,27 @@ class TestSftRunner:
         assert metrics[-1]["phase"] == "sft"
         assert metrics[-1]["backend"] == "unsloth"
         assert metrics[-1]["sft_loss_fn"] == "cross_entropy"
+        assert metrics[-1]["sft_sequence_length_min"] > 0
+        assert metrics[-1]["sft_sequence_length_p95"] > 0
+        assert metrics[-1]["sft_logical_padded_tokens"] >= metrics[-1]["tokens"]
+        assert 0.0 <= metrics[-1]["sft_logical_padding_fraction"] <= 1.0
+        assert 0.0 < metrics[-1]["sft_supervised_token_fraction"] <= 1.0
+        assert metrics[-1]["step_time_s"] >= metrics[-1]["train_time_s"]
         assert metrics[-1]["backend/fake_metric"] == 1
+        assert metrics[-1]["backend/local_train_wall_s"] == pytest.approx(0.5)
+        assert metrics[-1]["optimizer/local_effective_rows_sha256"] == "e" * 64
+        assert "backend/optimizer/local_effective_rows_sha256" not in metrics[-1]
         assert "backend/none_metric" not in metrics[-1]
         assert "backend/object_metric" not in metrics[-1]
         assert "backend/123" not in metrics[-1]
+
+        from retrain.benchmark.summary import summarize_run
+        from retrain.status.scan import scan_run
+
+        status_summary = scan_run(log_dir)
+        assert status_summary is not None
+        assert status_summary.latest_step_time_s > 0.0
+        assert summarize_run(log_dir).mean_step_time_s > 0.0
 
         state = json.loads((log_dir / "trainer_state.json").read_text())
         assert state["checkpoint_name"] == "final"
@@ -515,7 +546,25 @@ class TestSftRunner:
         assert any(
             entry["train/recoverability/checkpoint_artifacts_enabled"] == 1
             and entry["train/sft"] == 1
+            and entry["train/optimizer/local_effective_rows_sha256"] == "e" * 64
             for entry, _ in wandb_run.logs
+        )
+        sft_log = next(
+            entry for entry, _ in wandb_run.logs if entry.get("train/sft") == 1
+        )
+        assert sft_log["train/backend/local/wall_s"] == pytest.approx(0.5)
+        assert sft_log["train/backend/local/forward_s"] == pytest.approx(0.2)
+        assert sft_log["train/backend/local/gpu_peak_allocated_mb"] == pytest.approx(
+            123.0
+        )
+        assert sft_log[
+            "train/backend/local/padding_avoidance_fraction"
+        ] == pytest.approx(0.25)
+        assert sft_log["train/backend/local/sequence_length_p95"] == 12
+        assert sft_log["train/sft/sequence_length_p95"] > 0
+        assert sft_log["train/sft/logical_padding_fraction"] == pytest.approx(0.0)
+        assert sft_log["train/train_time_semantics"] == (
+            "synchronous_optimizer_update"
         )
         assert len(wandb_run.artifacts) == 2
         checkpoint_artifact, checkpoint_aliases = wandb_run.artifacts[0]

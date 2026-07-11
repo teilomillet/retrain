@@ -105,6 +105,34 @@ class TestScanRun:
         assert result.process_max_rss_mb == pytest.approx(1024.0)
         assert not result.completed
 
+    def test_prime_rl_status_preserves_enqueue_timing_semantics(self, tmp_path):
+        run_dir = tmp_path / "prime"
+        _write_metrics(
+            run_dir / "metrics.jsonl",
+            [
+                {
+                    "step": 0,
+                    "condition": "grpo+none",
+                    "step_time_s": 10.0,
+                    "train_time_s": 0.5,
+                    "train_time_semantics": "submit_enqueue_latency",
+                    "train_submit_enqueue_time_s": 0.5,
+                    "train_submit_enqueue_share": 0.05,
+                }
+            ],
+        )
+
+        result = scan_run(run_dir)
+
+        assert result is not None
+        assert result.train_share is None
+        assert result.train_time_semantics == "submit_enqueue_latency"
+        assert result.train_submit_enqueue_time_s == pytest.approx(0.5)
+        assert result.train_submit_enqueue_share == pytest.approx(0.05)
+        text = format_run(result)
+        assert "enqueue=5%" in text
+        assert "train=0%" not in text
+
     def test_scan_run_skips_bad_and_non_object_metric_rows(self, tmp_path):
         run_dir = tmp_path / "run1"
         metrics_path = run_dir / "metrics.jsonl"

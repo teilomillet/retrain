@@ -23,7 +23,15 @@ _TIMING_EPS = 1e-9
 _WANDB_ECHO_METRIC_KEYS = (
     "rl/train_time_s",
     "rl/completion_tokens",
+    "rl/sampled_action_tokens",
+    "rl/eligible_action_tokens",
+    "rl/datumized_action_tokens",
+    "rl/pre_optimizer_nonzero_advantage_action_tokens",
+    "rl/optimizer_nonzero_advantage_action_tokens",
+    "rl/nonzero_advantage_action_tokens",
+    "rl/action_token_datumization_ratio",
     "rl/completion_surprisal_mean",
+    "rl/train_time_semantics",
     "echo/enabled",
     "echo/loss",
     "echo/train_time_s",
@@ -34,11 +42,20 @@ _WANDB_ECHO_METRIC_KEYS = (
     "echo/candidate_datums",
     "echo/candidate_tokens",
     "echo/observation_mask_datums",
+    "echo/observation_responses",
+    "echo/bridged_transition_datums",
+    "echo/bridge_failures",
+    "echo/renderer_parity_failures",
+    "echo/terminal_candidate_tokens",
+    "echo/terminal_kept_tokens",
+    "echo/explicit_transition_rollouts",
     "echo/kept_datums",
     "echo/kept_tokens",
     "echo/truncated_tokens",
     "echo/token_ratio",
     "echo/skipped_low_overlap",
+    "echo/split_non_prefix",
+    "echo/eligible_rollouts",
     "echo/skipped_bad_observation_mask",
     "echo/skipped_entropy_floor",
     "echo/entropy_floor",
@@ -76,7 +93,29 @@ _WANDB_METRIC_ALIASES = (
     ("sepa_gate_open", "train/sepa_gate_open"),
     ("max_token_hit_rate", "train/max_token_hit_rate"),
     ("num_datums", "train/num_datums"),
+    (
+        "optimizer/logical_batch_sha256",
+        "train/optimizer/logical_batch_sha256",
+    ),
+    # Deprecated compatibility alias for the original logical-row digest.
+    ("optimizer/batch_sha256", "train/optimizer/batch_sha256"),
+    (
+        "optimizer/local_effective_rows_sha256",
+        "train/optimizer/local_effective_rows_sha256",
+    ),
     ("step_time_s", "train/step_time_s"),
+    ("sample_time_s", "train/sample_time_s"),
+    ("train_time_s", "train/train_time_s"),
+    ("train_time_semantics", "train/train_time_semantics"),
+    (
+        "train_submit_enqueue_time_s",
+        "train/train_submit_enqueue_time_s",
+    ),
+    ("tokens_per_step", "train/tokens_per_step"),
+    ("tokens_per_second", "train/tokens_per_second"),
+    ("sample_share", "train/sample_share"),
+    ("train_share", "train/train_share"),
+    ("train_submit_enqueue_share", "train/train_submit_enqueue_share"),
     ("batch_size", "train/batch_size"),
     ("group_size", "train/group_size"),
     ("exec_entropy_mean", "train/entropy/exec_mean"),
@@ -104,6 +143,87 @@ _WANDB_METRIC_ALIASES = (
     ("bp_utilization", "train/backpressure/utilization"),
     ("bp_throughput", "train/backpressure/throughput"),
     ("bp_warmup", "train/backpressure/warmup"),
+    ("local_train_wall_s", "train/backend/local/wall_s"),
+    ("local_train_forward_s", "train/backend/local/forward_s"),
+    ("local_train_backward_s", "train/backend/local/backward_s"),
+    ("local_train_optimizer_s", "train/backend/local/optimizer_s"),
+    ("local_train_snapshot_s", "train/backend/local/snapshot_s"),
+    ("local_train_microbatches", "train/backend/local/microbatches"),
+    ("local_train_tokens", "train/backend/local/tokens"),
+    ("local_train_batch_size", "train/backend/local/batch_size"),
+    ("local_train_tokens_per_s", "train/backend/local/tokens_per_s"),
+    (
+        "local_train_gpu_peak_memory_allocated_mb",
+        "train/backend/local/gpu_peak_allocated_mb",
+    ),
+    (
+        "local_train_gpu_peak_memory_reserved_mb",
+        "train/backend/local/gpu_peak_reserved_mb",
+    ),
+    (
+        "local_train_microbatch_local_padding",
+        "train/backend/local/microbatch_local_padding",
+    ),
+    (
+        "local_train_unpadded_tokens",
+        "train/backend/local/unpadded_tokens",
+    ),
+    (
+        "local_train_global_padded_tokens",
+        "train/backend/local/global_padded_tokens",
+    ),
+    (
+        "local_train_microbatch_padded_tokens",
+        "train/backend/local/microbatch_padded_tokens",
+    ),
+    (
+        "local_train_padding_tokens_avoided",
+        "train/backend/local/padding_tokens_avoided",
+    ),
+    (
+        "local_train_padding_avoidance_fraction",
+        "train/backend/local/padding_avoidance_fraction",
+    ),
+    (
+        "local_train_global_attention_proxy",
+        "train/backend/local/global_attention_proxy",
+    ),
+    (
+        "local_train_microbatch_attention_proxy",
+        "train/backend/local/microbatch_attention_proxy",
+    ),
+    (
+        "local_train_attention_proxy_avoided",
+        "train/backend/local/attention_proxy_avoided",
+    ),
+    (
+        "local_train_attention_proxy_avoidance_fraction",
+        "train/backend/local/attention_proxy_avoidance_fraction",
+    ),
+    (
+        "local_train_avg_microbatch_examples",
+        "train/backend/local/avg_microbatch_examples",
+    ),
+    (
+        "local_train_sequence_length_min",
+        "train/backend/local/sequence_length_min",
+    ),
+    (
+        "local_train_sequence_length_p50",
+        "train/backend/local/sequence_length_p50",
+    ),
+    (
+        "local_train_sequence_length_p95",
+        "train/backend/local/sequence_length_p95",
+    ),
+    (
+        "local_train_sequence_length_max",
+        "train/backend/local/sequence_length_max",
+    ),
+    (
+        "local_train_sft_microbatch_token_budget",
+        "train/backend/local/sft_microbatch_token_budget",
+    ),
 )
 
 _WANDB_INT_SOURCE_KEYS = frozenset(
@@ -131,6 +251,8 @@ _WANDB_SURPRISAL_DEFAULTS = (
     ("train/surprisal/post_plan_var", "post_plan_var"),
 )
 
+_WANDB_RUNTIME_SOURCE_PREFIXES = ("local_", "optimizer/")
+
 
 class RewardTieTelemetry(Protocol):
     eligible_groups: int
@@ -150,7 +272,19 @@ class RolloutTelemetry(Protocol):
     ties: RewardTieTelemetry
     adv_results: Sequence[AdvantageResult]
     echo_build: EchoBuildStats
+    eligible_completion_token_count: int
+    pre_optimizer_nonzero_advantage_token_count: int
+    optimizer_nonzero_advantage_token_count: int
     rl_completion_token_count: int
+    sampled_completion_token_count: int
+    echo_eligible_rollout_count: int
+    optimizer_logical_batch_sha256: str
+    optimizer_batch_capture_manifest: str
+    optimizer_batch_payload_sha256: str
+    optimizer_batch_manifest_sha256: str
+    optimizer_batch_config_sha256: str
+    optimizer_batch_contract_sha256: str
+    optimizer_batch_initial_adapter_sha256: str
     rollout_timing_metrics: Mapping[str, float]
     sample_time_s: float
     behavior_turns: int
@@ -339,8 +473,8 @@ def _add_behavior_metrics(
                 max(rollout.behavior_actions.values()) / action_total
             )
     if rollout.behavior_resp_lens:
-        metrics["behavior/avg_response_chars"] = (
-            sum(rollout.behavior_resp_lens) / len(rollout.behavior_resp_lens)
+        metrics["behavior/avg_response_chars"] = sum(rollout.behavior_resp_lens) / len(
+            rollout.behavior_resp_lens
         )
 
 
@@ -348,6 +482,28 @@ def _wandb_metric_value(source_key: str, value: MetricValue) -> MetricValue:
     if source_key in _WANDB_INT_SOURCE_KEYS:
         return int(value)
     return value
+
+
+def build_runtime_wandb_metrics(
+    runtime_metrics: Mapping[str, MetricValue],
+) -> dict[str, MetricValue]:
+    """Project backend runtime counters onto their stable W&B aliases.
+
+    The standalone SFT runner uses this same projection as the RL loop so the
+    documented ``train/backend/local/*`` fields do not disappear by trainer.
+    """
+
+    wandb_metrics: dict[str, MetricValue] = {}
+    for source_key, target_key in _WANDB_METRIC_ALIASES:
+        if (
+            source_key.startswith(_WANDB_RUNTIME_SOURCE_PREFIXES)
+            and source_key in runtime_metrics
+        ):
+            wandb_metrics[target_key] = _wandb_metric_value(
+                source_key,
+                runtime_metrics[source_key],
+            )
+    return wandb_metrics
 
 
 def _add_wandb_surprisal_defaults(
@@ -371,6 +527,10 @@ def build_step_metrics(
     runtime_counters: RuntimeCounters,
     helper: TrainHelper,
 ) -> dict[str, MetricValue]:
+    prime_rl_async = config.backend == "prime_rl"
+    train_time_semantics = (
+        "submit_enqueue_latency" if prime_rl_async else "synchronous_optimizer_update"
+    )
     metrics: dict[str, MetricValue] = {
         "step": data.step,
         "algorithm_mode": config.algorithm_mode,
@@ -396,10 +556,15 @@ def build_step_metrics(
         "sepa_lambda": data.sepa_lambda,
         "sepa_gate_open": data.sepa_gate,
         "num_datums": data.num_datums,
+        "optimizer/logical_batch_sha256": rollout.optimizer_logical_batch_sha256,
+        # Keep the pre-split metric until downstream JSONL/W&B consumers have
+        # migrated to the explicitly logical name.
+        "optimizer/batch_sha256": rollout.optimizer_logical_batch_sha256,
         "max_token_hit_rate": data.max_token_hit_rate,
         "step_time_s": data.step_time,
         "sample_time_s": data.sample_time,
         "train_time_s": data.train_time,
+        "train_time_semantics": train_time_semantics,
         "batch_size": data.batch_size,
         "group_size": data.group_size,
         "bp_warmup": data.bp_warmup,
@@ -417,32 +582,55 @@ def build_step_metrics(
             else 0.0
         ),
         "sample_share": (
-            data.sample_time / data.step_time
-            if data.step_time > _TIMING_EPS
-            else 0.0
-        ),
-        "train_share": (
-            data.train_time / data.step_time
-            if data.step_time > _TIMING_EPS
-            else 0.0
+            data.sample_time / data.step_time if data.step_time > _TIMING_EPS else 0.0
         ),
         "rl/train_time_s": data.rl_train_time,
+        "rl/train_time_semantics": train_time_semantics,
         "rl/completion_tokens": rollout.rl_completion_token_count,
-        "rl/completion_surprisal_mean": (
-            echo_plan.rl_completion_surprisal_mean
+        "rl/sampled_action_tokens": rollout.sampled_completion_token_count,
+        "rl/eligible_action_tokens": rollout.eligible_completion_token_count,
+        "rl/datumized_action_tokens": rollout.rl_completion_token_count,
+        "rl/pre_optimizer_nonzero_advantage_action_tokens": (
+            rollout.pre_optimizer_nonzero_advantage_token_count
         ),
+        "rl/optimizer_nonzero_advantage_action_tokens": (
+            rollout.optimizer_nonzero_advantage_token_count
+        ),
+        # Compatibility alias. Unlike older releases, this is recomputed after
+        # trainer-side normalization/capping and therefore describes the
+        # optimizer input rather than the pre-transform rollout signal.
+        "rl/nonzero_advantage_action_tokens": (
+            rollout.optimizer_nonzero_advantage_token_count
+        ),
+        "rl/action_token_datumization_ratio": (
+            rollout.rl_completion_token_count / rollout.eligible_completion_token_count
+            if rollout.eligible_completion_token_count > 0
+            else 0.0
+        ),
+        "rl/completion_surprisal_mean": (echo_plan.rl_completion_surprisal_mean),
         "echo/enabled": int(config.echo_enabled),
         "echo/loss": data.echo_loss,
         "echo/train_time_s": data.echo_train_time,
         "echo/weight": config.echo_weight,
         "echo/allowed_tokens": echo_plan.allowed_tokens,
         "echo/reference_completion_tokens": echo_plan.reference_completion_tokens,
-        "echo/completion_surprisal_mean": (
-            echo_plan.echo_completion_surprisal_mean
-        ),
+        "echo/completion_surprisal_mean": (echo_plan.echo_completion_surprisal_mean),
         "echo/candidate_datums": rollout.echo_build.candidate_datums,
         "echo/candidate_tokens": rollout.echo_build.candidate_tokens,
         "echo/observation_mask_datums": rollout.echo_build.observation_mask_datums,
+        "echo/observation_responses": rollout.echo_build.observation_responses,
+        "echo/bridged_transition_datums": (
+            rollout.echo_build.bridged_transition_datums
+        ),
+        "echo/bridge_failures": rollout.echo_build.bridge_failures,
+        "echo/renderer_parity_failures": (rollout.echo_build.renderer_parity_failures),
+        "echo/terminal_candidate_tokens": (
+            rollout.echo_build.terminal_candidate_tokens
+        ),
+        "echo/terminal_kept_tokens": echo_plan.limit.kept_terminal_tokens,
+        "echo/explicit_transition_rollouts": (
+            rollout.echo_build.explicit_transition_rollouts
+        ),
         "echo/kept_datums": echo_plan.limit.kept_datums,
         "echo/kept_tokens": echo_plan.limit.kept_tokens,
         "echo/truncated_tokens": echo_plan.limit.truncated_tokens,
@@ -450,6 +638,8 @@ def build_step_metrics(
         "echo/skipped_first_turns": rollout.echo_build.skipped_first_turns,
         "echo/skipped_no_suffix": rollout.echo_build.skipped_no_suffix,
         "echo/skipped_low_overlap": rollout.echo_build.skipped_low_overlap,
+        "echo/split_non_prefix": rollout.echo_build.split_non_prefix,
+        "echo/eligible_rollouts": rollout.echo_eligible_rollout_count,
         "echo/skipped_bad_observation_mask": (
             rollout.echo_build.skipped_bad_observation_mask
         ),
@@ -458,6 +648,44 @@ def build_step_metrics(
         "echo/mode_collapse_guard": int(echo_plan.skipped_entropy_floor),
         "echo/joint_optimizer_step": int(data.echo_joint_optimizer_step),
     }
+    capture_manifest = str(
+        getattr(rollout, "optimizer_batch_capture_manifest", "")
+    )
+    if capture_manifest:
+        metrics.update(
+            {
+                "optimizer_batch/mode": "capture",
+                "optimizer_batch/capture_manifest": capture_manifest,
+                "optimizer_batch/payload_sha256": str(
+                    getattr(rollout, "optimizer_batch_payload_sha256", "")
+                ),
+                "optimizer_batch/manifest_sha256": str(
+                    getattr(rollout, "optimizer_batch_manifest_sha256", "")
+                ),
+                "optimizer_batch/source_config_sha256": str(
+                    getattr(rollout, "optimizer_batch_config_sha256", "")
+                ),
+                "optimizer_batch/optimizer_contract_sha256": str(
+                    getattr(rollout, "optimizer_batch_contract_sha256", "")
+                ),
+                "optimizer_batch/initial_adapter_sha256": str(
+                    getattr(
+                        rollout,
+                        "optimizer_batch_initial_adapter_sha256",
+                        "",
+                    )
+                ),
+            }
+        )
+    if prime_rl_async:
+        metrics["train_submit_enqueue_time_s"] = data.train_time
+        metrics["train_submit_enqueue_share"] = (
+            data.train_time / data.step_time if data.step_time > _TIMING_EPS else 0.0
+        )
+    else:
+        metrics["train_share"] = (
+            data.train_time / data.step_time if data.step_time > _TIMING_EPS else 0.0
+        )
     rss_mb = max_rss_mb()
     if rss_mb is not None:
         metrics["process_max_rss_mb"] = round(rss_mb, 3)

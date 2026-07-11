@@ -53,7 +53,7 @@ search_paths = ["plugins"] # module prefixes searched before normal dotted impor
 strict = true              # fail fast on plugin load/shape errors
 
 [training]
-trainer = "retrain"        # retrain | sft | command | dotted plugin path
+trainer = "retrain"        # retrain | sft | optimizer_replay | command | plugin
 seed = -1                  # -1 = no seed
 max_steps = 500
 batch_size = 8
@@ -71,6 +71,13 @@ sft_batch_size = 0         # 0 = trainer default
 sft_max_tokens = 0         # 0 = trainer default
 sft_lr = 0.0               # 0 = use lr
 sft_loss_fn = "auto"       # auto | importance_sampling | cross_entropy
+
+[optimizer_batch]
+capture = false             # one-step local source-run capture
+replay_path = ""            # manifest input for trainer = "optimizer_replay"
+expected_logical_sha256 = "" # required external pin for replay
+expected_manifest_sha256 = "" # pins manifest plus RNG-bearing payload
+allow_config_differences = [] # v1: backend.options.gradient_checkpointing only
 
 [echo]
 enabled = false             # train same-rollout environment/tool tokens in multi-turn envs
@@ -205,8 +212,18 @@ lora_freeze_a = false  # LoRA-FA-style gate: freeze lora_A and train lora_B only
 ```
 
 `train_microbatch_size` splits local PyTorch/PEFT training datums into smaller
-forward/backward chunks while preserving the token-weighted loss. This trades
-extra compute time for lower peak VRAM during `train_step`.
+forward/backward chunks while preserving the token-weighted loss. RL, SFT, and
+hybrid RL+ECHO pad each chunk only to that chunk's longest row; a long rollout
+therefore no longer forces every later microbatch to its global width. This
+trades more forward/backward launches for lower peak VRAM and less padding.
+Use the `train/backend/local/*` W&B fields (wall time, microbatch count, peak
+memory, padding avoidance, and attention-work proxy) to sweep the largest
+microbatch that fits instead of assuming that size 1 is fastest.
+Standalone SFT emits the same backend aliases, plus backend-independent
+`train/sft/sequence_length_*`, `train/sft/logical_padding_*`, and
+`train/sft/supervised_token_fraction` fields. In JSONL, local runtime fields
+remain under `backend/local_train_*` so the artifact records the raw backend
+counter names.
 `cuda_empty_cache` is allocator hygiene and does not change model outputs. It
 defaults to `true` for the local backend because multi-step cache-on runs can
 fragment the CUDA allocator even when one-step probes fit. `sample_use_cache =
@@ -356,7 +373,7 @@ Nested plugin params tables under `[algorithm]`:
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `seed` | int | `-1` | RNG seed. `-1` disables seeding |
-| `trainer` | str | `"retrain"` | Training loop: `"retrain"` for RL/RLVR, `"sft"` for standalone supervised fine-tuning, `"command"` for an external command, or a dotted plugin path |
+| `trainer` | str | `"retrain"` | Training loop: `"retrain"` for RL/RLVR, `"sft"` for standalone supervised fine-tuning, `"optimizer_replay"` for a verified one-step local systems replay, `"command"` for an external command, or a dotted plugin path |
 | `max_steps` | int | `500` | Total training steps |
 | `batch_size` | int | `8` | Number of prompts per step |
 | `group_size` | int | `16` | Completions sampled per prompt |
@@ -391,6 +408,16 @@ phase. The SFT trainer accepts JSONL rows in any of these forms:
 {"prompt":"Question: ...\nAnswer:","completion":" ..."}
 {"text":"plain next-token text"}
 ```
+
+SFT masks are accounted after the causal one-token shift. If suffix truncation
+lands inside an assistant target, retrain reserves the first retained token as
+context and supervises only later tokens. A row that retains fewer than two
+tokens, such as `sft_max_tokens = 1`, has no loss-bearing target and fails fast
+instead of logging supervised work that cannot produce a gradient.
+
+For `prompt`/`completion` rows, retrain tokenizes the fields independently and
+then concatenates their token IDs. This prevents a tokenizer's BPE merge across
+the text boundary from erasing or misclassifying the first completion token.
 
 Example SFT config:
 
@@ -494,6 +521,11 @@ path, SHA256, row count, byte count, and reason they were left external.
 path, SHA256, row count, byte count, and git tracking status, and verifies
 `sft_data_sha256` / `sft_data_rows` when they are set. This makes the config a
 portable data contract instead of just a filename.
+
+For RL configs, the same preview includes `+echo` in the condition when ECHO
+is enabled, reports its weight and token caps, and shows the environment turn
+limit, renderer, and configured task-source/task-ID guards. Use `--json` when
+these resolved launch-contract fields must be checked automatically.
 
 ### Qwen3.5 Unsloth SFT Ergonomics
 
@@ -617,16 +649,22 @@ Memory policy should stay evidence-first:
 
 ### `[echo]`
 
-ECHO is an auxiliary world-modeling objective for multi-turn verifiers
-environments. It composes with any configured retrain algorithm: the algorithm
+ECHO is an auxiliary world-modeling objective for multi-turn environments. It
+composes with any configured retrain algorithm: the algorithm
 still determines sampled assistant-token advantages, while ECHO adds a
-supervised environment-token mask from the same rollout. When enabled, the
-verifiers bridge records exact prompt-aligned masks for rendered messages whose
-roles are `tool`, `environment`, or `observation`. Those masks are preferred so
-only observed environment/tool tokens receive the auxiliary loss. Prompt-suffix
-extraction remains a fallback for older renderers that cannot expose a stable
-role-aligned mask. ECHO is only enabled for backends that can compute the RL
-and ECHO losses from the same actor forward/backward pass.
+supervised environment-token mask from the same rollout. The native OpenEnv
+provider consumes each newly model-visible response immediately after the
+action, including terminal responses, and uses Prime Intellect's pinned
+`renderers` bridge to extend the exact sampled prompt/action token prefix. One
+combined transition row carries the GRPO mask on action tokens and the ECHO mask
+only on that response's body. Next-turn sampling still uses the ordinary full
+chat render, so a message-based evaluation harness sees the same protocol.
+
+For verifiers environments without the native one-shot response hook, retrain
+keeps the compatibility path: exact prompt-aligned masks for `tool`,
+`environment`, or `observation` roles, followed by conservative prompt-suffix
+extraction. A failed native token bridge never drops sampled action tokens; it
+produces an action-only GRPO row and increments `echo/bridge_failures`.
 
 For `loss_fn = "cross_entropy"`, retrain follows the ECHO normalization shape:
 selected environment-token negative log-probabilities are divided by the
@@ -664,6 +702,13 @@ output inside the same observation-role message, retrain cannot separate them at
 token level; render warnings as a different role/message if they should be
 excluded from ECHO.
 
+For native OpenEnv, also require `echo/observation_responses > 0`,
+`echo/bridged_transition_datums > 0`, and `echo/bridge_failures = 0` in a
+mechanism gate. `echo/renderer_parity_failures` means the official renderer did
+not reproduce the tokenizer's sampling prompt and retrain refused to guess.
+`echo/terminal_candidate_tokens` counts terminal targets before the step cap;
+only `echo/terminal_kept_tokens > 0` proves terminal feedback reached the loss.
+
 ECHO candidates are collected before reward-uniform groups are skipped for RL.
 This keeps the paper's intended signal: all-failed rollouts can still train the
 environment-prediction objective even when they provide no policy-gradient
@@ -685,7 +730,7 @@ currently compute the RL and ECHO losses from one shared actor pass.
 | `max_tokens_per_step` | int | `2048` | Absolute cap on positive ECHO tokens per step |
 | `max_token_ratio` | float | `0.5` | Cap positive ECHO tokens to this fraction of RL completion tokens, so ECHO cannot dominate the step |
 | `entropy_floor` | float | `0.01` | Skip the ECHO step when sampled-completion mean surprisal is below this floor; this is a mode-collapse guard |
-| `min_prompt_overlap` | float | `0.5` | Minimum overlap required between previous prompt+completion and the next prompt before suffix extraction is trusted |
+| `min_prompt_overlap` | float | `0.5` | Compatibility-only minimum overlap for environments that do not expose native one-shot observation messages |
 
 ### `[optimizer]`
 
@@ -694,6 +739,35 @@ currently compute the RL and ECHO losses from one shared actor pass.
 | `beta1` | float | `0.9` | AdamW beta1 |
 | `beta2` | float | `0.95` | AdamW beta2 |
 | `eps` | float | `1e-8` | AdamW epsilon |
+
+### `[optimizer_batch]`
+
+This section supports exact-input one-GPU systems ablations. See
+[Exact-Input Optimizer-Batch Replay](optimizer-batch-replay.md) for the full
+workflow and evidence gate.
+
+| TOML key | Type | Default | Description |
+|----------|------|---------|-------------|
+| `capture` | bool | `false` | Capture the exact post-transform logical batch in a normal one-step local RL run |
+| `replay_path` | str | `""` | Captured `.manifest.json` input; required for `trainer = "optimizer_replay"` |
+| `expected_logical_sha256` | str | `""` | Required 64-character external pin for the captured logical batch |
+| `expected_manifest_sha256` | str | `""` | Required 64-character external pin for the exact manifest and its RNG-bearing payload |
+| `allow_config_differences` | list[str] | `[]` | Explicit optimizer-contract differences. V1 permits only `backend.options.gradient_checkpointing` |
+
+Capture/replay v1 requires `backend = "local"`, exactly one device,
+`inference.engine = "pytorch"`, `max_steps = 1`, `save_every = 0`,
+`sft_warmup_steps = 0`, backpressure disabled, and a local adapter identified
+by `resume.from`. Capture additionally requires the initialization resume state
+to contain `step = -1`, proving that step zero executes once. Replay skips
+data, environments, rollouts, and sampling; it is not a quality-evaluation
+mode.
+
+Exact manifest, logical/effective rows, RNG, initial adapter, config contract,
+and loss admit runtime/memory comparisons with repeated timing. They do not
+guarantee bitwise-identical CUDA updates. That stronger claim additionally
+requires identical final adapter hashes across source and repeated
+same-condition replays. Evaluate the source-run adapter, not replay outputs,
+for model quality.
 
 ### `[lora]`
 
@@ -715,7 +789,7 @@ currently compute the RL and ECHO losses from one shared actor pass.
 | `provider` | str | `""` | Optional environment provider: `"verifiers"` for verifiers environments, `"openenv"` for a running OpenEnv gym server |
 | `id` | str | `""` | Environment ID (for example `primeintellect/gsm8k`) or, for `openenv`, the server base URL (for example `http://localhost:8765`) |
 | `args` | table / str | `{}` | Environment kwargs. Prefer TOML table (`args = { split = "train" }`); JSON string is also accepted |
-| `max_turns` | int | `-1` | Multi-turn safety cap. `-1` means use environment defaults |
+| `max_turns` | int | `-1` | Multi-turn safety cap. For OpenEnv, a positive value is also sent to every preload and live `reset`; `-1` uses the server default |
 | `auto_install` | bool | `false` | If true, auto-install missing Prime Hub environments before loading |
 | `rollout_env_workers` | int | `1` | Max concurrent async environment jobs for multi-turn setup/render/step stages |
 | `rollout_buffer_size` | int | `0` | Max in-flight rollout env jobs; `0` uses the current group size |
@@ -735,12 +809,32 @@ install required. Requires the `websockets` package (`pip install retrain[openen
   rendered `reset(seed)` observation. `[data] max_examples` caps the count
   (default 100 when unset).
 - Rewards are the per-episode sum of step rewards from the server.
-- `args` accepts:
-  `renderer` — dotted path to a callable turning observations into chat
-  messages (renderers written for verifiers' OpenEnv integration work
+- `args` accepts `renderer` — dotted path to a callable turning observations
+  into chat messages (renderers written for verifiers' OpenEnv integration work
   unchanged); the default renderer JSON-dumps observations and states the
-  action schema on reset. `message_timeout_s` — WebSocket response timeout
-  (default 300).
+  action schema on reset. `message_timeout_s` sets the WebSocket response
+  timeout (default 300).
+- For contamination-sensitive training, `expected_task_source` and
+  `expected_task_ids` enable fail-closed reset provenance checks. A guarded
+  reset observation must expose consistent `task_id` and `task_source` fields
+  at top level, in `info`, or in `metadata`. Preload seeds must cover exactly
+  the configured task-ID set. Each live rollout must then return the same task
+  identity that its seed returned during preload.
+- A positive `max_turns` is forwarded to both preload and live resets so the
+  rendered prompt, server episode, and retrain rollout cap share one horizon.
+  Non-positive values are not sent, preserving servers that use their own
+  default.
+
+Example guarded task set:
+
+```toml
+[environment]
+provider = "openenv"
+id = "http://localhost:8765"
+max_turns = 16
+args = { expected_task_source = "factory", expected_task_ids = ["task-3000", "task-3001"] }
+```
+
 - Completions must be a single JSON action object; malformed completions
   receive a corrective observation instead of crashing the rollout.
 - MCP tool environments are not supported on this provider; use the

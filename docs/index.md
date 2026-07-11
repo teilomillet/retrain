@@ -57,7 +57,9 @@ retrain
 │   │   ├── protocol.py # Runner protocol
 │   │   ├── retain.py   # Built-in retrain loop runner
 │   │   ├── command.py  # Shell-command runner
-│   │   └── sft.py      # Standalone SFT runner
+│   │   ├── sft.py      # Standalone SFT runner
+│   │   └── optimizer_replay.py # Exact one-step systems replay runner
+│   ├── optimizer_batch/ # Capture codec, contracts, RNG, and atomic storage
 │   ├── flow.py         # Construct-and-trace of the training flow
 │   ├── generations.py  # Generation log selection and surprisal payloads
 │   ├── prompts.py      # Prompt batch selection for training steps

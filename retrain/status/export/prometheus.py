@@ -32,6 +32,9 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
             "run": snapshot.run,
             "phase": snapshot.phase,
             "trainer": snapshot.trainer or "unknown",
+            "train_time_semantics": (
+                snapshot.latest_train_time_semantics or "unspecified"
+            ),
             "path": snapshot.path,
         }
         lines.append(_metric_line("soma_retrain_run_info", 1, labels))
@@ -101,9 +104,21 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
         ),
         (
             "soma_retrain_latest_train_share",
-            "Latest training share of step time.",
+            "Latest synchronous training share of step time.",
             "gauge",
             lambda s: s.latest_train_share,
+        ),
+        (
+            "soma_retrain_latest_train_submit_enqueue_time_seconds",
+            "Latest PRIME-RL submit/enqueue latency.",
+            "gauge",
+            lambda s: s.latest_train_submit_enqueue_time_s,
+        ),
+        (
+            "soma_retrain_latest_train_submit_enqueue_share",
+            "Latest PRIME-RL submit/enqueue share of step time.",
+            "gauge",
+            lambda s: s.latest_train_submit_enqueue_share,
         ),
         (
             "soma_retrain_latest_process_max_rss_megabytes",

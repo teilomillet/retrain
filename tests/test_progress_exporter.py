@@ -45,6 +45,7 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
                 "tokens_per_second": 128.0,
                 "sample_share": 0.7,
                 "train_share": 0.2,
+                "train_time_semantics": "synchronous_optimizer_update",
                 "process_max_rss_mb": 2048.0,
             }
         ],
@@ -96,6 +97,9 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
     assert snapshot.latest_tokens_per_second == 128.0
     assert snapshot.latest_sample_share == 0.7
     assert snapshot.latest_train_share == 0.2
+    assert snapshot.latest_train_time_semantics == "synchronous_optimizer_update"
+    assert snapshot.latest_train_submit_enqueue_time_s is None
+    assert snapshot.latest_train_submit_enqueue_share is None
     assert snapshot.latest_process_max_rss_mb == 2048.0
     assert snapshot.recent_dispatch_count == 2
     assert snapshot.recent_result_count == 2
@@ -113,6 +117,35 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
         "root": str(tmp_path),
         "runs": [snapshot.to_dict()],
     }
+
+
+def test_prime_rl_export_surfaces_enqueue_metrics_without_train_share(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "prime-rl"
+    run_dir.mkdir()
+    _write_jsonl(
+        run_dir / "metrics.jsonl",
+        [
+            {
+                "step": 0,
+                "train_time_semantics": "submit_enqueue_latency",
+                "train_submit_enqueue_time_s": 0.4,
+                "train_submit_enqueue_share": 0.08,
+            }
+        ],
+    )
+
+    snapshot = collect_run_snapshots(tmp_path)[0]
+    prometheus = render_prometheus_text([snapshot])
+
+    assert snapshot.latest_train_share is None
+    assert snapshot.latest_train_time_semantics == "submit_enqueue_latency"
+    assert snapshot.latest_train_submit_enqueue_time_s == 0.4
+    assert snapshot.latest_train_submit_enqueue_share == 0.08
+    assert "soma_retrain_latest_train_submit_enqueue_time_seconds" in prometheus
+    assert "soma_retrain_latest_train_submit_enqueue_share" in prometheus
+    assert 'train_time_semantics="submit_enqueue_latency"' in prometheus
 
 
 def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> None:

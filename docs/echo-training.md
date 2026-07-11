@@ -1,10 +1,13 @@
 # ECHO Training Optimization
 
 ECHO trains the model to predict environment, tool, or observation tokens from
-the same rollout row used for policy learning. Agent workloads make this row
-long: the model emits an action, waits for a tool reply, emits another action,
-and so on. Most tokens in that history are context, while only a small subset
-carry RL or ECHO loss.
+the same transition row used for policy learning. For native OpenEnv, retrain
+uses Prime Intellect `renderers==0.1.7` to preserve the exact sampled
+prompt/action prefix, then appends and masks only the current model-visible
+environment response. It captures the response immediately after `step`, so
+terminal output is not lost. Next-turn behavior sampling remains on the normal
+full chat render to match message-based evaluation. Most tokens in these rows
+are context, while only a small subset carry RL or ECHO loss.
 
 The optimization in retrain is deliberately exact for the default ECHO path. It
 does not replace training prefixes with detached KV cache. Instead, it keeps the

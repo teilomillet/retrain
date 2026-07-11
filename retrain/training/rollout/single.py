@@ -64,8 +64,7 @@ def run_singleturn(
         )
         # Separate into standard 2-tuples + entropy side channel
         all_group_sequences = [
-            [(ids, lps) for ids, lps, _ent in group]
-            for group in enriched_sequences
+            [(ids, lps) for ids, lps, _ent in group] for group in enriched_sequences
         ]
         precomputed_entropies_batch = [
             [ent if ent is not None else [] for _ids, _lps, ent in group]
@@ -130,6 +129,8 @@ def run_singleturn(
 
         for sample in decoded_group:
             acc.total_completions += 1
+            acc.sampled_completion_token_count += len(sample.token_ids)
+            acc.sampled_completion_surprisal_sum += sum(-lp for lp in sample.logprobs)
             if len(sample.token_ids) >= config.max_tokens:
                 acc.max_token_hits += 1
 
@@ -173,11 +174,14 @@ def run_singleturn(
             acc.datum_logprobs.append(padded_logprobs)
             acc.datum_advantages.append(padded_advantages)
             acc.datum_echo_advantages.append([0.0] * len(full_tokens))
+            acc.datum_echo_terminal_masks.append([0] * len(full_tokens))
             acc.datum_echo_full_observation_counts.append(0)
-            acc.rl_completion_token_count += len(sample.token_ids)
-            acc.rl_completion_surprisal_sum += sum(
-                -lp for lp in sample.logprobs
+            acc.eligible_completion_token_count += len(sample.token_ids)
+            acc.pre_optimizer_nonzero_advantage_token_count += sum(
+                abs(value) > 0.0 for value in token_advs
             )
+            acc.rl_completion_token_count += len(sample.token_ids)
+            acc.rl_completion_surprisal_sum += sum(-lp for lp in sample.logprobs)
 
         generation_entries: list[dict[str, object]] = []
         selected_generation_indices = (

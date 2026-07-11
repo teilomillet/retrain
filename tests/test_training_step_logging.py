@@ -165,7 +165,13 @@ def test_record_training_step_writes_all_step_outputs(capsys) -> None:
         ),
         adv_results=[AdvantageResult(extra_metrics={"dg_eta": 0.6})],
         echo_build=EchoBuildStats(candidate_datums=1, candidate_tokens=4),
+        sampled_completion_token_count=4,
+        eligible_completion_token_count=4,
+        pre_optimizer_nonzero_advantage_token_count=4,
+        optimizer_nonzero_advantage_token_count=4,
         rl_completion_token_count=4,
+        echo_eligible_rollout_count=1,
+        optimizer_logical_batch_sha256="b" * 64,
         rollout_timing_metrics={},
         sample_time_s=1.25,
         behavior_turns=0,
@@ -242,11 +248,22 @@ def test_record_training_step_writes_all_step_outputs(capsys) -> None:
     assert metrics_logger.entries[0]["num_datums"] == 2
     assert metrics_logger.entries[0]["running_correct_rate"] == pytest.approx(0.5)
     assert metrics_logger.entries[0]["backend/tokens_s"] == pytest.approx(9.0)
+    assert (
+        metrics_logger.entries[0]["optimizer/logical_batch_sha256"] == "b" * 64
+    )
+    assert metrics_logger.entries[0]["optimizer/batch_sha256"] == "b" * 64
     assert steps_logger.entries[0]["correct_count"] == 1
     assert steps_logger.entries[0]["total_count"] == 2
     assert steps_logger.entries[0]["dg_eta"] == pytest.approx(0.6)
     assert wandb_run.entries[0][1] == 7
     assert wandb_run.entries[0][0]["train/dg_eta"] == pytest.approx(0.6)
+    assert (
+        wandb_run.entries[0][0]["train/optimizer/logical_batch_sha256"]
+        == "b" * 64
+    )
+    assert (
+        wandb_run.entries[0][0]["train/optimizer/batch_sha256"] == "b" * 64
+    )
     assert (
         wandb_run.entries[0][0][
             "train/recoverability/checkpoint_artifacts_enabled"

@@ -23,6 +23,13 @@ class VerifiersTurnSample:
     completion_logprobs: list[float]
     completion_text: str
     observation_mask: list[int] | None = None
+    echo_observation_capture_supported: bool = False
+    post_observation_ids: list[int] | None = None
+    post_observation_mask: list[int] | None = None
+    post_observation_seen: bool = False
+    post_observation_bridge_failed: bool = False
+    echo_renderer_parity_failed: bool = False
+    post_observation_terminal: bool = False
 
 
 @dataclass
@@ -111,9 +118,7 @@ class RolloutScheduler:
         async def run_one(pos: int, item: object) -> tuple[int, object]:
             buffer_wait_started = time.perf_counter()
             await buffer_sem.acquire()
-            timing.scheduler_buffer_wait_s += (
-                time.perf_counter() - buffer_wait_started
-            )
+            timing.scheduler_buffer_wait_s += time.perf_counter() - buffer_wait_started
             worker_wait_started = time.perf_counter()
             await env_sem.acquire()
             timing.scheduler_wait_s += time.perf_counter() - worker_wait_started
@@ -126,10 +131,16 @@ class RolloutScheduler:
                 env_sem.release()
                 buffer_sem.release()
 
+        pending_results = await asyncio.gather(
+            *(run_one(pos, item) for pos, item in enumerate(items)),
+            return_exceptions=True,
+        )
+        for result in pending_results:
+            if isinstance(result, BaseException):
+                raise result
+
         slots: list[object | None] = [None] * len(items)
-        for pos, result in await asyncio.gather(
-            *(run_one(pos, item) for pos, item in enumerate(items))
-        ):
+        for pos, result in cast(list[tuple[int, object]], pending_results):
             slots[pos] = result
         return [cast(object, result) for result in slots]
 
@@ -161,9 +172,7 @@ def sample_active_rollouts(
     top_p: float,
 ) -> list[list[tuple[list[int], list[float]]]]:
     """Sample active rollout prompts, batching only equal-temperature prompts."""
-    sampled_groups: list[list[tuple[list[int], list[float]]]] = [
-        [] for _ in active
-    ]
+    sampled_groups: list[list[tuple[list[int], list[float]]]] = [[] for _ in active]
     batch_positions: list[int] = []
     batch_prompt_ids: list[list[int]] = []
     batch_temperature: float | None = None

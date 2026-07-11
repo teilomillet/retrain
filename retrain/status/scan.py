@@ -89,7 +89,10 @@ class RunSummary:
     latest_step_time_s: float = 0.0
     tokens_per_second: float = 0.0
     sample_share: float = 0.0
-    train_share: float = 0.0
+    train_share: float | None = None
+    train_time_semantics: str = ""
+    train_submit_enqueue_time_s: float | None = None
+    train_submit_enqueue_share: float | None = None
     process_max_rss_mb: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
@@ -113,6 +116,9 @@ class RunSummary:
             "tokens_per_second": self.tokens_per_second,
             "sample_share": self.sample_share,
             "train_share": self.train_share,
+            "train_time_semantics": self.train_time_semantics,
+            "train_submit_enqueue_time_s": self.train_submit_enqueue_time_s,
+            "train_submit_enqueue_share": self.train_submit_enqueue_share,
             "process_max_rss_mb": self.process_max_rss_mb,
         }
 
@@ -236,7 +242,17 @@ def scan_run(run_dir: Path) -> RunSummary | None:
         summary.latest_step_time_s = _metric_float(last_entry, "step_time_s")
         summary.tokens_per_second = _metric_float(last_entry, "tokens_per_second")
         summary.sample_share = _metric_float(last_entry, "sample_share")
-        summary.train_share = _metric_float(last_entry, "train_share")
+        summary.train_share = float_or_none(last_entry.get("train_share"))
+        summary.train_time_semantics = _metric_str(
+            last_entry,
+            "train_time_semantics",
+        )
+        summary.train_submit_enqueue_time_s = float_or_none(
+            last_entry.get("train_submit_enqueue_time_s")
+        )
+        summary.train_submit_enqueue_share = float_or_none(
+            last_entry.get("train_submit_enqueue_share")
+        )
         summary.process_max_rss_mb = _metric_float(last_entry, "process_max_rss_mb")
     summary.wall_time_s = metrics.wall_time_s
 

@@ -11,6 +11,7 @@ import pytest
 
 from retrain.environments.openenv.client import (
     OpenEnvClient,
+    OpenEnvServerError,
     StepResult,
     _default_connect,
     http_url,
@@ -90,6 +91,38 @@ class TestRequests:
         )
         with pytest.raises(RuntimeError, match="bad action.*E42"):
             asyncio.run(client.step({}))
+
+    def test_server_error_preserves_structured_code(self):
+        client, _ = _client(
+            [
+                {
+                    "type": "error",
+                    "data": {"message": "Invalid message", "code": "VALIDATION_ERROR"},
+                }
+            ]
+        )
+        with pytest.raises(OpenEnvServerError) as raised:
+            asyncio.run(client.step({}))
+        assert raised.value.code == "VALIDATION_ERROR"
+        assert raised.value.server_message == "Invalid message"
+
+    def test_capacity_error_explains_worker_and_server_remediation(self):
+        client, _ = _client(
+            [
+                {
+                    "type": "error",
+                    "data": {
+                        "message": "Server at capacity: 1/1 sessions active",
+                        "code": "CAPACITY_REACHED",
+                    },
+                }
+            ]
+        )
+        with pytest.raises(
+            RuntimeError,
+            match=r"CAPACITY_REACHED.*rollout_env_workers.*matching capacity",
+        ):
+            asyncio.run(client.reset())
 
     def test_close_is_idempotent_and_closes_transport(self):
         client, transport = _client(

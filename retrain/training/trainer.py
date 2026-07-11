@@ -15,6 +15,12 @@ from retrain.advantages import apply_batch_advantage_normalization
 from retrain.training.backpressure import (
     StepObservation,
 )
+from retrain.training.batch_digest import logical_optimizer_batch_sha256
+from retrain.training.optimizer_batch import (
+    OptimizerBatch,
+    preflight_optimizer_batch_capture,
+    save_optimizer_batch_capture,
+)
 from retrain.config import TrainConfig
 from retrain.training.echo import run_rl_echo_train_step
 from retrain.training.flow import (
@@ -72,6 +78,12 @@ from retrain.environments.verifiers import (
 
 def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     """Main training loop -- fully self-contained. Returns final adapter path."""
+
+    capture_initial_adapter = (
+        preflight_optimizer_batch_capture(config)
+        if config.optimizer_batch_capture
+        else None
+    )
 
     console.print_config_summary(config)
 
@@ -235,6 +247,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         start_step = 0
         tl_grpo_ema: float | None = config.tl_grpo_ema_init if config.tl_grpo else None
         delight_eta_ema: float | None = None
+        optimizer_batch_captured = False
 
         # -----------------------------------------------------------------------
         # 10b. Resume from checkpoint (if requested)
@@ -446,6 +459,11 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     apply_advantage_cap(acc.datum_advantages, config.adv_clip_max)
                 )
 
+            # Rollout telemetry is captured before trainer-side batch
+            # normalization/capping. Recount here so the optimizer-signal
+            # metric describes the exact advantages submitted to the backend.
+            acc.refresh_optimizer_advantage_token_count()
+
             echo_plan = prepare_echo_step_plan(config, acc)
 
             rl_has_signal = has_nonzero_advantage(acc.datum_advantages)
@@ -466,6 +484,69 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 backpressure.observe(obs)
                 continue
 
+            acc.optimizer_logical_batch_sha256 = logical_optimizer_batch_sha256(
+                acc.datum_tokens,
+                acc.datum_logprobs,
+                acc.datum_advantages,
+                echo_observation_masks=(
+                    acc.datum_echo_advantages if echo_has_datums else None
+                ),
+                echo_full_observation_counts=(
+                    acc.datum_echo_full_observation_counts
+                    if echo_has_datums
+                    else None
+                ),
+                echo_rollout_denominator=(
+                    acc.echo_eligible_rollout_count if echo_has_datums else None
+                ),
+            )
+            if config.optimizer_batch_capture:
+                assert capture_initial_adapter is not None
+                captured = save_optimizer_batch_capture(
+                    log_path,
+                    step=batch_idx,
+                    batch=OptimizerBatch(
+                        tokens=acc.datum_tokens,
+                        old_logprobs=acc.datum_logprobs,
+                        advantages=acc.datum_advantages,
+                        echo_advantages=(
+                            acc.datum_echo_advantages if echo_has_datums else None
+                        ),
+                        echo_full_observation_counts=(
+                            acc.datum_echo_full_observation_counts
+                            if echo_has_datums
+                            else None
+                        ),
+                        echo_rollout_denominator=(
+                            acc.echo_eligible_rollout_count
+                            if echo_has_datums
+                            else None
+                        ),
+                    ),
+                    config=config,
+                    initial_adapter=capture_initial_adapter,
+                )
+                if (
+                    captured.logical_batch_sha256
+                    != acc.optimizer_logical_batch_sha256
+                ):
+                    raise RuntimeError(
+                        "optimizer-batch capture changed the logical batch digest."
+                    )
+                acc.optimizer_batch_capture_manifest = str(
+                    captured.manifest_path.resolve()
+                )
+                acc.optimizer_batch_payload_sha256 = captured.payload_sha256
+                acc.optimizer_batch_manifest_sha256 = captured.manifest_sha256
+                acc.optimizer_batch_config_sha256 = captured.config_sha256
+                acc.optimizer_batch_contract_sha256 = (
+                    captured.optimizer_contract_sha256
+                )
+                acc.optimizer_batch_initial_adapter_sha256 = (
+                    captured.initial_adapter_sha256
+                )
+                optimizer_batch_captured = True
+
             print(
                 f"Step {batch_idx}: submitting {num_datums} RL datums "
                 f"and {echo_plan.limit.kept_datums if echo_has_datums else 0} ECHO datums..."
@@ -481,6 +562,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 echo_loss_fn=config.echo_loss_fn,
                 lr=config.lr,
                 weight_decay=config.weight_decay,
+                echo_rollout_denominator=acc.echo_eligible_rollout_count,
             )
             train_time = time.perf_counter() - train_start
             rl_train_time = train_time if num_datums > 0 else 0.0
@@ -591,6 +673,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     checkpoint_path=checkpoint_path,
                     step=batch_idx,
                 )
+
+        if config.optimizer_batch_capture and not optimizer_batch_captured:
+            raise RuntimeError(
+                "optimizer-batch capture completed no optimizer update; the "
+                "single source batch had no informative RL or ECHO signal."
+            )
 
         # -----------------------------------------------------------------------
         # Final

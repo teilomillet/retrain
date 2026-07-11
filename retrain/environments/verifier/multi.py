@@ -12,6 +12,12 @@ from typing import TYPE_CHECKING, cast
 from retrain.environments import branch as tl_branch
 from retrain.environments import load as env_load
 from retrain.environments import prompt as prompt_utils
+from retrain.environments.echo_tokens import (
+    EchoTokenBridgeError,
+    EchoTokenRenderer,
+    bridge_observation_tokens,
+    create_echo_token_renderer,
+)
 from retrain.environments.rollout import (
     RolloutScheduler,
     VerifiersRolloutTiming,
@@ -68,6 +74,8 @@ def run_multiturn_group(
     temperature_spread: float = 0.0,
     rollout_env_workers: int = 1,
     rollout_buffer_size: int = 0,
+    capture_echo_transitions: bool = False,
+    echo_token_renderer: EchoTokenRenderer | None = None,
     verifiers_loader: Callable[[], types.ModuleType | None] = client.optional,
     env_client_factory: Callable[[], object | None] = client.make,
 ) -> tuple[
@@ -95,7 +103,25 @@ def run_multiturn_group(
         vf = verifiers_loader()
         env_typed = cast(MultiTurnEnvironment, env)
         tokenizer_typed = cast(Tokenizer, tokenizer)
+        pop_echo_observation_messages = getattr(
+            env_typed,
+            "pop_echo_observation_messages",
+            None,
+        )
+        echo_capture_supported = capture_echo_transitions and callable(
+            pop_echo_observation_messages
+        )
+        active_echo_renderer = echo_token_renderer
+        echo_renderer_parity_failed = False
+        if echo_capture_supported and active_echo_renderer is None:
+            try:
+                active_echo_renderer = create_echo_token_renderer(tokenizer)
+            except (AssertionError, RuntimeError, TypeError, ValueError):
+                # Rollouts and GRPO remain valid; explicit bridge-failure metrics
+                # prevent this from being mistaken for a working ECHO update.
+                active_echo_renderer = None
         states: list[StateDict] = []
+        initialized_states: list[StateDict] = []
         per_rollout_turns: list[list[VerifiersTurnSample]] = [
             [] for _ in range(num_rollouts)
         ]
@@ -112,7 +138,7 @@ def run_multiturn_group(
             cleanup_error: Exception | None = None
             active_exception = sys.exc_info()[0] is not None
             cleanup_openenv_state = getattr(env_typed, "_cleanup_openenv_state", None)
-            for state in states:
+            for state in initialized_states:
                 try:
                     if callable(cleanup_openenv_state):
                         await cleanup_openenv_state(state)
@@ -130,6 +156,7 @@ def run_multiturn_group(
         )
 
         try:
+
             async def init_one(raw_idx: object) -> StateDict:
                 i = int(cast(int, raw_idx))
                 input_payload: dict[str, object] = {
@@ -148,6 +175,9 @@ def run_multiturn_group(
                     sampling_args=None,
                 )
                 state = await env_typed.setup_state(state)
+                # Keep cleanup ownership even if a later sibling fails setup
+                # before map_ordered can return the complete state list.
+                initialized_states.append(state)
                 rollout_timing.init_state_s += time.perf_counter() - init_started
                 return state
 
@@ -168,6 +198,7 @@ def run_multiturn_group(
                 async def render_active(
                     raw_item: object,
                 ) -> tuple[int, PromptLike, list[int], list[int] | None] | None:
+                    nonlocal echo_renderer_parity_failed
                     idx, state = cast(tuple[int, StateDict], raw_item)
                     if await env_typed.is_completed(state):
                         return None
@@ -190,6 +221,22 @@ def run_multiturn_group(
                         prompt_messages,
                         prompt_ids,
                     )
+                    if (
+                        echo_capture_supported
+                        and active_echo_renderer is not None
+                        and not echo_renderer_parity_failed
+                        and isinstance(prompt_messages, list)
+                    ):
+                        try:
+                            renderer_prompt_ids = active_echo_renderer.render_ids(
+                                [dict(message) for message in prompt_messages],
+                                add_generation_prompt=True,
+                            )
+                        except (AssertionError, RuntimeError, TypeError, ValueError):
+                            echo_renderer_parity_failed = True
+                        else:
+                            if list(renderer_prompt_ids) != prompt_ids:
+                                echo_renderer_parity_failed = True
                     rollout_timing.prompt_encode_s += (
                         time.perf_counter() - encode_started
                     )
@@ -223,9 +270,7 @@ def run_multiturn_group(
                     max_tokens=max_tokens,
                     top_p=top_p,
                 )
-                rollout_timing.generation_s += (
-                    time.perf_counter() - generation_started
-                )
+                rollout_timing.generation_s += time.perf_counter() - generation_started
                 # Empty sampler groups can happen when prompts leave no generation budget.
                 completion_ids_batch = [
                     list(group[0][0]) if group else [] for group in sampled_groups
@@ -303,6 +348,42 @@ def run_multiturn_group(
                         states[idx],
                         rollout_timing.env_timing_s,
                     )
+                    observation_messages: list[dict[str, object]] = []
+                    post_observation_ids: list[int] | None = None
+                    post_observation_mask: list[int] | None = None
+                    post_observation_bridge_failed = False
+                    if echo_capture_supported:
+                        assert callable(pop_echo_observation_messages)
+                        raw_messages = pop_echo_observation_messages(states[idx])
+                        if not isinstance(raw_messages, list):
+                            raise TypeError(
+                                "ECHO observation capture must return a messages list."
+                            )
+                        for raw_message in raw_messages:
+                            if not isinstance(raw_message, dict):
+                                raise TypeError(
+                                    "ECHO observation messages must be mappings."
+                                )
+                            observation_messages.append(dict(raw_message))
+                        if observation_messages:
+                            if (
+                                active_echo_renderer is None
+                                or echo_renderer_parity_failed
+                            ):
+                                post_observation_bridge_failed = True
+                            else:
+                                try:
+                                    transition = bridge_observation_tokens(
+                                        active_echo_renderer,
+                                        prompt_ids=list(prompt_ids),
+                                        completion_ids=list(completion_ids),
+                                        observation_messages=observation_messages,
+                                    )
+                                except EchoTokenBridgeError:
+                                    post_observation_bridge_failed = True
+                                else:
+                                    post_observation_ids = transition.token_ids
+                                    post_observation_mask = transition.observation_mask
                     turn_sample = VerifiersTurnSample(
                         prompt_ids=list(prompt_ids),
                         completion_ids=list(completion_ids),
@@ -313,6 +394,13 @@ def run_multiturn_group(
                             if observation_mask is not None
                             else None
                         ),
+                        echo_observation_capture_supported=echo_capture_supported,
+                        post_observation_ids=post_observation_ids,
+                        post_observation_mask=post_observation_mask,
+                        post_observation_seen=bool(observation_messages),
+                        post_observation_bridge_failed=(post_observation_bridge_failed),
+                        echo_renderer_parity_failed=echo_renderer_parity_failed,
+                        post_observation_terminal=bool(states[idx].get("openenv_done")),
                     )
                     return idx, turn_sample, len(completion_ids)
 
@@ -376,8 +464,7 @@ def run_multiturn_group(
                 coerce.float_list(s.get("turn_advantages")) for s in states
             ]
             turn_logs = [
-                cast(list[dict[str, object]], s.get("turn_log") or [])
-                for s in states
+                cast(list[dict[str, object]], s.get("turn_log") or []) for s in states
             ]
             rollout_timing.total_s = time.perf_counter() - rollout_started
             return (

@@ -210,6 +210,13 @@ def _trainer_retrain(config: TrainConfig) -> TrainingRunner:
     return RetainRunner()
 
 
+@trainer.register("optimizer_replay")
+def _trainer_optimizer_replay(config: TrainConfig) -> TrainingRunner:
+    from retrain.training.runner import OptimizerReplayRunner
+
+    return OptimizerReplayRunner()
+
+
 @trainer.register("sft")
 def _trainer_sft(config: TrainConfig) -> TrainingRunner:
     from retrain.training.runner import SftRunner

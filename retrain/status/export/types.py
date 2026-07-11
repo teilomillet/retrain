@@ -28,6 +28,9 @@ class RunSnapshot:
     latest_tokens_per_second: float | None
     latest_sample_share: float | None
     latest_train_share: float | None
+    latest_train_time_semantics: str
+    latest_train_submit_enqueue_time_s: float | None
+    latest_train_submit_enqueue_share: float | None
     latest_process_max_rss_mb: float | None
     metrics_age_seconds: float | None
     sample_event_age_seconds: float | None

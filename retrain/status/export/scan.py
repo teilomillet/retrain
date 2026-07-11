@@ -205,6 +205,22 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         latest_tokens_per_second=float_or_none(latest_metrics.get("tokens_per_second")) if latest_metrics else None,
         latest_sample_share=float_or_none(latest_metrics.get("sample_share")) if latest_metrics else None,
         latest_train_share=float_or_none(latest_metrics.get("train_share")) if latest_metrics else None,
+        latest_train_time_semantics=(
+            str(latest_metrics.get("train_time_semantics"))
+            if latest_metrics
+            and isinstance(latest_metrics.get("train_time_semantics"), str)
+            else ""
+        ),
+        latest_train_submit_enqueue_time_s=(
+            float_or_none(latest_metrics.get("train_submit_enqueue_time_s"))
+            if latest_metrics
+            else None
+        ),
+        latest_train_submit_enqueue_share=(
+            float_or_none(latest_metrics.get("train_submit_enqueue_share"))
+            if latest_metrics
+            else None
+        ),
         latest_process_max_rss_mb=float_or_none(latest_metrics.get("process_max_rss_mb")) if latest_metrics else None,
         metrics_age_seconds=metrics_age_seconds,
         sample_event_age_seconds=sample_event_age_seconds,

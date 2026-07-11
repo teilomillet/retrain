@@ -14,6 +14,10 @@ from retrain.kernels.logprobs import (
     packed_quantized_linear_target_logprobs,
     unpack_quantized_weight,
 )
+from retrain.training.batch_digest import (
+    local_rl_effective_rows_sha256,
+    local_sft_effective_rows_sha256,
+)
 
 
 class _TinyLM(torch.nn.Module):
@@ -222,6 +226,112 @@ def test_local_echo_mask_train_step_updates_model_with_real_logits(monkeypatch) 
     assert math.isfinite(float(echo_loss))
     assert float(echo_loss) > 0.0
     assert changed
+
+
+def test_local_echo_microbatch_padding_matches_full_batch_update() -> None:
+    torch.manual_seed(456)
+    base = _TinyLM()
+    full_model = _TinyLM()
+    micro_model = _TinyLM()
+    full_model.load_state_dict(base.state_dict())
+    micro_model.load_state_dict(base.state_dict())
+
+    tokens = [[1, 2, 3, 4, 5], [1, 3, 4]]
+    logprobs = [[0.0] * len(row) for row in tokens]
+    advantages = [
+        [0.0, 0.25, -0.10, 0.0, 0.15],
+        [0.0, -0.20, 0.10],
+    ]
+    echo_advantages = [
+        [0.0, 0.0, 0.20, 0.20, 0.0],
+        [0.0, 0.30, 0.0],
+    ]
+    echo_counts = [2, 1]
+
+    full = _helper(full_model)
+    micro = _helper(micro_model)
+    micro.train_microbatch_size = 1
+    full.train_selective_suffix_logits = True
+    micro.train_selective_suffix_logits = True
+    full.train_logprob_chunk_size = 128
+    micro.train_logprob_chunk_size = 128
+    full._train_logits_to_keep_supported = False
+    micro._train_logits_to_keep_supported = False
+
+    full_losses = full.train_step_with_echo_masks(
+        tokens,
+        logprobs,
+        advantages,
+        echo_advantages,
+        echo_counts,
+        "cross_entropy",
+        0.05,
+        0.0,
+    )
+    micro_losses = micro.train_step_with_echo_masks(
+        tokens,
+        logprobs,
+        advantages,
+        echo_advantages,
+        echo_counts,
+        "cross_entropy",
+        0.05,
+        0.0,
+    )
+
+    assert micro_losses == pytest.approx(full_losses, rel=1e-6, abs=1e-6)
+    metrics = micro.runtime_metrics()
+    assert metrics["local_train_microbatches"] == 2
+    assert metrics["local_train_microbatch_local_padding"] == 1
+    assert metrics["local_train_global_padded_tokens"] == 10
+    assert metrics["local_train_microbatch_padded_tokens"] == 8
+    assert metrics["local_train_padding_tokens_avoided"] == 2
+    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+        assert torch.allclose(full_param, micro_param, atol=1e-6)
+
+
+def test_echo_rollout_denominator_preserves_loss_across_exact_segments() -> None:
+    torch.manual_seed(789)
+    base = _TinyLM()
+    packed_model = _TinyLM()
+    segmented_model = _TinyLM()
+    packed_model.load_state_dict(base.state_dict())
+    segmented_model.load_state_dict(base.state_dict())
+    packed = _helper(packed_model)
+    segmented = _helper(segmented_model)
+
+    packed_losses = packed.train_step_with_echo_masks(
+        all_tokens=[[1, 2, 3, 4, 5]],
+        all_logprobs=[[0.0] * 5],
+        all_advantages=[[0.0] * 5],
+        echo_advantages=[[0.0, 0.0, 0.2, 0.0, 0.2]],
+        echo_full_observation_counts=[2],
+        echo_loss_fn="cross_entropy",
+        lr=0.05,
+        weight_decay=0.0,
+        echo_rollout_denominator=1,
+    )
+    segmented_losses = segmented.train_step_with_echo_masks(
+        all_tokens=[[1, 2, 3], [1, 2, 3, 4, 5]],
+        all_logprobs=[[0.0] * 3, [0.0] * 5],
+        all_advantages=[[0.0] * 3, [0.0] * 5],
+        echo_advantages=[
+            [0.0, 0.0, 0.2],
+            [0.0, 0.0, 0.0, 0.0, 0.2],
+        ],
+        echo_full_observation_counts=[2, 2],
+        echo_loss_fn="cross_entropy",
+        lr=0.05,
+        weight_decay=0.0,
+        echo_rollout_denominator=1,
+    )
+
+    assert segmented_losses == pytest.approx(packed_losses, rel=1e-6, abs=1e-6)
+    for packed_param, segmented_param in zip(
+        packed_model.parameters(),
+        segmented_model.parameters(),
+    ):
+        assert torch.allclose(packed_param, segmented_param, atol=1e-6)
 
 
 def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> None:
@@ -918,3 +1028,70 @@ def test_local_echo_train_step_clears_inference_prefix_cache() -> None:
     )
 
     assert engine.clear_calls == 1
+
+
+def test_local_effective_rl_rows_digest_is_recorded_after_context_crop() -> None:
+    helper = _helper(_TinyLM())
+    helper.train_supervised_context_tokens = 1
+    helper.train_selective_suffix_logits = True
+
+    helper.train_step_with_echo_masks(
+        all_tokens=[[1, 2, 3, 4, 5, 6]],
+        all_logprobs=[[0.0, 0.0, -0.1, -0.2, -0.3, -0.4]],
+        all_advantages=[[0.0, 0.0, 0.0, 0.0, 0.3, 0.0]],
+        echo_advantages=[[0.0, 0.0, 0.0, 0.2, 0.0, 0.0]],
+        echo_full_observation_counts=[2],
+        echo_loss_fn="cross_entropy",
+        lr=0.05,
+        weight_decay=0.0,
+        echo_rollout_denominator=7,
+    )
+
+    expected = local_rl_effective_rows_sha256(
+        [[3, 4, 5, 6]],
+        [[-0.1, -0.2, -0.3, -0.4]],
+        [[0.0, 0.0, 0.3, 0.0]],
+        echo_observation_masks=[[0.0, 0.2, 0.0, 0.0]],
+        echo_full_observation_counts=[2],
+        echo_rollout_denominator=7,
+    )
+    metrics = helper.runtime_metrics()
+
+    assert helper._last_effective_optimizer_rows_sha256 == expected
+    assert metrics["optimizer/local_effective_rows_sha256"] == expected
+    assert metrics["local_train_context_tokens_removed"] == 2
+
+
+def test_local_sft_effective_rows_digest_is_recorded_after_context_crop() -> None:
+    helper = _helper(_TinyLM())
+    setattr(helper, "sft_loss_fn", "cross_entropy")
+    helper.train_supervised_context_tokens = 1
+    helper.train_selective_suffix_logits = True
+
+    helper.sft_train_step(
+        all_tokens=[[1, 2, 3, 4, 5]],
+        all_advantages=[[0.0, 0.0, 0.0, 1.0, 1.0]],
+        lr=0.05,
+        weight_decay=0.0,
+    )
+
+    expected = local_sft_effective_rows_sha256(
+        [[3, 4, 5]],
+        [[0.0, 1.0, 1.0]],
+    )
+    metrics = helper.runtime_metrics()
+
+    assert helper._last_effective_optimizer_rows_sha256 == expected
+    assert metrics["optimizer/local_effective_rows_sha256"] == expected
+    assert metrics["local_train_context_tokens_removed"] == 2
+
+
+def test_empty_local_sft_step_clears_stale_effective_rows_digest() -> None:
+    helper = _helper(_TinyLM())
+    setattr(helper, "sft_loss_fn", "cross_entropy")
+    helper._last_effective_optimizer_rows_sha256 = "stale"
+
+    assert helper.sft_train_step([], [], lr=0.05, weight_decay=0.0) == 0.0
+
+    assert helper._last_effective_optimizer_rows_sha256 == ""
+    assert "optimizer/local_effective_rows_sha256" not in helper.runtime_metrics()

@@ -170,3 +170,118 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
             "checkpoint_artifacts='wandb' requires save_every > 0 so a "
             "preempted run has periodic checkpoints to recover from."
         )
+    _collect_optimizer_batch_errors(config, errors)
+
+
+def _collect_optimizer_batch_errors(
+    config: TrainConfig,
+    errors: list[str],
+) -> None:
+    """Validate the deliberately narrow deterministic replay surface."""
+
+    replay = config.trainer == "optimizer_replay"
+    configured = bool(config.optimizer_batch_replay_path)
+    checksum = config.optimizer_batch_expected_logical_sha256.strip().lower()
+    manifest_checksum = (
+        config.optimizer_batch_expected_manifest_sha256.strip().lower()
+    )
+    allowed_path = "backend.options.gradient_checkpointing"
+
+    if checksum and (
+        len(checksum) != 64
+        or any(ch not in "0123456789abcdef" for ch in checksum)
+    ):
+        errors.append(
+            "optimizer_batch.expected_logical_sha256 must be a 64-character "
+            "hexadecimal SHA256 digest."
+        )
+    if manifest_checksum and (
+        len(manifest_checksum) != 64
+        or any(ch not in "0123456789abcdef" for ch in manifest_checksum)
+    ):
+        errors.append(
+            "optimizer_batch.expected_manifest_sha256 must be a 64-character "
+            "hexadecimal SHA256 digest."
+        )
+    if replay and not configured:
+        errors.append(
+            "trainer='optimizer_replay' requires "
+            "[optimizer_batch].replay_path."
+        )
+    if replay and not checksum:
+        errors.append(
+            "trainer='optimizer_replay' requires "
+            "[optimizer_batch].expected_logical_sha256 so replay is pinned."
+        )
+    if replay and not manifest_checksum:
+        errors.append(
+            "trainer='optimizer_replay' requires "
+            "[optimizer_batch].expected_manifest_sha256 so the RNG-bearing "
+            "payload contract is externally pinned."
+        )
+    if configured and not replay:
+        errors.append(
+            "optimizer_batch.replay_path requires trainer='optimizer_replay'."
+        )
+    if config.optimizer_batch_capture and replay:
+        errors.append(
+            "optimizer_batch.capture and trainer='optimizer_replay' are mutually "
+            "exclusive."
+        )
+    if config.optimizer_batch_capture and config.trainer != "retrain":
+        errors.append(
+            "optimizer_batch.capture currently requires trainer='retrain'."
+        )
+
+    allowed = config.optimizer_batch_allow_config_differences
+    if not isinstance(allowed, list) or not all(
+        isinstance(path, str) and path.strip() for path in allowed
+    ):
+        errors.append(
+            "optimizer_batch.allow_config_differences must be a list of "
+            "non-empty strings."
+        )
+    else:
+        unique = set(allowed)
+        if len(unique) != len(allowed):
+            errors.append(
+                "optimizer_batch.allow_config_differences must not contain "
+                "duplicates."
+            )
+        unsupported = sorted(unique - {allowed_path})
+        if unsupported:
+            errors.append(
+                "optimizer_batch.allow_config_differences v1 only permits "
+                f"'{allowed_path}', got {unsupported}."
+            )
+
+    if not (replay or config.optimizer_batch_capture):
+        return
+    if config.backend != "local":
+        errors.append("optimizer-batch capture/replay v1 requires backend='local'.")
+    if config.inference_engine != "pytorch":
+        errors.append(
+            "optimizer-batch capture/replay v1 requires "
+            "inference_engine='pytorch' for synchronous loss and timing."
+        )
+    devices = [value.strip() for value in config.devices.split(",") if value.strip()]
+    if len(devices) != 1:
+        errors.append(
+            "optimizer-batch capture/replay v1 requires exactly one local device "
+            "so the optimizer update is synchronous."
+        )
+    if config.max_steps != 1:
+        errors.append("optimizer-batch capture/replay v1 requires max_steps = 1.")
+    if config.save_every != 0:
+        errors.append("optimizer-batch capture/replay v1 requires save_every = 0.")
+    if config.sft_warmup_steps != 0:
+        errors.append(
+            "optimizer-batch capture/replay v1 requires sft_warmup_steps = 0."
+        )
+    if config.bp_enabled:
+        errors.append("optimizer-batch capture/replay v1 requires backpressure off.")
+    if not config.resume_from:
+        errors.append(
+            "optimizer-batch capture/replay v1 requires resume.from to pin the "
+            "initial local adapter."
+        )

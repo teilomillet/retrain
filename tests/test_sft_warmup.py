@@ -23,6 +23,8 @@ from retrain.config import TrainConfig, load_config
 from retrain.training.warmup import load_sft_warmup_data
 from retrain.training.sft import (
     SftExample,
+    SftTokenizedExample,
+    build_sft_tokenized_batch,
     load_sft_dataset,
     load_sft_jsonl,
     tokenize_sft_batch,
@@ -127,6 +129,14 @@ class _TinyTokenizer:
 
     def encode(self, text, add_special_tokens=False):
         return [ord(ch) for ch in text]
+
+
+class _BoundaryMergingTokenizer:
+    """Minimal BPE-like tokenizer whose full text crosses the field boundary."""
+
+    def encode(self, text, add_special_tokens=False):
+        _ = add_special_tokens
+        return {"": [], "a": [1], "b": [2], "ab": [3]}[text]
 
 
 class _ThinkingTokenizer(_TinyTokenizer):
@@ -401,6 +411,99 @@ class TestGenericSftJsonl:
         tokenize_sft_batch(tokenizer, examples, max_tokens=0)
 
         assert signature_calls == 1
+
+    def test_sft_context_limit_left_crops_prompt_and_preserves_target(self):
+        tokens, advantages = sft_module.tokenize_sft_example(
+            _TinyTokenizer(),
+            SftExample(prompt="p" * 20, completion="TARGET"),
+            max_tokens=10,
+        )
+
+        assert "".join(chr(token) for token in tokens) == "ppppTARGET"
+        assert advantages == [0.0] * 4 + [1.0] * 6
+
+    def test_prompt_completion_tokenization_cannot_merge_across_boundary(self):
+        tokens, advantages = sft_module.tokenize_sft_example(
+            _BoundaryMergingTokenizer(),
+            SftExample(prompt="a", completion="b"),
+            max_tokens=0,
+        )
+
+        assert tokens == [1, 2]
+        assert advantages == [0.0, 1.0]
+
+    def test_cached_qwen35_prompt_completion_boundary_regression(self):
+        transformers = pytest.importorskip("transformers")
+        hf_home = Path(
+            os.environ.get(
+                "HF_HOME",
+                str(Path.home() / ".cache" / "huggingface"),
+            )
+        )
+        snapshots = sorted(
+            (hf_home / "hub" / "models--Qwen--Qwen3.5-4B" / "snapshots").glob(
+                "*"
+            )
+        )
+        snapshot = next(
+            (path for path in snapshots if (path / "tokenizer_config.json").is_file()),
+            None,
+        )
+        if snapshot is None:
+            pytest.skip("Qwen3.5-4B tokenizer is not present in the local HF cache")
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            str(snapshot),
+            local_files_only=True,
+        )
+        prompt_tokens = tokenizer.encode("a", add_special_tokens=False)
+        completion_tokens = tokenizer.encode("b", add_special_tokens=False)
+        merged_tokens = tokenizer.encode("ab", add_special_tokens=False)
+        assert merged_tokens != prompt_tokens + completion_tokens
+
+        tokens, advantages = sft_module.tokenize_sft_example(
+            tokenizer,
+            SftExample(prompt="a", completion="b"),
+            max_tokens=0,
+        )
+
+        assert tokens == prompt_tokens + completion_tokens
+        assert advantages == [0.0, 1.0]
+
+    def test_sft_max_tokens_one_fails_instead_of_reporting_zero_loss_work(self):
+        with pytest.raises(ValueError, match="no loss-bearing supervised"):
+            sft_module.tokenize_sft_example(
+                _TinyTokenizer(),
+                SftExample(prompt="prompt", completion="X"),
+                max_tokens=1,
+            )
+
+    def test_sft_suffix_crop_keeps_one_causal_context_token(self):
+        tokens, advantages = sft_module.tokenize_sft_example(
+            _TinyTokenizer(),
+            SftExample(prompt="prompt", completion="X"),
+            max_tokens=2,
+        )
+
+        assert "".join(chr(token) for token in tokens) == "tX"
+        assert advantages == [0.0, 1.0]
+
+    def test_sft_supervision_accounting_counts_only_loss_bearing_targets(self):
+        batch = tokenize_sft_batch(
+            _TinyTokenizer(),
+            [SftExample(text="abc")],
+            max_tokens=0,
+        )
+
+        assert batch.advantages == [[0.0, 1.0, 1.0]]
+        assert batch.total_tokens == 3
+        assert batch.supervised_tokens == 2
+
+    def test_pretokenized_sft_batch_rejects_zero_loss_row(self):
+        with pytest.raises(ValueError, match="no loss-bearing supervised"):
+            build_sft_tokenized_batch(
+                [SftTokenizedExample(tokens=[7], advantages=[1.0])]
+            )
 
     def test_invalid_jsonl_reports_line_number(self, tmp_path):
         data_path = tmp_path / "bad.jsonl"

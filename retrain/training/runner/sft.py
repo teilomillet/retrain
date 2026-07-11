@@ -15,6 +15,25 @@ from retrain.training.runner.result import (
 )
 
 
+def _sft_runtime_metric_key(key: str) -> str:
+    """Keep optimizer evidence canonical; namespace ordinary backend metrics."""
+
+    return key if key.startswith("optimizer/") else f"backend/{key}"
+
+
+_SFT_BATCH_WANDB_KEYS = (
+    "sft_sequence_length_min",
+    "sft_sequence_length_mean",
+    "sft_sequence_length_p50",
+    "sft_sequence_length_p95",
+    "sft_sequence_length_max",
+    "sft_logical_padded_tokens",
+    "sft_logical_padding_tokens",
+    "sft_logical_padding_fraction",
+    "sft_supervised_token_fraction",
+)
+
+
 class SftRunner:
     """Standalone supervised fine-tuning runner using retrain backends."""
 
@@ -38,6 +57,7 @@ class SftRunner:
         from retrain.io.log import JsonlLogger
         from retrain.registry.builtin import get_registry
         from retrain.training.sft import (
+            build_sft_batch_metrics,
             build_sft_tokenized_batch,
             build_sft_artifact_manifest,
             build_sft_example_order,
@@ -49,6 +69,7 @@ class SftRunner:
             write_sft_artifact_manifest,
             write_sft_run_snapshot_artifacts,
         )
+        from retrain.training.telemetry import build_runtime_wandb_metrics
         from retrain.training.state import (
             TRAINER_STATE_FILE,
             load_trainer_state,
@@ -227,7 +248,9 @@ class SftRunner:
                 )
                 batch = [tokenized_examples[idx] for idx in indices]
                 tokenized = build_sft_tokenized_batch(batch)
+                batch_metrics = build_sft_batch_metrics(tokenized)
 
+                train_start = time.perf_counter()
                 loss = run_sft_train_step(
                     helper,
                     tokenized.tokens,
@@ -235,8 +258,14 @@ class SftRunner:
                     lr,
                     config.weight_decay,
                 )
+                train_elapsed = time.perf_counter() - train_start
 
                 elapsed = time.perf_counter() - step_start
+                train_time_semantics = (
+                    "submit_enqueue_latency"
+                    if config.backend == "prime_rl"
+                    else "synchronous_optimizer_update"
+                )
                 metrics: dict[str, int | float | str] = {
                     "step": step,
                     "phase": "sft",
@@ -259,17 +288,31 @@ class SftRunner:
                         ((step + 1) * batch_size) / max(len(examples), 1),
                     ),
                     "time_s": round(elapsed, 2),
+                    "step_time_s": elapsed,
+                    "train_time_s": train_elapsed,
+                    "train_time_semantics": train_time_semantics,
                 }
+                if config.backend == "prime_rl":
+                    metrics["train_submit_enqueue_time_s"] = train_elapsed
+                    metrics["train_submit_enqueue_share"] = (
+                        train_elapsed / elapsed if elapsed > 0.0 else 0.0
+                    )
+                else:
+                    metrics["train_share"] = (
+                        train_elapsed / elapsed if elapsed > 0.0 else 0.0
+                    )
+                metrics.update(batch_metrics)
                 rss_mb = max_rss_mb()
                 if rss_mb is not None:
                     metrics["process_max_rss_mb"] = round(rss_mb, 3)
-                for key, value in collect_runtime_metrics(helper).items():
-                    metrics[f"backend/{key}"] = value
+                runtime_metrics = collect_runtime_metrics(helper)
+                for key, value in runtime_metrics.items():
+                    metrics[_sft_runtime_metric_key(key)] = value
 
                 metrics_logger.log(metrics)
                 steps_logger.log(metrics)
                 if wandb_run is not None:
-                    wandb_metrics: dict[str, int | float | str] = {
+                    wandb_metrics: dict[str, object] = {
                         "train/loss": loss,
                         "train/sft": 1,
                         "train/step": step,
@@ -280,9 +323,39 @@ class SftRunner:
                         "train/sft_dataset_coverage": metrics[
                             "sft_dataset_coverage"
                         ],
+                        "train/step_time_s": elapsed,
+                        "train/train_time_s": train_elapsed,
+                        "train/train_time_semantics": train_time_semantics,
                     }
+                    if config.backend == "prime_rl":
+                        wandb_metrics["train/train_submit_enqueue_time_s"] = (
+                            train_elapsed
+                        )
+                        wandb_metrics["train/train_submit_enqueue_share"] = metrics[
+                            "train_submit_enqueue_share"
+                        ]
+                    else:
+                        wandb_metrics["train/train_share"] = metrics["train_share"]
+                    for key in _SFT_BATCH_WANDB_KEYS:
+                        wandb_metrics[f"train/sft/{key.removeprefix('sft_')}"] = (
+                            metrics[key]
+                        )
+                    if "process_max_rss_mb" in metrics:
+                        wandb_metrics["train/process_max_rss_mb"] = metrics[
+                            "process_max_rss_mb"
+                        ]
+                    wandb_metrics.update(
+                        build_runtime_wandb_metrics(runtime_metrics)
+                    )
                     wandb_metrics.update(
                         checkpoint_recoverability_wandb_metrics(config, wandb_run)
+                    )
+                    wandb_metrics.update(
+                        {
+                            f"train/{key}": value
+                            for key, value in metrics.items()
+                            if key.startswith("optimizer/")
+                        }
                     )
                     wandb_run.log(wandb_metrics, step=step)
                 last_metrics = dict(metrics)

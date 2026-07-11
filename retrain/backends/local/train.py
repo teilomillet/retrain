@@ -64,6 +64,10 @@ from retrain.models.oscar_qwen3 import (
     oscar_options_from_mapping,
 )
 from retrain.models.qwen35 import patch_qwen35_gated_delta_kernel
+from retrain.training.batch_digest import (
+    local_rl_effective_rows_sha256,
+    local_sft_effective_rows_sha256,
+)
 
 
 class LocalTrainHelper:
@@ -255,6 +259,7 @@ class LocalTrainHelper:
         self._last_train_metrics: dict[str, float | int | str] = {}
         self._last_sync_metrics: dict[str, float | int] = {}
         self._last_context_crop_metrics: dict[str, float | int] = {}
+        self._last_effective_optimizer_rows_sha256 = ""
         self._train_logits_to_keep_supported: bool | None = None
         self._selective_logprob_path_counts: dict[str, int] = {}
         self._loss_path_counts: dict[str, int] = {}
@@ -753,6 +758,19 @@ class LocalTrainHelper:
             attention_mask,
         )
 
+    def _do_train_sequence_impl(
+        self,
+        all_tokens,
+        all_logprobs,
+        all_advantages,
+    ):
+        return local_rl_step.run_sequence(
+            self,
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+        )
+
     def _do_sft_impl(self, input_ids, advantages, attention_mask):
         return local_sft_step.run_padded(self, input_ids, advantages, attention_mask)
 
@@ -768,6 +786,7 @@ class LocalTrainHelper:
         echo_advantages,
         echo_full_observation_counts,
         echo_loss_fn,
+        echo_rollout_denominator=0,
     ):
         return local_hybrid_step.run(
             self,
@@ -778,6 +797,28 @@ class LocalTrainHelper:
             echo_advantages,
             echo_full_observation_counts,
             echo_loss_fn,
+            echo_rollout_denominator,
+        )
+
+    def _do_hybrid_mask_sequence_impl(
+        self,
+        all_tokens,
+        all_logprobs,
+        all_advantages,
+        echo_advantages,
+        echo_full_observation_counts,
+        echo_loss_fn,
+        echo_rollout_denominator=0,
+    ):
+        return local_hybrid_step.run_sequence(
+            self,
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            echo_advantages,
+            echo_full_observation_counts,
+            echo_loss_fn,
+            echo_rollout_denominator,
         )
 
     def _maybe_crop_supervised_context(
@@ -803,6 +844,41 @@ class LocalTrainHelper:
         self._last_context_crop_metrics = result.metrics
         return result.tokens, result.logprobs, result.advantages, result.echo_advantages
 
+    def _clear_effective_optimizer_rows(self) -> None:
+        """Prevent a failed or empty step from emitting a previous row digest."""
+
+        self._last_effective_optimizer_rows_sha256 = ""
+
+    def _record_effective_rl_rows(
+        self,
+        all_tokens,
+        all_logprobs,
+        all_advantages,
+        *,
+        echo_advantages=None,
+        echo_full_observation_counts=None,
+        echo_rollout_denominator=None,
+    ) -> None:
+        """Record post-crop RL rows without claiming optimizer equivalence."""
+
+        self._last_effective_optimizer_rows_sha256 = (
+            local_rl_effective_rows_sha256(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                echo_observation_masks=echo_advantages,
+                echo_full_observation_counts=echo_full_observation_counts,
+                echo_rollout_denominator=echo_rollout_denominator,
+            )
+        )
+
+    def _record_effective_sft_rows(self, all_tokens, all_advantages) -> None:
+        """Record post-crop cross-entropy SFT rows and target weights."""
+
+        self._last_effective_optimizer_rows_sha256 = (
+            local_sft_effective_rows_sha256(all_tokens, all_advantages)
+        )
+
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):
         """Run one training step with importance sampling loss.
 
@@ -823,6 +899,7 @@ class LocalTrainHelper:
         Returns:
             Mean loss (from previous step in split mode, current step otherwise).
         """
+        self._clear_effective_optimizer_rows()
         n = len(all_tokens)
         if n == 0:
             return 0.0
@@ -834,6 +911,11 @@ class LocalTrainHelper:
                 all_advantages,
             )
         )
+        self._record_effective_rl_rows(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+        )
 
         self._clear_inference_prefix_cache()
 
@@ -841,6 +923,30 @@ class LocalTrainHelper:
         for pg in self.optimizer.param_groups:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
+
+        microbatch_size = self.train_microbatch_size or n
+        if microbatch_size < n:
+            if self.split_mode:
+                if self._train_future is not None:
+                    self._pending_loss = self._train_future.result()
+                    self._train_future = None
+                # The previous tensor path snapshotted caller-owned rows during
+                # padding. Preserve that isolation for the asynchronous path.
+                tokens_snapshot = tuple(tuple(row) for row in all_tokens)
+                logprobs_snapshot = tuple(tuple(row) for row in all_logprobs)
+                advantages_snapshot = tuple(tuple(row) for row in all_advantages)
+                self._train_future = self._train_executor.submit(
+                    self._do_train_sequence_impl,
+                    tokens_snapshot,
+                    logprobs_snapshot,
+                    advantages_snapshot,
+                )
+                return self._pending_loss
+            return self._do_train_sequence_impl(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+            )
 
         batch = local_batch.policy(
             all_tokens,
@@ -882,6 +988,7 @@ class LocalTrainHelper:
         ``cross_entropy`` gives the direct next-token world-modeling objective
         ECHO needs for prompt-side environment/tool tokens.
         """
+        self._clear_effective_optimizer_rows()
         loss_fn = getattr(self, "sft_loss_fn", "importance_sampling")
         if loss_fn == "importance_sampling":
             all_logprobs = [[0.0] * len(tokens) for tokens in all_tokens]
@@ -905,6 +1012,7 @@ class LocalTrainHelper:
             all_tokens,
             all_advantages=all_advantages,
         )
+        self._record_effective_sft_rows(all_tokens, all_advantages)
 
         self._clear_inference_prefix_cache()
 
@@ -942,8 +1050,10 @@ class LocalTrainHelper:
         echo_loss_fn,
         lr,
         weight_decay,
+        echo_rollout_denominator=0,
     ):
         """Run RL + ECHO masks over the same rollout rows."""
+        self._clear_effective_optimizer_rows()
         if not echo_advantages:
             return self.train_step(
                 all_tokens,
@@ -972,6 +1082,15 @@ class LocalTrainHelper:
                 echo_advantages,
             )
         )
+        effective_echo_denominator = echo_rollout_denominator or len(all_tokens)
+        self._record_effective_rl_rows(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            echo_advantages=echo_advantages,
+            echo_full_observation_counts=echo_full_observation_counts,
+            echo_rollout_denominator=effective_echo_denominator,
+        )
 
         self._clear_inference_prefix_cache()
 
@@ -982,6 +1101,18 @@ class LocalTrainHelper:
         for pg in self.optimizer.param_groups:
             pg["lr"] = lr
             pg["weight_decay"] = weight_decay
+
+        microbatch_size = self.train_microbatch_size or len(all_tokens)
+        if microbatch_size < len(all_tokens):
+            return self._do_hybrid_mask_sequence_impl(
+                all_tokens,
+                all_logprobs,
+                all_advantages,
+                echo_advantages,
+                echo_full_observation_counts,
+                echo_loss_fn,
+                effective_echo_denominator,
+            )
 
         batch = local_batch.echo(
             all_tokens,
@@ -1000,6 +1131,7 @@ class LocalTrainHelper:
             batch.echo_advantages,
             batch.echo_counts,
             echo_loss_fn,
+            effective_echo_denominator,
         )
 
     def load_state(self, name):

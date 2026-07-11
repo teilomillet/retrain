@@ -198,6 +198,11 @@ def runtime_metrics(owner: object) -> dict[str, object]:
         ),
         "local_prefix_caching": int(getattr(owner, "prefix_caching", True)),
     }
+    effective_rows_digest = str(
+        getattr(owner, "_last_effective_optimizer_rows_sha256", "")
+    )
+    if effective_rows_digest:
+        metrics["optimizer/local_effective_rows_sha256"] = effective_rows_digest
     metrics.update(getattr(owner, "_lora_model_metrics", {}))
     metrics.update(getattr(owner, "_accelerator_metrics", {}))
     engine = getattr(owner, "engine", None)

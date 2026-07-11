@@ -176,6 +176,81 @@ def test_summarize_run_reads_perf_fields(tmp_path) -> None:
     assert "peak_process_max_rss_mb: 512.000" in format_run_summary(summary)
 
 
+def test_summarize_prime_rl_labels_enqueue_latency_without_train_share(
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "prime"
+    run_dir.mkdir()
+    (run_dir / "metrics.jsonl").write_text(
+        json.dumps(
+            {
+                "step": 0,
+                "step_time_s": 4.0,
+                "train_time_s": 0.25,
+                "train_time_semantics": "submit_enqueue_latency",
+                "train_submit_enqueue_time_s": 0.25,
+                "train_submit_enqueue_share": 0.0625,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_run(run_dir)
+    rendered = format_run_summary(summary)
+
+    assert summary.mean_train_share is None
+    assert summary.train_time_semantics == "submit_enqueue_latency"
+    assert summary.mean_train_submit_enqueue_time_s == pytest.approx(0.25)
+    assert summary.mean_train_submit_enqueue_share == pytest.approx(0.0625)
+    assert "mean_train_share: n/a" in rendered
+    assert "mean_train_submit_enqueue_share: 0.062" in rendered
+
+
+def test_mixed_suite_does_not_average_enqueue_with_synchronous_train_time(
+    tmp_path,
+) -> None:
+    root = tmp_path / "mixed"
+    sync_dir = root / "sync"
+    prime_dir = root / "prime"
+    sync_dir.mkdir(parents=True)
+    prime_dir.mkdir(parents=True)
+    (sync_dir / "metrics.jsonl").write_text(
+        json.dumps(
+            {
+                "step": 0,
+                "step_time_s": 2.0,
+                "train_time_s": 1.0,
+                "train_time_semantics": "synchronous_optimizer_update",
+                "train_share": 0.5,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (prime_dir / "metrics.jsonl").write_text(
+        json.dumps(
+            {
+                "step": 0,
+                "step_time_s": 2.0,
+                "train_time_s": 0.1,
+                "train_time_semantics": "submit_enqueue_latency",
+                "train_submit_enqueue_time_s": 0.1,
+                "train_submit_enqueue_share": 0.05,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = summarize_suite(root)
+
+    assert summary.aggregates["mean_train_time_s"].mean == pytest.approx(1.0)
+    assert summary.aggregates[
+        "mean_train_submit_enqueue_time_s"
+    ].mean == pytest.approx(0.1)
+
+
 def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
     run_dir = tmp_path / "run"
     emergence_dir = run_dir / "emergence"

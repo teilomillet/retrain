@@ -118,6 +118,7 @@ def run_padded(helper: "LocalTrainHelper", input_ids, advantages, attention_mask
     backward_s = 0.0
     optimizer_s = 0.0
     microbatches = 0
+    microbatch_ranges: list[tuple[int, int]] = []
 
     try:
         batch_size = int(input_ids.shape[0])
@@ -130,6 +131,7 @@ def run_padded(helper: "LocalTrainHelper", input_ids, advantages, attention_mask
         for start in range(0, batch_size, microbatch_size):
             stop = min(start + microbatch_size, batch_size)
             microbatches += 1
+            microbatch_ranges.append((start, stop))
             masked_loss, token_count_value, mb_forward_s, mb_backward_s = (
                 backward_microbatch(
                     helper,
@@ -157,6 +159,8 @@ def run_padded(helper: "LocalTrainHelper", input_ids, advantages, attention_mask
             total_tokens=total_tokens_value,
             batch_size=batch_size,
         )
+        lengths = [int(value) for value in attention_mask.sum(dim=1).tolist()]
+        shared.record_sequence_padding(helper, lengths, microbatch_ranges)
 
         return loss_val
     finally:
@@ -184,11 +188,6 @@ def run_sequence(helper: "LocalTrainHelper", all_tokens, all_advantages) -> floa
     microbatch_size = helper.train_microbatch_size or batch_size
     token_budget = getattr(helper, "train_sft_microbatch_token_budget", 0)
     lengths = [len(row) for row in all_tokens]
-    global_padded, microbatch_padded = local_sft.padding_stats(
-        lengths,
-        microbatch_size,
-        token_budget,
-    )
     microbatch_ranges = local_sft.microbatch_ranges(
         lengths,
         microbatch_size,
@@ -243,25 +242,14 @@ def run_sequence(helper: "LocalTrainHelper", all_tokens, all_advantages) -> floa
             total_tokens=total_tokens_value,
             batch_size=batch_size,
         )
+        shared.record_sequence_padding(helper, lengths, microbatch_ranges)
         metrics = getattr(helper, "_last_train_metrics", {})
         if isinstance(metrics, dict):
-            avoided = max(0, global_padded - microbatch_padded)
-            metrics.update(
-                {
-                    "local_train_microbatch_local_padding": 1,
-                    "local_train_global_padded_tokens": global_padded,
-                    "local_train_microbatch_padded_tokens": microbatch_padded,
-                    "local_train_padding_tokens_avoided": avoided,
-                    "local_train_padding_avoidance_fraction": (
-                        avoided / global_padded if global_padded else 0.0
-                    ),
-                    "local_train_sft_microbatch_token_budget": int(token_budget),
-                }
+            metrics["local_train_sft_microbatch_token_budget"] = int(token_budget)
+            metrics["local_train_sft_avg_microbatch_examples"] = metrics.get(
+                "local_train_avg_microbatch_examples",
+                0.0,
             )
-            if microbatches:
-                metrics["local_train_sft_avg_microbatch_examples"] = (
-                    batch_size / microbatches
-                )
         return loss_val
     finally:
         helper.optimizer.zero_grad()

@@ -11,10 +11,12 @@ from retrain.training.backpressure import BackPressureDecision
 from retrain.config import TrainConfig
 from retrain.training.echo import EchoBuildStats, EchoLimitStats
 from retrain.training.rollouts import RuntimeCounters
+from retrain.training.rollout import RolloutAccumulator
 from retrain.training.telemetry import (
     EchoStepPlan,
     StepLogData,
     build_emergence_step_entry,
+    build_runtime_wandb_metrics,
     build_step_metrics,
     build_wandb_metrics,
     format_step_log_summary,
@@ -54,8 +56,42 @@ class _RuntimeMetricsHelper:
     def load_state(self, name: str) -> None:
         _ = name
 
-    def runtime_metrics(self) -> dict[str, float]:
-        return {"backend/tokens_s": 12.0}
+    def runtime_metrics(self) -> dict[str, float | str]:
+        return {
+            "backend/tokens_s": 12.0,
+            "local_train_wall_s": 3.0,
+            "local_train_microbatches": 5,
+            "local_train_padding_avoidance_fraction": 0.4,
+            "local_train_attention_proxy_avoidance_fraction": 0.6,
+            "local_train_sequence_length_p95": 512,
+            "optimizer/local_effective_rows_sha256": "e" * 64,
+        }
+
+
+def test_optimizer_signal_count_is_refreshed_from_final_advantages() -> None:
+    acc = RolloutAccumulator(
+        pre_optimizer_nonzero_advantage_token_count=4,
+        datum_advantages=[[0.0, 1.0, 0.0], [0.0, -2.0]],
+    )
+
+    acc.refresh_optimizer_advantage_token_count()
+
+    assert acc.pre_optimizer_nonzero_advantage_token_count == 4
+    assert acc.optimizer_nonzero_advantage_token_count == 2
+
+
+def test_runtime_wandb_projection_cannot_override_step_loss() -> None:
+    wandb = build_runtime_wandb_metrics(
+        {
+            "loss": 99.0,
+            "local_train_wall_s": 0.5,
+            "optimizer/local_effective_rows_sha256": "e" * 64,
+        }
+    )
+
+    assert "train/loss" not in wandb
+    assert wandb["train/backend/local/wall_s"] == pytest.approx(0.5)
+    assert wandb["train/optimizer/local_effective_rows_sha256"] == "e" * 64
 
 
 def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
@@ -137,8 +173,20 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
             candidate_tokens=7,
             observation_mask_datums=2,
             skipped_low_overlap=1,
+            observation_responses=4,
+            bridged_transition_datums=3,
+            bridge_failures=1,
+            renderer_parity_failures=1,
+            terminal_candidate_tokens=2,
+            explicit_transition_rollouts=2,
         ),
+        sampled_completion_token_count=16,
+        eligible_completion_token_count=12,
+        pre_optimizer_nonzero_advantage_token_count=8,
+        optimizer_nonzero_advantage_token_count=6,
         rl_completion_token_count=12,
+        echo_eligible_rollout_count=2,
+        optimizer_logical_batch_sha256="a" * 64,
         rollout_timing_metrics={"rollout/total_s": 3.0},
         sample_time_s=2.0,
         behavior_turns=4,
@@ -147,7 +195,12 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
         behavior_resp_lens=[10, 14],
     )
     echo_plan = EchoStepPlan(
-        limit=EchoLimitStats(kept_datums=2, kept_tokens=5, truncated_tokens=1),
+        limit=EchoLimitStats(
+            kept_datums=2,
+            kept_tokens=5,
+            kept_terminal_tokens=1,
+            truncated_tokens=1,
+        ),
         allowed_tokens=8,
         reference_completion_tokens=10,
         skipped_entropy_floor=False,
@@ -210,16 +263,80 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     assert metrics["backend/tokens_s"] == pytest.approx(12.0)
     assert metrics["process_max_rss_mb"] == pytest.approx(12.346)
     assert metrics["echo/token_ratio"] == pytest.approx(0.5)
+    assert metrics["echo/observation_responses"] == 4
+    assert metrics["echo/bridged_transition_datums"] == 3
+    assert metrics["echo/bridge_failures"] == 1
+    assert metrics["echo/renderer_parity_failures"] == 1
+    assert metrics["echo/terminal_candidate_tokens"] == 2
+    assert metrics["echo/terminal_kept_tokens"] == 1
+    assert metrics["echo/explicit_transition_rollouts"] == 2
+    assert metrics["rl/action_token_datumization_ratio"] == pytest.approx(1.0)
+    assert metrics["rl/sampled_action_tokens"] == 16
+    assert metrics["rl/pre_optimizer_nonzero_advantage_action_tokens"] == 8
+    assert metrics["rl/optimizer_nonzero_advantage_action_tokens"] == 6
+    assert metrics["rl/nonzero_advantage_action_tokens"] == 6
+    assert metrics["optimizer/logical_batch_sha256"] == "a" * 64
+    assert metrics["optimizer/batch_sha256"] == "a" * 64
+    assert metrics["optimizer/local_effective_rows_sha256"] == "e" * 64
 
     assert wandb["train/dg_eta"] == pytest.approx(0.3)
     assert wandb["train/echo/kept_tokens"] == 5
+    assert wandb["train/rl/datumized_action_tokens"] == 12
+    assert wandb["train/optimizer/logical_batch_sha256"] == "a" * 64
+    assert wandb["train/optimizer/batch_sha256"] == "a" * 64
+    assert wandb["train/optimizer/local_effective_rows_sha256"] == "e" * 64
     assert wandb["train/behavior/action_dominance"] == pytest.approx(0.75)
     assert wandb["train/tl_grpo_ema_baseline"] == pytest.approx(0.7)
     assert wandb["train/rewards/mean_reward"] == metrics["mean_reward"]
+    assert wandb["train/sample_time_s"] == pytest.approx(2.0)
+    assert wandb["train/train_time_s"] == pytest.approx(3.0)
+    assert wandb["train/tokens_per_step"] == 100
+    assert wandb["train/tokens_per_second"] == pytest.approx(10.0)
+    assert wandb["train/train_share"] == pytest.approx(0.3)
+    assert wandb["train/train_time_semantics"] == "synchronous_optimizer_update"
     assert wandb["train/backpressure/warmup"] == 0
     assert type(wandb["train/backpressure/warmup"]) is int
     assert wandb["train/backend/reports_sync_loss"] == 1
     assert type(wandb["train/backend/reports_sync_loss"]) is int
+    assert wandb["train/backend/local/wall_s"] == pytest.approx(3.0)
+    assert wandb["train/backend/local/microbatches"] == 5
+    assert wandb["train/backend/local/padding_avoidance_fraction"] == pytest.approx(0.4)
+    assert wandb[
+        "train/backend/local/attention_proxy_avoidance_fraction"
+    ] == pytest.approx(0.6)
+    assert wandb["train/backend/local/sequence_length_p95"] == 512
+
+    prime_config = TrainConfig(backend="prime_rl")
+    prime_caps = BackendCapabilities(
+        reports_sync_loss=False,
+        preserves_token_advantages=False,
+        supports_checkpoint_resume=True,
+        resume_runtime_dependent=False,
+    )
+    prime_metrics = build_step_metrics(
+        step,
+        config=prime_config,
+        backend_caps=prime_caps,
+        rollout=rollout,
+        echo_plan=echo_plan,
+        bp_decision=bp_decision,
+        batch_norm_metrics={},
+        runtime_counters=RuntimeCounters(),
+        helper=_RuntimeMetricsHelper(),
+    )
+    prime_wandb = build_wandb_metrics(
+        step,
+        adv_results=rollout.adv_results,
+        batch_norm_metrics={},
+        metrics=prime_metrics,
+    )
+    assert prime_metrics["train_time_semantics"] == "submit_enqueue_latency"
+    assert prime_metrics["train_submit_enqueue_time_s"] == pytest.approx(3.0)
+    assert prime_metrics["train_submit_enqueue_share"] == pytest.approx(0.3)
+    assert "train_share" not in prime_metrics
+    assert prime_wandb["train/train_time_semantics"] == "submit_enqueue_latency"
+    assert prime_wandb["train/train_submit_enqueue_time_s"] == pytest.approx(3.0)
+    assert "train/train_share" not in prime_wandb
 
     assert emergence["correct_count"] == 1
     assert emergence["total_count"] == 2
@@ -283,6 +400,13 @@ def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:
         "echo/candidate_datums": 0,
         "echo/candidate_tokens": 0,
         "echo/observation_mask_datums": 0,
+        "echo/observation_responses": 0,
+        "echo/bridged_transition_datums": 0,
+        "echo/bridge_failures": 0,
+        "echo/renderer_parity_failures": 0,
+        "echo/terminal_candidate_tokens": 0,
+        "echo/terminal_kept_tokens": 0,
+        "echo/explicit_transition_rollouts": 0,
         "echo/kept_datums": 0,
         "echo/kept_tokens": 0,
         "echo/truncated_tokens": 0,
@@ -293,8 +417,18 @@ def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:
         "echo/entropy_floor": 0.0,
         "echo/mode_collapse_guard": 0,
         "rl/train_time_s": 0.0,
+        "rl/train_time_semantics": "synchronous_optimizer_update",
         "rl/completion_tokens": 0,
+        "rl/sampled_action_tokens": 0,
+        "rl/eligible_action_tokens": 0,
+        "rl/datumized_action_tokens": 0,
+        "rl/pre_optimizer_nonzero_advantage_action_tokens": 0,
+        "rl/optimizer_nonzero_advantage_action_tokens": 0,
+        "rl/nonzero_advantage_action_tokens": 0,
+        "rl/action_token_datumization_ratio": 0.0,
         "rl/completion_surprisal_mean": 0.0,
+        "echo/split_non_prefix": 0,
+        "echo/eligible_rollouts": 0,
     }
 
     wandb = build_wandb_metrics(

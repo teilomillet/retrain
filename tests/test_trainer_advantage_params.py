@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -13,10 +14,13 @@ from retrain.training import trainer as trainer_mod
 from retrain.training import signals as signal_mod
 from retrain.advantages import AdvantageResult
 from retrain.training.backpressure import NoOpBackPressure
+from retrain.training.batch_digest import logical_optimizer_batch_sha256
+from retrain.training.optimizer_batch import load_optimizer_batch_capture
 from retrain.config import TrainConfig
 from retrain.data.source import Example
 from retrain.training.flow import build_flow
 from retrain.environments.verifiers import VerifiersRolloutTiming, VerifiersTurnSample
+from retrain.planning.types import PlanningDetector
 
 
 class _FakeTokenizer:
@@ -162,6 +166,7 @@ class _EchoRecordingFakeHelper(_FakeHelper):
         echo_loss_fn: str,
         lr: float,
         weight_decay: float,
+        echo_rollout_denominator: int = 0,
     ) -> tuple[float, float]:
         self.hybrid_calls.append(
             {
@@ -173,6 +178,7 @@ class _EchoRecordingFakeHelper(_FakeHelper):
                 "echo_loss_fn": echo_loss_fn,
                 "lr": lr,
                 "weight_decay": weight_decay,
+                "echo_rollout_denominator": echo_rollout_denominator,
             }
         )
         return 0.123, 0.031
@@ -184,8 +190,9 @@ def _make_fake_flow(cfg, helper):
 
     flow = build_flow(cfg, gpu=False)
     flow.backend = helper
-    flow.planning_detector = SimpleNamespace(
-        detect=lambda token_strs: [0] * len(token_strs)
+    flow.planning_detector = cast(
+        PlanningDetector,
+        SimpleNamespace(detect=lambda token_strs: [0] * len(token_strs)),
     )
     flow.sepa_controller = SEPAController(
         sepa_steps=cfg.sepa_steps,
@@ -259,6 +266,26 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(trainer_mod, "prompt_preview", lambda prompt: str(prompt))
 
+    initial_adapter = tmp_path / "initial-adapter"
+    initial_adapter.mkdir()
+    (initial_adapter / "adapter_model.safetensors").write_bytes(b"initial")
+    resume_dir = tmp_path / "resume"
+    resume_dir.mkdir()
+    (resume_dir / "trainer_state.json").write_text(
+        json.dumps(
+            {
+                "step": -1,
+                "example_idx": 0,
+                "total_correct": 0,
+                "total_completions": 0,
+                "current_batch_size": 1,
+                "current_group_size": 2,
+                "checkpoint_name": "init",
+                "checkpoint_path": str(initial_adapter),
+                "sepa": {},
+            }
+        )
+    )
     cfg = TrainConfig(
         backend="local",
         model="fake/model",
@@ -272,6 +299,9 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
         advantage_mode="grpo",
         transform_mode="none",
         advantage_params={"scale": 3.0},
+        adv_clip_max=0.25,
+        resume_from=str(resume_dir),
+        optimizer_batch_capture=True,
     )
 
     flow = _make_fake_flow(cfg, helper)
@@ -280,6 +310,19 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     assert captured_kwargs, "compute_composable_advantages should be called"
     assert captured_kwargs[0]["advantage_params"] == cfg.effective_advantage_params
     assert final_path == str(Path(cfg.adapter_path) / "final")
+    metrics = json.loads((Path(cfg.log_dir) / "metrics.jsonl").read_text().splitlines()[0])
+    assert metrics[
+        "optimizer/logical_batch_sha256"
+    ] == logical_optimizer_batch_sha256(
+        [[101, 42], [101, 13]],
+        [[0.0, -0.1], [0.0, -0.2]],
+        [[0.0, 0.25], [0.0, 0.25]],
+    )
+    manifest_path = Path(cfg.log_dir) / "optimizer_batch_step_000000.manifest.json"
+    captured = load_optimizer_batch_capture(manifest_path)
+    assert captured.batch.advantages == [[0.0, 0.25], [0.0, 0.25]]
+    assert metrics["optimizer_batch/mode"] == "capture"
+    assert metrics["optimizer_batch/payload_sha256"] == captured.payload_sha256
 
 
 def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
@@ -369,10 +412,8 @@ def test_train_feeds_previous_delight_eta_into_next_step(monkeypatch, tmp_path):
     trainer_mod.train(cfg, flow=flow)
 
     assert len(captured_kwargs) >= 2
-    first_params = captured_kwargs[0]["transform_params"]
-    second_params = captured_kwargs[1]["transform_params"]
-    assert isinstance(first_params, dict)
-    assert isinstance(second_params, dict)
+    first_params = cast(dict[str, object], captured_kwargs[0]["transform_params"])
+    second_params = cast(dict[str, object], captured_kwargs[1]["transform_params"])
     assert "delight_eta_prev" not in first_params
     assert second_params["delight_eta_prev"] == pytest.approx(2.0)
 
@@ -879,6 +920,12 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
                     completion_text="b",
                     observation_mask=[0, 0, 0, 1, 1],
                 ),
+                VerifiersTurnSample(
+                    prompt_ids=[9, 8],
+                    completion_ids=[7],
+                    completion_logprobs=[-0.3],
+                    completion_text="e",
+                ),
             ],
             [
                 VerifiersTurnSample(
@@ -899,12 +946,12 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
         return (
             [1.0, 0.0],
             turns,
-            ["ab", "cd"],
+            ["abe", "cd"],
             [],
             [],
             [],
             [],
-            VerifiersRolloutTiming(model_tokens=4, turns=4),
+            VerifiersRolloutTiming(model_tokens=5, turns=5),
         )
 
     monkeypatch.setattr(
@@ -962,14 +1009,17 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
     assert helper.hybrid_calls[0]["echo_loss_fn"] == "cross_entropy"
     assert helper.hybrid_calls[0]["tokens"] == [
         [1, 2, 3, 50, 51, 4],
+        [9, 8, 7],
         [1, 2, 5, 60, 6],
     ]
     echo_advantages = helper.hybrid_calls[0]["echo_advantages"]
     assert echo_advantages == [
         [0.0, 0.0, 0.0, 0.2, 0.2, 0.0],
+        [0.0, 0.0, 0.0],
         [0.0, 0.0, 0.0, 0.2, 0.0],
     ]
-    assert helper.hybrid_calls[0]["echo_full_observation_counts"] == [2, 1]
+    assert helper.hybrid_calls[0]["echo_full_observation_counts"] == [2, 2, 1]
+    assert helper.hybrid_calls[0]["echo_rollout_denominator"] == 2
 
     metrics_path = Path(cfg.log_dir) / "metrics.jsonl"
     entries = [
@@ -983,7 +1033,12 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
     assert step_metrics["echo/candidate_tokens"] == 3
     assert step_metrics["echo/observation_mask_datums"] == 2
     assert step_metrics["echo/kept_tokens"] == 3
-    assert step_metrics["echo/token_ratio"] == pytest.approx(0.75)
+    assert step_metrics["echo/token_ratio"] == pytest.approx(0.6)
+    assert step_metrics["echo/split_non_prefix"] == 1
+    assert step_metrics["rl/sampled_action_tokens"] == 5
+    assert step_metrics["rl/eligible_action_tokens"] == 5
+    assert step_metrics["rl/datumized_action_tokens"] == 5
+    assert step_metrics["rl/action_token_datumization_ratio"] == pytest.approx(1.0)
     assert step_metrics["echo/skipped_entropy_floor"] == 0
     assert step_metrics["echo/mode_collapse_guard"] == 0
     assert step_metrics["echo/joint_optimizer_step"] == 1

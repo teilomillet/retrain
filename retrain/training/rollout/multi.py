@@ -12,7 +12,7 @@ from retrain.environments.verifiers import run_multiturn_group
 from retrain.io.log import JsonlLogger
 from retrain.planning.types import PlanningDetector
 from retrain.training import console
-from retrain.training.echo import build_rollout_echo_datum, merge_echo_build_stats
+from retrain.training.echo import build_rollout_echo_datums, merge_echo_build_stats
 from retrain.training.generations import generation_log_indices, top_surprisal_payload
 from retrain.training.prompts import PromptBatch
 from retrain.training.rollout.state import RolloutAccumulator, accumulate_metric_totals
@@ -77,6 +77,7 @@ def run_multiturn(
             tl_grpo_outcome_baseline=acc.tl_grpo_ema,
             rollout_env_workers=config.environment_rollout_env_workers,
             rollout_buffer_size=config.environment_rollout_buffer_size,
+            capture_echo_transitions=config.echo_enabled,
         )
         accumulate_metric_totals(
             acc.rollout_timing_metrics,
@@ -115,9 +116,7 @@ def run_multiturn(
 
             acc.total_completions += 1
             acc.sampled_completion_token_count += len(seq_token_ids)
-            acc.sampled_completion_surprisal_sum += sum(
-                -lp for lp in seq_logprobs
-            )
+            acc.sampled_completion_surprisal_sum += sum(-lp for lp in seq_logprobs)
             if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
                 acc.max_token_hits += 1
 
@@ -194,8 +193,14 @@ def run_multiturn(
                 offset += len(seq_tokens)
                 seq_advs_by_turn.append(seq_advs)
 
+            eligible_tokens = sum(len(tokens) for tokens in turn_token_ids)
+            acc.eligible_completion_token_count += eligible_tokens
+            acc.pre_optimizer_nonzero_advantage_token_count += sum(
+                abs(value) > 0.0 for row in seq_advs_by_turn for value in row
+            )
+
             if config.echo_enabled:
-                rollout_datum, rollout_echo_build = build_rollout_echo_datum(
+                rollout_datums, rollout_echo_build = build_rollout_echo_datums(
                     turns_G[s_idx],
                     completion_advantages=seq_advs_by_turn,
                     weight=config.echo_weight,
@@ -205,22 +210,25 @@ def run_multiturn(
                     acc.echo_build,
                     rollout_echo_build,
                 )
-                if rollout_datum is not None:
-                    acc.datum_tokens.append(rollout_datum.tokens)
-                    acc.datum_logprobs.append(rollout_datum.logprobs)
-                    acc.datum_advantages.append(rollout_datum.advantages)
-                    acc.datum_echo_advantages.append(
-                        rollout_datum.echo_advantages
-                    )
-                    acc.datum_echo_full_observation_counts.append(
-                        rollout_datum.full_observation_count
-                    )
-                    acc.rl_completion_token_count += sum(
-                        len(tokens) for tokens in turn_token_ids
-                    )
-                    acc.rl_completion_surprisal_sum += sum(
-                        -lp for turn_lps in turn_logprobs for lp in turn_lps
-                    )
+                if rollout_datums:
+                    acc.echo_eligible_rollout_count += 1
+                    for rollout_datum in rollout_datums:
+                        acc.datum_tokens.append(rollout_datum.tokens)
+                        acc.datum_logprobs.append(rollout_datum.logprobs)
+                        acc.datum_advantages.append(rollout_datum.advantages)
+                        acc.datum_echo_advantages.append(rollout_datum.echo_advantages)
+                        acc.datum_echo_terminal_masks.append(
+                            rollout_datum.terminal_observation_mask
+                        )
+                        acc.datum_echo_full_observation_counts.append(
+                            rollout_datum.full_observation_count
+                        )
+                        acc.rl_completion_token_count += (
+                            rollout_datum.action_token_count
+                        )
+                        acc.rl_completion_surprisal_sum += (
+                            rollout_datum.action_surprisal_sum
+                        )
                     continue
 
             turn_prompt_ids = turns_prompt_ids_G[s_idx]
@@ -236,14 +244,11 @@ def run_multiturn(
                 acc.datum_tokens.append(full_tokens)
                 acc.datum_logprobs.append(padded_logprobs)
                 acc.datum_advantages.append(padded_advantages)
-                acc.datum_echo_advantages.append(
-                    [0.0] * len(full_tokens)
-                )
+                acc.datum_echo_advantages.append([0.0] * len(full_tokens))
+                acc.datum_echo_terminal_masks.append([0] * len(full_tokens))
                 acc.datum_echo_full_observation_counts.append(0)
                 acc.rl_completion_token_count += len(seq_tokens)
-                acc.rl_completion_surprisal_sum += sum(
-                    -lp for lp in seq_logprobs
-                )
+                acc.rl_completion_surprisal_sum += sum(-lp for lp in seq_logprobs)
 
         generation_entries: list[dict[str, object]] = []
         selected_generation_indices = (
@@ -293,13 +298,9 @@ def run_multiturn(
                     if not tl.get("valid", True):
                         acc.behavior_invalid += 1
                     _op = str(tl.get("operation", "unknown"))
-                    acc.behavior_actions[_op] = (
-                        acc.behavior_actions.get(_op, 0) + 1
-                    )
+                    acc.behavior_actions[_op] = acc.behavior_actions.get(_op, 0) + 1
                 gen_entry["turn_log"] = turn_summary
-                acc.behavior_resp_lens.append(
-                    len(str(gen_entry.get("completion", "")))
-                )
+                acc.behavior_resp_lens.append(len(str(gen_entry.get("completion", ""))))
             if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
                 gen_entry["turn_advantages"] = turn_advantages_G[s_idx]
             if s_idx < len(branch_rewards_G) and branch_rewards_G[s_idx]:
@@ -307,12 +308,12 @@ def run_multiturn(
             if s_idx < len(turns_logprobs_G) and turns_logprobs_G[s_idx]:
                 turn_lps = turns_logprobs_G[s_idx]
                 gen_entry["turn_mean_logprobs"] = [
-                    sum(lps) / len(lps) if lps else 0.0
-                    for lps in turn_lps
+                    sum(lps) / len(lps) if lps else 0.0 for lps in turn_lps
                 ]
                 gen_entry["turn_logprob_var"] = [
                     (sum((x - sum(lps) / len(lps)) ** 2 for x in lps) / len(lps))
-                    if len(lps) > 1 else 0.0
+                    if len(lps) > 1
+                    else 0.0
                     for lps in turn_lps
                 ]
             # Log top-K highest surprisal tokens with decoded text.

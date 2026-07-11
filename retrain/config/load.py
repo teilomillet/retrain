@@ -65,6 +65,24 @@ def load_config(
                     "Use a TOML list of strings."
                 )
 
+        optimizer_batch_sec = data.get("optimizer_batch")
+        if isinstance(optimizer_batch_sec, dict) and (
+            "allow_config_differences" in optimizer_batch_sec
+        ):
+            raw_differences = optimizer_batch_sec["allow_config_differences"]
+            if not isinstance(raw_differences, list) or not all(
+                isinstance(value, str) for value in raw_differences
+            ):
+                raise ValueError(
+                    "Invalid [optimizer_batch].allow_config_differences value. "
+                    "Use a TOML list of strings."
+                )
+            setattr(
+                config,
+                "optimizer_batch_allow_config_differences",
+                list(raw_differences),
+            )
+
         for section, mapping in _TOML_MAP.items():
             sec = data.get(section)
             if sec is None:

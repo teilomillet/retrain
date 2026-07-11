@@ -64,6 +64,7 @@ nav:
     - Experiment Tree: tree.md
     - LoRA-Squeeze: squeeze.md
     - Backends: backends.md
+    - Optimizer-Batch Replay: optimizer-batch-replay.md
     - Logging & wandb: logging.md
   - Research Guide: research-guide.md
   - Tinker Forecasting Note: tinker-forecasting-note.md

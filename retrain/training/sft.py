@@ -10,29 +10,16 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, cast
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
 
+from retrain.config.snapshot import config_snapshot
+
 SFT_DATA_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
-_REDACTED_CONFIG_VALUE = "<redacted>"
-_SENSITIVE_CONFIG_KEYS = {
-    "api_key",
-    "apikey",
-    "auth_token",
-    "bearer_token",
-    "credential",
-    "credentials",
-    "hf_token",
-    "openai_api_key",
-    "password",
-    "passwd",
-    "refresh_token",
-    "secret",
-}
 
 
 @dataclass(frozen=True)
@@ -97,7 +84,64 @@ class SftTokenizedExample:
 
     @property
     def supervised_tokens(self) -> int:
-        return sum(1 for value in self.advantages if value > 0.0)
+        return _loss_bearing_supervised_tokens(self.advantages)
+
+
+def _loss_bearing_supervised_tokens(advantages: list[float]) -> int:
+    """Count supervised targets that survive the causal one-token shift."""
+
+    return sum(1 for value in advantages[1:] if value > 0.0)
+
+
+def build_sft_batch_metrics(
+    batch: SftTokenizedBatch,
+) -> dict[str, int | float]:
+    """Describe logical-batch sequence shape without changing SFT tensors.
+
+    These metrics are backend-independent. Local-backend telemetry separately
+    reports the padding actually materialized after microbatching.
+    """
+
+    lengths = [len(row) for row in batch.tokens]
+    if not lengths:
+        return {
+            "sft_sequence_length_min": 0,
+            "sft_sequence_length_mean": 0.0,
+            "sft_sequence_length_p50": 0,
+            "sft_sequence_length_p95": 0,
+            "sft_sequence_length_max": 0,
+            "sft_logical_padded_tokens": 0,
+            "sft_logical_padding_tokens": 0,
+            "sft_logical_padding_fraction": 0.0,
+            "sft_supervised_token_fraction": 0.0,
+        }
+
+    sorted_lengths = sorted(lengths)
+    count = len(sorted_lengths)
+
+    def nearest_rank(percent: int) -> int:
+        index = max(0, (percent * count + 99) // 100 - 1)
+        return sorted_lengths[index]
+
+    padded_tokens = count * sorted_lengths[-1]
+    padding_tokens = max(0, padded_tokens - batch.total_tokens)
+    return {
+        "sft_sequence_length_min": sorted_lengths[0],
+        "sft_sequence_length_mean": batch.total_tokens / count,
+        "sft_sequence_length_p50": nearest_rank(50),
+        "sft_sequence_length_p95": nearest_rank(95),
+        "sft_sequence_length_max": sorted_lengths[-1],
+        "sft_logical_padded_tokens": padded_tokens,
+        "sft_logical_padding_tokens": padding_tokens,
+        "sft_logical_padding_fraction": (
+            padding_tokens / padded_tokens if padded_tokens else 0.0
+        ),
+        "sft_supervised_token_fraction": (
+            batch.supervised_tokens / batch.total_tokens
+            if batch.total_tokens
+            else 0.0
+        ),
+    }
 
 
 def effective_sft_loss_fn(config: "TrainConfig") -> str:
@@ -473,18 +517,39 @@ def tokenize_sft_example(
     if not callable(encode):
         raise RuntimeError("SFT tokenization requires a tokenizer with encode().")
 
-    full_text, prompt_text = _render_sft_text(tokenizer, example)
-    full_tokens = list(encode(full_text, add_special_tokens=False))
-    prompt_tokens = list(encode(prompt_text, add_special_tokens=False))
-
+    if example.messages is None and (example.prompt or example.completion):
+        # Tokenize the two fields independently. BPE tokenization is not
+        # prefix-stable: encoding ``prompt + completion`` can merge across the
+        # boundary and make a completion token look like prompt context.
+        prompt_tokens = list(encode(example.prompt, add_special_tokens=False))
+        completion_tokens = list(
+            encode(example.completion, add_special_tokens=False)
+        )
+        full_tokens = prompt_tokens + completion_tokens
+        n_prompt = len(prompt_tokens)
+    else:
+        full_text, prompt_text = _render_sft_text(tokenizer, example)
+        full_tokens = list(encode(full_text, add_special_tokens=False))
+        prompt_tokens = list(encode(prompt_text, add_special_tokens=False))
+        n_prompt = min(len(prompt_tokens), len(full_tokens))
     if max_tokens > 0 and len(full_tokens) > max_tokens:
-        full_tokens = full_tokens[:max_tokens]
-    n_prompt = min(len(prompt_tokens), len(full_tokens))
+        crop_start = len(full_tokens) - max_tokens
+        full_tokens = full_tokens[crop_start:]
+        n_prompt = max(0, n_prompt - crop_start)
     advantages = [0.0] * n_prompt + [1.0] * (len(full_tokens) - n_prompt)
     if not full_tokens:
         raise ValueError("SFT example tokenized to zero tokens.")
-    if not any(value > 0.0 for value in advantages):
-        raise ValueError("SFT example has no supervised target tokens after truncation.")
+    # Causal LM loss predicts token i from token i - 1, so position zero can
+    # never contribute loss. A suffix crop that lands inside the target must
+    # reserve its first retained token as causal context instead of reporting
+    # it as supervised work that the backend silently shifts away.
+    advantages[0] = 0.0
+    if _loss_bearing_supervised_tokens(advantages) == 0:
+        raise ValueError(
+            "SFT example has no loss-bearing supervised target tokens after "
+            "causal shifting/truncation; retain at least two tokens (for "
+            "example, set sft_max_tokens >= 2)."
+        )
     return full_tokens, advantages
 
 
@@ -508,7 +573,7 @@ def tokenize_sft_batch(
         tokens.append(row_tokens)
         advantages.append(row_advantages)
         total_tokens += len(row_tokens)
-        supervised_tokens += sum(1 for value in row_advantages if value > 0.0)
+        supervised_tokens += _loss_bearing_supervised_tokens(row_advantages)
     return SftTokenizedBatch(
         tokens=tokens,
         advantages=advantages,
@@ -541,6 +606,15 @@ def build_sft_tokenized_batch(
     examples: list[SftTokenizedExample],
 ) -> SftTokenizedBatch:
     """Build a batch view from pre-tokenized examples."""
+    zero_loss_rows = [
+        index for index, example in enumerate(examples)
+        if example.supervised_tokens == 0
+    ]
+    if zero_loss_rows:
+        raise ValueError(
+            "SFT tokenized batch contains rows with no loss-bearing supervised "
+            f"tokens after causal shifting: {zero_loss_rows}."
+        )
     tokens = [example.tokens for example in examples]
     advantages = [example.advantages for example in examples]
     return SftTokenizedBatch(
@@ -661,42 +735,6 @@ def write_sft_artifact_manifest(
     return paths
 
 
-def _is_sensitive_config_key(key: object) -> bool:
-    normalized = str(key).lower()
-    return (
-        normalized in _SENSITIVE_CONFIG_KEYS
-        or normalized.endswith("_api_key")
-        or normalized.endswith("_password")
-        or normalized.endswith("_secret")
-        or normalized.endswith("_token")
-        or "credential" in normalized
-    )
-
-
-def _redact_config_value(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {
-            str(key): (
-                _REDACTED_CONFIG_VALUE
-                if _is_sensitive_config_key(key)
-                else _redact_config_value(nested)
-            )
-            for key, nested in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_config_value(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_config_value(item) for item in value]
-    return value
-
-
-def _config_snapshot(config: "TrainConfig") -> dict[str, object]:
-    return {
-        field.name: _redact_config_value(getattr(config, field.name))
-        for field in fields(config)
-    }
-
-
 def write_sft_run_snapshot_artifacts(
     log_dir: str | Path,
     config: "TrainConfig",
@@ -714,7 +752,7 @@ def write_sft_run_snapshot_artifacts(
     config_payload = {
         "schema_version": 1,
         "kind": "retrain_resolved_config",
-        "config": _config_snapshot(config),
+        "config": config_snapshot(config),
     }
     config_path.write_text(json.dumps(config_payload, indent=2, sort_keys=True, default=str) + "\n")
     paths["resolved_config.json"] = str(config_path)

@@ -70,6 +70,15 @@ retrain/
       retain.py
       command.py
       sft.py
+      optimizer_replay.py
+    optimizer_batch/
+      adapter.py
+      artifact.py
+      codec.py
+      contract.py
+      rng.py
+      storage.py
+      types.py
     flow.py
     generations.py
     prompts.py
@@ -278,6 +287,10 @@ Split code when it creates a stable place a maintainer would naturally search:
 - `training/resume_check.py`: local preflight checks for resume directories and
   downloaded checkpoint artifacts.
 - `training/trainer.py`: the main RL orchestration path.
+- `training/optimizer_batch/`: exact logical-row capture, safe ragged tensor
+  codec, initial-adapter/config contracts, RNG state, and atomic artifact IO.
+- `training/runner/optimizer_replay.py`: local-only one-step systems replay
+  that intentionally bypasses data, environments, rollouts, and sampling.
 - `training/discover.py`: test-time training over a single problem.
 - `training/discovery/`: candidate archive, prompt memory rendering, and
   archive summary export for TTT-Discover.

@@ -234,6 +234,11 @@ OPTIONS
         --optim-beta1
         --optim-beta2
         --optim-eps
+        --optimizer-batch-allow-config-differences
+        --optimizer-batch-capture
+        --optimizer-batch-expected-logical-sha256
+        --optimizer-batch-expected-manifest-sha256
+        --optimizer-batch-replay-path
         --planning-detector
         --planning-model
         --planning-threshold
@@ -423,8 +428,10 @@ CONFIGURATION
         train_microbatch_size = 0
             0 disables train-step microbatching. A positive value splits local
             PyTorch/PEFT train_step datums into chunks of that size, preserving
-            the token-weighted loss while reducing peak VRAM at extra compute
-            cost. Use 1 for tight single-GPU memory probes.
+            the token-weighted loss. RL, SFT, and hybrid RL+ECHO pad each chunk
+            only to its local longest row, reducing peak VRAM and global-padding
+            work at the cost of more launches. Use 1 for memory probes, then
+            sweep upward and compare local backend timing/memory telemetry.
         cuda_empty_cache = false
             Release cached CUDA allocator blocks after local sample/train calls.
             This can reduce fragmentation pressure but may hurt throughput.
@@ -597,9 +604,12 @@ CONFIGURATION
         Warning if 0 (disables periodic checkpoints).
 
     trainer = "retrain"
-        Training runner. Built-in: "retrain", "command".
+        Training runner. Built-ins: "retrain", "sft", "optimizer_replay",
+        "ttt_discover", and "command".
         Dotted paths load plugins: "my_module.my_runner".
         "retrain" uses the built-in training loop.
+        "optimizer_replay" runs one verified local optimizer batch without
+        loading data, environments, or sampling.
         "command" runs an arbitrary shell command (see trainer_command).
 
     trainer_command = ""
@@ -619,6 +629,48 @@ CONFIGURATION
 
     eps = 1e-8
         Adam epsilon.
+
+  [optimizer_batch]
+
+    capture = false
+        Capture the exact post-transform logical rows from a one-step local
+        retrain run. Writes safetensors first and commits its manifest last.
+
+    replay_path = ""
+        Manifest input required by trainer = "optimizer_replay".
+
+    expected_logical_sha256 = ""
+        Required external SHA256 pin for replay.
+
+    expected_manifest_sha256 = ""
+        Required external SHA256 pin for the exact manifest and its
+        RNG-bearing payload. Checked before JSON parsing.
+
+    allow_config_differences = []
+        Explicit optimizer-contract differences. V1 permits only
+        "backend.options.gradient_checkpointing". Undeclared and unused
+        allowances both fail closed.
+
+    Capture/replay v1 requires backend = "local", exactly one device,
+    inference.engine = "pytorch", max_steps = 1, save_every = 0, no SFT
+    warmup/backpressure, and a local resume adapter. Capture requires the
+    initialization trainer state to have step = -1.
+
+    CLAIM BOUNDARY
+        Exact manifest, logical/effective rows, RNG, initial adapter,
+        optimizer contract, and loss admit an exact-input systems claim for
+        repeated runtime and memory measurements. They do not prove a
+        bitwise-identical CUDA update.
+
+        A bitwise update claim additionally requires identical final adapter
+        SHA256 values across the source, a same-condition replay, and repeated
+        identical replays. Approximate numerical-equivalence claims require
+        metrics and tolerances declared before inspecting the result.
+
+        Replay outputs are diagnostic one-batch adapters. Evaluate the source
+        adapter from the normal training path for model quality. Do not enable
+        deterministic-algorithm modes without measured correctness and
+        repeatability evidence on the target model and kernels.
 
   [lora]
 
@@ -739,18 +791,22 @@ CONFIGURATION
   [environment]
 
     provider = ""
-        "" (disabled) or "verifiers". Hard error if invalid.
+        "" (disabled), "verifiers", or "openenv". Hard error if invalid.
 
     id = ""
-        Required when provider is set. Hub environment ID.
-        Examples: "primeintellect/gsm8k", "primeintellect/wordle".
+        Required when provider is set. Hub environment ID, or an OpenEnv
+        server URL. Examples: "primeintellect/gsm8k",
+        "http://localhost:8765".
 
     args = ""
         JSON object or TOML inline table: args = { split = "train" }.
         Must be valid JSON decoding to a dict when provider is set.
+        OpenEnv supports expected_task_source and expected_task_ids as
+        opt-in, fail-closed reset provenance guards.
 
     max_turns = -1
-        -1 = no limit. Positive integer caps multi-turn rollouts.
+        -1 = no limit. Positive integer caps multi-turn rollouts. OpenEnv
+        also forwards a positive value to preload and live resets.
 
     auto_install = false
         Auto-download Hub environments via verifiers SDK.
@@ -1161,10 +1217,19 @@ BENCHMARKING
         wall_time_s              Total measured step wall time
         mean_step_time_s         Mean full-step duration
         mean_sample_time_s       Mean sampling duration
-        mean_train_time_s        Mean training duration
+        mean_train_time_s        Mean synchronous training duration; PRIME-RL
+                                 reports submit/enqueue latency and labels it
+                                 with train_time_semantics
         mean_tokens_per_second   Throughput from training metrics
         mean_sample_share        Fraction of step time spent sampling
-        mean_train_share         Fraction of step time spent training
+        mean_train_share         Fraction of step time spent synchronously
+                                 training; n/a for PRIME-RL
+        mean_train_submit_enqueue_time_s
+                                 Mean PRIME-RL submit/enqueue latency
+        mean_train_submit_enqueue_share
+                                 PRIME-RL submit/enqueue fraction of step time
+        Mixed-backend suites exclude PRIME-RL enqueue latency from the
+        synchronous mean_train_time_s aggregate.
         peak_process_max_rss_mb  Peak process RSS reported by the run
         mean_engine_prompt_prefill_s
                                 Mean local PyTorch prompt prefill time
@@ -1194,7 +1259,9 @@ BENCHMARKING
 
     Practical use:
         1) Start with 3 repeats on a short representative config.
-        2) Compare sample_share vs train_share to localize the bottleneck.
+        2) Compare sample_share vs train_share to localize synchronous
+           bottlenecks; for PRIME-RL use train_submit_enqueue_share only as
+           client-side submission overhead.
         3) Use retrain diff and retrain status to inspect the resulting runs.
 
     Local one-GPU sweep helper:
@@ -1256,11 +1323,18 @@ LOGGING
         max_token_hit_rate      Fraction hitting max_tokens limit
         step_time_s             Wall time for the step (seconds)
         sample_time_s           Sampling wall time inside the step
-        train_time_s            Training wall time inside the step
+        train_time_s            Synchronous optimizer wall time, except for
+                                PRIME-RL where it is submit/enqueue latency;
+                                inspect train_time_semantics
+        train_submit_enqueue_time_s
+                                Explicit PRIME-RL submit/enqueue latency
         tokens_per_step         Tokens submitted for the step
         tokens_per_second       Tokens_per_step / step_time_s
         sample_share            sample_time_s / step_time_s
-        train_share             train_time_s / step_time_s
+        train_share             train_time_s / step_time_s for synchronous
+                                backends; omitted for PRIME-RL
+        train_submit_enqueue_share
+                                PRIME-RL submit/enqueue_time / step_time_s
         process_max_rss_mb      Best-effort process peak RSS in MiB
         batch_size              Current batch size
         group_size              Current group size
@@ -1319,6 +1393,10 @@ LOGGING
         train/                  loss, reported_loss, loss_is_placeholder,
                                 rewards/*, sepa_*, step_time_s, ...
         train/backend/          reports_sync_loss, preserves_token_advantages
+        train/backend/local/    optimizer timing, CUDA peaks, exact padding,
+                                attention proxy, sequence lengths (RL and SFT)
+        train/sft/              logical-batch sequence and padding metrics
+        train/rl/               action-token and optimizer-signal coverage
         train/surprisal/        exec_mean, exec_var, plan_mean, plan_var
         train/entropy/          backward-compat aliases for train/surprisal/
         train/backpressure/     action, regime, p_star, sigma, ...
@@ -1519,13 +1597,19 @@ METRICS GUIDE
         sepa_gate_open          When the correctness gate opened.
         tokens_per_second       Throughput proxy for end-to-end step work.
         sample_share            Sampling fraction of each step.
-        train_share             Training fraction of each step.
+        train_share             Synchronous training fraction of each step;
+                                omitted for asynchronous PRIME-RL.
+        train_submit_enqueue_share
+                                PRIME-RL local submit/enqueue fraction; not
+                                remote optimizer utilization.
 
     Diagnostic metrics (debug, not for comparison):
 
         max_token_hit_rate      Spikes = model rambling. Increase max_tokens.
         loss                    Should decrease. Can be negative (normal).
         loss_is_placeholder     True for async backend-reported placeholder loss.
+        train_time_semantics    "submit_enqueue_latency" for PRIME-RL;
+                                "synchronous_optimizer_update" otherwise.
         num_datums              Drops = groups uninformative (all right/wrong).
         bp_regime               Stuck in "retrograde" = batch size too high.
         process_max_rss_mb      Host-side peak RSS; useful for capacity tracking.
@@ -1649,6 +1733,15 @@ ARCHITECTURE
             +-- retain.py        Built-in retrain loop runner
             +-- command.py       Shell-command runner
             +-- sft.py           Standalone SFT runner
+            +-- optimizer_replay.py Exact one-step systems replay runner
+        +-- optimizer_batch/     Capture artifacts, codec, contracts, RNG, IO
+            +-- adapter.py       Initial/final local adapter content hashes
+            +-- artifact.py      Manifest orchestration and verification
+            +-- codec.py         Ragged safetensors encoding and validation
+            +-- contract.py      Config snapshot and fail-closed diff contract
+            +-- rng.py           Torch CPU/CUDA RNG capture and restore
+            +-- storage.py       Atomic writes and file hashing
+            +-- types.py         Capture/replay value objects
         +-- flow.py              Flow construction and synthetic trace
         +-- generations.py       Generation log selection and surprisal payloads
         +-- prompts.py           Prompt batch selection for training steps

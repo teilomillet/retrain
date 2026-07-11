@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 from retrain.environments import load as env_load
 from retrain.environments import prompt as prompt_utils
+from retrain.environments.echo_tokens import EchoTokenRenderer
 from retrain.environments.rollout import VerifiersRolloutTiming, VerifiersTurnSample
 from retrain.environments.verifier import client as verifier_client
 from retrain.environments.verifier import coerce
@@ -150,6 +151,8 @@ def run_multiturn_group(
     temperature_spread: float = 0.0,
     rollout_env_workers: int = 1,
     rollout_buffer_size: int = 0,
+    capture_echo_transitions: bool = False,
+    echo_token_renderer: EchoTokenRenderer | None = None,
 ) -> tuple[
     list[float],
     list[list[VerifiersTurnSample]],
@@ -182,6 +185,8 @@ def run_multiturn_group(
         temperature_spread=temperature_spread,
         rollout_env_workers=rollout_env_workers,
         rollout_buffer_size=rollout_buffer_size,
+        capture_echo_transitions=capture_echo_transitions,
+        echo_token_renderer=echo_token_renderer,
         verifiers_loader=_optional_verifiers,
         env_client_factory=_make_env_client,
     )

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from retrain.backends.local import batch as local_batch
+from retrain.backends.local import sft as local_sft
 from retrain.backends.local.memory import empty_cuda_cache_if_requested
 from retrain.backends.local.steps import shared
 from retrain.backends.torch import reset_cuda_peak, timer_start, timer_stop
@@ -21,17 +23,18 @@ if TYPE_CHECKING:
     from retrain.backends.local.train import LocalTrainHelper
 
 
-def run(
+def _run_batches(
     helper: "LocalTrainHelper",
-    input_ids,
-    old_logprobs,
-    advantages,
-    attention_mask,
-    echo_advantages,
-    echo_full_observation_counts,
+    batches,
     echo_loss_fn,
+    *,
+    batch_size: int,
+    total_tokens_value: float,
+    echo_rollout_denominator: int,
+    padding_lengths=None,
+    padding_ranges=None,
 ) -> tuple[float, float]:
-    """Execute RL + ECHO on the same rollout rows in one optimizer step."""
+    """Execute one hybrid optimizer update over shaped microbatches."""
     helper.train_model.train()
     helper.optimizer.zero_grad()
     wall_start = time.perf_counter()
@@ -42,25 +45,21 @@ def run(
     microbatches = 0
 
     try:
-        batch_size = int(input_ids.shape[0])
-        microbatch_size = helper.train_microbatch_size or batch_size
-        total_tokens = shared.policy_total_tokens(helper, advantages, attention_mask)
-        total_tokens_value = float(total_tokens.item())
         loss_sum = 0.0
         clip_count = 0.0
         cov_count = 0.0
         abs_kl_sum = 0.0
         echo_loss_sum = 0.0
 
-        for start in range(0, batch_size, microbatch_size):
-            stop = min(start + microbatch_size, batch_size)
+        for (
+            mb_input_ids,
+            mb_old_logprobs,
+            mb_advantages,
+            mb_attention_mask,
+            mb_echo_advantages,
+            mb_echo_counts,
+        ) in batches:
             microbatches += 1
-            mb_input_ids = input_ids[start:stop]
-            mb_old_logprobs = old_logprobs[start:stop]
-            mb_advantages = advantages[start:stop]
-            mb_attention_mask = attention_mask[start:stop]
-            mb_echo_advantages = echo_advantages[start:stop]
-            mb_echo_counts = echo_full_observation_counts[start:stop]
 
             timer = timer_start(helper.train_device)
             with shared.saved_tensors(helper):
@@ -73,37 +72,35 @@ def run(
                         min=0.0,
                     )
                     echo_weights = echo_weights * mask.float()
-                    loss_mask = mask
-                    target_mask = None
-                    if getattr(helper, "train_selective_suffix_logits", False):
-                        target_mask = (mask > 0) & (
-                            (adv != 0) | (echo_weights > 0.0)
-                        )
-                        loss_mask = ((mask > 0) & (adv != 0)).to(mask.dtype)
+                    action_mask = (mask > 0) & (adv != 0)
+                    loss_mask = action_mask.to(mask.dtype)
+                    target_mask = (
+                        (mask > 0) & ((adv != 0) | (echo_weights > 0.0))
+                        if getattr(helper, "train_selective_suffix_logits", False)
+                        else None
+                    )
                     token_logprobs = helper._shifted_token_logprobs(
                         mb_input_ids,
                         mb_attention_mask,
                         target_mask=target_mask,
                     )
-                    masked_loss, clip_frac, cov_frac, abs_kl = (
-                        compute_policy_loss(
-                            old_lp,
-                            token_logprobs,
-                            adv,
-                            loss_mask,
-                            helper.clip_eps,
-                            helper.clip_eps_high,
-                            getattr(helper, "policy_loss_mode", "standard"),
-                            getattr(helper, "kl_cov_percent", 0.2),
-                            getattr(helper, "kl_cov_coef", 1.0),
-                            getattr(helper, "clip_cov_ratio", 0.0002),
-                            getattr(helper, "clip_cov_min", 1.0),
-                            getattr(helper, "clip_cov_max", 5.0),
-                        )
+                    masked_loss, clip_frac, cov_frac, abs_kl = compute_policy_loss(
+                        old_lp,
+                        token_logprobs,
+                        adv,
+                        loss_mask,
+                        helper.clip_eps,
+                        helper.clip_eps_high,
+                        getattr(helper, "policy_loss_mode", "standard"),
+                        getattr(helper, "kl_cov_percent", 0.2),
+                        getattr(helper, "kl_cov_coef", 1.0),
+                        getattr(helper, "clip_cov_ratio", 0.0002),
+                        getattr(helper, "clip_cov_min", 1.0),
+                        getattr(helper, "clip_cov_max", 5.0),
                     )
                     token_count = loss_mask.sum().clamp(min=1)
                     token_count_value = float(token_count.item())
-                    scaled_loss = masked_loss * (token_count / total_tokens)
+                    scaled_loss = masked_loss * (token_count / total_tokens_value)
 
                     if echo_loss_fn != "cross_entropy":
                         raise ValueError(
@@ -113,13 +110,14 @@ def run(
                     echo_selected = (echo_weights > 0.0).float()
                     if echo_selected.sum() > 0:
                         denom = mb_echo_counts.float().clamp(min=1e-3).unsqueeze(1)
-                        echo_loss = (
-                            (-token_logprobs * echo_weights) / denom
-                        ).sum()
+                        echo_loss = ((-token_logprobs * echo_weights) / denom).sum()
                     else:
                         echo_loss = token_logprobs.sum() * 0.0
 
-                    scaled_loss = scaled_loss + echo_loss / max(batch_size, 1)
+                    scaled_loss = scaled_loss + echo_loss / max(
+                        echo_rollout_denominator,
+                        1,
+                    )
                 forward_s += timer_stop(timer)
 
                 timer = timer_start(helper.train_device)
@@ -137,7 +135,7 @@ def run(
         helper._policy_cov_fraction = cov_count / total_tokens_value
         helper._policy_abs_kl = abs_kl_sum / total_tokens_value
         loss_val = loss_sum / total_tokens_value
-        echo_loss_val = echo_loss_sum / max(batch_size, 1)
+        echo_loss_val = echo_loss_sum / max(echo_rollout_denominator, 1)
 
         shared.snapshot_and_record(
             helper,
@@ -150,8 +148,108 @@ def run(
             total_tokens=total_tokens_value,
             batch_size=batch_size,
         )
+        if padding_lengths is not None and padding_ranges is not None:
+            shared.record_sequence_padding(
+                helper,
+                padding_lengths,
+                padding_ranges,
+            )
 
         return loss_val, echo_loss_val
     finally:
         helper.optimizer.zero_grad()
         empty_cuda_cache_if_requested(helper.cuda_empty_cache)
+
+
+def run(
+    helper: "LocalTrainHelper",
+    input_ids,
+    old_logprobs,
+    advantages,
+    attention_mask,
+    echo_advantages,
+    echo_full_observation_counts,
+    echo_loss_fn,
+    echo_rollout_denominator=0,
+) -> tuple[float, float]:
+    """Execute RL + ECHO from one globally padded tensor batch."""
+    batch_size = int(input_ids.shape[0])
+    microbatch_size = helper.train_microbatch_size or batch_size
+    total_tokens = shared.policy_total_tokens(helper, advantages, attention_mask)
+    ranges = [
+        (start, min(start + microbatch_size, batch_size))
+        for start in range(0, batch_size, microbatch_size)
+    ]
+    batches = (
+        (
+            input_ids[start:stop],
+            old_logprobs[start:stop],
+            advantages[start:stop],
+            attention_mask[start:stop],
+            echo_advantages[start:stop],
+            echo_full_observation_counts[start:stop],
+        )
+        for start, stop in ranges
+    )
+    return _run_batches(
+        helper,
+        batches,
+        echo_loss_fn,
+        batch_size=batch_size,
+        total_tokens_value=float(total_tokens.item()),
+        echo_rollout_denominator=(echo_rollout_denominator or batch_size),
+    )
+
+
+def run_sequence(
+    helper: "LocalTrainHelper",
+    all_tokens,
+    all_logprobs,
+    all_advantages,
+    echo_advantages,
+    echo_full_observation_counts,
+    echo_loss_fn,
+    echo_rollout_denominator=0,
+) -> tuple[float, float]:
+    """Execute RL + ECHO while padding only inside each microbatch."""
+    batch_size = len(all_tokens)
+    lengths = [len(row) for row in all_tokens]
+    ranges = local_sft.microbatch_ranges(
+        lengths,
+        helper.train_microbatch_size or batch_size,
+    )
+    total_tokens_value = shared.policy_total_tokens_from_rows(
+        helper,
+        all_tokens,
+        all_advantages,
+    )
+
+    def batches():
+        for start, stop in ranges:
+            batch = local_batch.echo(
+                all_tokens[start:stop],
+                all_logprobs[start:stop],
+                all_advantages[start:stop],
+                echo_advantages[start:stop],
+                echo_full_observation_counts[start:stop],
+                device=helper.train_device,
+            )
+            yield (
+                batch.input_ids,
+                batch.old_logprobs,
+                batch.advantages,
+                batch.attention_mask,
+                batch.echo_advantages,
+                batch.echo_counts,
+            )
+
+    return _run_batches(
+        helper,
+        batches(),
+        echo_loss_fn,
+        batch_size=batch_size,
+        total_tokens_value=total_tokens_value,
+        echo_rollout_denominator=(echo_rollout_denominator or batch_size),
+        padding_lengths=lengths,
+        padding_ranges=ranges,
+    )

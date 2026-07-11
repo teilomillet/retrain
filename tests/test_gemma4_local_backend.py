@@ -1048,7 +1048,8 @@ def _helper_for_model(model: torch.nn.Module, *, train_microbatch_size: int):
     return helper
 
 
-def test_local_train_step_microbatch_matches_full_batch_update():
+@pytest.mark.parametrize("selective_suffix", [False, True])
+def test_local_train_step_microbatch_matches_full_batch_update(selective_suffix):
     torch.manual_seed(123)
     base = _TinyCausalModel()
     full_model = _TinyCausalModel()
@@ -1070,6 +1071,12 @@ def test_local_train_step_microbatch_matches_full_batch_update():
 
     full = _helper_for_model(full_model, train_microbatch_size=0)
     micro = _helper_for_model(micro_model, train_microbatch_size=1)
+    full.train_selective_suffix_logits = selective_suffix
+    micro.train_selective_suffix_logits = selective_suffix
+    full.train_logprob_chunk_size = 128
+    micro.train_logprob_chunk_size = 128
+    full._train_logits_to_keep_supported = False
+    micro._train_logits_to_keep_supported = False
 
     full_loss = full.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
     micro_loss = micro.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
@@ -1081,6 +1088,12 @@ def test_local_train_step_microbatch_matches_full_batch_update():
     assert metrics["local_train_forward_s"] >= 0.0
     assert metrics["local_train_backward_s"] >= 0.0
     assert metrics["local_train_optimizer_s"] >= 0.0
+    assert metrics["local_train_microbatch_local_padding"] == 1
+    assert metrics["local_train_global_padded_tokens"] == 12
+    assert metrics["local_train_microbatch_padded_tokens"] == 11
+    assert metrics["local_train_padding_tokens_avoided"] == 1
+    assert metrics["local_train_global_attention_proxy"] == 48
+    assert metrics["local_train_microbatch_attention_proxy"] == 41
     for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 
@@ -1113,12 +1126,28 @@ def test_sft_train_step_microbatch_local_padding_matches_full_batch_update():
     micro_loss = micro.sft_train_step(tokens, advantages, lr=0.05, weight_decay=0.0)
 
     assert micro_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
+    full_metrics = full.runtime_metrics()
+    assert full_metrics["local_train_global_padded_tokens"] == 18
+    assert full_metrics["local_train_microbatch_padded_tokens"] == 18
+    assert full_metrics["local_train_padding_avoidance_fraction"] == pytest.approx(
+        0.0
+    )
+    assert full_metrics["local_train_sequence_length_p95"] == 6
     metrics = micro.runtime_metrics()
     assert metrics["local_train_microbatches"] == 3
     assert metrics["local_train_microbatch_local_padding"] == 1
     assert metrics["local_train_global_padded_tokens"] == 18
     assert metrics["local_train_microbatch_padded_tokens"] == 14
     assert metrics["local_train_padding_tokens_avoided"] == 4
+    assert metrics["local_train_global_attention_proxy"] == 108
+    assert metrics["local_train_microbatch_attention_proxy"] == 70
+    assert metrics["local_train_attention_proxy_avoided"] == 38
+    assert metrics["local_train_sequence_length_min"] == 3
+    assert metrics["local_train_sequence_length_p50"] == 5
+    assert metrics["local_train_sequence_length_p95"] == 6
+    assert metrics["local_train_sequence_length_max"] == 6
+    assert metrics["local_train_avg_microbatch_examples"] == pytest.approx(1.0)
+    assert metrics["local_train_sft_avg_microbatch_examples"] == pytest.approx(1.0)
     for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 

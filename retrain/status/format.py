@@ -113,6 +113,10 @@ def format_run(run: RunSummary) -> str:
         perf_parts.append(f"tok/s={run.tokens_per_second:.1f}")
     if run.sample_share > 0:
         perf_parts.append(f"sample={run.sample_share:.0%}")
+    if run.train_share is not None:
+        perf_parts.append(f"train={run.train_share:.0%}")
+    elif run.train_submit_enqueue_share is not None:
+        perf_parts.append(f"enqueue={run.train_submit_enqueue_share:.0%}")
     if run.latest_step_time_s > 0:
         perf_parts.append(f"step_t={run.latest_step_time_s:.1f}s")
     if run.process_max_rss_mb > 0:

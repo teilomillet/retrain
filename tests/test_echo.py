@@ -7,6 +7,7 @@ import pytest
 from retrain.training.echo import (
     EchoBuildStats,
     build_rollout_echo_datum,
+    build_rollout_echo_datums,
     common_prefix_len,
     limit_echo_masks,
     merge_echo_build_stats,
@@ -48,6 +49,8 @@ def test_build_rollout_echo_datum_interleaves_actions_and_observations() -> None
     assert datum.echo_advantages == [0.0, 0.0, 0.0, 0.05, 0.05, 0.0, 0.0, 0.0]
     assert datum.full_observation_count == 2
     assert datum.positive_tokens == 2
+    assert datum.action_token_count == 3
+    assert datum.action_surprisal_sum == pytest.approx(0.6)
     assert stats.candidate_datums == 1
     assert stats.observation_mask_datums == 1
     assert stats.skipped_first_turns == 1
@@ -76,6 +79,200 @@ def test_build_rollout_echo_datum_rejects_unstable_prompt_stitching() -> None:
 
     assert datum is None
     assert stats.skipped_low_overlap == 1
+
+
+def test_build_rollout_echo_datum_keeps_exact_prefix_before_late_mismatch() -> None:
+    turns = [
+        SimpleNamespace(
+            prompt_ids=[1, 2],
+            completion_ids=[3],
+            completion_logprobs=[-0.1],
+        ),
+        SimpleNamespace(
+            prompt_ids=[1, 2, 3, 50],
+            completion_ids=[4],
+            completion_logprobs=[-0.2],
+            observation_mask=[0, 0, 0, 1],
+        ),
+        SimpleNamespace(
+            prompt_ids=[9, 8, 7],
+            completion_ids=[5],
+            completion_logprobs=[-0.3],
+        ),
+    ]
+
+    datums, stats = build_rollout_echo_datums(
+        turns,
+        completion_advantages=[[0.1], [0.2], [0.3]],
+        weight=0.05,
+        min_prompt_overlap=0.5,
+    )
+
+    assert [datum.tokens for datum in datums] == [
+        [1, 2, 3, 50, 4],
+        [9, 8, 7, 5],
+    ]
+    assert [datum.action_token_count for datum in datums] == [2, 1]
+    assert sum(datum.action_token_count for datum in datums) == 3
+    assert datums[0].advantages == [0.0, 0.0, 0.1, 0.0, 0.2]
+    assert datums[0].echo_advantages == [0.0, 0.0, 0.0, 0.05, 0.0]
+    assert datums[0].positive_tokens == 1
+    assert datums[1].full_observation_count == 1
+    assert stats.candidate_datums == 1
+    assert stats.candidate_tokens == 1
+    assert stats.skipped_low_overlap == 1
+    assert stats.split_non_prefix == 1
+
+
+def test_echo_high_overlap_non_prefix_splits_instead_of_splicing() -> None:
+    turns = [
+        SimpleNamespace(
+            prompt_ids=[1, 2],
+            completion_ids=[3, 4],
+            completion_logprobs=[-0.1, -0.2],
+        ),
+        SimpleNamespace(
+            prompt_ids=[1, 2, 3, 9, 50],
+            completion_ids=[5],
+            completion_logprobs=[-0.3],
+        ),
+    ]
+
+    datums, stats = build_rollout_echo_datums(
+        turns,
+        completion_advantages=[[0.1, 0.2], [0.3]],
+        weight=0.05,
+        min_prompt_overlap=0.5,
+    )
+
+    assert [datum.tokens for datum in datums] == [
+        [1, 2, 3, 4],
+        [1, 2, 3, 9, 50, 5],
+    ]
+    assert sum(datum.action_token_count for datum in datums) == 3
+    assert stats.split_non_prefix == 1
+    assert stats.skipped_low_overlap == 0
+
+
+def test_echo_shorter_next_prompt_splits_and_keeps_every_action() -> None:
+    turns = [
+        SimpleNamespace(
+            prompt_ids=[1, 2, 3],
+            completion_ids=[4],
+            completion_logprobs=[-0.1],
+        ),
+        SimpleNamespace(
+            prompt_ids=[1, 2],
+            completion_ids=[5],
+            completion_logprobs=[-0.2],
+        ),
+    ]
+
+    datums, stats = build_rollout_echo_datums(
+        turns,
+        completion_advantages=[[0.1], [0.2]],
+        weight=0.05,
+        min_prompt_overlap=0.5,
+    )
+
+    assert [datum.tokens for datum in datums] == [[1, 2, 3, 4], [1, 2, 5]]
+    assert sum(datum.action_token_count for datum in datums) == 2
+    assert stats.split_non_prefix == 1
+
+
+def test_explicit_transition_rows_keep_actions_and_target_each_response_once() -> None:
+    turns = [
+        SimpleNamespace(
+            prompt_ids=[1, 2],
+            completion_ids=[3],
+            completion_logprobs=[-0.1],
+            echo_observation_capture_supported=True,
+            post_observation_ids=[1, 2, 3, 40, 50],
+            post_observation_mask=[0, 0, 0, 0, 1],
+            post_observation_seen=True,
+            post_observation_terminal=False,
+        ),
+        # Deliberately not a prefix of the prior transition. This is the real
+        # Qwen rerender shape that defeated rollout-level suffix stitching.
+        SimpleNamespace(
+            prompt_ids=[9, 8],
+            completion_ids=[4, 5],
+            completion_logprobs=[-0.2, -0.3],
+            echo_observation_capture_supported=True,
+            post_observation_ids=[9, 8, 4, 5, 41, 51, 52],
+            post_observation_mask=[0, 0, 0, 0, 0, 1, 1],
+            post_observation_seen=True,
+            post_observation_terminal=True,
+        ),
+    ]
+
+    datums, stats = build_rollout_echo_datums(
+        turns,
+        completion_advantages=[[0.7], [-0.2, 0.4]],
+        weight=0.05,
+        min_prompt_overlap=1.0,
+    )
+
+    assert [datum.tokens for datum in datums] == [
+        [1, 2, 3, 40, 50],
+        [9, 8, 4, 5, 41, 51, 52],
+    ]
+    assert sum(datum.action_token_count for datum in datums) == 3
+    assert datums[0].advantages == [0.0, 0.0, 0.7, 0.0, 0.0]
+    assert datums[1].advantages == [0.0, 0.0, -0.2, 0.4, 0.0, 0.0, 0.0]
+    assert datums[0].echo_advantages == [0.0, 0.0, 0.0, 0.0, 0.05]
+    assert datums[1].echo_advantages == [0.0, 0.0, 0.0, 0.0, 0.0, 0.05, 0.05]
+    assert datums[0].terminal_observation_mask == [0, 0, 0, 0, 0]
+    assert datums[1].terminal_observation_mask == [0, 0, 0, 0, 0, 1, 1]
+    assert all(datum.full_observation_count == 3 for datum in datums)
+    assert stats.observation_responses == 2
+    assert stats.bridged_transition_datums == 2
+    assert stats.bridge_failures == 0
+    assert stats.terminal_candidate_tokens == 2
+    assert stats.explicit_transition_rollouts == 1
+    assert stats.split_non_prefix == 0
+
+    _, capped = limit_echo_masks(
+        [datum.echo_advantages for datum in datums],
+        max_positive_tokens=1,
+        terminal_observation_masks=[
+            datum.terminal_observation_mask for datum in datums
+        ],
+    )
+    assert capped.kept_tokens == 1
+    assert capped.kept_terminal_tokens == 0
+
+
+def test_explicit_bridge_failure_preserves_grpo_action_row() -> None:
+    turns = [
+        SimpleNamespace(
+            prompt_ids=[1, 2],
+            completion_ids=[3, 4],
+            completion_logprobs=[-0.1, -0.2],
+            echo_observation_capture_supported=True,
+            post_observation_ids=None,
+            post_observation_mask=None,
+            post_observation_seen=True,
+            post_observation_bridge_failed=True,
+            post_observation_terminal=True,
+        )
+    ]
+
+    datums, stats = build_rollout_echo_datums(
+        turns,
+        completion_advantages=[[0.25, -0.25]],
+        weight=0.05,
+        min_prompt_overlap=1.0,
+    )
+
+    assert len(datums) == 1
+    assert datums[0].tokens == [1, 2, 3, 4]
+    assert datums[0].advantages == [0.0, 0.0, 0.25, -0.25]
+    assert datums[0].action_token_count == 2
+    assert datums[0].positive_tokens == 0
+    assert stats.observation_responses == 1
+    assert stats.bridge_failures == 1
+    assert stats.bridged_transition_datums == 0
 
 
 def test_build_rollout_echo_datum_falls_back_to_prompt_suffix() -> None:
@@ -153,6 +350,29 @@ def test_limit_echo_masks_caps_without_truncating_rollout_rows() -> None:
     assert [len(row) for row in limited] == [4, 3]
     assert stats.kept_datums == 2
     assert stats.kept_tokens == 3
+    assert stats.kept_terminal_tokens == 0
+    assert stats.truncated_tokens == 1
+
+
+def test_limit_echo_masks_counts_only_terminal_tokens_retained_after_cap() -> None:
+    rows = [
+        [0.0, 0.2, 0.2],
+        [0.1, 0.1],
+    ]
+    terminal_masks = [
+        [0, 0, 0],
+        [1, 1],
+    ]
+
+    limited, stats = limit_echo_masks(
+        rows,
+        max_positive_tokens=3,
+        terminal_observation_masks=terminal_masks,
+    )
+
+    assert limited == [[0.0, 0.2, 0.2], [0.1, 0.0]]
+    assert stats.kept_tokens == 3
+    assert stats.kept_terminal_tokens == 1
     assert stats.truncated_tokens == 1
 
 
@@ -164,7 +384,8 @@ def test_merge_echo_build_stats_adds_all_counters() -> None:
         skipped_first_turns=4,
         skipped_no_suffix=5,
         skipped_low_overlap=6,
-        skipped_bad_observation_mask=7,
+        split_non_prefix=7,
+        skipped_bad_observation_mask=8,
     )
     right = EchoBuildStats(
         candidate_datums=8,
@@ -173,7 +394,8 @@ def test_merge_echo_build_stats_adds_all_counters() -> None:
         skipped_first_turns=11,
         skipped_no_suffix=12,
         skipped_low_overlap=13,
-        skipped_bad_observation_mask=14,
+        split_non_prefix=14,
+        skipped_bad_observation_mask=15,
     )
 
     assert merge_echo_build_stats(left, right) == EchoBuildStats(
@@ -183,7 +405,8 @@ def test_merge_echo_build_stats_adds_all_counters() -> None:
         skipped_first_turns=15,
         skipped_no_suffix=17,
         skipped_low_overlap=19,
-        skipped_bad_observation_mask=21,
+        split_non_prefix=21,
+        skipped_bad_observation_mask=23,
     )
 
 
@@ -202,6 +425,7 @@ def test_echo_treats_rl_advantages_as_opaque_algorithm_output() -> None:
             echo_loss_fn,
             lr,
             weight_decay,
+            echo_rollout_denominator=0,
         ):
             self.calls.append(
                 {
@@ -213,6 +437,7 @@ def test_echo_treats_rl_advantages_as_opaque_algorithm_output() -> None:
                     "echo_loss_fn": echo_loss_fn,
                     "lr": lr,
                     "weight_decay": weight_decay,
+                    "echo_rollout_denominator": echo_rollout_denominator,
                 }
             )
             return 0.25, 0.125
@@ -233,6 +458,7 @@ def test_echo_treats_rl_advantages_as_opaque_algorithm_output() -> None:
         echo_loss_fn="cross_entropy",
         lr=1e-4,
         weight_decay=0.01,
+        echo_rollout_denominator=1,
     )
 
     assert (rl_loss, echo_loss, joint) == (0.25, 0.125, True)
@@ -242,6 +468,7 @@ def test_echo_treats_rl_advantages_as_opaque_algorithm_output() -> None:
         [0.0, 0.0],
     ]
     assert helper.calls[0]["echo_full_observation_counts"] == [1, 0]
+    assert helper.calls[0]["echo_rollout_denominator"] == 1
 
 
 def test_echo_rejects_helper_without_shared_forward_step() -> None:

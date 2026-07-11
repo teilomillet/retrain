@@ -49,6 +49,21 @@ class StepResult:
     done: bool
 
 
+class OpenEnvServerError(RuntimeError):
+    """Structured error returned by the OpenEnv wire protocol."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        self.server_message = message
+        self.code = code
+        hint = ""
+        if code == "CAPACITY_REACHED":
+            hint = (
+                "; reduce environment.rollout_env_workers to the server capacity "
+                "or relaunch the OpenEnv server with a matching capacity"
+            )
+        super().__init__(f"OpenEnv server error: {message} (code: {code}){hint}")
+
+
 def ws_url(base_url: str) -> str:
     """Convert an http(s)/ws(s) base URL to the ``/ws`` endpoint URL."""
     url = base_url.strip().rstrip("/")
@@ -147,10 +162,10 @@ class OpenEnvClient:
         if response_obj.get("type") == "error":
             data = response_obj.get("data")
             details = data if isinstance(data, dict) else {}
-            raise RuntimeError(
-                "OpenEnv server error: "
-                f"{details.get('message', 'unknown error')} "
-                f"(code: {details.get('code', 'UNKNOWN')})"
+            code = str(details.get("code", "UNKNOWN"))
+            raise OpenEnvServerError(
+                str(details.get("message", "unknown error")),
+                code=code,
             )
         return response_obj
 
