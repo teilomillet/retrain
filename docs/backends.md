@@ -80,6 +80,7 @@ PyTorch sampling:
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
 cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
 cuda_expandable_segments = "auto"  # "auto" enables expandable CUDA segments when checkpoint layers are skipped; "on"/"off" force it
+strict_deterministic = false  # opt in to fail-closed PyTorch/CUDA update controls
 sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 cudnn_causal_conv1d_shim = false  # opt-in Qwen3.5 GatedDelta fast path via cuDNN frontend
@@ -110,6 +111,23 @@ over this option. `"on"` forces the setting for any run; `"off"` never touches
 the allocator. The applied state is visible in the
 `local_cuda_expandable_segments_enabled` / `_env_preset` / `_set_failed`
 runtime metrics.
+`strict_deterministic` defaults to `false` for compatibility and throughput.
+When enabled, retrain establishes a deterministic cuBLAS workspace before
+CUDA/model construction, enables
+`torch.use_deterministic_algorithms(True, warn_only=False)`, sets cuDNN
+deterministic mode, disables cuDNN benchmarking, requires `training.seed >= 0`,
+and seeds model/adapter initialization before construction. It fails if CUDA was
+already initialized without those controls. Runtime metrics record the requested and
+model-config attention path, deterministic flags, and exact
+`CUBLAS_WORKSPACE_CONFIG`; the attention field does not prove which CUDA SDPA
+sub-kernel was dispatched. This is a PyTorch/CUDA guard, not proof that custom
+Triton kernels from Liger, FlashQLA, or another extension are deterministic.
+For causal campaigns, run the same captured update twice on the target GPU and
+require identical post-update adapter hashes before making a bitwise or causal
+claim. PyTorch, cuDNN, and cuBLAS controls are process-global, so campaign arms
+that mix `strict_deterministic = true` and `false` must run in separate
+processes; retrain fails closed if a non-strict local backend follows a strict
+one in the same process.
 `cudnn_causal_conv1d_shim` is default-off. Enable it only after a smoke run
 confirms the installed `cudnn` frontend exports `ops.causal_conv1d`; it is meant
 for CUDA hosts where Qwen3.5 would otherwise fall back because the normal

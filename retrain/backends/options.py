@@ -45,6 +45,10 @@ def local_option_schema() -> dict[str, BackendOptionSpec]:
             value_type=str,
             default="auto",
         ),
+        "strict_deterministic": BackendOptionSpec(
+            value_type=bool,
+            default=False,
+        ),
         "sample_use_cache": BackendOptionSpec(value_type=bool, default=True),
         "sample_kv_quantization": BackendOptionSpec(
             value_type=str,

@@ -99,6 +99,17 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
             errors.append(str(exc))
 
     if (
+        config.backend == "local"
+        and isinstance(config.backend_options, dict)
+        and bool(config.backend_options.get("strict_deterministic", False))
+        and config.seed < 0
+    ):
+        errors.append(
+            "backend.options.strict_deterministic=true requires "
+            "[training] seed >= 0."
+        )
+
+    if (
         config.backend == "prime_rl"
         and isinstance(config.backend_options, dict)
         and config.backend_options.get("strict_advantages") is False

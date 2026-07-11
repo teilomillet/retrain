@@ -18,6 +18,11 @@ import torch
 from transformers import AutoModelForCausalLM
 from peft import get_peft_model
 
+from retrain.backends.determinism import (
+    add_model_attention_proof,
+    establish_strict_determinism,
+    seed_strict_determinism,
+)
 from retrain.kernels.accelerators import (
     accelerator_status,
     apply_liger_kernel_if_available,
@@ -91,6 +96,8 @@ class LocalTrainHelper:
                  liger_fused_linear_ce=True,
                  cuda_empty_cache=False,
                  cuda_expandable_segments="auto",
+                 strict_deterministic=False,
+                 strict_deterministic_seed=-1,
                  sample_use_cache=True,
                  gradient_checkpointing=True,
                  gradient_checkpointing_use_reentrant="auto",
@@ -125,6 +132,14 @@ class LocalTrainHelper:
                  sample_oscar_residual_block_size=128,
                  sample_oscar_attn_implementation="sdpa",
                  trust_remote_code=False):
+        self.strict_deterministic = bool(strict_deterministic)
+        self._determinism_metrics = establish_strict_determinism(
+            enabled=self.strict_deterministic
+        )
+        if self.strict_deterministic:
+            self._determinism_metrics.update(
+                seed_strict_determinism(int(strict_deterministic_seed))
+            )
         self.adapter_path = adapter_path
         self.model_name = model_name
         self.engine_type = engine_type
@@ -315,6 +330,17 @@ class LocalTrainHelper:
             lora_rank,
             lora_alpha,
             lora_dropout,
+        )
+        # Re-read the controls after model/CUDA construction. Strict mode only
+        # survives this boundary if the same verified process preflight ran
+        # before CUDA initialization.
+        self._determinism_metrics.update(
+            establish_strict_determinism(enabled=self.strict_deterministic)
+        )
+        self._determinism_metrics = add_model_attention_proof(
+            self._determinism_metrics,
+            model=self.train_model,
+            requested_attention_kernel=self.attention_kernel,
         )
         self._accelerator_metrics.update(
             patch_qwen35_gated_delta_kernel(

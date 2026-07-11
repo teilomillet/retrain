@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 from types import SimpleNamespace
 
@@ -221,6 +222,14 @@ def test_local_backend_contract(monkeypatch):
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_expandable_segments"]
         == "auto"
     )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
+        is False
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic_seed"]
+        == -1
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is True
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_kv_quantization"]
@@ -289,6 +298,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
             "train_sft_microbatch_token_budget": 9500,
             "cuda_empty_cache": True,
             "cuda_expandable_segments": "off",
+            "strict_deterministic": False,
             "sample_use_cache": False,
             "gradient_checkpointing": False,
             "gradient_checkpointing_use_reentrant": "false",
@@ -328,6 +338,10 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["cuda_expandable_segments"]
         == "off"
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
+        is False
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is False
@@ -413,6 +427,36 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_coef"] == 0.5
+
+
+def test_local_backend_prepares_strict_determinism_before_helper_import(monkeypatch):
+    _FakeLocalTrainHelper.init_calls.clear()
+    fake_mod = SimpleNamespace(LocalTrainHelper=_FakeLocalTrainHelper)
+    monkeypatch.setitem(sys.modules, "retrain.backends.local", fake_mod)
+    factory = importlib.import_module("retrain.backends.create.local")
+    prepared: list[bool] = []
+    monkeypatch.setattr(
+        factory,
+        "prepare_strict_determinism_environment",
+        lambda *, enabled: prepared.append(enabled) or {},
+    )
+
+    cfg = TrainConfig(
+        backend="local",
+        backend_options={"strict_deterministic": True},
+        seed=123,
+    )
+    backend.create("local", cfg)
+
+    assert prepared == [True]
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
+        is True
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic_seed"]
+        == 123
+    )
 
 
 def test_local_backend_passes_oscar_sampling_options(monkeypatch):

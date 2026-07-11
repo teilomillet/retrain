@@ -48,6 +48,16 @@ class SftRunner:
             )
 
     def _run(self, config: TrainConfig) -> TrainingRunResult:
+        if config.backend == "local" and bool(
+            config.backend_options.get("strict_deterministic", False)
+        ):
+            # SFT seeds CUDA before constructing its backend. Establish strict
+            # controls first so manual_seed_all cannot initialize CUDA ahead
+            # of the deterministic cuBLAS/PyTorch contract.
+            from retrain.backends.determinism import establish_strict_determinism
+
+            establish_strict_determinism(enabled=True)
+
         from transformers import AutoTokenizer
 
         from retrain.backends.catalog import (

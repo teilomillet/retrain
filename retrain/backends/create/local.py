@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from retrain.backends.create.values import backend_option_float, backend_option_int
+from retrain.backends.determinism import prepare_strict_determinism_environment
 from retrain.training.sft import effective_sft_loss_fn
 
 if TYPE_CHECKING:
@@ -13,6 +14,13 @@ if TYPE_CHECKING:
 
 
 def create_local(config: "TrainConfig") -> "TrainHelper":
+    strict_deterministic = bool(
+        config.backend_options.get("strict_deterministic", False)
+    )
+    # cuBLAS reads this process contract during CUDA initialization. Establish
+    # it before importing the local backend, whose dependency graph imports
+    # torch and Transformers.
+    prepare_strict_determinism_environment(enabled=strict_deterministic)
     try:
         from retrain.backends.local import LocalTrainHelper
     except ImportError:
@@ -60,6 +68,8 @@ def create_local(config: "TrainConfig") -> "TrainHelper":
         cuda_expandable_segments=str(
             config.backend_options.get("cuda_expandable_segments", "auto")
         ),
+        strict_deterministic=strict_deterministic,
+        strict_deterministic_seed=config.seed,
         sample_use_cache=bool(config.backend_options.get("sample_use_cache", True)),
         gradient_checkpointing=bool(
             config.backend_options.get("gradient_checkpointing", True)

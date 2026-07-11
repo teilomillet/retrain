@@ -435,6 +435,21 @@ CONFIGURATION
         cuda_empty_cache = false
             Release cached CUDA allocator blocks after local sample/train calls.
             This can reduce fragmentation pressure but may hurt throughput.
+        strict_deterministic = false
+            Opt-in fail-closed local PyTorch/CUDA update guard. When true,
+            retrain sets a deterministic cuBLAS workspace before CUDA/model
+            construction, enables torch deterministic algorithms with
+            warn_only=false, enables cuDNN determinism, and disables cuDNN
+            benchmarking. Requires training.seed >= 0 and seeds model/adapter
+            initialization before construction. Runtime metrics record the
+            resolved controls and Transformers model-config attention
+            implementation, not the CUDA SDPA sub-kernel actually dispatched.
+            This does not certify third-party Triton kernels; causal campaigns
+            still require two identical captured updates with identical final
+            adapter hashes. The controls are process-global, so mixed strict
+            and non-strict campaign arms must run in separate processes;
+            retrain rejects a non-strict local backend after a strict one in
+            the same process.
         sample_use_cache = true
             Use KV-cache during local PyTorch sampling. Set false only for
             memory-fit probes where slower generation is acceptable.

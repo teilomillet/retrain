@@ -26,11 +26,15 @@ earlier value fails closed instead of capturing zero or multiple steps.
 ```toml
 [training]
 trainer = "retrain"
+seed = 123
 max_steps = 1
 save_every = 0
 
 [backend]
 devices = "gpu:0"
+
+[backend.options]
+strict_deterministic = true
 
 [inference]
 engine = "pytorch"
@@ -81,6 +85,7 @@ expected_manifest_sha256 = "<64-character manifest digest from the source run>"
 allow_config_differences = ["backend.options.gradient_checkpointing"]
 
 [backend.options]
+strict_deterministic = true
 gradient_checkpointing = false
 ```
 
@@ -92,6 +97,13 @@ match exactly. In v1, the only permitted difference is
 `backend.options.gradient_checkpointing`, and it must be explicitly declared.
 An undeclared difference fails; a declared difference that is not actually
 present also fails. This prevents a stale allowlist from weakening the gate.
+`strict_deterministic` is part of that optimizer contract, so source and replay
+must use the same value; the examples above enable it. When enabled, it
+establishes and records strict PyTorch, cuDNN, cuBLAS, and model-config attention
+controls before CUDA/model construction, and requires an explicit non-negative
+training seed. The resolved attention field is provenance for the Transformers
+configuration, not proof of the CUDA SDPA sub-kernel actually dispatched. It
+intentionally does not attest custom Triton kernels.
 
 Replay constructs the local backend, loads the pinned adapter, restores the
 captured Torch RNG state, performs exactly one optimizer update, and saves the
@@ -140,7 +152,9 @@ runtime, not evidence that the captured optimizer inputs differed.
 A bitwise update claim has a stricter gate: source, same-condition replay, and
 repeated identical replays must produce the same final adapter SHA. The live
 CUDA control did not pass this gate, so retrain does not currently claim
-bitwise-deterministic updates.
+bitwise-deterministic updates. `strict_deterministic = true` makes that canary
+more meaningful and fails on known unsupported PyTorch operations, but the
+adapter-hash requirement remains the deciding evidence.
 
 Approximate numerical-equivalence claims are separate again. Predeclare their
 metrics and tolerances, then report update cosine and relative delta L2 across

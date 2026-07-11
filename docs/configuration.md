@@ -169,7 +169,7 @@ strategic_grams = ""       # custom planning token grams (JSON array or CSV)
 | `backend` | str | `"local"` | Training backend: `local` (PyTorch/PEFT), `unsloth` (Unsloth-patched local model loading), `tinker` (remote GPU), or `prime_rl` (external PRIME-RL trainer + inference) |
 | `devices` | str | `"gpu:0"` | Comma-separated device list. Multi-GPU enables split mode (inference on first, training on last) |
 | `adapter_path` | str | `"/tmp/retrain_adapter"` | Directory for LoRA adapter checkpoints |
-| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `cuda_expandable_segments`, `sample_use_cache`, `sample_kv_quantization`, `sample_oscar_repo`, `sample_oscar_bits`, `sample_oscar_quant_mode`, `sample_oscar_group_size`, `sample_oscar_kv_rotation`, `sample_oscar_kv_norm`, `sample_oscar_residual_block_size`, `sample_oscar_attn_implementation`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`, `lora_detach_input`, `lora_fast_linear`, `lora_freeze_a`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
+| `options` | table | backend defaults | Backend-specific options table. For `local`: `train_microbatch_size`, `cuda_empty_cache`, `cuda_expandable_segments`, `strict_deterministic`, `sample_use_cache`, `sample_kv_quantization`, `sample_oscar_repo`, `sample_oscar_bits`, `sample_oscar_quant_mode`, `sample_oscar_group_size`, `sample_oscar_kv_rotation`, `sample_oscar_kv_norm`, `sample_oscar_residual_block_size`, `sample_oscar_attn_implementation`, `gradient_checkpointing`, `cudnn_causal_conv1d_shim`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`, `lora_detach_input`, `lora_fast_linear`, `lora_freeze_a`. For `unsloth`: `max_seq_length`, `load_in_4bit`, `load_in_8bit`, `load_in_16bit`, `fast_inference`, `gpu_memory_utilization`, `device_map`, `train_microbatch_size`, `qwen35_gated_delta_chunk_size`, `qwen35_gated_delta_kernel`, `train_selective_suffix_logits`, `train_compile_selective_ce`, `train_compile_selective_ce_min_tokens`, `train_save_on_cpu`, `train_save_on_cpu_pin_memory`, `train_save_on_cpu_min_numel`, `train_supervised_context_tokens`, `train_unsloth_fused_ce`, `train_unsloth_fused_ce_target_gb`, `train_unsloth_fused_ce_torch_compile`. For `prime_rl`: `transport`, `zmq_host`, `zmq_port`, `zmq_hwm`, `strict_advantages`, `sync_wait_s`, `sync_poll_s` |
 
 !!! note
     Legacy `prime_rl_*` keys under `[backend]` were removed. Use `[backend.options]` keys instead.
@@ -183,6 +183,7 @@ backend = "local"
 [backend.options]
 train_microbatch_size = 1  # 0 disables; positive values reduce train_step VRAM
 cuda_empty_cache = true    # release cached CUDA blocks after local sample/train calls
+strict_deterministic = false  # opt-in strict PyTorch/CUDA update guard
 sample_use_cache = true    # faster PyTorch sampling with per-step allocator cleanup
 gradient_checkpointing = true  # lower train VRAM at extra forward/backward compute
 cudnn_causal_conv1d_shim = false  # opt-in Qwen3.5 GatedDelta fast path via cuDNN frontend
@@ -229,6 +230,22 @@ defaults to `true` for the local backend because multi-step cache-on runs can
 fragment the CUDA allocator even when one-step probes fit. `sample_use_cache =
 true` keeps the PyTorch engine on the faster generation KV-cache path; disable
 it only when rollout sampling OOMs and slower generation is acceptable.
+`strict_deterministic = true` establishes a deterministic cuBLAS workspace
+before CUDA/model construction and strictly enables PyTorch deterministic
+algorithms plus cuDNN deterministic mode. It requires `training.seed >= 0`,
+seeds model/adapter initialization before construction, and fails rather than
+continuing if CUDA was initialized first or the controls cannot be verified. The
+`local_strict_deterministic_*`, `local_cublas_workspace_config`,
+`local_attention_implementation_resolved`, and
+`local_sdpa_strict_torch_guard_enabled` runtime fields are copied into normal
+metrics and SFT/optimizer-replay manifests. The resolved attention value is the
+Transformers model configuration, not proof of the CUDA SDPA sub-kernel that
+actually ran. These fields do not certify arbitrary
+third-party Triton kernels. A causal campaign still requires two identical
+captured updates with identical final adapter hashes on the target GPU. Strict
+PyTorch/cuDNN/cuBLAS controls are process-global, so mixed strict/non-strict
+campaign arms must run in separate processes; retrain rejects a non-strict
+local backend constructed after a strict one in the same process.
 `gradient_checkpointing` defaults to `true` for compatibility with previous
 local backend behavior; set it to `false` during throughput sweeps when the full
 train step fits in memory.

@@ -203,6 +203,7 @@ def runtime_metrics(owner: object) -> dict[str, object]:
     )
     if effective_rows_digest:
         metrics["optimizer/local_effective_rows_sha256"] = effective_rows_digest
+    metrics.update(getattr(owner, "_determinism_metrics", {}))
     metrics.update(getattr(owner, "_lora_model_metrics", {}))
     metrics.update(getattr(owner, "_accelerator_metrics", {}))
     engine = getattr(owner, "engine", None)

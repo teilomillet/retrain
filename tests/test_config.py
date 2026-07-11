@@ -310,6 +310,7 @@ min_prompt_overlap = 0.75
             "liger_fused_linear_ce": True,
             "cuda_empty_cache": True,
             "cuda_expandable_segments": "auto",
+            "strict_deterministic": False,
             "sample_use_cache": True,
             "sample_kv_quantization": "off",
             "sample_oscar_repo": "",
@@ -654,6 +655,21 @@ class TestValidation:
                 backend="prime_rl",
                 backend_options={"zmq_port": 0},
             )
+
+    def test_local_strict_determinism_requires_explicit_seed(self):
+        with pytest.raises(ValueError, match="strict_deterministic=true requires"):
+            TrainConfig(
+                backend="local",
+                backend_options={"strict_deterministic": True},
+                seed=-1,
+            )
+
+        config = TrainConfig(
+            backend="local",
+            backend_options={"strict_deterministic": True},
+            seed=123,
+        )
+        assert config.backend_options["strict_deterministic"] is True
 
     def test_prime_rl_strict_advantages_false_rejected(self):
         with pytest.raises(ValueError, match="strict_advantages=false is disallowed"):
