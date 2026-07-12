@@ -105,6 +105,39 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
         )
     if config.sft_audit_path and not config.sft_data_path:
         errors.append("sft_audit_path requires sft_data_path.")
+    if config.sft_token_audit_sha256:
+        checksum = config.sft_token_audit_sha256.strip().lower()
+        if len(checksum) != 64 or any(
+            ch not in "0123456789abcdef" for ch in checksum
+        ):
+            errors.append(
+                "sft_token_audit_sha256 must be a 64-character hexadecimal "
+                "SHA256 digest."
+            )
+    if bool(config.sft_token_audit_path) != bool(
+        config.sft_token_audit_sha256
+    ):
+        errors.append(
+            "sft_token_audit_path and sft_token_audit_sha256 must be "
+            "configured together."
+        )
+    if config.sft_token_audit_path and not config.sft_data_path:
+        errors.append("sft_token_audit_path requires sft_data_path.")
+    if config.sft_token_audit_path:
+        effective_sft_cap = (
+            config.sft_max_tokens
+            if config.sft_max_tokens > 0
+            else (
+                config.max_tokens
+                if config.trainer == "sft"
+                else config.max_tokens + 512
+            )
+        )
+        if effective_sft_cap <= 0:
+            errors.append(
+                "sft_token_audit_path requires a positive effective SFT "
+                "token cap."
+            )
     if config.sft_loss_fn not in ("auto", "importance_sampling", "cross_entropy"):
         errors.append(
             "sft_loss_fn must be 'auto', 'importance_sampling', or 'cross_entropy'."
@@ -135,6 +168,10 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
     if config.echo_enabled and config.echo_weight <= 0.0:
         errors.append(
             "echo_enabled requires echo_weight > 0. Try: echo_weight = 0.05"
+        )
+    if config.echo_require_live_observation_bridge and not config.echo_enabled:
+        errors.append(
+            "echo_require_live_observation_bridge requires echo_enabled=true."
         )
     if config.echo_loss_fn != "cross_entropy":
         errors.append(

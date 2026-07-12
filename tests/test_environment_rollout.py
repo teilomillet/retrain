@@ -85,7 +85,11 @@ def test_sample_active_rollouts_batches_equal_temperatures() -> None:
         top_p=0.9,
     )
 
-    assert groups == [[([100], [-0.1])], [([101], [-0.1])], [([100], [-0.1])]]
+    assert [[sample.token_ids for sample in group] for group in groups] == [
+        [[100]],
+        [[101]],
+        [[100]],
+    ]
     assert [call["temperature"] for call in recorder.calls] == [0.5, 0.8]
     assert [call["prompt_ids_batch"] for call in recorder.calls] == [[[1], [2]], [[3]]]
 
@@ -105,10 +109,10 @@ def test_sample_active_rollouts_collapses_identical_prompts_to_num_samples() -> 
         top_p=0.9,
     )
 
-    assert groups == [
-        [([100], [-0.1])],
-        [([101], [-0.1])],
-        [([102], [-0.1])],
+    assert [[sample.token_ids for sample in group] for group in groups] == [
+        [[100]],
+        [[101]],
+        [[102]],
     ]
     assert recorder.calls == [
         {
@@ -119,6 +123,208 @@ def test_sample_active_rollouts_collapses_identical_prompts_to_num_samples() -> 
             "top_p": 0.9,
         }
     ]
+
+
+def test_sample_active_rollouts_uses_exact_finish_reason_before_length_fallback() -> (
+    None
+):
+    class FinishReasonHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, temperature, top_p
+            return [
+                [([1] * max_tokens, [-0.1] * max_tokens, "stop")],
+                [([2] * max_tokens, [-0.2] * max_tokens, "length")],
+            ]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    groups = sample_active_rollouts(
+        helper=cast(TrainHelper, FinishReasonHelper()),
+        active=[
+            (0, "a", [1], None),
+            (1, "b", [2], None),
+        ],
+        rollout_temps=[0.5, 0.5],
+        max_tokens=2,
+        top_p=0.9,
+    )
+
+    assert groups[0][0].finish_reason == "stop"
+    assert groups[0][0].hit_token_limit is False
+    assert groups[1][0].finish_reason == "length"
+    assert groups[1][0].hit_token_limit is True
+
+
+def test_sample_active_rollouts_fails_closed_on_non_stop_finish_reason() -> None:
+    class FilteredHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+            return [[([1], [-0.1], "content_filter")]]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    groups = sample_active_rollouts(
+        helper=cast(TrainHelper, FilteredHelper()),
+        active=[(0, "a", [1], None)],
+        rollout_temps=[0.5],
+        max_tokens=2,
+        top_p=0.9,
+    )
+
+    assert groups[0][0].finish_reason == "content_filter"
+    assert groups[0][0].hit_token_limit is True
+
+
+@pytest.mark.parametrize("finish_reason", [None, 7])
+def test_metadata_sampler_fails_closed_without_valid_finish_reason(
+    finish_reason: object,
+) -> None:
+    class MissingFinishReasonHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+            if finish_reason is None:
+                return [[([1], [-0.1])]]
+            return [[([1], [-0.1], finish_reason)]]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    groups = sample_active_rollouts(
+        helper=cast(TrainHelper, MissingFinishReasonHelper()),
+        active=[(0, "a", [1], None)],
+        rollout_temps=[0.5],
+        max_tokens=2,
+        top_p=0.9,
+    )
+
+    assert groups[0][0].finish_reason is None
+    assert groups[0][0].hit_token_limit is True
+
+
+def test_legacy_sampler_retains_token_count_fallback() -> None:
+    helper, _recorder = _helper()
+
+    below_cap = sample_active_rollouts(
+        helper=helper,
+        active=[(0, "a", [1], None)],
+        rollout_temps=[0.5],
+        max_tokens=2,
+        top_p=0.9,
+    )
+    at_cap = sample_active_rollouts(
+        helper=helper,
+        active=[(0, "a", [1], None)],
+        rollout_temps=[0.5],
+        max_tokens=1,
+        top_p=0.9,
+    )
+
+    assert below_cap[0][0].hit_token_limit is False
+    assert at_cap[0][0].hit_token_limit is True
+
+
+def test_sample_active_rollouts_rejects_stop_past_cap() -> None:
+    class OversizedHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, temperature, top_p
+            return [[([1] * (max_tokens + 1), [-0.1] * (max_tokens + 1), "stop")]]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    groups = sample_active_rollouts(
+        helper=cast(TrainHelper, OversizedHelper()),
+        active=[(0, "a", [1], None)],
+        rollout_temps=[0.5],
+        max_tokens=2,
+        top_p=0.9,
+    )
+
+    assert groups[0][0].finish_reason == "stop"
+    assert groups[0][0].hit_token_limit is True
+
+
+def test_sample_active_rollouts_rejects_token_logprob_length_mismatch() -> None:
+    class MismatchedHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+            return [[([1, 2], [-0.1], "stop")]]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    with pytest.raises(ValueError, match="identical lengths"):
+        sample_active_rollouts(
+            helper=cast(TrainHelper, MismatchedHelper()),
+            active=[(0, "a", [1], None)],
+            rollout_temps=[0.5],
+            max_tokens=2,
+            top_p=0.9,
+        )
+
+
+@pytest.mark.parametrize("logprob", [float("nan"), float("inf"), float("-inf")])
+def test_sample_active_rollouts_rejects_non_finite_logprobs(logprob: float) -> None:
+    class NonFiniteHelper:
+        def sample_with_finish_reason(
+            self,
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        ):
+            del prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+            return [[([1], [logprob], "stop")]]
+
+        def sample(self, *args, **kwargs):
+            raise AssertionError("metadata sampling must be preferred")
+
+    with pytest.raises(ValueError, match="logprobs must be finite"):
+        sample_active_rollouts(
+            helper=cast(TrainHelper, NonFiniteHelper()),
+            active=[(0, "a", [1], None)],
+            rollout_temps=[0.5],
+            max_tokens=2,
+            top_p=0.9,
+        )
 
 
 def test_rollout_scheduler_preserves_order_with_bounded_workers() -> None:

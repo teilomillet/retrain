@@ -17,11 +17,13 @@ class SampleResult:
         token_ids: Generated token IDs (completion only, no prompt).
         logprobs: Log-probability of each generated token under the model.
         token_entropies: Per-token Shannon entropy (optional, GPU-computed).
+        finish_reason: Why generation stopped, when the engine reports it.
     """
 
     token_ids: list[int]
     logprobs: list[float]
     token_entropies: list[float] | None = None
+    finish_reason: str | None = None
 
 
 class InferenceEngine(ABC):

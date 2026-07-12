@@ -115,7 +115,8 @@ runtime metrics.
 When enabled, retrain establishes a deterministic cuBLAS workspace before
 CUDA/model construction, enables
 `torch.use_deterministic_algorithms(True, warn_only=False)`, sets cuDNN
-deterministic mode, disables cuDNN benchmarking, requires `training.seed >= 0`,
+deterministic mode, disables cuDNN benchmarking, requires an integer
+`training.seed` in `0..4294967295`,
 and seeds model/adapter initialization before construction. It fails if CUDA was
 already initialized without those controls. Runtime metrics record the requested and
 model-config attention path, deterministic flags, and exact

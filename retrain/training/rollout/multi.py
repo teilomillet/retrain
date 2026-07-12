@@ -114,11 +114,10 @@ def run_multiturn(
             else:
                 planning_masks_G.append([0] * len(seq_logprobs))
 
-            acc.total_completions += 1
+            acc.total_completions += len(turns)
             acc.sampled_completion_token_count += len(seq_token_ids)
             acc.sampled_completion_surprisal_sum += sum(-lp for lp in seq_logprobs)
-            if seq_token_ids and len(seq_token_ids) >= config.max_tokens:
-                acc.max_token_hits += 1
+            acc.max_token_hits += sum(turn.is_truncated for turn in turns)
 
         acc.logprobs_sepa.extend(logprobs_G)
         acc.planning_masks_sepa.extend(planning_masks_G)

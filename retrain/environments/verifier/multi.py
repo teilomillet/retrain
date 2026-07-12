@@ -6,7 +6,7 @@ import asyncio
 import sys
 import time
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, cast
 
 from retrain.environments import branch as tl_branch
@@ -103,6 +103,36 @@ def run_multiturn_group(
         vf = verifiers_loader()
         env_typed = cast(MultiTurnEnvironment, env)
         tokenizer_typed = cast(Tokenizer, tokenizer)
+        raw_rollout_contract = getattr(env_typed, "retrain_rollout_contract", None)
+        rollout_contract = (
+            raw_rollout_contract
+            if isinstance(raw_rollout_contract, Mapping)
+            else {}
+        )
+        context_window = rollout_contract.get("context_window")
+        completion_reserve = rollout_contract.get("completion_reserve_tokens")
+        history_turns = rollout_contract.get("history_turns")
+        if rollout_contract:
+            if history_turns != 0:
+                raise ValueError(
+                    "retrain_rollout_contract.history_turns must be 0 (full history)"
+                )
+            if (
+                not isinstance(context_window, int)
+                or isinstance(context_window, bool)
+                or not isinstance(completion_reserve, int)
+                or isinstance(completion_reserve, bool)
+                or context_window <= completion_reserve
+            ):
+                raise ValueError(
+                    "retrain_rollout_contract requires a context_window larger "
+                    "than completion_reserve_tokens"
+                )
+            if max_tokens != completion_reserve:
+                raise ValueError(
+                    f"training max_tokens={max_tokens} does not match the live "
+                    f"completion reserve {completion_reserve}"
+                )
         pop_echo_observation_messages = getattr(
             env_typed,
             "pop_echo_observation_messages",
@@ -216,6 +246,18 @@ def run_multiturn_group(
                         tokenizer,
                         prompt_messages,
                     )
+                    if (
+                        isinstance(context_window, int)
+                        and isinstance(completion_reserve, int)
+                        and len(prompt_ids) + completion_reserve > context_window
+                    ):
+                        raise RuntimeError(
+                            f"Full-history prompt for rollout {idx} has "
+                            f"{len(prompt_ids)} tokens; with the reserved "
+                            f"{completion_reserve}-token action it exceeds the "
+                            f"{context_window}-token context window. No action "
+                            "was sampled, sent to the environment, or optimizer."
+                        )
                     observation_mask = prompt_utils.observation_mask(
                         tokenizer,
                         prompt_messages,
@@ -271,14 +313,44 @@ def run_multiturn_group(
                     top_p=top_p,
                 )
                 rollout_timing.generation_s += time.perf_counter() - generation_started
-                # Empty sampler groups can happen when prompts leave no generation budget.
+                malformed_groups = [
+                    active[pos][0]
+                    for pos, group in enumerate(sampled_groups)
+                    if len(group) != 1
+                ]
+                if malformed_groups:
+                    raise RuntimeError(
+                        "Sampler must return exactly one action for every active "
+                        f"rollout; malformed rollout(s): {malformed_groups}. No "
+                        "action from this sampled batch was sent to the environment "
+                        "or optimizer."
+                    )
                 completion_ids_batch = [
-                    list(group[0][0]) if group else [] for group in sampled_groups
+                    list(group[0].token_ids) for group in sampled_groups
                 ]
                 completion_logprobs_batch = [
-                    [float(lp) for lp in group[0][1]] if group else []
+                    list(group[0].logprobs)
                     for group in sampled_groups
                 ]
+                finish_reasons = [
+                    group[0].finish_reason for group in sampled_groups
+                ]
+                token_limit_hits = [
+                    group[0].hit_token_limit
+                    for group in sampled_groups
+                ]
+                if any(token_limit_hits):
+                    rejected_rollouts = [
+                        active[pos][0]
+                        for pos, hit_token_limit in enumerate(token_limit_hits)
+                        if hit_token_limit
+                    ]
+                    raise RuntimeError(
+                        "Refusing incomplete sampled action(s) for rollout(s) "
+                        f"{rejected_rollouts}: generation did not finish with an "
+                        "explicit normal stop. No action from this sampled batch "
+                        "was sent to the environment or optimizer."
+                    )
                 decode_started = time.perf_counter()
                 completion_texts = tokenizer_typed.batch_decode(
                     completion_ids_batch,
@@ -302,6 +374,7 @@ def run_multiturn_group(
                     completion_ids = completion_ids_batch[pos]
                     completion_logprobs = completion_logprobs_batch[pos]
                     completion_text = completion_texts[pos]
+                    finish_reason = finish_reasons[pos]
                     completion = completion_messages(env_typed, completion_text)
 
                     tokens_payload = {
@@ -389,6 +462,8 @@ def run_multiturn_group(
                         completion_ids=list(completion_ids),
                         completion_logprobs=list(completion_logprobs),
                         completion_text=completion_text,
+                        finish_reason=finish_reason,
+                        is_truncated=False,
                         observation_mask=(
                             list(observation_mask)
                             if observation_mask is not None

@@ -31,6 +31,8 @@ def create_engine(
     liger_kernel=True,
     sample_kv_quantization="off",
     sample_oscar_options=None,
+    model_revision="",
+    model_local_files_only=False,
 ):
     """Factory: create the right InferenceEngine based on engine_type.
 
@@ -65,6 +67,8 @@ def create_engine(
             liger_kernel=liger_kernel,
             sample_kv_quantization=sample_kv_quantization,
             sample_oscar_options=sample_oscar_options,
+            model_revision=model_revision,
+            model_local_files_only=model_local_files_only,
         )
 
     elif engine_type == "max":

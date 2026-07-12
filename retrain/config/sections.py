@@ -27,6 +27,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
     },
     "model": {
         "model": "model",
+        "revision": "model_revision",
+        "local_files_only": "model_local_files_only",
         "base_url": "base_url",
         "lora_rank": "lora_rank",
     },
@@ -67,6 +69,8 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "sft_data_rows": "sft_data_rows",
         "sft_audit_path": "sft_audit_path",
         "sft_audit_sha256": "sft_audit_sha256",
+        "sft_token_audit_path": "sft_token_audit_path",
+        "sft_token_audit_sha256": "sft_token_audit_sha256",
         "sft_batch_size": "sft_batch_size",
         "sft_max_tokens": "sft_max_tokens",
         "sft_lr": "sft_lr",
@@ -83,6 +87,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "max_token_ratio": "echo_max_token_ratio",
         "entropy_floor": "echo_entropy_floor",
         "min_prompt_overlap": "echo_min_prompt_overlap",
+        "require_live_observation_bridge": ("echo_require_live_observation_bridge"),
     },
     "optimizer": {
         "beta1": "optim_beta1",

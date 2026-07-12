@@ -133,6 +133,8 @@ class OpenAIEngine(InferenceEngine):
             for choice in _response_choices(response):
                 raw_text = choice.get("text", "")
                 text = raw_text if isinstance(raw_text, str) else ""
+                raw_finish_reason = choice.get("finish_reason")
+                finish_reason = raw_finish_reason if isinstance(raw_finish_reason, str) else None
                 logprobs_info = choice.get("logprobs", {})
 
                 token_ids, logprobs = self._recover_tokens(
@@ -141,7 +143,13 @@ class OpenAIEngine(InferenceEngine):
                     logprobs_info,
                     choice,
                 )
-                group.append(SampleResult(token_ids=token_ids, logprobs=logprobs))
+                group.append(
+                    SampleResult(
+                        token_ids=token_ids,
+                        logprobs=logprobs,
+                        finish_reason=finish_reason,
+                    )
+                )
 
             results.append(group)
 

@@ -59,6 +59,8 @@ class PyTorchEngine(InferenceEngine):
         liger_kernel=True,
         sample_kv_quantization="off",
         sample_oscar_options=None,
+        model_revision="",
+        model_local_files_only=False,
     ):
         """Load a PEFT-wrapped model for inference.
 
@@ -72,6 +74,8 @@ class PyTorchEngine(InferenceEngine):
         """
         self.device = device
         self.model_name = model_name
+        self.model_revision = str(model_revision or "")
+        self.model_local_files_only = bool(model_local_files_only)
         self.sample_use_cache = bool(sample_use_cache)
         self.prefix_caching = bool(prefix_caching)
         self.attention_kernel = str(attention_kernel or "default")
@@ -140,6 +144,8 @@ class PyTorchEngine(InferenceEngine):
                     model_name,
                     dtype=dtype,
                     options=self.sample_oscar_options,
+                    revision=self.model_revision,
+                    local_files_only=self.model_local_files_only,
                 )
                 self._accelerator_metrics.update(oscar_metrics)
             else:
@@ -147,13 +153,22 @@ class PyTorchEngine(InferenceEngine):
                 base = AutoModelForCausalLM.from_pretrained(
                     model_name,
                     torch_dtype=dtype,
+                    revision=self.model_revision or None,
+                    local_files_only=self.model_local_files_only,
                     **model_kwargs,
                 )
             self.model = get_peft_model(base, peft_config)
             self.model.to(device)
 
-    def generate(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                 compute_entropy=False):
+    def generate(
+        self,
+        prompt_ids_list,
+        num_samples,
+        max_tokens,
+        temperature,
+        top_p,
+        compute_entropy=False,
+    ):
         """Generate completions with per-token logprobs via PyTorch."""
         self.model.eval()
 
@@ -185,7 +200,9 @@ class PyTorchEngine(InferenceEngine):
                     dtype=torch.long,
                     device=self.device,
                 )
-                finished = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
+                finished = torch.zeros(
+                    num_samples, dtype=torch.bool, device=self.device
+                )
 
                 for step_idx in range(max_tokens):
                     use_cache = self.sample_use_cache
@@ -290,6 +307,9 @@ class PyTorchEngine(InferenceEngine):
                             if generated_entropies is not None
                             else None
                         ),
+                        finish_reason=(
+                            "stop" if bool(finished[i].item()) else "length"
+                        ),
                     )
                     for i in range(num_samples)
                 ]
@@ -365,7 +385,7 @@ class PyTorchEngine(InferenceEngine):
         cached = self._find_prefix_cache(prompt_ids, num_samples)
         if use_cache and cached is not None:
             prefix_ids, past_key_values = cached
-            suffix_ids = list(prompt_ids[len(prefix_ids):])
+            suffix_ids = list(prompt_ids[len(prefix_ids) :])
             if suffix_ids:
                 suffix_input_ids = torch.tensor(
                     [suffix_ids] * num_samples,
@@ -391,7 +411,9 @@ class PyTorchEngine(InferenceEngine):
                         num_samples,
                     )
                     return outputs
-                except Exception:  # Exact-prefix reuse must fall back to normal sampling.
+                except (
+                    Exception
+                ):  # Exact-prefix reuse must fall back to normal sampling.
                     self._prefix_cache_fallbacks += 1
 
         self._prefix_cache_misses += 1
@@ -424,10 +446,12 @@ class PyTorchEngine(InferenceEngine):
         if not (self.prefix_caching and self.sample_use_cache):
             return None
         prompt_key = tuple(int(token_id) for token_id in prompt_ids)
-        for key in sorted(self._prefix_cache.keys(), key=lambda item: len(item), reverse=True):
+        for key in sorted(
+            self._prefix_cache.keys(), key=lambda item: len(item), reverse=True
+        ):
             if len(key) >= len(prompt_key):
                 continue
-            if prompt_key[:len(key)] != key:
+            if prompt_key[: len(key)] != key:
                 continue
             past_key_values, batch_size = self._prefix_cache[key]
             if batch_size != num_samples:
@@ -445,12 +469,17 @@ class PyTorchEngine(InferenceEngine):
             return
         if key not in self._prefix_cache:
             self._prefix_cache_order.append(key)
-        self._prefix_cache[key] = (self._detach_past_key_values(past_key_values), num_samples)
+        self._prefix_cache[key] = (
+            self._detach_past_key_values(past_key_values),
+            num_samples,
+        )
         while len(self._prefix_cache_order) > self._prefix_cache_max_entries:
             evicted = self._prefix_cache_order.pop(0)
             self._prefix_cache.pop(evicted, None)
 
-    def _advance_past_for_prefix_cache(self, past_key_values, full_prefix_ids, generated):
+    def _advance_past_for_prefix_cache(
+        self, past_key_values, full_prefix_ids, generated
+    ):
         if not full_prefix_ids:
             return past_key_values
         last_token = torch.tensor([[full_prefix_ids[-1]]], device=self.device)
@@ -503,7 +532,10 @@ class PyTorchEngine(InferenceEngine):
             return self.model(**model_kwargs)
         except TypeError as exc:
             message = str(exc)
-            if "unexpected keyword" not in message and "got an unexpected" not in message:
+            if (
+                "unexpected keyword" not in message
+                and "got an unexpected" not in message
+            ):
                 raise
             if "logits_to_keep" in model_kwargs:
                 retry_kwargs = dict(model_kwargs)
@@ -548,11 +580,11 @@ class PyTorchEngine(InferenceEngine):
         decode_s,
     ):
         wall_s = time.perf_counter() - start_s
-        prompt_tokens = sum(len(prompt) for prompt in prompt_ids_list) * int(num_samples)
+        prompt_tokens = sum(len(prompt) for prompt in prompt_ids_list) * int(
+            num_samples
+        )
         generated_tokens = sum(
-            len(result.token_ids)
-            for group in results
-            for result in group
+            len(result.token_ids) for group in results for result in group
         )
         self._last_generation_metrics = {
             "engine_generation_wall_s": wall_s,
@@ -582,8 +614,15 @@ class PyTorchEngine(InferenceEngine):
             "engine_prefix_cache_append_s": self._prefix_cache_append_s,
         }
 
-    def _generate_gemma4_text(self, prompt_ids_list, num_samples, max_tokens, temperature, top_p,
-                              compute_entropy=False):
+    def _generate_gemma4_text(
+        self,
+        prompt_ids_list,
+        num_samples,
+        max_tokens,
+        temperature,
+        top_p,
+        compute_entropy=False,
+    ):
         """Text-only Gemma4 sampling path avoiding the multimodal wrapper."""
         results = []
         unwrapped = unwrap_peft_model(self.model)
@@ -603,8 +642,12 @@ class PyTorchEngine(InferenceEngine):
                 shared_kv_states = None
                 generated_tokens = [[] for _ in range(num_samples)]
                 generated_logprobs = [[] for _ in range(num_samples)]
-                generated_entropies = [[] for _ in range(num_samples)] if compute_entropy else None
-                finished = torch.zeros(num_samples, dtype=torch.bool, device=self.device)
+                generated_entropies = (
+                    [[] for _ in range(num_samples)] if compute_entropy else None
+                )
+                finished = torch.zeros(
+                    num_samples, dtype=torch.bool, device=self.device
+                )
 
                 for step_idx in range(max_tokens):
                     use_cache = self.sample_use_cache
@@ -642,12 +685,16 @@ class PyTorchEngine(InferenceEngine):
                         compute_entropy=compute_entropy,
                     )
                     generated = torch.cat([generated, next_token], dim=-1)
-                    attention_mask = torch.cat([attention_mask, torch.ones_like(next_token)], dim=-1)
+                    attention_mask = torch.cat(
+                        [attention_mask, torch.ones_like(next_token)], dim=-1
+                    )
                     past_key_values = (
                         getattr(outputs, "past_key_values", None) if use_cache else None
                     )
                     shared_kv_states = (
-                        getattr(outputs, "shared_kv_states", None) if use_cache else None
+                        getattr(outputs, "shared_kv_states", None)
+                        if use_cache
+                        else None
                     )
 
                     for i in range(num_samples):
@@ -667,11 +714,18 @@ class PyTorchEngine(InferenceEngine):
 
                 group = []
                 for i in range(num_samples):
-                    group.append(SampleResult(
-                        token_ids=generated_tokens[i],
-                        logprobs=generated_logprobs[i],
-                        token_entropies=generated_entropies[i] if generated_entropies is not None else None,
-                    ))
+                    group.append(
+                        SampleResult(
+                            token_ids=generated_tokens[i],
+                            logprobs=generated_logprobs[i],
+                            token_entropies=generated_entropies[i]
+                            if generated_entropies is not None
+                            else None,
+                            finish_reason=(
+                                "stop" if bool(finished[i].item()) else "length"
+                            ),
+                        )
+                    )
                 results.append(group)
 
         self._record_generation_metrics(

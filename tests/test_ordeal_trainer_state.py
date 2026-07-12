@@ -13,7 +13,7 @@ from pathlib import Path
 import hypothesis.strategies as st
 import pytest
 from hypothesis import given
-from ordeal import ChaosTest, always, invariant, rule
+from ordeal import ChaosTest, Explorer, always, invariant, rule
 from ordeal.invariants import no_nan, no_inf
 
 from retrain.training.state import load_trainer_state, save_trainer_state
@@ -246,6 +246,28 @@ class TrainerStateChaos(ChaosTest):
         self._saved_step = -1
         self._saved_correct = -1
         self._saved_completions = -1
+        self._saved_state_json: str | None = None
+
+    def checkpoint_snapshot_filter(self, name: str, value: object) -> bool:
+        """Keep temporary paths out of Explorer checkpoints."""
+        return super().checkpoint_snapshot_filter(name, value) and name not in {
+            "_tmpdir",
+            "_path",
+        }
+
+    def restore_checkpoint_state(self, snapshot: dict[str, object]) -> None:
+        """Restore saved state into the fresh machine's temporary directory."""
+        super().restore_checkpoint_state(snapshot)
+        if self._saved_state_json is not None:
+            (self._path / "trainer_state.json").write_text(
+                self._saved_state_json,
+                encoding="utf-8",
+            )
+
+    def _remember_saved_state(self) -> None:
+        self._saved_state_json = (self._path / "trainer_state.json").read_text(
+            encoding="utf-8"
+        )
 
     @rule(
         correct=st.integers(min_value=0, max_value=16),
@@ -276,6 +298,7 @@ class TrainerStateChaos(ChaosTest):
         self._saved_step = self._step
         self._saved_correct = self._total_correct
         self._saved_completions = self._total_completions
+        self._remember_saved_state()
 
     @rule()
     def load_and_verify(self) -> None:
@@ -314,6 +337,7 @@ class TrainerStateChaos(ChaosTest):
         self._saved_step = self._step
         self._saved_correct = self._total_correct
         self._saved_completions = self._total_completions
+        self._remember_saved_state()
         loaded = load_trainer_state(str(self._path))
         always(loaded["step"] == self._step, "immediate load matches save")
 
@@ -330,6 +354,33 @@ class TrainerStateChaos(ChaosTest):
 
         shutil.rmtree(self._tmpdir, ignore_errors=True)
         super().teardown()
+
+
+def test_trainer_state_checkpoint_restore_recreates_saved_file() -> None:
+    machine = TrainerStateChaos()
+    explorer = Explorer(TrainerStateChaos, workers=1)
+    restored: TrainerStateChaos | None = None
+    try:
+        machine.advance(correct=3, completions=5)
+        machine.save()
+        original_path = machine._path
+        snapshot = explorer._snapshot_machine(machine)
+
+        assert "_tmpdir" not in snapshot.state_dict
+        assert "_path" not in snapshot.state_dict
+
+        machine.teardown()
+        restored = explorer._restore_machine(snapshot)
+        loaded = load_trainer_state(str(restored._path))
+
+        assert restored._path != original_path
+        assert loaded["step"] == 1
+        assert loaded["total_correct"] == 3
+        assert loaded["total_completions"] == 5
+    finally:
+        if restored is not None:
+            restored.teardown()
+        machine.teardown()
 
 
 TestTrainerStateChaos = TrainerStateChaos.TestCase

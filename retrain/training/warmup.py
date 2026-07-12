@@ -55,6 +55,8 @@ def load_sft_warmup_data(
             or config.sft_data_rows > 0
             or config.sft_audit_path
             or config.sft_audit_sha256
+            or config.sft_token_audit_path
+            or config.sft_token_audit_sha256
         ):
             raise FileNotFoundError(
                 f"SFT data path {sft_path} not found; cannot verify configured "

@@ -76,6 +76,7 @@ class SftRunner:
             effective_sft_loss_fn,
             load_sft_dataset,
             select_sft_batch_indices,
+            sft_tokenizer_load_kwargs,
             tokenize_sft_dataset,
             verify_sft_data_contract,
             verify_sft_resume_schedule_contract,
@@ -201,7 +202,10 @@ class SftRunner:
         print(f"SFT loss: {loss_fn}")
 
         print(f"Loading tokenizer for {config.model} ...")
-        tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model,
+            **sft_tokenizer_load_kwargs(config, dataset.provenance),
+        )
 
         batch_size = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
         batch_size = min(max(1, batch_size), len(examples))

@@ -99,11 +99,74 @@ class _NonPrefixRoleTemplateTokenizer(_RoleTemplateTokenizer):
 
 class _DummyHelper:
     def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):
-        return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
+        return [
+            [([101 + sample_idx], [-0.1]) for sample_idx in range(num_samples)]
+            for _prompt in prompt_ids_batch
+        ]
 
 
 def _helper() -> TrainHelper:
     return cast(TrainHelper, _DummyHelper())
+
+
+class _LengthHelper:
+    def sample_with_finish_reason(
+        self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+    ):
+        del num_samples, temperature, top_p
+        return [
+            [([201] * max_tokens, [-0.1] * max_tokens, "length")]
+            for _prompt in prompt_ids_batch
+        ]
+
+    def sample(self, *args, **kwargs):
+        raise AssertionError("metadata sampling must be preferred")
+
+
+def _length_helper() -> TrainHelper:
+    return cast(TrainHelper, _LengthHelper())
+
+
+class _StopAtCapHelper:
+    def sample_with_finish_reason(
+        self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+    ):
+        del temperature, top_p
+        return [
+            [([202] * max_tokens, [-0.1] * max_tokens, "stop")]
+            * num_samples
+            for _prompt in prompt_ids_batch
+        ]
+
+    def sample(self, *args, **kwargs):
+        raise AssertionError("metadata sampling must be preferred")
+
+
+class _EmptyGroupHelper:
+    def sample_with_finish_reason(
+        self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+    ):
+        del num_samples, max_tokens, temperature, top_p
+        return [[] for _prompt in prompt_ids_batch]
+
+    def sample(self, *args, **kwargs):
+        raise AssertionError("metadata sampling must be preferred")
+
+
+class _MixedStopLengthHelper:
+    def sample_with_finish_reason(
+        self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+    ):
+        del temperature, top_p
+        assert len(prompt_ids_batch) == 1
+        assert num_samples == 2
+        return [[
+            ([203] * max_tokens, [-0.1] * max_tokens, "stop"),
+            ([204] * max_tokens, [-0.1] * max_tokens, "length"),
+        ]]
+
+    def sample(self, *args, **kwargs):
+        raise AssertionError("metadata sampling must be preferred")
 
 
 class _RecordingHelper:
@@ -120,7 +183,10 @@ class _RecordingHelper:
                 "top_p": top_p,
             }
         )
-        return [[([101 + idx], [-0.1])] for idx, _prompt in enumerate(prompt_ids_batch)]
+        return [
+            [([101 + sample_idx], [-0.1]) for sample_idx in range(num_samples)]
+            for _prompt in prompt_ids_batch
+        ]
 
 
 def _recording_helper() -> tuple[TrainHelper, _RecordingHelper]:
@@ -137,6 +203,11 @@ class _CleanupTrackingRubric:
 class _FailingRubric:
     async def score_group(self, states):
         raise RuntimeError("score failed")
+
+
+class _RejectScoringRubric:
+    async def score_group(self, states):
+        raise AssertionError("incomplete action reached rubric scoring")
 
 
 class _CleanupTrackingMultiTurnEnv:
@@ -174,6 +245,26 @@ class _CleanupTrackingMultiTurnEnv:
 
     async def cleanup(self, state):
         self.cleaned.append(int(state["trajectory_id"]))
+
+
+class _RejectAppliedTruncationEnv(_CleanupTrackingMultiTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rubric = _RejectScoringRubric()
+
+    async def add_trajectory_step(self, state, step):
+        raise AssertionError("truncated action reached add_trajectory_step")
+
+    async def render_completion(self, state):
+        raise AssertionError("truncated action reached render_completion")
+
+
+class _PromptOverflowEnv(_RejectAppliedTruncationEnv):
+    retrain_rollout_contract = {
+        "history_turns": 0,
+        "context_window": 3,
+        "completion_reserve_tokens": 2,
+    }
 
 
 class _TwoTurnObservationEnv(_CleanupTrackingMultiTurnEnv):
@@ -420,6 +511,165 @@ class TestRunMultiturnGroup:
                 "top_p": 0.95,
             }
         ]
+
+    def test_token_limited_action_aborts_before_step_score_or_optimizer(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _RejectAppliedTruncationEnv()
+
+        with pytest.raises(RuntimeError, match="No action.*environment or optimizer"):
+            run_multiturn_group(
+                env,
+                helper=_length_helper(),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=1,
+                max_tokens=2,
+                temperature=0.8,
+                top_p=0.95,
+            )
+
+        assert env.cleaned == [0]
+
+    def test_mixed_stop_and_length_batch_is_atomic(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _RejectAppliedTruncationEnv()
+
+        with pytest.raises(RuntimeError, match="No action.*environment or optimizer"):
+            run_multiturn_group(
+                env,
+                helper=cast(TrainHelper, _MixedStopLengthHelper()),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=2,
+                max_tokens=2,
+                temperature=0.8,
+                top_p=0.95,
+            )
+
+        assert env.cleaned == [0, 1]
+
+    def test_empty_sampler_group_aborts_before_environment_step(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _RejectAppliedTruncationEnv()
+
+        with pytest.raises(RuntimeError, match="exactly one action"):
+            run_multiturn_group(
+                env,
+                helper=cast(TrainHelper, _EmptyGroupHelper()),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=1,
+                max_tokens=2,
+                temperature=0.8,
+                top_p=0.95,
+            )
+
+        assert env.cleaned == [0]
+
+    def test_exact_cap_with_explicit_stop_reaches_environment(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _CleanupTrackingMultiTurnEnv()
+
+        rewards, turns, *_ = run_multiturn_group(
+            env,
+            helper=cast(TrainHelper, _StopAtCapHelper()),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
+
+        assert rewards == [1.0]
+        assert turns[0][0].completion_ids == [202, 202]
+        assert turns[0][0].finish_reason == "stop"
+        assert turns[0][0].is_truncated is False
+        assert env.cleaned == [0]
+
+    def test_full_history_prompt_overflow_aborts_before_sampling(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _PromptOverflowEnv()
+
+        with pytest.raises(RuntimeError, match="No action was sampled"):
+            run_multiturn_group(
+                env,
+                helper=cast(TrainHelper, object()),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=1,
+                max_tokens=2,
+                temperature=0.8,
+                top_p=0.95,
+            )
+
+        assert env.cleaned == [0]
+
+    def test_live_completion_reserve_must_match_training_cap(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _PromptOverflowEnv()
+
+        with pytest.raises(ValueError, match="does not match the live"):
+            run_multiturn_group(
+                env,
+                helper=_helper(),
+                tokenizer=_DummyTokenizer(),
+                model_name="dummy-model",
+                prompt=[{"role": "user", "content": "hello"}],
+                answer="",
+                task="task",
+                info={},
+                num_rollouts=1,
+                max_tokens=1,
+                temperature=0.8,
+                top_p=0.95,
+            )
+
+        assert env.cleaned == []
 
     def test_temperature_spread_samples_each_rollout_temperature(self, monkeypatch):
         monkeypatch.setattr(

@@ -109,6 +109,50 @@ def merge_echo_build_stats(
     )
 
 
+def assert_echo_live_observation_contract(
+    *,
+    required: bool,
+    build: EchoBuildStats,
+    limit: EchoLimitStats,
+    final_masks: Sequence[Sequence[float]],
+    eligible_rollouts: int,
+    skipped_entropy_floor: bool,
+) -> None:
+    """Abort strict ECHO before optimization if tool-token signal is absent."""
+
+    if not required:
+        return
+    positive_final_tokens = sum(
+        value > 0.0 for row in final_masks for value in row
+    )
+    checks = {
+        "explicit_transition_rollouts": build.explicit_transition_rollouts > 0,
+        "all_eligible_rollouts_use_explicit_bridge": (
+            eligible_rollouts > 0
+            and build.explicit_transition_rollouts == eligible_rollouts
+        ),
+        "observation_responses": build.observation_responses > 0,
+        "bridged_transition_datums": build.bridged_transition_datums > 0,
+        "zero_bridge_failures": build.bridge_failures == 0,
+        "zero_renderer_parity_failures": build.renderer_parity_failures == 0,
+        "candidate_tokens": build.candidate_tokens > 0,
+        "entropy_floor_not_skipped": not skipped_entropy_floor,
+        "kept_tokens": limit.kept_tokens > 0,
+        "final_mask_matches_kept_tokens": (
+            positive_final_tokens == limit.kept_tokens
+        ),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError(
+            "ECHO live-observation contract failed before optimizer: "
+            + ", ".join(failed)
+            + f"; build={build!r}, limit={limit!r}, "
+            + f"eligible_rollouts={eligible_rollouts}, "
+            + f"positive_final_tokens={positive_final_tokens}"
+        )
+
+
 def common_prefix_len(left: list[int], right: list[int]) -> int:
     """Return the length of the exact token prefix shared by two sequences."""
 

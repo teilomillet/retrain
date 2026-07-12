@@ -27,11 +27,13 @@ class TrainConfig:
     backend_options: dict[str, object] = field(default_factory=dict)
 
     # Training runner
-    trainer: str = "retrain"       # built-in runner name or dotted plugin path
-    trainer_command: str = ""      # shell command template for trainer = "command"
+    trainer: str = "retrain"  # built-in runner name or dotted plugin path
+    trainer_command: str = ""  # shell command template for trainer = "command"
 
     # Model
     model: str = "Qwen/Qwen3-4B-Instruct-2507"
+    model_revision: str = ""
+    model_local_files_only: bool = False
     base_url: str = ""
     lora_rank: int = 32
 
@@ -45,16 +47,18 @@ class TrainConfig:
     top_p: float = 0.95
     lr: float = 4e-5
     weight_decay: float = 0.0
-    clip_eps: float = 0.0        # 0 = disabled (no PPO-style ratio clipping)
-    clip_eps_high: float = 0.0   # 0 = symmetric (uses clip_eps for upper bound)
+    clip_eps: float = 0.0  # 0 = disabled (no PPO-style ratio clipping)
+    clip_eps_high: float = 0.0  # 0 = symmetric (uses clip_eps for upper bound)
     policy_loss_mode: str = "standard"  # "standard", "kl_cov", or "clip_cov"
     kl_cov_percent: float = 0.2  # percent of valid policy tokens receiving KL-Cov
     kl_cov_coef: float = 1.0
     clip_cov_ratio: float = 0.0002
     clip_cov_min: float = 1.0
     clip_cov_max: float = 5.0
-    adv_clip_max: float = 0.0    # 0 = disabled; caps token advantages to [-max, +max]
-    batch_advantage_norm: bool = False  # REINFORCE++: normalize advantages across full batch
+    adv_clip_max: float = 0.0  # 0 = disabled; caps token advantages to [-max, +max]
+    batch_advantage_norm: bool = (
+        False  # REINFORCE++: normalize advantages across full batch
+    )
     max_examples: int = 0
     save_every: int = 20
 
@@ -63,7 +67,7 @@ class TrainConfig:
     optim_beta2: float = 0.95
     optim_eps: float = 1e-8
     grad_clip_norm: float = 0.0  # 0 = disabled; max global gradient norm
-    clip_ratio_c: float = 0.0   # 0 = disabled; dual-clip lower bound for negative advs
+    clip_ratio_c: float = 0.0  # 0 = disabled; dual-clip lower bound for negative advs
 
     # LoRA
     lora_alpha: int = 0  # 0 = auto = rank * 2
@@ -137,11 +141,15 @@ class TrainConfig:
     sft_data_rows: int = 0  # 0 = unpinned
     sft_audit_path: str = ""  # Optional generic audit JSON
     sft_audit_sha256: str = ""  # Required exact-audit pin when path is set
+    sft_token_audit_path: str = ""  # Optional exact token-cap audit JSON
+    sft_token_audit_sha256: str = ""  # Required token-audit pin with path
     sft_batch_size: int = 0  # 0 = trainer default
     sft_max_tokens: int = 0  # 0 = trainer default
-    sft_lr: float = 0.0      # 0 = use main lr; separate LR for SFT phase
+    sft_lr: float = 0.0  # 0 = use main lr; separate LR for SFT phase
     sft_loss_fn: str = "auto"  # "auto", "importance_sampling", or "cross_entropy"
-    sft_batch_order: str = "shuffle"  # "shuffle", "length", "length_desc", "length_bucket"
+    sft_batch_order: str = (
+        "shuffle"  # "shuffle", "length", "length_desc", "length_bucket"
+    )
     sft_length_bucket_size: int = 0  # 0 = full tokenized traversal for length_bucket
     # Opt in to deriving each epoch's traversal from (seed, epoch). The false
     # default preserves the legacy behavior that cycles one fixed permutation.
@@ -155,6 +163,7 @@ class TrainConfig:
     echo_max_token_ratio: float = 0.5
     echo_entropy_floor: float = 0.01
     echo_min_prompt_overlap: float = 0.5
+    echo_require_live_observation_bridge: bool = False
 
     # TL-GRPO (Turn-Level GRPO with branching)
     tl_grpo: bool = False
@@ -187,14 +196,11 @@ class TrainConfig:
     optimizer_batch_replay_path: str = ""
     optimizer_batch_expected_logical_sha256: str = ""
     optimizer_batch_expected_manifest_sha256: str = ""
-    optimizer_batch_allow_config_differences: list[str] = field(
-        default_factory=list
-    )
+    optimizer_batch_allow_config_differences: list[str] = field(default_factory=list)
 
     # Plugin loading
     plugins_search_paths: list[str] = field(default_factory=lambda: ["plugins"])
     plugins_strict: bool = True
-
 
     def __post_init__(self) -> None:
         from retrain.config.validate import validate_train_config

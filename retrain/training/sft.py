@@ -21,7 +21,7 @@ from retrain.config.snapshot import config_snapshot
 from retrain.training.sft_audit import SFT_AUDIT_SCHEMA
 
 SFT_DATA_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
-SFT_RESUME_SCHEDULE_CONTRACT_VERSION = 2
+SFT_RESUME_SCHEDULE_CONTRACT_VERSION = 3
 SFT_RESUME_SCHEDULE_ALGORITHM = "absolute_sample_seed_plus_epoch_v1"
 
 
@@ -140,9 +140,7 @@ def build_sft_batch_metrics(
             padding_tokens / padded_tokens if padded_tokens else 0.0
         ),
         "sft_supervised_token_fraction": (
-            batch.supervised_tokens / batch.total_tokens
-            if batch.total_tokens
-            else 0.0
+            batch.supervised_tokens / batch.total_tokens if batch.total_tokens else 0.0
         ),
     }
 
@@ -178,7 +176,9 @@ def _coerce_messages(raw: object, *, path: Path, line_no: int) -> list[dict[str,
         if not isinstance(role, str) or not role.strip():
             raise _row_error(path, line_no, f"messages[{idx}].role must be a string.")
         if not isinstance(content, str):
-            raise _row_error(path, line_no, f"messages[{idx}].content must be a string.")
+            raise _row_error(
+                path, line_no, f"messages[{idx}].content must be a string."
+            )
         messages.append({"role": role, "content": content})
     if not any(msg["role"] == "assistant" for msg in messages):
         raise _row_error(path, line_no, "'messages' must include an assistant target.")
@@ -269,9 +269,7 @@ def _build_sft_data_provenance(
             "keep durable training data in a git checkout when possible."
         )
     if git_tracked is False:
-        warnings.append(
-            f"SFT data is not tracked by git in {git_root}: {path}."
-        )
+        warnings.append(f"SFT data is not tracked by git in {git_root}: {path}.")
 
     return SftDataProvenance(
         data_path=str(path),
@@ -348,7 +346,9 @@ def load_sft_dataset(path: str | Path) -> SftDataset:
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError(f"Invalid SFT JSONL file {sft_path}: expected UTF-8 text.") from exc
+        raise ValueError(
+            f"Invalid SFT JSONL file {sft_path}: expected UTF-8 text."
+        ) from exc
     examples = _load_sft_jsonl_rows(sft_path, text)
     return SftDataset(
         examples=examples,
@@ -387,8 +387,54 @@ def verify_sft_data_contract(
         raise ValueError("SFT data contract mismatch:\n- " + "\n- ".join(errors))
 
     from retrain.training.sft_audit import verify_sft_audit_contract
+    from retrain.training.sft_token_audit import (
+        verify_sft_token_audit_contract,
+    )
 
+    verify_sft_token_audit_contract(config, provenance)
     return verify_sft_audit_contract(config, provenance)
+
+
+def sft_tokenizer_load_kwargs(
+    config: "TrainConfig",
+    provenance: SftDataProvenance | None = None,
+) -> dict[str, object]:
+    """Return tokenizer kwargs bound to the verified SFT token audit."""
+
+    kwargs: dict[str, object] = {"trust_remote_code": True}
+    configured_revision = str(config.model_revision).strip()
+    if configured_revision:
+        kwargs["revision"] = configured_revision
+    if config.model_local_files_only:
+        kwargs["local_files_only"] = True
+    if not config.sft_token_audit_path:
+        return kwargs
+    if provenance is None:
+        if not config.sft_data_path:
+            raise ValueError(
+                "sft_token_audit_path requires sft_data_path before tokenizer load"
+            )
+        provenance = load_sft_dataset(config.sft_data_path).provenance
+
+    from retrain.training.sft_token_audit import (
+        verify_sft_token_audit_contract,
+    )
+
+    verified = verify_sft_token_audit_contract(config, provenance)
+    if verified is None:
+        raise RuntimeError("configured SFT token audit was not verified")
+    revision = verified.get("tokenizer_revision")
+    if not isinstance(revision, str) or not revision:
+        raise RuntimeError("verified SFT token audit has no tokenizer revision")
+    if configured_revision != revision:
+        raise RuntimeError(
+            "verified SFT token audit revision does not match [model] revision"
+        )
+    if not config.model_local_files_only:
+        raise RuntimeError(
+            "verified SFT token audit requires [model] local_files_only=true"
+        )
+    return kwargs
 
 
 def build_sft_resume_schedule_contract(
@@ -423,12 +469,13 @@ def build_sft_resume_schedule_contract(
         "data_sha256": provenance.data_sha256,
         "data_rows": int(provenance.data_rows),
         "audit_sha256": config.sft_audit_sha256.strip().lower(),
-        "audit_schema": (
-            SFT_AUDIT_SCHEMA if config.sft_audit_sha256 else ""
-        ),
+        "audit_schema": (SFT_AUDIT_SCHEMA if config.sft_audit_sha256 else ""),
+        "token_audit_sha256": config.sft_token_audit_sha256.strip().lower(),
         "sft_warmup_steps": int(config.sft_warmup_steps),
         "example_count": len(example_order),
         "model": str(config.model),
+        "model_revision": str(config.model_revision),
+        "model_local_files_only": bool(config.model_local_files_only),
         "max_tokens": int(max_tokens),
         "epoch_zero_order_sha256": sft_indices_sha256(example_order),
     }
@@ -459,8 +506,7 @@ def verify_sft_resume_schedule_contract(
     if errors:
         raise ValueError(
             "SFT resume schedule contract mismatch; refusing to change example "
-            "traversal:\n- "
-            + "\n- ".join(errors)
+            "traversal:\n- " + "\n- ".join(errors)
         )
 
 
@@ -491,7 +537,9 @@ def build_sft_example_order(
     if batch_order == "shuffle":
         return order
     if lengths is None or len(lengths) != example_count:
-        raise ValueError("length-aware SFT ordering requires one token length per example.")
+        raise ValueError(
+            "length-aware SFT ordering requires one token length per example."
+        )
     if batch_order in ("length", "length_asc"):
         return sorted(order, key=lambda idx: (lengths[idx], idx))
     if batch_order == "length_desc":
@@ -726,8 +774,7 @@ def _chat_template_kwargs(apply_chat_template: _ChatTemplate) -> dict[str, objec
     except (TypeError, ValueError):
         return {}
     if "enable_thinking" in sig.parameters or any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in sig.parameters.values()
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
     ):
         return {"enable_thinking": False}
     return {}
@@ -781,9 +828,7 @@ def tokenize_sft_example(
         # prefix-stable: encoding ``prompt + completion`` can merge across the
         # boundary and make a completion token look like prompt context.
         prompt_tokens = list(encode(example.prompt, add_special_tokens=False))
-        completion_tokens = list(
-            encode(example.completion, add_special_tokens=False)
-        )
+        completion_tokens = list(encode(example.completion, add_special_tokens=False))
         full_tokens = prompt_tokens + completion_tokens
         n_prompt = len(prompt_tokens)
     else:
@@ -866,7 +911,8 @@ def build_sft_tokenized_batch(
 ) -> SftTokenizedBatch:
     """Build a batch view from pre-tokenized examples."""
     zero_loss_rows = [
-        index for index, example in enumerate(examples)
+        index
+        for index, example in enumerate(examples)
         if example.supervised_tokens == 0
     ]
     if zero_loss_rows:
@@ -900,7 +946,9 @@ def build_sft_artifact_manifest(
     adapter_dir = Path(policy_ref)
     adapter_files: list[str] = []
     if adapter_dir.is_dir():
-        adapter_files = sorted(path.name for path in adapter_dir.iterdir() if path.is_file())
+        adapter_files = sorted(
+            path.name for path in adapter_dir.iterdir() if path.is_file()
+        )
 
     sft_payload: dict[str, object] = {
         "data_path": config.sft_data_path,
@@ -943,6 +991,13 @@ def build_sft_artifact_manifest(
                 "audit_schema": SFT_AUDIT_SCHEMA,
             }
         )
+    if config.sft_token_audit_path:
+        sft_payload.update(
+            {
+                "token_audit_path": config.sft_token_audit_path,
+                "token_audit_sha256": (config.sft_token_audit_sha256.strip().lower()),
+            }
+        )
 
     return {
         "schema_version": 1,
@@ -950,6 +1005,8 @@ def build_sft_artifact_manifest(
         "trainer": "sft",
         "backend": config.backend,
         "base_model": config.model,
+        "base_model_revision": config.model_revision,
+        "base_model_local_files_only": config.model_local_files_only,
         "adapter_path": str(adapter_dir),
         "adapter_root": config.adapter_path,
         "log_dir": config.log_dir,
@@ -963,7 +1020,9 @@ def build_sft_artifact_manifest(
         },
         "lora": {
             "rank": int(config.lora_rank),
-            "alpha": int(config.lora_alpha if config.lora_alpha else config.lora_rank * 2),
+            "alpha": int(
+                config.lora_alpha if config.lora_alpha else config.lora_rank * 2
+            ),
             "dropout": float(config.lora_dropout),
         },
         "huggingface": {
@@ -972,7 +1031,10 @@ def build_sft_artifact_manifest(
             "load_snippet": (
                 "from transformers import AutoModelForCausalLM\n"
                 "from peft import PeftModel\n"
-                f"base = AutoModelForCausalLM.from_pretrained({config.model!r})\n"
+                "base = AutoModelForCausalLM.from_pretrained(\n"
+                f"    {config.model!r}, revision={config.model_revision or None!r}, "
+                f"local_files_only={config.model_local_files_only!r},\n"
+                ")\n"
                 f"model = PeftModel.from_pretrained(base, {str(adapter_dir)!r})"
             ),
             "publish_hint": (
@@ -1028,7 +1090,9 @@ def write_sft_run_snapshot_artifacts(
         "kind": "retrain_resolved_config",
         "config": config_snapshot(config),
     }
-    config_path.write_text(json.dumps(config_payload, indent=2, sort_keys=True, default=str) + "\n")
+    config_path.write_text(
+        json.dumps(config_payload, indent=2, sort_keys=True, default=str) + "\n"
+    )
     paths["resolved_config.json"] = str(config_path)
 
     source_path = Path(provenance.data_path)
@@ -1069,6 +1133,8 @@ def write_sft_run_snapshot_artifacts(
         "recoverable": copied,
         "reason": reason,
     }
-    recoverability_path.write_text(json.dumps(recoverability, indent=2, sort_keys=True) + "\n")
+    recoverability_path.write_text(
+        json.dumps(recoverability, indent=2, sort_keys=True) + "\n"
+    )
     paths["sft_data_recoverability.json"] = str(recoverability_path)
     return paths

@@ -201,6 +201,7 @@ OPTIONS
         --echo-max-token-ratio
         --echo-max-tokens-per-step
         --echo-min-prompt-overlap
+        --echo-require-live-observation-bridge
         --echo-weight
         --environment-args
         --environment-auto-install
@@ -231,6 +232,8 @@ OPTIONS
         --max-steps
         --max-tokens
         --model
+        --model-local-files-only
+        --model-revision
         --optim-beta1
         --optim-beta2
         --optim-eps
@@ -269,6 +272,8 @@ OPTIONS
         --sft-lr
         --sft-max-tokens
         --sft-reshuffle-each-epoch
+        --sft-token-audit-path
+        --sft-token-audit-sha256
         --sft-warmup-steps
         --strategic-grams
         --surprisal-mask-rho
@@ -443,8 +448,9 @@ CONFIGURATION
             retrain sets a deterministic cuBLAS workspace before CUDA/model
             construction, enables torch deterministic algorithms with
             warn_only=false, enables cuDNN determinism, and disables cuDNN
-            benchmarking. Requires training.seed >= 0 and seeds model/adapter
-            initialization before construction. Runtime metrics record the
+            benchmarking. Requires an integer training.seed in 0..4294967295
+            and seeds model/adapter initialization before construction. Runtime
+            metrics record the
             resolved controls and Transformers model-config attention
             implementation, not the CUDA SDPA sub-kernel actually dispatched.
             This does not certify third-party Triton kernels; causal campaigns
@@ -577,6 +583,14 @@ CONFIGURATION
     model = "Qwen/Qwen3-4B-Instruct-2507"
         Any HuggingFace model ID.
 
+    revision = ""
+        Exact Hugging Face revision for Retrain tokenizer and local PyTorch
+        model loads.
+
+    local_files_only = false
+        Forbid network fallback for pinned tokenizer/model loads. Requires a
+        non-empty revision. Token-audited SFT requires true.
+
     base_url = ""
         Backward-compatible fallback for inference URL when
         [inference].url is not set.
@@ -587,7 +601,9 @@ CONFIGURATION
   [training]
 
     seed = -1
-        -1 = no seed (random). >= 0 sets deterministic seed.
+        Must be an integer. -1 = no seed (random). Otherwise use
+        0..4294967295 for deterministic seeding across Python, NumPy, and
+        PyTorch.
 
     max_steps = 500
         Must be > 0.
@@ -636,6 +652,23 @@ CONFIGURATION
         The command receives a JSON config file at {config_path} and
         should write metrics to {log_dir}/metrics.jsonl and save the
         adapter to {adapter_path}.
+
+    sft_token_audit_path = ""
+        Optional runtime-sensitive token-cap audit JSON. When configured,
+        standalone SFT, explain, and resume preflight recheck the exact
+        dataset, effective SFT cap, model, Transformers runtime, implementation
+        hashes, and cached tokenizer snapshot without network access. The
+        config must bind the same revision through [model].revision and set
+        [model].local_files_only = true; Retrain uses both for the actual
+        tokenizer and local PyTorch base-model loads.
+
+    sft_token_audit_sha256 = ""
+        Required exact SHA256 pin for sft_token_audit_path. The two fields
+        must be configured together with sft_data_path. SFT resume schedules
+        bind this pin. Strict patch corpora must prove that the loaded bytes
+        end in the exact tracked lineage.patch.path and that the derived base
+        prefix matches lineage.base hashes and rows. lineage.base.path is
+        checked when available but is not required in a fresh checkout.
 
   [optimizer]
 

@@ -42,6 +42,7 @@ class TestDefaults:
         assert c.echo_max_token_ratio == pytest.approx(0.5)
         assert c.echo_entropy_floor == pytest.approx(0.01)
         assert c.echo_min_prompt_overlap == pytest.approx(0.5)
+        assert c.echo_require_live_observation_bridge is False
         assert c.policy_loss_mode == "standard"
         assert c.kl_cov_percent == pytest.approx(0.2)
         assert c.kl_cov_coef == pytest.approx(1.0)
@@ -53,7 +54,7 @@ class TestDefaults:
 class TestLoadConfig:
     def test_load_minimal_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[training]\nmax_steps = 100\n')
+        toml.write_text("[training]\nmax_steps = 100\n")
         c = load_config(str(toml))
         assert c.max_steps == 100
         # Other defaults preserved
@@ -168,6 +169,7 @@ min_prompt_overlap = 0.75
         assert c.echo_max_token_ratio == pytest.approx(0.25)
         assert c.echo_entropy_floor == pytest.approx(0.05)
         assert c.echo_min_prompt_overlap == pytest.approx(0.75)
+        assert c.echo_require_live_observation_bridge is False
 
     def test_empty_string_ignored(self, tmp_path):
         """Empty-string TOML values should keep the default."""
@@ -185,7 +187,7 @@ min_prompt_overlap = 0.75
     def test_type_coercion_float_from_int(self, tmp_path):
         """TOML integer should be coerced to float for float fields."""
         toml = tmp_path / "config.toml"
-        toml.write_text('[training]\ntemperature = 1\n')
+        toml.write_text("[training]\ntemperature = 1\n")
         c = load_config(str(toml))
         assert c.temperature == pytest.approx(1.0)
         assert isinstance(c.temperature, float)
@@ -201,7 +203,9 @@ min_prompt_overlap = 0.75
 
     def test_unknown_sections_ignored(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[unknown_section]\nfoo = "bar"\n\n[training]\nmax_steps = 42\n')
+        toml.write_text(
+            '[unknown_section]\nfoo = "bar"\n\n[training]\nmax_steps = 42\n'
+        )
         c = load_config(str(toml))
         assert c.max_steps == 42
 
@@ -240,7 +244,7 @@ min_prompt_overlap = 0.75
     def test_wandb_extended_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[logging]\n'
+            "[logging]\n"
             'wandb_entity = "my-team"\n'
             'wandb_group = "sweep-1"\n'
             'wandb_tags = "baseline,seed42"\n'
@@ -253,9 +257,7 @@ min_prompt_overlap = 0.75
     def test_checkpoint_artifacts_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[logging]\n'
-            'wandb_project = "my-proj"\n'
-            'checkpoint_artifacts = "wandb"\n'
+            '[logging]\nwandb_project = "my-proj"\ncheckpoint_artifacts = "wandb"\n'
         )
         c = load_config(str(toml))
         assert c.checkpoint_artifacts == "wandb"
@@ -351,6 +353,8 @@ min_prompt_overlap = 0.75
         assert c.environment_auto_install is False
         assert c.environment_rollout_env_workers == 1
         assert c.environment_rollout_buffer_size == 0
+        assert c.model_revision == ""
+        assert c.model_local_files_only is False
         assert c.log_generations is True
         assert c.generation_log_samples_per_prompt == 1
         assert c.generation_top_surprisal_limit == 0
@@ -361,23 +365,34 @@ min_prompt_overlap = 0.75
         with pytest.raises(ValueError, match="generation_top_surprisal_limit"):
             TrainConfig(generation_top_surprisal_limit=-1)
 
+    def test_model_revision_and_offline_mode_parse_and_validate(self, tmp_path):
+        toml = tmp_path / "config.toml"
+        toml.write_text('[model]\nrevision = "snapshot-abc"\nlocal_files_only = true\n')
+
+        config = load_config(str(toml))
+
+        assert config.model_revision == "snapshot-abc"
+        assert config.model_local_files_only is True
+        with pytest.raises(ValueError, match="requires a non-empty revision"):
+            TrainConfig(model_local_files_only=True)
+
     def test_new_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[training]\ntop_p = 0.9\n\n'
-            '[optimizer]\nbeta1 = 0.85\nbeta2 = 0.99\neps = 1e-6\n\n'
-            '[lora]\nalpha = 64\ndropout = 0.05\n\n'
-            '[backend]\n'
+            "[training]\ntop_p = 0.9\n\n"
+            "[optimizer]\nbeta1 = 0.85\nbeta2 = 0.99\neps = 1e-6\n\n"
+            "[lora]\nalpha = 64\ndropout = 0.05\n\n"
+            "[backend]\n"
             'backend = "prime_rl"\n'
-            '\n'
-            '[backend.options]\n'
+            "\n"
+            "[backend.options]\n"
             'transport = "zmq"\n'
             'zmq_host = "127.0.0.1"\n'
-            'zmq_port = 7777\n'
-            'zmq_hwm = 32\n'
-            'strict_advantages = true\n'
-            'sync_wait_s = 5\n'
-            'sync_poll_s = 0.5\n'
+            "zmq_port = 7777\n"
+            "zmq_hwm = 32\n"
+            "strict_advantages = true\n"
+            "sync_wait_s = 5\n"
+            "sync_poll_s = 0.5\n"
         )
         c = load_config(str(toml))
         assert c.top_p == pytest.approx(0.9)
@@ -398,11 +413,7 @@ min_prompt_overlap = 0.75
 
     def test_legacy_prime_rl_backend_keys_raise_with_migration_hint(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text(
-            '[backend]\n'
-            'backend = "prime_rl"\n'
-            'prime_rl_transport = "zmq"\n'
-        )
+        toml.write_text('[backend]\nbackend = "prime_rl"\nprime_rl_transport = "zmq"\n')
         with pytest.raises(ValueError, match="Legacy PRIME-RL keys"):
             load_config(str(toml))
 
@@ -415,14 +426,14 @@ min_prompt_overlap = 0.75
     def test_environment_fields_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[environment]\n'
+            "[environment]\n"
             'provider = "verifiers"\n'
             'id = "primeintellect/aime"\n'
             'args = "{\\"split\\": \\"train\\"}"\n'
-            'max_turns = 8\n'
-            'auto_install = true\n'
-            'rollout_env_workers = 4\n'
-            'rollout_buffer_size = 6\n'
+            "max_turns = 8\n"
+            "auto_install = true\n"
+            "rollout_env_workers = 4\n"
+            "rollout_buffer_size = 6\n"
         )
         c = load_config(str(toml))
         assert c.environment_provider == "verifiers"
@@ -436,7 +447,7 @@ min_prompt_overlap = 0.75
     def test_environment_args_table_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[environment]\n'
+            "[environment]\n"
             'provider = "verifiers"\n'
             'id = "primeintellect/aime"\n'
             'args = { split = "train", seed = 7 }\n'
@@ -449,13 +460,13 @@ min_prompt_overlap = 0.75
     def test_algorithm_params_tables_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[algorithm]\n'
+            "[algorithm]\n"
             'algorithm_mode = "custom_algorithms.my_algo"\n'
-            '\n[algorithm.params]\n'
+            "\n[algorithm.params]\n"
             "alpha = 0.2\n"
-            '\n[algorithm.advantage_params]\n'
+            "\n[algorithm.advantage_params]\n"
             "scale = 3\n"
-            '\n[algorithm.transform_params]\n'
+            "\n[algorithm.transform_params]\n"
             "cap = 0.1\n"
         )
         c = load_config(str(toml))
@@ -467,9 +478,7 @@ min_prompt_overlap = 0.75
     def test_plugins_section_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            "[plugins]\n"
-            'search_paths = ["plugins", "lab_plugins"]\n'
-            "strict = false\n"
+            '[plugins]\nsearch_paths = ["plugins", "lab_plugins"]\nstrict = false\n'
         )
         c = load_config(str(toml))
         assert c.plugins_search_paths == ["plugins", "lab_plugins"]
@@ -494,13 +503,16 @@ class TestConfigKind:
 
     def test_campaign_wins_over_squeeze(self, tmp_path):
         path = tmp_path / "combined.toml"
-        path.write_text("[campaign]\nmax_steps = 1\n\n[squeeze]\nadapter_path = 'adapter'\n")
+        path.write_text(
+            "[campaign]\nmax_steps = 1\n\n[squeeze]\nadapter_path = 'adapter'\n"
+        )
         assert config_kind(str(path)) == "campaign"
 
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
+
 
 class TestValidation:
     def test_algorithm_mode_builtin_accepted(self):
@@ -574,7 +586,7 @@ class TestValidation:
             algorithm_mode="maxrl_gtpo",
             algorithm_params={
                 "transform_params": {"uncertainty_metric": "pred_var"},
-            }
+            },
         )
         assert c.uncertainty_kind == "predictive_variance"
         assert isinstance(c.algorithm_params["transform_params"], dict)
@@ -789,12 +801,12 @@ class TestCLIParsing:
     def test_backend_opt_cli_beats_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[backend]\n'
+            "[backend]\n"
             'backend = "prime_rl"\n'
-            '\n'
-            '[backend.options]\n'
+            "\n"
+            "[backend.options]\n"
             'transport = "filesystem"\n'
-            'zmq_port = 5555\n'
+            "zmq_port = 5555\n"
         )
         c = load_config(
             str(toml),
@@ -931,13 +943,13 @@ class TestSurprisalMaskRho:
 
     def test_toml_loading_new_key(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[algorithm]\nsurprisal_mask_rho = 0.2\n')
+        toml.write_text("[algorithm]\nsurprisal_mask_rho = 0.2\n")
         c = load_config(str(toml))
         assert c.surprisal_mask_rho == pytest.approx(0.2)
 
     def test_toml_loading_legacy_key(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[algorithm]\nentropy_mask_rho = 0.2\n')
+        toml.write_text("[algorithm]\nentropy_mask_rho = 0.2\n")
         c = load_config(str(toml))
         assert c.surprisal_mask_rho == pytest.approx(0.2)
 
@@ -1009,7 +1021,10 @@ class TestClipEpsConfig:
             warnings.simplefilter("always")
             TrainConfig(clip_eps=0.2, backend="prime_rl")
         msgs = [str(x.message) for x in w]
-        assert any("ratio clipping is only implemented in the local and tinker backends" in m for m in msgs)
+        assert any(
+            "ratio clipping is only implemented in the local and tinker backends" in m
+            for m in msgs
+        )
 
     def test_clip_eps_tinker_no_warn(self):
         """clip_eps on tinker backend should NOT warn (PPO loss supported)."""
@@ -1021,7 +1036,7 @@ class TestClipEpsConfig:
 
     def test_clip_eps_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[training]\nclip_eps = 0.2\nclip_eps_high = 0.28\n')
+        toml.write_text("[training]\nclip_eps = 0.2\nclip_eps_high = 0.28\n")
         c = load_config(str(toml))
         assert c.clip_eps == pytest.approx(0.2)
         assert c.clip_eps_high == pytest.approx(0.28)
@@ -1029,7 +1044,9 @@ class TestClipEpsConfig:
     def test_clip_eps_cli_override(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text("")
-        c = load_config(str(toml), overrides={"clip_eps": "0.2", "clip_eps_high": "0.28"})
+        c = load_config(
+            str(toml), overrides={"clip_eps": "0.2", "clip_eps_high": "0.28"}
+        )
         assert c.clip_eps == pytest.approx(0.2)
         assert c.clip_eps_high == pytest.approx(0.28)
 
@@ -1065,7 +1082,7 @@ class TestPolicyLossModeConfig:
         toml = tmp_path / "config.toml"
         toml.write_text(
             "[training]\n"
-            "policy_loss_mode = \"kl_cov\"\n"
+            'policy_loss_mode = "kl_cov"\n'
             "kl_cov_percent = 0.3\n"
             "kl_cov_coef = 0.7\n"
             "clip_cov_ratio = 0.002\n"
@@ -1096,7 +1113,7 @@ class TestAdvClipMaxConfig:
 
     def test_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[training]\nadv_clip_max = 5.0\n')
+        toml.write_text("[training]\nadv_clip_max = 5.0\n")
         c = load_config(str(toml))
         assert c.adv_clip_max == pytest.approx(5.0)
 
@@ -1112,7 +1129,7 @@ class TestBatchAdvantageNormConfig:
 
     def test_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
-        toml.write_text('[training]\nbatch_advantage_norm = true\n')
+        toml.write_text("[training]\nbatch_advantage_norm = true\n")
         c = load_config(str(toml))
         assert c.batch_advantage_norm is True
 
@@ -1161,8 +1178,8 @@ class TestTlGrpoConfig:
     def test_from_toml(self, tmp_path):
         toml = tmp_path / "config.toml"
         toml.write_text(
-            '[training]\ntl_grpo = true\ntl_grpo_branch_size = 8\n'
-            'tl_grpo_ema_decay = 0.95\ntl_grpo_ema_init = 0.4\n'
+            "[training]\ntl_grpo = true\ntl_grpo_branch_size = 8\n"
+            "tl_grpo_ema_decay = 0.95\ntl_grpo_ema_init = 0.4\n"
         )
         c = load_config(str(toml))
         assert c.tl_grpo is True

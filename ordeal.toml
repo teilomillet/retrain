@@ -2,8 +2,9 @@
 target_modules = [
   "retrain.advantages",
   "retrain.registry",
-  "retrain.sepa",
-  "retrain.backpressure",
+  "retrain.training.sepa",
+  "retrain.training.backpressure",
+  "retrain.training.state",
   "retrain.rewards",
   "retrain.config",
   "tests.test_ordeal_backend_workflow",
@@ -27,6 +28,9 @@ class = "tests.test_ordeal_sepa:SEPAAutoScheduleChaos"
 
 [[tests]]
 class = "tests.test_ordeal_backpressure:USLBackPressureChaos"
+
+[[tests]]
+class = "tests.test_ordeal_registry:RegistryChaos"
 
 [[tests]]
 class = "tests.test_ordeal_trainer_state:TrainerStateChaos"

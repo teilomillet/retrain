@@ -26,6 +26,8 @@ sync_poll_s = 0.2          # polling interval for broadcast weights
 
 [model]
 model = "Qwen/Qwen3-4B-Instruct-2507"
+revision = ""             # exact Hugging Face revision for local loads
+local_files_only = false   # forbid network fallback; requires revision
 base_url = ""              # Tinker service URL (tinker backend only)
 lora_rank = 32
 
@@ -54,7 +56,7 @@ strict = true              # fail fast on plugin load/shape errors
 
 [training]
 trainer = "retrain"        # retrain | sft | optimizer_replay | command | plugin
-seed = -1                  # -1 = no seed
+seed = -1                  # integer: -1 = no seed; otherwise 0..4294967295
 max_steps = 500
 batch_size = 8
 group_size = 16
@@ -69,6 +71,8 @@ sft_data_sha256 = ""       # optional exact-data pin from retrain explain
 sft_data_rows = 0          # optional row-count pin; 0 = unpinned
 sft_audit_path = ""        # optional retrain.sft_audit.v1 JSON
 sft_audit_sha256 = ""      # required exact audit-byte pin when path is set
+sft_token_audit_path = ""  # optional runtime-sensitive token-cap audit JSON
+sft_token_audit_sha256 = "" # required exact token-audit pin when path is set
 sft_batch_size = 0         # 0 = trainer default
 sft_max_tokens = 0         # 0 = trainer default
 sft_lr = 0.0               # 0 = use lr
@@ -92,6 +96,7 @@ max_tokens_per_step = 2048  # hard cap on supervised ECHO tokens per step
 max_token_ratio = 0.5       # cap ECHO tokens to this fraction of RL completion tokens
 entropy_floor = 0.01        # skip ECHO when completion surprisal falls below this floor
 min_prompt_overlap = 0.5    # require stable prompt-prefix overlap before extracting suffix
+require_live_observation_bridge = false # require native post-action observations
 
 [gtpo]
 beta = 0.1                 # entropy weighting strength
@@ -237,7 +242,8 @@ true` keeps the PyTorch engine on the faster generation KV-cache path; disable
 it only when rollout sampling OOMs and slower generation is acceptable.
 `strict_deterministic = true` establishes a deterministic cuBLAS workspace
 before CUDA/model construction and strictly enables PyTorch deterministic
-algorithms plus cuDNN deterministic mode. It requires `training.seed >= 0`,
+algorithms plus cuDNN deterministic mode. It requires an integer `training.seed`
+in `0..4294967295`,
 seeds model/adapter initialization before construction, and fails rather than
 continuing if CUDA was initialized first or the controls cannot be verified. The
 `local_strict_deterministic_*`, `local_cublas_workspace_config`,
@@ -364,6 +370,8 @@ cat retrain.toml | retrain migrate-config --stdin --stdout
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
 | `model` | str | `"Qwen/Qwen3-4B-Instruct-2507"` | HuggingFace model ID or local path |
+| `revision` | str | `""` | Exact Hugging Face revision used by Retrain's tokenizer and local PyTorch model loads |
+| `local_files_only` | bool | `false` | Forbid network fallback for pinned tokenizer/model loads. Requires `revision` |
 | `base_url` | str | `""` | Tinker service URL (tinker backend only) |
 | `lora_rank` | int | `32` | LoRA rank. Alpha is set to `2 * rank` |
 
@@ -394,7 +402,7 @@ Nested plugin params tables under `[algorithm]`:
 
 | TOML key | Type | Default | Description |
 |----------|------|---------|-------------|
-| `seed` | int | `-1` | RNG seed. `-1` disables seeding |
+| `seed` | int | `-1` | RNG seed. `-1` disables seeding; otherwise use `0..4294967295` |
 | `trainer` | str | `"retrain"` | Training loop: `"retrain"` for RL/RLVR, `"sft"` for standalone supervised fine-tuning, `"optimizer_replay"` for a verified one-step local systems replay, `"command"` for an external command, or a dotted plugin path |
 | `max_steps` | int | `500` | Total training steps |
 | `batch_size` | int | `8` | Number of prompts per step |
@@ -411,6 +419,8 @@ Nested plugin params tables under `[algorithm]`:
 | `sft_data_rows` | int | `0` | Optional loaded-row-count pin for SFT data. `0` leaves the count unpinned |
 | `sft_audit_path` | str | `""` | Optional `retrain.sft_audit.v1` JSON. When set, its exact hash, pass status, dataset binding, corpus mode, and patch lineage are verified before SFT |
 | `sft_audit_sha256` | str | `""` | Required SHA256 pin for the exact audit JSON bytes when `sft_audit_path` is set |
+| `sft_token_audit_path` | str | `""` | Optional token-cap audit JSON. When set, Retrain rechecks its dataset, model, effective cap, Transformers runtime, implementation files, and local tokenizer snapshot before SFT |
+| `sft_token_audit_sha256` | str | `""` | Required SHA256 pin for the exact token-audit JSON bytes when `sft_token_audit_path` is set |
 | `sft_batch_size` | int | `0` | SFT datums per optimizer step. `0` keeps the trainer default |
 | `sft_max_tokens` | int | `0` | SFT row token cap. `0` uses `max_tokens` for standalone SFT and `max_tokens + 512` for warmup compatibility |
 | `sft_lr` | float | `0.0` | SFT learning rate. `0` uses `lr` |
@@ -475,6 +485,8 @@ sft_data_path = "data/sft.jsonl"
 # sft_data_rows = 1000
 # sft_audit_path = "data/sft.audit.json"
 # sft_audit_sha256 = "..."
+# sft_token_audit_path = "data/sft.token-audit.json"
+# sft_token_audit_sha256 = "..."
 sft_batch_size = 4
 sft_loss_fn = "auto"  # cross_entropy for standalone SFT
 sft_reshuffle_each_epoch = true
@@ -532,8 +544,9 @@ Each new standalone-SFT checkpoint also stores an `sft_schedule` contract in
 dataset SHA256 and row count, seed, effective batch size, batching policy and
 bucket size, per-epoch reshuffle flag, the SFT warmup phase boundary,
 tokenizer/model inputs, and exact
-epoch-zero order fingerprint still match. A configured audit SHA256 is bound
-too, so resume cannot silently substitute a different corpus decision. The
+epoch-zero order fingerprint still match. Configured generic-audit and
+token-audit SHA256 pins are bound too, so resume cannot silently substitute a
+different corpus decision or tokenization proof. The
 dataset may move to another path when its bytes are unchanged. Older SFT
 trainer states do not contain enough
 evidence to prove the original traversal, so they cannot be continued as a
@@ -596,6 +609,29 @@ configured, explain also verifies its externally pinned bytes and requires:
 `lineage.patch`, each with a valid `sha256` and positive `rows`. Retrain
 does not infer patch-versus-replacement semantics from paths. This makes the
 config a portable, fail-closed data contract instead of just a filename.
+
+When `sft_token_audit_path` is configured, `retrain explain`, standalone SFT,
+SFT warmup, and `resume-check --config` additionally verify the exact pinned
+token-audit bytes. The audit must have a non-empty `schema`, `status = "pass"`,
+and bind the loaded dataset SHA256/row count plus the configured trainer,
+model, and effective SFT cap (`sft_max_tokens`, or the trainer fallback). It
+must report zero rows over that cap and a positive `tokens.max` no greater than
+the cap. Retrain also requires the audit's Transformers version, hashes every
+listed implementation file, and resolves every listed tokenizer file for the
+configured model from the existing Hugging Face cache with
+`local_files_only=True`; the cached snapshot revision and file hashes must
+match. The config must set that same `[model].revision` and
+`[model].local_files_only = true`; Retrain passes both values into the actual
+tokenizer and local PyTorch base-model loads. No network fallback is allowed.
+
+For `corpus_mode = "patch"`, enabling the token audit also strengthens the
+generic corpus audit: `lineage.base.path` and `lineage.patch.path` become
+source evidence. `lineage.patch.path` must resolve and match its declared
+bytes. Retrain then proves the loaded training file ends with that exact patch
+and verifies the derived base prefix against `lineage.base`'s hash and row
+count. If `lineage.base.path` is present locally it is checked too, but a fresh
+checkout does not need that standalone base file. Path-free v1 generic audits
+remain valid when no token audit is configured.
 
 For RL configs, the same preview includes `+echo` in the condition when ECHO
 is enabled, reports its weight and token caps, and shows the environment turn
@@ -806,6 +842,7 @@ currently compute the RL and ECHO losses from one shared actor pass.
 | `max_token_ratio` | float | `0.5` | Cap positive ECHO tokens to this fraction of RL completion tokens, so ECHO cannot dominate the step |
 | `entropy_floor` | float | `0.01` | Skip the ECHO step when sampled-completion mean surprisal is below this floor; this is a mode-collapse guard |
 | `min_prompt_overlap` | float | `0.5` | Compatibility-only minimum overlap for environments that do not expose native one-shot observation messages |
+| `require_live_observation_bridge` | bool | `false` | Fail before optimization unless the environment bridge supplies native post-action observation messages for ECHO |
 
 ### `[optimizer]`
 

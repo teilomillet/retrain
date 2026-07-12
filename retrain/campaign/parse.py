@@ -8,6 +8,7 @@ from typing import cast
 
 from retrain.campaign.model import CampaignCondition
 from retrain.config import TrainConfig
+from retrain.config.constants import _MAX_REPRODUCIBLE_SEED
 
 DEFAULT_CONDITIONS: list[tuple[str, str]] = [
     ("grpo", "none"),
@@ -74,6 +75,11 @@ def campaign_seeds(campaign: Mapping[str, object]) -> list[int]:
     for idx, seed in enumerate(raw):
         if not isinstance(seed, int) or isinstance(seed, bool):
             raise ValueError(f"campaign.seeds[{idx}] must be an integer")
+        if seed < -1 or seed > _MAX_REPRODUCIBLE_SEED:
+            raise ValueError(
+                f"campaign.seeds[{idx}] must be -1 (random) or between 0 and "
+                f"{_MAX_REPRODUCIBLE_SEED} inclusive"
+            )
         seeds.append(seed)
     return seeds
 

@@ -22,7 +22,11 @@ from retrain.training.optimizer_batch import (
     save_optimizer_batch_capture,
 )
 from retrain.config import TrainConfig
-from retrain.training.echo import run_rl_echo_train_step
+from retrain.config.readiness import assert_readiness_runtime_matches_file
+from retrain.training.echo import (
+    assert_echo_live_observation_contract,
+    run_rl_echo_train_step,
+)
 from retrain.training.flow import (
     TrainingFlow,
     _condition_label,
@@ -82,6 +86,8 @@ from retrain.environments.verifiers import (
 
 def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
     """Main training loop -- fully self-contained. Returns final adapter path."""
+
+    assert_readiness_runtime_matches_file(config)
 
     capture_initial_adapter = (
         preflight_optimizer_batch_capture(config)
@@ -187,7 +193,12 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # 4. Load tokenizer + lazy token/prompt caches
         # -----------------------------------------------------------------------
         print(f"Loading tokenizer for {config.model} ...")
-        tokenizer = AutoTokenizer.from_pretrained(config.model, trust_remote_code=True)
+        from retrain.training.sft import sft_tokenizer_load_kwargs
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.model,
+            **sft_tokenizer_load_kwargs(config),
+        )
         runtime_counters = RuntimeCounters()
         token_lookup = TokenTextLookup(tokenizer, counters=runtime_counters)
         prompt_cache = ExamplePromptCache(
@@ -476,6 +487,14 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             acc.refresh_optimizer_advantage_token_count()
 
             echo_plan = prepare_echo_step_plan(config, acc)
+            assert_echo_live_observation_contract(
+                required=config.echo_require_live_observation_bridge,
+                build=acc.echo_build,
+                limit=echo_plan.limit,
+                final_masks=acc.datum_echo_advantages,
+                eligible_rollouts=acc.echo_eligible_rollout_count,
+                skipped_entropy_floor=echo_plan.skipped_entropy_floor,
+            )
 
             rl_has_signal = has_nonzero_advantage(acc.datum_advantages)
             echo_has_datums = bool(

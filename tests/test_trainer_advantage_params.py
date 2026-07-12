@@ -1127,7 +1127,12 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
     assert step_metrics["echo/joint_optimizer_step"] == 1
 
 
-def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
+@pytest.mark.parametrize("strict_live_bridge", [False, True])
+def test_train_echo_entropy_floor_skips_or_fails_closed(
+    monkeypatch,
+    tmp_path,
+    strict_live_bridge,
+):
     helper = _EchoRecordingFakeHelper(adapter_path=str(tmp_path / "adapter"))
     env = SimpleNamespace(env_id="fake/multiturn")
 
@@ -1218,9 +1223,21 @@ def test_train_echo_entropy_floor_skips_auxiliary_step(monkeypatch, tmp_path):
         echo_enabled=True,
         echo_weight=0.2,
         echo_entropy_floor=0.5,
+        echo_require_live_observation_bridge=strict_live_bridge,
     )
 
     flow = _make_fake_flow(cfg, helper)
+    if strict_live_bridge:
+        with pytest.raises(
+            RuntimeError,
+            match="ECHO live-observation contract failed before optimizer",
+        ):
+            trainer_mod.train(cfg, flow=flow)
+        assert helper.train_calls == []
+        assert helper.sft_calls == []
+        assert helper.hybrid_calls == []
+        return
+
     trainer_mod.train(cfg, flow=flow)
 
     assert len(helper.train_calls) == 1

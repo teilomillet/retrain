@@ -6,13 +6,29 @@ import json
 from typing import TYPE_CHECKING
 
 from retrain.backends.catalog import normalize_backend_options
-from retrain.config.constants import _VALID_ENVIRONMENT_PROVIDERS
+from retrain.config.constants import (
+    _MAX_REPRODUCIBLE_SEED,
+    _VALID_ENVIRONMENT_PROVIDERS,
+)
 
 if TYPE_CHECKING:
     from retrain.config.schema import TrainConfig
 
 
 def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
+    if config.model_local_files_only and not config.model_revision.strip():
+        errors.append("[model] local_files_only=true requires a non-empty revision.")
+    if config.sft_token_audit_path:
+        if not config.model_revision.strip():
+            errors.append(
+                "sft_token_audit_path requires [model] revision so the "
+                "audited tokenizer and base model cannot float."
+            )
+        if not config.model_local_files_only:
+            errors.append(
+                "sft_token_audit_path requires [model] local_files_only=true "
+                "so training cannot refresh the audited snapshot."
+            )
     if not isinstance(config.plugins_search_paths, list) or not all(
         isinstance(p, str) and p.strip() for p in config.plugins_search_paths
     ):
@@ -25,9 +41,7 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
             f"Must be one of: {sorted(_VALID_ENVIRONMENT_PROVIDERS)}"
         )
     if config.environment_provider and not config.environment_id:
-        errors.append(
-            "environment_id is required when environment_provider is set."
-        )
+        errors.append("environment_id is required when environment_provider is set.")
     if (
         config.environment_provider == "openenv"
         and config.environment_id
@@ -38,7 +52,7 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
         errors.append(
             "environment_id must be a server URL (http(s):// or ws(s)://) "
             "when environment_provider is 'openenv'. "
-            "Try: id = \"http://localhost:8765\""
+            'Try: id = "http://localhost:8765"'
         )
     if config.environment_provider and config.environment_args:
         try:
@@ -59,6 +73,16 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
         errors.append("environment_rollout_env_workers must be >= 1.")
     if config.environment_rollout_buffer_size < 0:
         errors.append("environment_rollout_buffer_size must be >= 0.")
+    if not isinstance(config.seed, int) or isinstance(config.seed, bool):
+        errors.append(
+            "[training] seed must be an integer: -1 (random) or between 0 and "
+            f"{_MAX_REPRODUCIBLE_SEED} inclusive."
+        )
+    elif config.seed < -1 or config.seed > _MAX_REPRODUCIBLE_SEED:
+        errors.append(
+            "[training] seed must be -1 (random) or between 0 and "
+            f"{_MAX_REPRODUCIBLE_SEED} inclusive."
+        )
 
     if config.tl_grpo and config.tl_grpo_branch_mode not in ("action_space", "llm"):
         errors.append(
@@ -66,13 +90,9 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
             f"got '{config.tl_grpo_branch_mode}'. Try: tl_grpo_branch_mode = 'action_space'"
         )
     if config.tl_grpo and config.tl_grpo_ema_decay <= 0.0:
-        errors.append(
-            "tl_grpo_ema_decay must be > 0. Try: tl_grpo_ema_decay = 0.9"
-        )
+        errors.append("tl_grpo_ema_decay must be > 0. Try: tl_grpo_ema_decay = 0.9")
     if config.tl_grpo and config.tl_grpo_ema_decay >= 1.0:
-        errors.append(
-            "tl_grpo_ema_decay must be < 1. Try: tl_grpo_ema_decay = 0.9"
-        )
+        errors.append("tl_grpo_ema_decay must be < 1. Try: tl_grpo_ema_decay = 0.9")
     if config.tl_grpo and config.tl_grpo_branch_size < 2:
         errors.append(
             "tl_grpo_branch_size must be >= 2 when tl_grpo is enabled. "
@@ -102,11 +122,10 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
         config.backend == "local"
         and isinstance(config.backend_options, dict)
         and bool(config.backend_options.get("strict_deterministic", False))
-        and config.seed < 0
+        and config.seed == -1
     ):
         errors.append(
-            "backend.options.strict_deterministic=true requires "
-            "[training] seed >= 0."
+            "backend.options.strict_deterministic=true requires [training] seed >= 0."
         )
 
     if (
@@ -141,10 +160,7 @@ def collect_runtime_errors(config: TrainConfig, errors: list[str]) -> None:
             f"Shannon entropy needs GPU-side logit access to compute "
             f"per-token entropy."
         )
-    if (
-        config.uncertainty_kind == "shannon_entropy"
-        and config.backend == "tinker"
-    ):
+    if config.uncertainty_kind == "shannon_entropy" and config.backend == "tinker":
         errors.append(
             "uncertainty_kind='shannon_entropy' is not supported with "
             "backend='tinker'. The Tinker API returns only scalar "

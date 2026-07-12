@@ -79,8 +79,11 @@ class _JsonActionTokenizer:
 
 class _DummyHelper:
     def sample(self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p):
-        del num_samples, max_tokens, temperature, top_p
-        return [[([101 + idx], [-0.1])] for idx, _ in enumerate(prompt_ids_batch)]
+        del max_tokens, temperature, top_p
+        return [
+            [([101 + sample_idx], [-0.1]) for sample_idx in range(num_samples)]
+            for _prompt_ids in prompt_ids_batch
+        ]
 
 
 class _TransitionRenderer:

@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from retrain.backends.tinker import runtime as tinker_runtime
 from retrain.backends.tinker.runtime import (
     load_tensor_data,
     load_tinker,
@@ -51,8 +52,18 @@ def test_tinker_runtime_loads_optional_sdk_modules(
 def test_tinker_runtime_preserves_import_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in ("tinker", "tinker.types", "tinker.types.tensor_data"):
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    expected = ModuleNotFoundError("No module named 'tinker'")
 
-    with pytest.raises(ModuleNotFoundError):
+    def _missing_tinker(name: str) -> ModuleType:
+        assert name == "tinker"
+        raise expected
+
+    monkeypatch.setattr(
+        tinker_runtime,
+        "importlib",
+        SimpleNamespace(import_module=_missing_tinker),
+    )
+
+    with pytest.raises(ModuleNotFoundError) as exc_info:
         load_tinker()
+    assert exc_info.value is expected

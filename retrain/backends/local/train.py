@@ -78,60 +78,73 @@ from retrain.training.batch_digest import (
 class LocalTrainHelper:
     """Local GPU backend: pluggable inference engine + PyTorch/PEFT training."""
 
-    def __init__(self, model_name, adapter_path, devices, lora_rank=32,
-                 engine_type="pytorch", inference_url="",
-                 lora_alpha=0, lora_dropout=0.0,
-                 optim_beta1=0.9, optim_beta2=0.95, optim_eps=1e-8,
-                 clip_eps=0.0, clip_eps_high=0.0,
-                 policy_loss_mode="standard",
-                 kl_cov_percent=0.2,
-                 kl_cov_coef=1.0,
-                 clip_cov_ratio=0.0002,
-                 clip_cov_min=1.0,
-                 clip_cov_max=5.0,
-                 train_microbatch_size=0,
-                 train_sft_microbatch_token_budget=0,
-                 train_logprob_chunk_size=0,
-                 liger_kernel=True,
-                 liger_fused_linear_ce=True,
-                 cuda_empty_cache=False,
-                 cuda_expandable_segments="auto",
-                 strict_deterministic=False,
-                 strict_deterministic_seed=-1,
-                 sample_use_cache=True,
-                 gradient_checkpointing=True,
-                 gradient_checkpointing_use_reentrant="auto",
-                 gradient_checkpointing_skip_last_n=0,
-                 cudnn_causal_conv1d_shim=False,
-                 attention_kernel="default",
-                 prefix_caching=True,
-                 train_selective_suffix_logits=False,
-                 train_save_on_cpu=False,
-                 train_save_on_cpu_pin_memory=True,
-                 train_save_on_cpu_min_numel=0,
-                 train_supervised_context_tokens=0,
-                 train_unsloth_fused_ce="off",
-                 train_unsloth_fused_ce_target_gb=0.0,
-                 train_unsloth_fused_ce_torch_compile=True,
-                 train_compile_selective_ce="off",
-                 train_compile_selective_ce_min_tokens=128,
-                 lora_target_modules="",
-                 lora_layers_to_transform="",
-                 lora_layers_pattern="layers",
-                 lora_detach_input=False,
-                 lora_fast_linear=False,
-                 lora_freeze_a=False,
-                 qwen35_gated_delta_kernel="auto",
-                 sample_kv_quantization="off",
-                 sample_oscar_repo="",
-                 sample_oscar_bits=2,
-                 sample_oscar_quant_mode="k-channel",
-                 sample_oscar_group_size=0,
-                 sample_oscar_kv_rotation="hadamard",
-                 sample_oscar_kv_norm="1",
-                 sample_oscar_residual_block_size=128,
-                 sample_oscar_attn_implementation="sdpa",
-                 trust_remote_code=False):
+    def __init__(
+        self,
+        model_name,
+        adapter_path,
+        devices,
+        lora_rank=32,
+        engine_type="pytorch",
+        inference_url="",
+        model_revision="",
+        model_local_files_only=False,
+        lora_alpha=0,
+        lora_dropout=0.0,
+        optim_beta1=0.9,
+        optim_beta2=0.95,
+        optim_eps=1e-8,
+        clip_eps=0.0,
+        clip_eps_high=0.0,
+        policy_loss_mode="standard",
+        kl_cov_percent=0.2,
+        kl_cov_coef=1.0,
+        clip_cov_ratio=0.0002,
+        clip_cov_min=1.0,
+        clip_cov_max=5.0,
+        train_microbatch_size=0,
+        train_sft_microbatch_token_budget=0,
+        train_logprob_chunk_size=0,
+        liger_kernel=True,
+        liger_fused_linear_ce=True,
+        cuda_empty_cache=False,
+        cuda_expandable_segments="auto",
+        strict_deterministic=False,
+        strict_deterministic_seed=-1,
+        sample_use_cache=True,
+        gradient_checkpointing=True,
+        gradient_checkpointing_use_reentrant="auto",
+        gradient_checkpointing_skip_last_n=0,
+        cudnn_causal_conv1d_shim=False,
+        attention_kernel="default",
+        prefix_caching=True,
+        train_selective_suffix_logits=False,
+        train_save_on_cpu=False,
+        train_save_on_cpu_pin_memory=True,
+        train_save_on_cpu_min_numel=0,
+        train_supervised_context_tokens=0,
+        train_unsloth_fused_ce="off",
+        train_unsloth_fused_ce_target_gb=0.0,
+        train_unsloth_fused_ce_torch_compile=True,
+        train_compile_selective_ce="off",
+        train_compile_selective_ce_min_tokens=128,
+        lora_target_modules="",
+        lora_layers_to_transform="",
+        lora_layers_pattern="layers",
+        lora_detach_input=False,
+        lora_fast_linear=False,
+        lora_freeze_a=False,
+        qwen35_gated_delta_kernel="auto",
+        sample_kv_quantization="off",
+        sample_oscar_repo="",
+        sample_oscar_bits=2,
+        sample_oscar_quant_mode="k-channel",
+        sample_oscar_group_size=0,
+        sample_oscar_kv_rotation="hadamard",
+        sample_oscar_kv_norm="1",
+        sample_oscar_residual_block_size=128,
+        sample_oscar_attn_implementation="sdpa",
+        trust_remote_code=False,
+    ):
         self.strict_deterministic = bool(strict_deterministic)
         self._determinism_metrics = establish_strict_determinism(
             enabled=self.strict_deterministic
@@ -142,6 +155,8 @@ class LocalTrainHelper:
             )
         self.adapter_path = adapter_path
         self.model_name = model_name
+        self.model_revision = str(model_revision or "")
+        self.model_local_files_only = bool(model_local_files_only)
         self.engine_type = engine_type
         self.trust_remote_code = bool(trust_remote_code)
         self.clip_eps = clip_eps
@@ -357,9 +372,7 @@ class LocalTrainHelper:
             self.train_model,
             enabled=self.lora_detach_input,
         )
-        self._lora_detach_input_hook_count = len(
-            self._lora_detach_input_hook_handles
-        )
+        self._lora_detach_input_hook_count = len(self._lora_detach_input_hook_handles)
         self._lora_fast_linear_patch_count = _patch_fast_lora(
             self.train_model,
             enabled=self.lora_fast_linear,
@@ -390,10 +403,10 @@ class LocalTrainHelper:
         )
 
         # Async pipeline state — initialized before first _sync_lora_weights call
-        self._train_future = None       # Future from last submitted training
-        self._pending_loss = 0.0        # Loss from last completed training
-        self._weight_snapshot = None    # LoRA weight snapshot for safe cross-thread sync
-        self._weights_dirty = False     # Track if weights changed since last server sync
+        self._train_future = None  # Future from last submitted training
+        self._pending_loss = 0.0  # Loss from last completed training
+        self._weight_snapshot = None  # LoRA weight snapshot for safe cross-thread sync
+        self._weights_dirty = False  # Track if weights changed since last server sync
 
         # Create inference engine
         if self._external_engine:
@@ -411,6 +424,8 @@ class LocalTrainHelper:
                 liger_kernel=self.liger_kernel,
                 sample_kv_quantization=self.sample_kv_quantization,
                 sample_oscar_options=self.sample_oscar_options,
+                model_revision=self.model_revision,
+                model_local_files_only=self.model_local_files_only,
             )
         elif self.split_mode:
             self._train_executor = ThreadPoolExecutor(max_workers=1)
@@ -428,6 +443,8 @@ class LocalTrainHelper:
                 liger_kernel=self.liger_kernel,
                 sample_kv_quantization=self.sample_kv_quantization,
                 sample_oscar_options=self.sample_oscar_options,
+                model_revision=self.model_revision,
+                model_local_files_only=self.model_local_files_only,
             )
             # Initial sync: copy LoRA weights from train to infer
             self._do_initial_sync()
@@ -447,6 +464,8 @@ class LocalTrainHelper:
                 liger_kernel=self.liger_kernel,
                 sample_kv_quantization=self.sample_kv_quantization,
                 sample_oscar_options=self.sample_oscar_options,
+                model_revision=self.model_revision,
+                model_local_files_only=self.model_local_files_only,
             )
 
         # Optimizer (only for train_model)
@@ -464,7 +483,9 @@ class LocalTrainHelper:
             enabled=self.use_amp and self.amp_dtype == torch.float16
         )
 
-        print(f"LocalTrainHelper ready (engine={engine_type}, split_mode={self.split_mode}).")
+        print(
+            f"LocalTrainHelper ready (engine={engine_type}, split_mode={self.split_mode})."
+        )
 
     def _autocast_context(self):
         device_type = self.train_device.split(":")[0]
@@ -480,6 +501,8 @@ class LocalTrainHelper:
             model_name,
             torch_dtype=dtype,
             trust_remote_code=self.trust_remote_code,
+            revision=self.model_revision or None,
+            local_files_only=self.model_local_files_only,
             **model_kwargs,
         )
         target_module_suffixes = getattr(
@@ -544,8 +567,16 @@ class LocalTrainHelper:
     def _shared_model_sampling_cache_context(self):
         return local_sampling.shared_model_cache_context(self)
 
-    def _sample_groups(self, prompt_ids_list, num_samples, max_tokens,
-                       temperature, top_p, *, compute_entropy):
+    def _sample_groups(
+        self,
+        prompt_ids_list,
+        num_samples,
+        max_tokens,
+        temperature,
+        top_p,
+        *,
+        compute_entropy,
+    ):
         return local_sampling.sample_groups(
             self,
             prompt_ids_list=prompt_ids_list,
@@ -574,23 +605,51 @@ class LocalTrainHelper:
             List of lists of (token_ids, logprobs) tuples.
         """
         engine_results = self._sample_groups(
-            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+            prompt_ids_list,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
             compute_entropy=False,
         )
         return [
-            [(sr.token_ids, sr.logprobs) for sr in group]
+            [(sr.token_ids, sr.logprobs) for sr in group] for group in engine_results
+        ]
+
+    def sample_with_finish_reason(
+        self, prompt_ids_list, num_samples, max_tokens, temperature, top_p
+    ):
+        """Generate completions while retaining per-sample stop metadata."""
+        engine_results = self._sample_groups(
+            prompt_ids_list,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+            compute_entropy=False,
+        )
+        return [
+            [
+                (sr.token_ids, sr.logprobs, getattr(sr, "finish_reason", None))
+                for sr in group
+            ]
             for group in engine_results
         ]
 
-    def sample_with_entropy(self, prompt_ids_list, num_samples, max_tokens,
-                            temperature, top_p):
+    def sample_with_entropy(
+        self, prompt_ids_list, num_samples, max_tokens, temperature, top_p
+    ):
         """Generate completions with per-token logprobs and Shannon entropy.
 
         Like sample(), but requests per-token entropy from the engine and
         returns 3-tuples (token_ids, logprobs, token_entropies).
         """
         engine_results = self._sample_groups(
-            prompt_ids_list, num_samples, max_tokens, temperature, top_p,
+            prompt_ids_list,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
             compute_entropy=True,
         )
         return [
@@ -855,9 +914,8 @@ class LocalTrainHelper:
         echo_advantages=None,
     ):
         context_tokens = int(getattr(self, "train_supervised_context_tokens", 0))
-        enabled = (
-            context_tokens > 0
-            and getattr(self, "train_selective_suffix_logits", False)
+        enabled = context_tokens > 0 and getattr(
+            self, "train_selective_suffix_logits", False
         )
         result = local_sft.crop_supervised_context(
             all_tokens,
@@ -887,22 +945,20 @@ class LocalTrainHelper:
     ) -> None:
         """Record post-crop RL rows without claiming optimizer equivalence."""
 
-        self._last_effective_optimizer_rows_sha256 = (
-            local_rl_effective_rows_sha256(
-                all_tokens,
-                all_logprobs,
-                all_advantages,
-                echo_observation_masks=echo_advantages,
-                echo_full_observation_counts=echo_full_observation_counts,
-                echo_rollout_denominator=echo_rollout_denominator,
-            )
+        self._last_effective_optimizer_rows_sha256 = local_rl_effective_rows_sha256(
+            all_tokens,
+            all_logprobs,
+            all_advantages,
+            echo_observation_masks=echo_advantages,
+            echo_full_observation_counts=echo_full_observation_counts,
+            echo_rollout_denominator=echo_rollout_denominator,
         )
 
     def _record_effective_sft_rows(self, all_tokens, all_advantages) -> None:
         """Record post-crop cross-entropy SFT rows and target weights."""
 
-        self._last_effective_optimizer_rows_sha256 = (
-            local_sft_effective_rows_sha256(all_tokens, all_advantages)
+        self._last_effective_optimizer_rows_sha256 = local_sft_effective_rows_sha256(
+            all_tokens, all_advantages
         )
 
     def train_step(self, all_tokens, all_logprobs, all_advantages, lr, weight_decay):

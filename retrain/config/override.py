@@ -54,6 +54,17 @@ def _coerce_value(field_name: str, raw: object) -> object:
             raise ValueError(f"Expected string for {field_name}, got {type(raw).__name__}")
         return raw.lower() in ("1", "true", "yes")
     if ftype is int:
+        if field_name == "seed":
+            if isinstance(raw, bool):
+                return raw
+            if isinstance(raw, int):
+                return raw
+            if isinstance(raw, str):
+                try:
+                    return int(raw)
+                except ValueError:
+                    return raw
+            return raw
         if isinstance(raw, int):
             return raw
         if isinstance(raw, (str, bytes, bytearray, typing.SupportsInt)):

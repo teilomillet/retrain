@@ -9,7 +9,11 @@ import pytest
 
 from retrain.campaign.configs import config_to_toml, toml_value, write_run_configs
 from retrain.campaign.parallel import run_parallel
-from retrain.campaign.parse import DEFAULT_CONDITIONS, parse_campaign_conditions
+from retrain.campaign.parse import (
+    DEFAULT_CONDITIONS,
+    campaign_seeds,
+    parse_campaign_conditions,
+)
 from retrain.campaign.run import run_campaign
 from retrain.config import TrainConfig, load_config
 
@@ -126,6 +130,20 @@ class TestParseCampaignConditions:
                 "campaign.toml",
             )
 
+    @pytest.mark.parametrize("seed", [1.5, True])
+    def test_invalid_seed_override_raises(self, seed: object) -> None:
+        with pytest.raises(ValueError, match="seed must be an integer"):
+            parse_campaign_conditions(
+                [
+                    {
+                        "advantage_mode": "grpo",
+                        "transform_mode": "none",
+                        "seed": seed,
+                    }
+                ],
+                "campaign.toml",
+            )
+
     def test_delight_gate_campaign_matrix_stays_in_sync(self):
         campaign_path = (
             Path(__file__).resolve().parents[1]
@@ -160,6 +178,22 @@ class TestParseCampaignConditions:
             assert transform_params["delight_eta_ema_decay"] == pytest.approx(0.8)
             assert transform_params["delight_eta_target_neutral_frac"] == pytest.approx(0.6)
             assert transform_params["delight_eta_target_ordering_gap"] == pytest.approx(0.1)
+
+
+class TestCampaignSeeds:
+    @pytest.mark.parametrize("seed", [-1, 0, (1 << 32) - 1])
+    def test_accepts_reproducible_range(self, seed: int) -> None:
+        assert campaign_seeds({"seeds": [seed]}) == [seed]
+
+    @pytest.mark.parametrize("seed", [-2, 1 << 32])
+    def test_rejects_values_outside_reproducible_range(self, seed: int) -> None:
+        with pytest.raises(ValueError, match=r"campaign.seeds\[0\].*4294967295"):
+            campaign_seeds({"seeds": [seed]})
+
+    @pytest.mark.parametrize("seed", [1.5, True])
+    def test_rejects_non_integer_values(self, seed: object) -> None:
+        with pytest.raises(ValueError, match=r"campaign.seeds\[0\].*integer"):
+            campaign_seeds({"seeds": [seed]})
 
 
 # ---------------------------------------------------------------------------

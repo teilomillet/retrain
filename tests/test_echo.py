@@ -6,6 +6,8 @@ import pytest
 
 from retrain.training.echo import (
     EchoBuildStats,
+    EchoLimitStats,
+    assert_echo_live_observation_contract,
     build_rollout_echo_datum,
     build_rollout_echo_datums,
     common_prefix_len,
@@ -13,6 +15,84 @@ from retrain.training.echo import (
     merge_echo_build_stats,
     run_rl_echo_train_step,
 )
+
+
+def test_strict_echo_live_observation_contract_accepts_real_tool_signal() -> None:
+    assert_echo_live_observation_contract(
+        required=True,
+        build=EchoBuildStats(
+            candidate_datums=2,
+            candidate_tokens=3,
+            observation_responses=2,
+            bridged_transition_datums=2,
+            explicit_transition_rollouts=1,
+        ),
+        limit=EchoLimitStats(kept_datums=2, kept_tokens=3),
+        final_masks=[[0.0, 0.1, 0.1], [0.1]],
+        eligible_rollouts=1,
+        skipped_entropy_floor=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("build", "limit", "masks", "eligible", "skipped", "failure"),
+    [
+        (EchoBuildStats(), EchoLimitStats(), [], 0, False, "candidate_tokens"),
+        (
+            EchoBuildStats(
+                candidate_tokens=1,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                bridge_failures=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(kept_tokens=1),
+            [[0.1]],
+            1,
+            False,
+            "zero_bridge_failures",
+        ),
+        (
+            EchoBuildStats(
+                candidate_tokens=1,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                renderer_parity_failures=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(kept_tokens=1),
+            [[0.1]],
+            1,
+            False,
+            "zero_renderer_parity_failures",
+        ),
+        (
+            EchoBuildStats(
+                candidate_tokens=1,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(),
+            [[0.0]],
+            1,
+            True,
+            "kept_tokens",
+        ),
+    ],
+)
+def test_strict_echo_live_observation_contract_fails_closed(
+    build, limit, masks, eligible, skipped, failure
+) -> None:
+    with pytest.raises(RuntimeError, match=failure):
+        assert_echo_live_observation_contract(
+            required=True,
+            build=build,
+            limit=limit,
+            final_masks=masks,
+            eligible_rollouts=eligible,
+            skipped_entropy_floor=skipped,
+        )
 
 
 def test_common_prefix_len_stops_at_first_mismatch() -> None:

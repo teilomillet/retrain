@@ -28,6 +28,8 @@ class TestCreateEngine:
                 inference_url="",
                 sample_kv_quantization="oscar",
                 sample_oscar_options=sample_oscar_options,
+                model_revision="snapshot-abc",
+                model_local_files_only=True,
             )
 
         mock_cls.assert_called_once()
@@ -35,6 +37,8 @@ class TestCreateEngine:
         assert args == ("Qwen/Qwen3-4B-Instruct-2507", "cuda:0", None, None)
         assert kwargs["sample_kv_quantization"] == "oscar"
         assert kwargs["sample_oscar_options"] is sample_oscar_options
+        assert kwargs["model_revision"] == "snapshot-abc"
+        assert kwargs["model_local_files_only"] is True
 
     def test_pytorch_engine_rejects_oscar_without_cache(self):
         from retrain.inference_engine.pytorch_engine import PyTorchEngine
@@ -127,7 +131,10 @@ class TestCreateEngine:
         )
 
     def test_unknown_engine_error_lists_mlx(self):
-        with pytest.raises(ValueError, match="Expected: pytorch, max, vllm, sglang, trtllm, mlx, openai"):
+        with pytest.raises(
+            ValueError,
+            match="Expected: pytorch, max, vllm, sglang, trtllm, mlx, openai",
+        ):
             create_engine(
                 engine_type="unknown-engine",
                 model_name="any",

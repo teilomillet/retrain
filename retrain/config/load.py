@@ -95,7 +95,14 @@ def load_config(
                 if ftype is bool:
                     setattr(config, field_name, bool(val))
                 elif ftype is int:
-                    setattr(config, field_name, int(val))
+                    # Preserve the seed's raw TOML type so validation can reject
+                    # floats, booleans, and strings instead of silently truncating
+                    # or coercing them into an accepted integer.
+                    setattr(
+                        config,
+                        field_name,
+                        val if field_name == "seed" else int(val),
+                    )
                 elif ftype is float:
                     setattr(config, field_name, float(val))
                 else:

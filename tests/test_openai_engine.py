@@ -490,6 +490,7 @@ def test_direct_token_ids_payload_is_used(monkeypatch):
         "choices": [
             {
                 "text": "world",
+                "finish_reason": "length",
                 "token_ids": [101, 102],
                 "logprobs": {
                     "token_logprobs": [-0.5, -0.3],
@@ -510,6 +511,7 @@ def test_direct_token_ids_payload_is_used(monkeypatch):
 
     assert results[0][0].token_ids == [101, 102]
     assert results[0][0].logprobs == [-0.5, -0.3]
+    assert results[0][0].finish_reason == "length"
 
 
 def test_null_choice_token_ids_with_unconvertible_tokens_reencodes_text(monkeypatch):

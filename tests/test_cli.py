@@ -24,6 +24,58 @@ def run_man(args: list[str]) -> None:
     manual_command.run(args, cli_name="retrain", manual_path=cli._manual_path)
 
 
+class TestReadinessBoundLaunch:
+    def test_exposes_resolved_config_path(self, tmp_path, monkeypatch):
+        config_path = tmp_path / "run.toml"
+        config_path.write_text("[training]\nmax_steps = 1\n")
+        monkeypatch.setenv("RETRAIN_CONFIG_PATH", "/stale/config.toml")
+
+        cli._prepare_single_run_binding(
+            str(config_path),
+            {},
+            pristine_environment_args="",
+            effective_environment_args="",
+        )
+
+        assert cli.os.environ["RETRAIN_CONFIG_PATH"] == str(config_path.resolve())
+
+    @pytest.mark.parametrize(
+        ("pristine", "effective"),
+        [
+            ('{"readiness_config":"training/run.toml"}', "{}"),
+            ("{}", '{"readiness_config":"training/run.toml"}'),
+        ],
+    )
+    def test_rejects_override_if_either_config_view_is_bound(
+        self,
+        tmp_path,
+        pristine,
+        effective,
+    ):
+        config_path = tmp_path / "run.toml"
+        config_path.write_text("[training]\nmax_steps = 1\n")
+
+        with pytest.raises(ValueError, match="CLI overrides are forbidden"):
+            cli._prepare_single_run_binding(
+                str(config_path),
+                {"seed": "124"},
+                pristine_environment_args=pristine,
+                effective_environment_args=effective,
+            )
+
+    def test_clears_inherited_path_without_a_config(self, monkeypatch):
+        monkeypatch.setenv("RETRAIN_CONFIG_PATH", "/stale/config.toml")
+
+        cli._prepare_single_run_binding(
+            None,
+            {"seed": "124"},
+            pristine_environment_args="",
+            effective_environment_args="",
+        )
+
+        assert "RETRAIN_CONFIG_PATH" not in cli.os.environ
+
+
 class TestInit:
     def test_init_creates_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

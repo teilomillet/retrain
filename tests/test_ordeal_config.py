@@ -123,6 +123,20 @@ class TestValidationAcceptsValid:
 
 
 class TestValidationRanges:
+    @pytest.mark.parametrize("seed", [-1, 0, (1 << 32) - 1])
+    def test_seed_accepts_reproducible_range(self, seed: int) -> None:
+        assert TrainConfig(seed=seed).seed == seed
+
+    @pytest.mark.parametrize("seed", [-2, 1 << 32])
+    def test_seed_rejects_values_outside_reproducible_range(self, seed: int) -> None:
+        with pytest.raises(ValueError, match="seed must be -1.*4294967295"):
+            TrainConfig(seed=seed)
+
+    @pytest.mark.parametrize("seed", [1.5, True, "1"])
+    def test_seed_rejects_non_integer_values(self, seed: object) -> None:
+        with pytest.raises(ValueError, match="seed must be an integer"):
+            TrainConfig(seed=seed)  # type: ignore[arg-type]
+
     @given(
         val=st.floats(
             min_value=-10.0,
@@ -316,6 +330,32 @@ class TestTOMLLoading:
             f.flush()
             c = load_config(f.name, overrides={"batch_size": 64})
         assert c.batch_size == 64
+
+    @pytest.mark.parametrize("raw_seed", ["1.5", "true", '"1"'])
+    def test_seed_toml_requires_exact_integer(self, raw_seed: str) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write(f"[training]\nseed = {raw_seed}\n")
+            f.flush()
+            with pytest.raises(ValueError, match="seed must be an integer"):
+                load_config(f.name)
+
+    @pytest.mark.parametrize("seed", [1.5, True])
+    def test_seed_programmatic_override_requires_exact_integer(
+        self,
+        seed: object,
+    ) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write("")
+            f.flush()
+            with pytest.raises(ValueError, match="seed must be an integer"):
+                load_config(f.name, overrides={"seed": seed})
+
+    def test_seed_cli_string_override_remains_supported(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
+            f.write("")
+            f.flush()
+            config = load_config(f.name, overrides={"seed": "42"})
+        assert config.seed == 42
 
     def test_algorithm_section(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:

@@ -47,12 +47,14 @@ class _FakeLanguageModel:
         self.calls: list[dict] = []
 
     def __call__(self, input_ids, attention_mask=None, use_cache=False, **kwargs):
-        self.calls.append({
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "use_cache": use_cache,
-            "kwargs": kwargs,
-        })
+        self.calls.append(
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "use_cache": use_cache,
+                "kwargs": kwargs,
+            }
+        )
         hidden = input_ids.float().unsqueeze(-1).repeat(1, 1, 3)
         return SimpleNamespace(last_hidden_state=hidden)
 
@@ -90,7 +92,12 @@ class _WrappedGemma4TextModel:
         self.base_model = SimpleNamespace(model=model)
 
     def named_modules(self):
-        return [("base_model.model.model.language_model.layers.0.self_attn.q_proj", object())]
+        return [
+            (
+                "base_model.model.model.language_model.layers.0.self_attn.q_proj",
+                object(),
+            )
+        ]
 
 
 class _FailingEngine:
@@ -190,7 +197,9 @@ class _FakeGenericCausalModel(torch.nn.Module):
         self.generation_config = SimpleNamespace(eos_token_id=7)
         self.calls: list[dict] = []
 
-    def forward(self, input_ids, attention_mask=None, use_cache=False, past_key_values=None):
+    def forward(
+        self, input_ids, attention_mask=None, use_cache=False, past_key_values=None
+    ):
         self.calls.append(
             {
                 "input_ids": input_ids,
@@ -212,7 +221,9 @@ class _PrefixCacheCausalModel(torch.nn.Module):
         self.generation_config = SimpleNamespace(eos_token_id=7)
         self.calls: list[dict] = []
 
-    def forward(self, input_ids, attention_mask=None, use_cache=False, past_key_values=None):
+    def forward(
+        self, input_ids, attention_mask=None, use_cache=False, past_key_values=None
+    ):
         _ = attention_mask
         prefix_len = (
             int(past_key_values[0])
@@ -297,7 +308,9 @@ def test_local_peft_config_can_select_qwen_layer_subset():
     assert peft_config.layers_to_transform == [2, 3]
     assert peft_config.layers_pattern == "layers"
     assert lora_names
-    assert all(".layers.0." not in name and ".layers.1." not in name for name in lora_names)
+    assert all(
+        ".layers.0." not in name and ".layers.1." not in name for name in lora_names
+    )
     assert any(".layers.2." in name for name in lora_names)
     assert any(".layers.3." in name for name in lora_names)
 
@@ -336,9 +349,7 @@ def test_local_peft_config_can_select_target_modules():
 def test_lora_detached_input_hook_preserves_weight_grad_but_stops_input_grad():
     root = torch.nn.Module()
     branch = torch.nn.Module()
-    branch.lora_A = torch.nn.ModuleDict(
-        {"default": torch.nn.Linear(4, 2, bias=False)}
-    )
+    branch.lora_A = torch.nn.ModuleDict({"default": torch.nn.Linear(4, 2, bias=False)})
     root.branch = branch
 
     handles = local_lora.detach_input(root, enabled=True)
@@ -691,6 +702,7 @@ def test_gemma4_text_sampler_can_disable_kv_cache():
 
     assert len(results) == 1
     assert len(results[0]) == 1
+    assert results[0][0].finish_reason == "length"
     assert len(model.language_model.calls) == 2
     assert [call["input_ids"].shape[1] for call in model.language_model.calls] == [
         2,
@@ -884,6 +896,8 @@ def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
 
     helper = LocalTrainHelper(
         model_name="Qwen/Qwen3.5-2B",
+        model_revision="snapshot-abc",
+        model_local_files_only=True,
         adapter_path=str(tmp_path / "adapter"),
         devices="cpu",
         engine_type="trtllm",
@@ -897,11 +911,38 @@ def test_local_helper_routes_trtllm_as_external_server(monkeypatch, tmp_path):
     assert helper._external_engine is True
     assert helper.engine is fake_engine
     assert len(from_pretrained_calls) == 1
+    assert from_pretrained_calls[0]["kwargs"]["revision"] == "snapshot-abc"
+    assert from_pretrained_calls[0]["kwargs"]["local_files_only"] is True
     assert create_engine_calls[0]["engine_type"] == "trtllm"
     assert create_engine_calls[0]["model_name"] == "Qwen/Qwen3.5-2B"
     assert create_engine_calls[0]["inference_url"] == "http://localhost:31000"
+    assert create_engine_calls[0]["model_revision"] == "snapshot-abc"
+    assert create_engine_calls[0]["model_local_files_only"] is True
     assert "existing_model" not in create_engine_calls[0]
     assert train_model.gradient_checkpointing_enable_calls == 1
+
+
+def test_local_helper_retains_engine_finish_reason():
+    helper = LocalTrainHelper.__new__(LocalTrainHelper)
+    helper._sample_groups = lambda *args, **kwargs: [
+        [
+            SimpleNamespace(
+                token_ids=[1, 2],
+                logprobs=[-0.1, -0.2],
+                finish_reason="length",
+            )
+        ]
+    ]
+
+    result = helper.sample_with_finish_reason(
+        [[10]],
+        1,
+        2,
+        temperature=1.0,
+        top_p=1.0,
+    )
+
+    assert result == [[([1, 2], [-0.1, -0.2], "length")]]
 
 
 def test_pytorch_engine_reports_prefill_decode_metrics_for_generic_model():
@@ -921,12 +962,34 @@ def test_pytorch_engine_reports_prefill_decode_metrics_for_generic_model():
     counters = engine.performance_counters()
 
     assert [sample.token_ids for sample in results[0]] == [[3, 3]]
+    assert results[0][0].finish_reason == "length"
     assert [call["input_ids"].shape[1] for call in model.calls] == [2, 1]
     assert counters["engine_prompt_tokens"] == 2
     assert counters["engine_generated_tokens"] == 2
     assert counters["engine_prompt_prefill_s"] >= 0.0
     assert counters["engine_decode_s"] >= 0.0
     assert counters["engine_generation_tokens_per_s"] > 0.0
+
+
+def test_pytorch_engine_reports_eos_as_stop():
+    torch.manual_seed(123)
+    model = _FakeGenericCausalModel()
+    model.config.eos_token_id = 3
+    model.generation_config.eos_token_id = 3
+    engine = PyTorchEngine(
+        model_name="unused",
+        device="cpu",
+        peft_config=None,
+        dtype=None,
+        existing_model=model,
+        sample_use_cache=True,
+        prefix_caching=False,
+    )
+
+    results = engine.generate([[1, 2]], 1, 2, temperature=1.0, top_p=1.0)
+
+    assert results[0][0].token_ids == [3]
+    assert results[0][0].finish_reason == "stop"
 
 
 def test_pytorch_engine_reuses_exact_prefix_kv_for_generic_model():
@@ -1079,7 +1142,9 @@ def test_local_train_step_microbatch_matches_full_batch_update(selective_suffix)
     micro._train_logits_to_keep_supported = False
 
     full_loss = full.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
-    micro_loss = micro.train_step(tokens, logprobs, advantages, lr=0.05, weight_decay=0.0)
+    micro_loss = micro.train_step(
+        tokens, logprobs, advantages, lr=0.05, weight_decay=0.0
+    )
 
     assert micro_loss == pytest.approx(full_loss, rel=1e-6, abs=1e-6)
     assert micro._clip_fraction == pytest.approx(full._clip_fraction)
@@ -1094,7 +1159,9 @@ def test_local_train_step_microbatch_matches_full_batch_update(selective_suffix)
     assert metrics["local_train_padding_tokens_avoided"] == 1
     assert metrics["local_train_global_attention_proxy"] == 48
     assert metrics["local_train_microbatch_attention_proxy"] == 41
-    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+    for full_param, micro_param in zip(
+        full_model.parameters(), micro_model.parameters()
+    ):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 
 
@@ -1129,9 +1196,7 @@ def test_sft_train_step_microbatch_local_padding_matches_full_batch_update():
     full_metrics = full.runtime_metrics()
     assert full_metrics["local_train_global_padded_tokens"] == 18
     assert full_metrics["local_train_microbatch_padded_tokens"] == 18
-    assert full_metrics["local_train_padding_avoidance_fraction"] == pytest.approx(
-        0.0
-    )
+    assert full_metrics["local_train_padding_avoidance_fraction"] == pytest.approx(0.0)
     assert full_metrics["local_train_sequence_length_p95"] == 6
     metrics = micro.runtime_metrics()
     assert metrics["local_train_microbatches"] == 3
@@ -1148,7 +1213,9 @@ def test_sft_train_step_microbatch_local_padding_matches_full_batch_update():
     assert metrics["local_train_sequence_length_max"] == 6
     assert metrics["local_train_avg_microbatch_examples"] == pytest.approx(1.0)
     assert metrics["local_train_sft_avg_microbatch_examples"] == pytest.approx(1.0)
-    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+    for full_param, micro_param in zip(
+        full_model.parameters(), micro_model.parameters()
+    ):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 
 
@@ -1188,7 +1255,9 @@ def test_sft_train_step_token_budget_matches_full_batch_update():
     assert metrics["local_train_global_padded_tokens"] == 24
     assert metrics["local_train_microbatch_padded_tokens"] == 16
     assert metrics["local_train_sft_microbatch_token_budget"] == 8
-    for full_param, budget_param in zip(full_model.parameters(), budget_model.parameters()):
+    for full_param, budget_param in zip(
+        full_model.parameters(), budget_model.parameters()
+    ):
         assert torch.allclose(full_param, budget_param, atol=1e-6)
 
 

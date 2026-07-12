@@ -24,6 +24,8 @@ def _should_load_sft_provenance(config: "TrainConfig") -> bool:
         or int(getattr(config, "sft_data_rows", 0) or 0) > 0
         or getattr(config, "sft_audit_path", "")
         or getattr(config, "sft_audit_sha256", "")
+        or getattr(config, "sft_token_audit_path", "")
+        or getattr(config, "sft_token_audit_sha256", "")
     )
     if getattr(config, "trainer", "") == "sft" or has_data_pins:
         return True
@@ -95,9 +97,7 @@ def _optimizer_batch_preview(config: "TrainConfig") -> dict[str, object] | None:
 
     capture = load_optimizer_batch_capture(
         config.optimizer_batch_replay_path,
-        expected_manifest_sha256=(
-            config.optimizer_batch_expected_manifest_sha256
-        ),
+        expected_manifest_sha256=(config.optimizer_batch_expected_manifest_sha256),
     )
     if (
         capture.logical_batch_sha256
@@ -193,6 +193,8 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "mode": "single",
         "config": config_path or "retrain.toml",
         "model": config.model,
+        "model_revision": config.model_revision,
+        "model_local_files_only": config.model_local_files_only,
         "trainer": config.trainer,
         "backend": config.backend,
         "backend_options": dict(config.backend_options),
@@ -214,6 +216,8 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "sft_data_rows": config.sft_data_rows,
         "sft_audit_path": config.sft_audit_path,
         "sft_audit_sha256": config.sft_audit_sha256,
+        "sft_token_audit_path": config.sft_token_audit_path,
+        "sft_token_audit_sha256": config.sft_token_audit_sha256,
         "sft_data_provenance": sft_provenance,
         "sft_batch_size": config.sft_batch_size,
         "sft_max_tokens": config.sft_max_tokens,
@@ -228,6 +232,9 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "echo_max_token_ratio": config.echo_max_token_ratio,
         "echo_entropy_floor": config.echo_entropy_floor,
         "echo_min_prompt_overlap": config.echo_min_prompt_overlap,
+        "echo_require_live_observation_bridge": (
+            config.echo_require_live_observation_bridge
+        ),
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
         "lr": config.lr,
@@ -281,16 +288,16 @@ def explain_single(config_path: str | None, fmt: str) -> None:
             f"ratio={config.echo_max_token_ratio} "
             f"entropy_floor={config.echo_entropy_floor}"
         )
+        print(
+            f"  echo bridge   : required={config.echo_require_live_observation_bridge}"
+        )
     if optimizer_batch_preview is not None:
         print(
             "  optimizer batch: "
             f"rows={optimizer_batch_preview['rows']} "
             f"tokens={optimizer_batch_preview['tokens']}"
         )
-        print(
-            "  batch logical : "
-            f"{optimizer_batch_preview['logical_batch_sha256']}"
-        )
+        print(f"  batch logical : {optimizer_batch_preview['logical_batch_sha256']}")
         print(
             "  batch config  : allowed="
             f"{optimizer_batch_preview['allowed_config_differences']} "
@@ -315,6 +322,12 @@ def explain_single(config_path: str | None, fmt: str) -> None:
     print(f"  datums/step   : {datums_per_step}")
     print(f"  total datums  : {total_datums}")
     print(f"  max_tokens    : {config.max_tokens}")
+    if config.model_revision:
+        print(
+            "  model source  : "
+            f"revision={config.model_revision} "
+            f"local_files_only={config.model_local_files_only}"
+        )
     print(f"  temperature   : {config.temperature}")
     print(f"  lr            : {config.lr}")
     if config.trainer == "sft" or config.sft_warmup_steps > 0:
@@ -349,6 +362,11 @@ def explain_single(config_path: str | None, fmt: str) -> None:
                     f"{audit_map.get('status')} "
                     f"mode={audit_map.get('corpus_mode')} "
                     f"sha256={audit_map.get('audit_sha256')}"
+                )
+            if config.sft_token_audit_path:
+                print(
+                    "  sft_token_audit: pass "
+                    f"sha256={config.sft_token_audit_sha256.strip().lower()}"
                 )
             for warning in cast(list[str], sft_provenance["data_warnings"]):
                 print(f"  sft_warning   : {warning}")

@@ -68,6 +68,46 @@ def _load_dotenv() -> None:
     print("Loaded .env", file=sys.stderr)
 
 
+_CONFIG_PATH_ENV = "RETRAIN_CONFIG_PATH"
+
+
+def _readiness_config_from_args(raw: str) -> str | None:
+    """Return a non-empty environment readiness binding, if configured."""
+
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    readiness = value.get("readiness_config")
+    return readiness if isinstance(readiness, str) and readiness.strip() else None
+
+
+def _prepare_single_run_binding(
+    config_path: str | None,
+    overrides: dict[str, object],
+    *,
+    pristine_environment_args: str,
+    effective_environment_args: str,
+) -> None:
+    """Expose the exact config path and forbid readiness-bypassing overrides."""
+
+    os.environ.pop(_CONFIG_PATH_ENV, None)
+    if config_path is None:
+        return
+    pristine_readiness = _readiness_config_from_args(pristine_environment_args)
+    effective_readiness = _readiness_config_from_args(effective_environment_args)
+    if overrides and (pristine_readiness or effective_readiness):
+        raise ValueError(
+            "CLI overrides are forbidden for a readiness-bound config; "
+            "put every setting in the TOML and regenerate its readiness artifact."
+        )
+    os.environ[_CONFIG_PATH_ENV] = str(Path(config_path).expanduser().resolve())
+
+
 def _commands(cli_name: str) -> dict[str, Callable[[list[str]], None]]:
     """Named commands; anything else is a config path or override flags."""
     return {
@@ -134,6 +174,10 @@ def main() -> None:
         print(f"File not found: {config_path}")
         sys.exit(1)
 
+    # Never trust an inherited or .env-supplied binding. Single-run configs
+    # below replace it only after both pristine and effective views are known.
+    os.environ.pop(_CONFIG_PATH_ENV, None)
+
     # Route: campaign | squeeze | single run
     # Campaign/squeeze only when a TOML file is provided (CLI overrides don't apply)
     if config_path is not None:
@@ -151,7 +195,26 @@ def main() -> None:
     from retrain.config import load_config
     from retrain.registry.builtin import get_registry
 
+    pristine_config = (
+        load_config(config_path)
+        if config_path is not None and overrides
+        else None
+    )
     config = load_config(config_path, overrides=overrides)
+    try:
+        _prepare_single_run_binding(
+            config_path,
+            overrides,
+            pristine_environment_args=(
+                pristine_config.environment_args
+                if pristine_config is not None
+                else config.environment_args
+            ),
+            effective_environment_args=config.environment_args,
+        )
+    except ValueError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        sys.exit(2)
     warn_missing(config)
     meta_dir = Path(config.log_dir)
     meta_dir.mkdir(parents=True, exist_ok=True)

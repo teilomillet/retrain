@@ -34,6 +34,7 @@ max_tokens_per_step = 1536
 max_token_ratio = 0.25
 entropy_floor = 0.02
 min_prompt_overlap = 0.75
+require_live_observation_bridge = true
 
 [environment]
 provider = "openenv"
@@ -55,6 +56,7 @@ def test_text_exposes_echo_and_environment_training_contract(tmp_path, capsys) -
     assert "condition     : grpo+none+echo" in output
     assert "echo          : weight=0.2 loss=cross_entropy" in output
     assert "echo caps     : tokens/step=1536 ratio=0.25 entropy_floor=0.02" in output
+    assert "echo bridge   : required=True" in output
     assert "env max_turns : 324" in output
     assert "env renderer  : quaero.render_observation" in output
     assert 'task guard    : source=factory-v3 ids=["task-3000","task-3001"]' in output
@@ -74,6 +76,7 @@ def test_json_exposes_echo_and_environment_training_contract(tmp_path, capsys) -
     assert payload["echo_max_token_ratio"] == pytest.approx(0.25)
     assert payload["echo_entropy_floor"] == pytest.approx(0.02)
     assert payload["echo_min_prompt_overlap"] == pytest.approx(0.75)
+    assert payload["echo_require_live_observation_bridge"] is True
     assert payload["environment_provider"] == "openenv"
     assert payload["environment_id"] == "http://localhost:8765"
     assert payload["environment_max_turns"] == 324

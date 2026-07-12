@@ -139,7 +139,7 @@ def test_default_mode_fails_after_strict_mode_in_same_process(monkeypatch) -> No
         establish_strict_determinism(enabled=False)
 
 
-def test_strict_seed_is_explicit_and_negative_seed_fails_closed(monkeypatch) -> None:
+def test_strict_seed_is_explicit_and_invalid_seeds_fail_closed(monkeypatch) -> None:
     fake = _FakeTorch()
     _install_fake_torch(monkeypatch, fake)
 
@@ -147,8 +147,13 @@ def test_strict_seed_is_explicit_and_negative_seed_fails_closed(monkeypatch) -> 
 
     assert proof["local_strict_deterministic_seed"] == 123
     assert proof["local_strict_deterministic_torch_seeded"] == 1
-    with pytest.raises(RuntimeError, match="seed >= 0"):
-        seed_strict_determinism(-1)
+    assert (
+        seed_strict_determinism((1 << 32) - 1)["local_strict_deterministic_seed"]
+        == (1 << 32) - 1
+    )
+    for invalid_seed in (-1, 1 << 32, 1.5, True):
+        with pytest.raises(RuntimeError, match="between 0 and 4294967295"):
+            seed_strict_determinism(invalid_seed)  # type: ignore[arg-type]
 
 
 def test_strict_mode_rejects_conflicting_cublas_environment(monkeypatch) -> None:

@@ -38,9 +38,7 @@ def normalize_sample_kv_quantization(raw: object) -> str:
     if mode in {"", "none", "false", "0"}:
         return "off"
     if mode not in {"off", "oscar"}:
-        raise ValueError(
-            "sample_kv_quantization must be 'off' or 'oscar'."
-        )
+        raise ValueError("sample_kv_quantization must be 'off' or 'oscar'.")
     return mode
 
 
@@ -97,6 +95,8 @@ def load_oscar_qwen3_causal_lm(
     options: OscarQwen3Options,
     trust_remote_code: bool = False,
     device_map: object | None = None,
+    revision: str = "",
+    local_files_only: bool = False,
 ):
     """Load the upstream OScaR Qwen3 CausalLM class with configured KV mode."""
     metrics = prepare_oscar_runtime(options)
@@ -113,6 +113,8 @@ def load_oscar_qwen3_causal_lm(
     config = AutoConfig.from_pretrained(
         model_name,
         trust_remote_code=trust_remote_code,
+        revision=revision or None,
+        local_files_only=local_files_only,
     )
     apply_oscar_config(config, options)
     kwargs: dict[str, object] = {
@@ -120,6 +122,8 @@ def load_oscar_qwen3_causal_lm(
         "low_cpu_mem_usage": True,
         "torch_dtype": dtype,
         "trust_remote_code": trust_remote_code,
+        "revision": revision or None,
+        "local_files_only": local_files_only,
     }
     if device_map is not None:
         kwargs["device_map"] = device_map
@@ -260,17 +264,22 @@ def _compute_default_rope_parameters(
         or rope_scaling.get("rope_theta")
         or getattr(config, "rope_theta", 10000.0)
     )
-    partial_rotary_factor = (
-        rope_parameters.get("partial_rotary_factor")
-        or getattr(config, "partial_rotary_factor", 1.0)
+    partial_rotary_factor = rope_parameters.get("partial_rotary_factor") or getattr(
+        config, "partial_rotary_factor", 1.0
     )
     head_dim = getattr(config, "head_dim", None) or (
-        int(getattr(config, "hidden_size")) // int(getattr(config, "num_attention_heads"))
+        int(getattr(config, "hidden_size"))
+        // int(getattr(config, "num_attention_heads"))
     )
     dim = int(head_dim * float(partial_rotary_factor))
     inv_freq = 1.0 / (
         float(base)
-        ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+        ** (
+            torch.arange(0, dim, 2, dtype=torch.int64).to(
+                device=device, dtype=torch.float
+            )
+            / dim
+        )
     )
     return inv_freq, 1.0
 

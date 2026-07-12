@@ -35,6 +35,8 @@ def create_local(config: "TrainConfig") -> "TrainHelper":
         config.lora_rank,
         config.inference_engine,
         config.inference_url,
+        model_revision=config.model_revision,
+        model_local_files_only=config.model_local_files_only,
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
         optim_beta1=config.optim_beta1,

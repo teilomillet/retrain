@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -46,11 +47,7 @@ def _write_audit(
         "checks": {"domain_guard": status == "pass"},
         "audited_dataset": {
             "sha256": data_sha256 or provenance.data_sha256,
-            "rows": (
-                data_rows
-                if data_rows is not None
-                else provenance.data_rows
-            ),
+            "rows": (data_rows if data_rows is not None else provenance.data_rows),
         },
         "corpus_mode": corpus_mode,
         "lineage": dict(lineage or {}),
@@ -60,6 +57,9 @@ def _write_audit(
 
 
 def _config(data_path: Path, audit_path: Path, audit_sha256: str, **kwargs):
+    if kwargs.get("sft_token_audit_path"):
+        kwargs.setdefault("model_revision", "audited-revision")
+        kwargs.setdefault("model_local_files_only", True)
     return TrainConfig(
         sft_data_path=str(data_path),
         sft_audit_path=str(audit_path),
@@ -150,9 +150,7 @@ def test_patch_audit_requires_explicit_base_and_patch_lineage(tmp_path: Path):
 
 def test_mode_lineage_semantics_match_emitter_contract(tmp_path: Path):
     data_path, provenance = _write_dataset(tmp_path)
-    replacement_lineage: dict[str, object] = {
-        "base": {"sha256": "1" * 64, "rows": 1}
-    }
+    replacement_lineage: dict[str, object] = {"base": {"sha256": "1" * 64, "rows": 1}}
     audit_path, audit_sha = _write_audit(
         tmp_path,
         provenance,
@@ -179,6 +177,131 @@ def test_mode_lineage_semantics_match_emitter_contract(tmp_path: Path):
             _config(data_path, audit_path, audit_sha),
             provenance,
         )
+
+
+def test_patch_with_token_audit_rechecks_source_bytes_and_rows(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "base.jsonl"
+    patch_path = tmp_path / "patch.jsonl"
+    combined_path = tmp_path / "datasets" / "combined.jsonl"
+    combined_path.parent.mkdir()
+    base_path.write_text(json.dumps({"text": "base"}) + "\n")
+    patch_path.write_text(json.dumps({"text": "patch"}) + "\n")
+    combined_path.write_bytes(base_path.read_bytes() + patch_path.read_bytes())
+    provenance = replace(
+        load_sft_dataset(combined_path).provenance,
+        git_root="",
+        data_root=str(combined_path.parent),
+    )
+    lineage: dict[str, object] = {
+        "base": {
+            "path": str(base_path.relative_to(tmp_path)),
+            "sha256": hashlib.sha256(base_path.read_bytes()).hexdigest(),
+            "rows": 1,
+        },
+        "patch": {
+            "path": str(patch_path.relative_to(tmp_path)),
+            "sha256": hashlib.sha256(patch_path.read_bytes()).hexdigest(),
+            "rows": 1,
+        },
+    }
+    audit_path, audit_sha = _write_audit(
+        tmp_path,
+        provenance,
+        corpus_mode="patch",
+        lineage=lineage,
+    )
+    config = _config(
+        combined_path,
+        audit_path,
+        audit_sha,
+        sft_token_audit_path="configured-token-audit.json",
+        sft_token_audit_sha256="a" * 64,
+    )
+
+    from retrain.training.sft_audit import verify_sft_audit_contract
+
+    verified = verify_sft_audit_contract(config, provenance)
+    assert verified is not None
+
+    # Fresh training checkouts need only the tracked combined corpus and patch.
+    base_path.unlink()
+    assert verify_sft_audit_contract(config, provenance) is not None
+
+    patch_path.write_text(
+        json.dumps({"text": "changed"}) + "\n" + json.dumps({"text": "extra"}) + "\n"
+    )
+    with pytest.raises(ValueError, match="lineage.patch.sha256 mismatch") as exc_info:
+        verify_sft_audit_contract(config, provenance)
+    assert "lineage.patch.rows mismatch" in str(exc_info.value)
+    assert "does not end byte-for-byte with lineage.patch" in str(exc_info.value)
+
+
+def test_patch_source_proof_is_required_only_with_token_audit(
+    tmp_path: Path,
+) -> None:
+    data_path, provenance = _write_dataset(tmp_path)
+    lineage: dict[str, object] = {
+        "base": {"sha256": "1" * 64, "rows": 1},
+        "patch": {"sha256": "2" * 64, "rows": 0},
+    }
+    audit_path, audit_sha = _write_audit(
+        tmp_path,
+        provenance,
+        corpus_mode="patch",
+        lineage=lineage,
+    )
+
+    # Legacy v1 behavior remains path-free when no token audit is configured.
+    with pytest.raises(ValueError, match="lineage.patch.rows must be a positive"):
+        verify_sft_data_contract(
+            _config(data_path, audit_path, audit_sha),
+            provenance,
+        )
+
+    lineage["base"] = {"sha256": "1" * 64, "rows": 0}
+    lineage["patch"] = {"sha256": "2" * 64, "rows": 1}
+    audit_path, audit_sha = _write_audit(
+        tmp_path,
+        provenance,
+        corpus_mode="patch",
+        lineage=lineage,
+    )
+    legacy = _config(data_path, audit_path, audit_sha)
+    from retrain.training.sft_audit import verify_sft_audit_contract
+
+    # Existing semantics still reject zero-row lineage independently of paths.
+    with pytest.raises(ValueError, match="lineage.base.rows must be a positive"):
+        verify_sft_audit_contract(legacy, provenance)
+
+    valid_path_free = {
+        "base": {"sha256": "1" * 64, "rows": 1},
+        "patch": {"sha256": "2" * 64, "rows": 1},
+    }
+    data_path.write_text(
+        json.dumps({"text": "one"}) + "\n" + json.dumps({"text": "two"}) + "\n"
+    )
+    provenance = load_sft_dataset(data_path).provenance
+    audit_path, audit_sha = _write_audit(
+        tmp_path,
+        provenance,
+        corpus_mode="patch",
+        lineage=valid_path_free,
+    )
+    assert (
+        verify_sft_audit_contract(_config(data_path, audit_path, audit_sha), provenance)
+        is not None
+    )
+    strict = _config(
+        data_path,
+        audit_path,
+        audit_sha,
+        sft_token_audit_path="configured-token-audit.json",
+        sft_token_audit_sha256="a" * 64,
+    )
+    with pytest.raises(ValueError, match="lineage.patch.path must be"):
+        verify_sft_audit_contract(strict, provenance)
 
 
 def test_audit_rejects_hash_status_and_dataset_binding_mismatches(tmp_path: Path):
@@ -279,6 +402,8 @@ def test_resume_check_contract_path_rejects_failed_audit(tmp_path: Path):
     result = check_resume_dir(log_dir, config=config, config_path="run.toml")
 
     assert not result.ok
-    issues = [issue for issue in result.issues if issue.code == "sft_config_data_invalid"]
+    issues = [
+        issue for issue in result.issues if issue.code == "sft_config_data_invalid"
+    ]
     assert len(issues) == 1
     assert "status must be 'pass'" in issues[0].message

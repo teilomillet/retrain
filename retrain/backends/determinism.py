@@ -16,6 +16,8 @@ import os
 from collections.abc import Mapping
 from typing import Protocol, cast
 
+from retrain.config.constants import _MAX_REPRODUCIBLE_SEED
+
 
 _CUBLAS_WORKSPACE_ENV = "CUBLAS_WORKSPACE_CONFIG"
 _DEFAULT_CUBLAS_WORKSPACE = ":4096:8"
@@ -116,10 +118,16 @@ def establish_strict_determinism(*, enabled: bool) -> dict[str, object]:
 def seed_strict_determinism(seed: int) -> dict[str, object]:
     """Seed every supported RNG before strict local-model construction."""
 
-    if seed < 0:
+    if (
+        not isinstance(seed, int)
+        or isinstance(seed, bool)
+        or seed < 0
+        or seed > _MAX_REPRODUCIBLE_SEED
+    ):
         raise RuntimeError(
-            "strict_deterministic requires [training] seed >= 0 so model and "
-            "adapter initialization are reproducible."
+            "strict_deterministic requires [training] seed between 0 and "
+            f"{_MAX_REPRODUCIBLE_SEED} inclusive so every supported RNG can "
+            f"be seeded; got {seed}."
         )
     import random
 

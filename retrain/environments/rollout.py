@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -14,6 +15,16 @@ if TYPE_CHECKING:
     from retrain.backends import TrainHelper
 
 
+@dataclass(frozen=True)
+class VerifiersActionSample:
+    """One normalized action sample with token-limit metadata."""
+
+    token_ids: list[int]
+    logprobs: list[float]
+    finish_reason: str | None
+    hit_token_limit: bool
+
+
 @dataclass
 class VerifiersTurnSample:
     """One assistant turn sampled by retrain for a rollout."""
@@ -22,6 +33,8 @@ class VerifiersTurnSample:
     completion_ids: list[int]
     completion_logprobs: list[float]
     completion_text: str
+    finish_reason: str | None = None
+    is_truncated: bool = False
     observation_mask: list[int] | None = None
     echo_observation_capture_supported: bool = False
     post_observation_ids: list[int] | None = None
@@ -163,6 +176,90 @@ def rollout_temperatures(
     ]
 
 
+def _normalize_action_sample(
+    raw_sample: object,
+    *,
+    max_tokens: int,
+    require_finish_reason: bool = False,
+) -> VerifiersActionSample:
+    if not isinstance(raw_sample, tuple) or len(raw_sample) not in {2, 3}:
+        raise TypeError(
+            "Sampler results must be (token_ids, logprobs[, finish_reason])."
+        )
+    raw_token_ids, raw_logprobs = raw_sample[:2]
+    if not isinstance(raw_token_ids, list) or not isinstance(raw_logprobs, list):
+        raise TypeError("Sampler token IDs and logprobs must be lists.")
+    raw_finish_reason = raw_sample[2] if len(raw_sample) == 3 else None
+    finish_reason = raw_finish_reason if isinstance(raw_finish_reason, str) else None
+    token_ids = [int(token_id) for token_id in raw_token_ids]
+    logprobs = [float(logprob) for logprob in raw_logprobs]
+    if len(token_ids) != len(logprobs):
+        raise ValueError("Sampler token IDs and logprobs must have identical lengths.")
+    if any(not math.isfinite(logprob) for logprob in logprobs):
+        raise ValueError("Sampler logprobs must be finite.")
+    # Only an explicit normal stop is safe to execute. Unknown legacy
+    # samples fall back to the exact cap, while metadata-capable samplers
+    # must report an explicit stop and any other condition fails closed.
+    incomplete_finish = (
+        finish_reason != "stop"
+        if require_finish_reason
+        else (
+            (finish_reason is not None and finish_reason != "stop")
+            or (finish_reason is None and len(token_ids) >= max_tokens)
+        )
+    )
+    hit_token_limit = not token_ids or len(token_ids) > max_tokens or incomplete_finish
+    return VerifiersActionSample(
+        token_ids=token_ids,
+        logprobs=logprobs,
+        finish_reason=finish_reason,
+        hit_token_limit=hit_token_limit,
+    )
+
+
+def _sample_action_groups(
+    helper: "TrainHelper",
+    prompt_ids_batch: list[list[int]],
+    num_samples: int,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+) -> list[list[VerifiersActionSample]]:
+    sample_with_finish_reason = getattr(helper, "sample_with_finish_reason", None)
+    has_finish_reason_metadata = callable(sample_with_finish_reason)
+    if has_finish_reason_metadata:
+        finish_reason_sampler = cast(
+            Callable[..., list[list[object]]],
+            sample_with_finish_reason,
+        )
+        raw_groups = finish_reason_sampler(
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        )
+    else:
+        raw_groups = helper.sample(
+            prompt_ids_batch,
+            num_samples,
+            max_tokens,
+            temperature,
+            top_p,
+        )
+    return [
+        [
+            _normalize_action_sample(
+                raw_sample,
+                max_tokens=max_tokens,
+                require_finish_reason=has_finish_reason_metadata,
+            )
+            for raw_sample in group
+        ]
+        for group in raw_groups
+    ]
+
+
 def sample_active_rollouts(
     *,
     helper: "TrainHelper",
@@ -170,9 +267,9 @@ def sample_active_rollouts(
     rollout_temps: list[float],
     max_tokens: int,
     top_p: float,
-) -> list[list[tuple[list[int], list[float]]]]:
+) -> list[list[VerifiersActionSample]]:
     """Sample active rollout prompts, batching only equal-temperature prompts."""
-    sampled_groups: list[list[tuple[list[int], list[float]]]] = [[] for _ in active]
+    sampled_groups: list[list[VerifiersActionSample]] = [[] for _ in active]
     batch_positions: list[int] = []
     batch_prompt_ids: list[list[int]] = []
     batch_temperature: float | None = None
@@ -189,7 +286,8 @@ def sample_active_rollouts(
             grouped_prompts.setdefault(key, prompt_ids)
 
         if all(len(positions) == 1 for positions in grouped_positions.values()):
-            groups = helper.sample(
+            groups = _sample_action_groups(
+                helper,
                 batch_prompt_ids,
                 1,
                 max_tokens,
@@ -200,7 +298,8 @@ def sample_active_rollouts(
                 sampled_groups[position] = group
         else:
             for key, positions in grouped_positions.items():
-                groups = helper.sample(
+                groups = _sample_action_groups(
+                    helper,
                     [grouped_prompts[key]],
                     len(positions),
                     max_tokens,
