@@ -6,6 +6,8 @@ import html as html_mod
 import re
 from dataclasses import dataclass, field
 
+from retrain.commands.manual.topic import is_heading as _is_manual_heading
+
 
 @dataclass
 class ManualSection:
@@ -13,15 +15,6 @@ class ManualSection:
 
     heading: str
     body_lines: list[str] = field(default_factory=list)
-
-
-def _is_manual_heading(line: str) -> bool:
-    """Detect ALL-CAPS section headings (no leading whitespace)."""
-    s = line.strip()
-    if not s or s != line:
-        return False
-    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-()")
-    return all(ch in allowed for ch in s) and any(ch.isalpha() for ch in s)
 
 
 _AUTO_RE = re.compile(r"<<(?:END:)?AUTO:\w+>>")
