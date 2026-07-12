@@ -10,7 +10,12 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrain.metrics.scan import float_or_none, int_or_none, iter_jsonl_objects
+from retrain.metrics.scan import (
+    float_metric as _float_metric,
+    float_or_none,
+    int_metric as _int_metric,
+    iter_jsonl_objects,
+)
 
 
 @dataclass
@@ -63,18 +68,6 @@ class DiffResult:
             "curve_a": list(self.curve_a),
             "curve_b": list(self.curve_b),
         }
-
-
-def _float_metric(row: dict[str, object], key: str, default: float = 0.0) -> float:
-    """Read a required numeric metric for tolerant run comparisons."""
-    value = float_or_none(row.get(key))
-    return default if value is None else value
-
-
-def _int_metric(row: dict[str, object], key: str, default: int = 0) -> int:
-    """Read a required integer metric for tolerant run comparisons."""
-    value = int_or_none(row.get(key))
-    return default if value is None else value
 
 
 def load_metrics(run_dir: Path) -> list[MetricsEntry]:

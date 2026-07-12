@@ -24,6 +24,20 @@ def int_or_none(value: object) -> int | None:
     return None
 
 
+def float_metric(row: JsonObject, key: str, default: float = 0.0) -> float:
+    """Read a numeric metric with a caller-selected fallback."""
+
+    value = float_or_none(row.get(key))
+    return default if value is None else value
+
+
+def int_metric(row: JsonObject, key: str, default: int = 0) -> int:
+    """Read an integer metric with a caller-selected fallback."""
+
+    value = int_or_none(row.get(key))
+    return default if value is None else value
+
+
 def iter_jsonl_objects(path: Path) -> Iterator[JsonObject]:
     """Yield JSON-object rows from a JSONL file, skipping blank/bad lines."""
     with open(path, "rb") as handle:

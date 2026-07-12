@@ -9,7 +9,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from retrain.metrics.scan import float_or_none, int_or_none, scan_metrics_file
+from retrain.metrics.scan import (
+    float_metric as _metric_float,
+    float_or_none,
+    int_metric as _metric_int,
+    scan_metrics_file,
+)
 from retrain.training.state import TRAINER_STATE_FILE
 
 
@@ -171,16 +176,6 @@ class CampaignSummary:
         }
 
 
-def _metric_float(row: dict[str, object], key: str, default: float = 0.0) -> float:
-    value = float_or_none(row.get(key))
-    return default if value is None else value
-
-
-def _metric_int(row: dict[str, object], key: str, default: int = -1) -> int:
-    value = int_or_none(row.get(key))
-    return default if value is None else value
-
-
 def _metric_str(row: dict[str, object], key: str, default: str = "") -> str:
     value = row.get(key)
     return value if isinstance(value, str) else default
@@ -234,7 +229,7 @@ def scan_run(run_dir: Path) -> RunSummary | None:
 
     last_entry = metrics.last
     if last_entry is not None:
-        summary.step = _metric_int(last_entry, "step")
+        summary.step = _metric_int(last_entry, "step", default=-1)
         summary.condition = _metric_str(last_entry, "condition")
         summary.correct_rate = _metric_float(last_entry, "correct_rate")
         summary.loss = _metric_float(last_entry, "loss")
