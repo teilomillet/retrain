@@ -1079,6 +1079,7 @@ def test_train_echo_multiturn_algorithm_mode_trains_prompt_suffix_and_logs_metri
         algorithm_mode="reinforce_pp_gtpo",
         echo_enabled=True,
         echo_weight=0.2,
+        echo_target_retention="bounded",
         echo_max_tokens_per_step=10,
         echo_max_token_ratio=10.0,
     )
@@ -1222,6 +1223,7 @@ def test_train_echo_entropy_floor_skips_or_fails_closed(
         transform_mode="none",
         echo_enabled=True,
         echo_weight=0.2,
+        echo_target_retention="bounded",
         echo_entropy_floor=0.5,
         echo_require_live_observation_bridge=strict_live_bridge,
     )
@@ -1350,6 +1352,7 @@ def test_train_echo_keeps_uniform_failed_rollout_observations(monkeypatch, tmp_p
         transform_mode="none",
         echo_enabled=True,
         echo_weight=0.2,
+        echo_target_retention="bounded",
         echo_max_token_ratio=10.0,
     )
 

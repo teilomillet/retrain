@@ -6,8 +6,10 @@ import time
 from collections.abc import Mapping
 from typing import cast
 
+from retrain.advantages import AdvantageResult
 from retrain.backends import TrainHelper
 from retrain.config import TrainConfig
+from retrain.environments.rollout import VerifiersTurnSample
 from retrain.environments.verifiers import run_multiturn_group
 from retrain.io.log import JsonlLogger
 from retrain.planning.types import PlanningDetector
@@ -89,14 +91,23 @@ def run_multiturn(
         turns_logprobs_G: list[list[list[float]]] = []
         turns_token_ids_G: list[list[list[int]]] = []
         turns_prompt_ids_G: list[list[list[int]]] = []
+        trainable_turns_G: list[list[VerifiersTurnSample]] = []
+        truncated_rollouts_G = [
+            any(turn.is_truncated for turn in turns) for turns in turns_G
+        ]
+        policy_rollout_indices = [
+            idx for idx, truncated in enumerate(truncated_rollouts_G) if not truncated
+        ]
 
         for turns in turns_G:
+            trainable_turns = [turn for turn in turns if not turn.is_truncated]
+            trainable_turns_G.append(trainable_turns)
             seq_logprobs: list[float] = []
             seq_token_ids: list[int] = []
             turn_logprobs: list[list[float]] = []
             turn_token_ids: list[list[int]] = []
             turn_prompt_ids: list[list[int]] = []
-            for turn in turns:
+            for turn in trainable_turns:
                 turn_prompt_ids.append(list(turn.prompt_ids))
                 turn_token_ids.append(list(turn.completion_ids))
                 turn_logprobs.append(list(turn.completion_logprobs))
@@ -114,45 +125,70 @@ def run_multiturn(
             else:
                 planning_masks_G.append([0] * len(seq_logprobs))
 
-            acc.total_completions += len(turns)
-            acc.sampled_completion_token_count += len(seq_token_ids)
-            acc.sampled_completion_surprisal_sum += sum(-lp for lp in seq_logprobs)
-            acc.max_token_hits += sum(turn.is_truncated for turn in turns)
+            acc.total_completions += sum(
+                turn.truncation_reason != "context_window" for turn in turns
+            )
+            acc.sampled_completion_token_count += sum(
+                len(turn.completion_ids) for turn in turns
+            )
+            acc.sampled_completion_surprisal_sum += sum(
+                -logprob for turn in turns for logprob in turn.completion_logprobs
+            )
+            acc.max_token_hits += sum(
+                turn.is_truncated and turn.truncation_reason != "context_window"
+                for turn in turns
+            )
 
-        acc.logprobs_sepa.extend(logprobs_G)
-        acc.planning_masks_sepa.extend(planning_masks_G)
+        acc.logprobs_sepa.extend(logprobs_G[idx] for idx in policy_rollout_indices)
+        acc.planning_masks_sepa.extend(
+            planning_masks_G[idx] for idx in policy_rollout_indices
+        )
 
-        for r in rewards_G:
+        for idx, r in enumerate(rewards_G):
             acc.rewards.append(r)
             if r > CORRECT_THRESHOLD:
                 acc.correct += 1
-            if acc.tl_grpo_ema is not None:
+            if not truncated_rollouts_G[idx] and acc.tl_grpo_ema is not None:
                 acc.tl_grpo_ema = (
                     config.tl_grpo_ema_decay * acc.tl_grpo_ema
                     + (1 - config.tl_grpo_ema_decay) * r
                 )
 
+        policy_rewards = [rewards_G[idx] for idx in policy_rollout_indices]
         console.print_group_summary(rewards_G, answer)
-        reward_tie_stats = acc.ties.observe(rewards_G)
-        if reward_tie_stats["is_uniform"] and not config.tl_grpo:
-            if not console.keep_uniform_group(
-                rewards_G,
-                batch_advantage_norm=config.batch_advantage_norm,
-                keep_for_echo=config.echo_enabled,
-            ):
-                continue
+        if policy_rewards:
+            reward_tie_stats = acc.ties.observe(policy_rewards)
+            if reward_tie_stats["is_uniform"] and not config.tl_grpo:
+                if not console.keep_uniform_group(
+                    policy_rewards,
+                    batch_advantage_norm=config.batch_advantage_norm,
+                    keep_for_echo=config.echo_enabled,
+                ):
+                    continue
 
-        adv_result = compute_group_advantages(
-            config,
-            rewards_G,
-            logprobs_G,
-            planning_masks_G,
-            step=step,
-            sepa_lambda=sepa_lambda,
-            algorithm_params=algorithm_params,
-            transform_params=transform_params,
-        )
-        all_token_advs_G = adv_result.token_advs
+            policy_adv_result = compute_group_advantages(
+                config,
+                policy_rewards,
+                [logprobs_G[idx] for idx in policy_rollout_indices],
+                [planning_masks_G[idx] for idx in policy_rollout_indices],
+                step=step,
+                sepa_lambda=sepa_lambda,
+                algorithm_params=algorithm_params,
+                transform_params=transform_params,
+            )
+            all_token_advs_G = [[0.0] * len(row) for row in logprobs_G]
+            for idx, token_advs in zip(
+                policy_rollout_indices,
+                policy_adv_result.token_advs,
+                strict=True,
+            ):
+                all_token_advs_G[idx] = token_advs
+            adv_result = policy_adv_result
+        else:
+            if not config.echo_enabled:
+                continue
+            all_token_advs_G = [[0.0] * len(row) for row in logprobs_G]
+            adv_result = AdvantageResult(token_advs=all_token_advs_G)
         if adv_result.has_stats:
             acc.surprisal_stats.append(adv_result.stats)
         if adv_result.extra_metrics:
@@ -171,7 +207,11 @@ def run_multiturn(
             # turns, use it; otherwise fall back entirely to episode-level
             # to avoid offset drift between the two modes.
             s_turn_advs: list[float] | None = None
-            if s_idx < len(turn_advantages_G) and turn_advantages_G[s_idx]:
+            if (
+                not truncated_rollouts_G[s_idx]
+                and s_idx < len(turn_advantages_G)
+                and turn_advantages_G[s_idx]
+            ):
                 candidate = turn_advantages_G[s_idx]
                 if len(candidate) >= len(turn_token_ids):
                     s_turn_advs = candidate
@@ -192,7 +232,11 @@ def run_multiturn(
                 offset += len(seq_tokens)
                 seq_advs_by_turn.append(seq_advs)
 
-            eligible_tokens = sum(len(tokens) for tokens in turn_token_ids)
+            eligible_tokens = (
+                0
+                if truncated_rollouts_G[s_idx]
+                else sum(len(tokens) for tokens in turn_token_ids)
+            )
             acc.eligible_completion_token_count += eligible_tokens
             acc.pre_optimizer_nonzero_advantage_token_count += sum(
                 abs(value) > 0.0 for row in seq_advs_by_turn for value in row
@@ -200,7 +244,7 @@ def run_multiturn(
 
             if config.echo_enabled:
                 rollout_datums, rollout_echo_build = build_rollout_echo_datums(
-                    turns_G[s_idx],
+                    trainable_turns_G[s_idx],
                     completion_advantages=seq_advs_by_turn,
                     weight=config.echo_weight,
                     min_prompt_overlap=config.echo_min_prompt_overlap,
@@ -222,13 +266,17 @@ def run_multiturn(
                         acc.datum_echo_full_observation_counts.append(
                             rollout_datum.full_observation_count
                         )
-                        acc.rl_completion_token_count += (
-                            rollout_datum.action_token_count
-                        )
-                        acc.rl_completion_surprisal_sum += (
-                            rollout_datum.action_surprisal_sum
-                        )
+                        if not truncated_rollouts_G[s_idx]:
+                            acc.rl_completion_token_count += (
+                                rollout_datum.action_token_count
+                            )
+                            acc.rl_completion_surprisal_sum += (
+                                rollout_datum.action_surprisal_sum
+                            )
                     continue
+
+            if truncated_rollouts_G[s_idx]:
+                continue
 
             turn_prompt_ids = turns_prompt_ids_G[s_idx]
             for t_idx in range(len(turn_token_ids)):
@@ -266,6 +314,7 @@ def run_multiturn(
                 "prompt": prompts.previews[f_idx],
                 "completion": comp_text[:500],
                 "reward": rewards_G[s_idx],
+                "system_truncated": truncated_rollouts_G[s_idx],
                 "num_tokens": len(logprobs_G[s_idx]),
             }
             if s_idx < len(turn_logs_G) and turn_logs_G[s_idx]:

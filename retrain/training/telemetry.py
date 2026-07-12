@@ -36,6 +36,7 @@ _WANDB_ECHO_METRIC_KEYS = (
     "echo/loss",
     "echo/train_time_s",
     "echo/weight",
+    "echo/target_retention",
     "echo/allowed_tokens",
     "echo/reference_completion_tokens",
     "echo/completion_surprisal_mean",
@@ -43,15 +44,18 @@ _WANDB_ECHO_METRIC_KEYS = (
     "echo/candidate_tokens",
     "echo/observation_mask_datums",
     "echo/observation_responses",
+    "echo/executed_transition_datums",
     "echo/bridged_transition_datums",
     "echo/bridge_failures",
     "echo/renderer_parity_failures",
     "echo/terminal_candidate_tokens",
     "echo/terminal_kept_tokens",
+    "echo/terminal_retention_ratio",
     "echo/explicit_transition_rollouts",
     "echo/kept_datums",
     "echo/kept_tokens",
     "echo/truncated_tokens",
+    "echo/retention_ratio",
     "echo/token_ratio",
     "echo/skipped_low_overlap",
     "echo/split_non_prefix",
@@ -612,6 +616,7 @@ def build_step_metrics(
         "echo/loss": data.echo_loss,
         "echo/train_time_s": data.echo_train_time,
         "echo/weight": config.echo_weight,
+        "echo/target_retention": config.echo_target_retention,
         "echo/allowed_tokens": echo_plan.allowed_tokens,
         "echo/reference_completion_tokens": echo_plan.reference_completion_tokens,
         "echo/completion_surprisal_mean": (echo_plan.echo_completion_surprisal_mean),
@@ -619,6 +624,9 @@ def build_step_metrics(
         "echo/candidate_tokens": rollout.echo_build.candidate_tokens,
         "echo/observation_mask_datums": rollout.echo_build.observation_mask_datums,
         "echo/observation_responses": rollout.echo_build.observation_responses,
+        "echo/executed_transition_datums": (
+            rollout.echo_build.executed_transition_datums
+        ),
         "echo/bridged_transition_datums": (
             rollout.echo_build.bridged_transition_datums
         ),
@@ -628,12 +636,23 @@ def build_step_metrics(
             rollout.echo_build.terminal_candidate_tokens
         ),
         "echo/terminal_kept_tokens": echo_plan.limit.kept_terminal_tokens,
+        "echo/terminal_retention_ratio": (
+            echo_plan.limit.kept_terminal_tokens
+            / rollout.echo_build.terminal_candidate_tokens
+            if rollout.echo_build.terminal_candidate_tokens > 0
+            else 0.0
+        ),
         "echo/explicit_transition_rollouts": (
             rollout.echo_build.explicit_transition_rollouts
         ),
         "echo/kept_datums": echo_plan.limit.kept_datums,
         "echo/kept_tokens": echo_plan.limit.kept_tokens,
         "echo/truncated_tokens": echo_plan.limit.truncated_tokens,
+        "echo/retention_ratio": (
+            echo_plan.limit.kept_tokens / rollout.echo_build.candidate_tokens
+            if rollout.echo_build.candidate_tokens > 0
+            else 0.0
+        ),
         "echo/token_ratio": echo_plan.token_ratio,
         "echo/skipped_first_turns": rollout.echo_build.skipped_first_turns,
         "echo/skipped_no_suffix": rollout.echo_build.skipped_no_suffix,
@@ -648,9 +667,7 @@ def build_step_metrics(
         "echo/mode_collapse_guard": int(echo_plan.skipped_entropy_floor),
         "echo/joint_optimizer_step": int(data.echo_joint_optimizer_step),
     }
-    capture_manifest = str(
-        getattr(rollout, "optimizer_batch_capture_manifest", "")
-    )
+    capture_manifest = str(getattr(rollout, "optimizer_batch_capture_manifest", ""))
     if capture_manifest:
         metrics.update(
             {
@@ -760,7 +777,9 @@ def build_emergence_step_entry(
     step_entry["adv_cap_fraction"] = data.adv_cap_fraction
     step_entry["adv_cap_magnitude"] = data.adv_cap_magnitude
     step_entry["echo/enabled"] = int(config.echo_enabled)
+    step_entry["echo/target_retention"] = config.echo_target_retention
     step_entry["echo/kept_tokens"] = echo_plan.limit.kept_tokens
+    step_entry["echo/retention_ratio"] = metrics.get("echo/retention_ratio", 0.0)
     step_entry["echo/token_ratio"] = echo_plan.token_ratio
     step_entry["echo/skipped_entropy_floor"] = int(echo_plan.skipped_entropy_floor)
     for key in _advantage_extra_metric_names(rollout.adv_results):

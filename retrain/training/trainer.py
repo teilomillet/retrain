@@ -494,6 +494,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 final_masks=acc.datum_echo_advantages,
                 eligible_rollouts=acc.echo_eligible_rollout_count,
                 skipped_entropy_floor=echo_plan.skipped_entropy_floor,
+                target_retention=config.echo_target_retention,
             )
 
             rl_has_signal = has_nonzero_advantage(acc.datum_advantages)

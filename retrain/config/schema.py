@@ -159,6 +159,9 @@ class TrainConfig:
     echo_enabled: bool = False
     echo_weight: float = 0.05
     echo_loss_fn: str = "cross_entropy"
+    # Keep the pre-retention-policy behavior for configs that predate
+    # target_retention. Paper-faithful runs opt in explicitly with "all".
+    echo_target_retention: str = "bounded"
     echo_max_tokens_per_step: int = 2048
     echo_max_token_ratio: float = 0.5
     echo_entropy_floor: float = 0.01

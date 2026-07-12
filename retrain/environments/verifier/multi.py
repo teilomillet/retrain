@@ -39,6 +39,23 @@ if TYPE_CHECKING:
     from retrain.backends import TrainHelper
 
 
+_RETRAIN_TRUNCATION_CONDITIONS = frozenset(
+    {"retrain_action_token_limit", "retrain_context_window"}
+)
+
+
+def _mark_retrain_truncation(state: StateDict, condition: str) -> None:
+    """End one rollout without applying or rewarding an invalid next action."""
+
+    state["is_completed"] = True
+    state["is_truncated"] = True
+    state["stop_condition"] = condition
+
+
+def _is_retrain_truncation(state: StateDict) -> bool:
+    return state.get("stop_condition") in _RETRAIN_TRUNCATION_CONDITIONS
+
+
 def is_multiturn_environment(
     env: object,
     *,
@@ -105,9 +122,7 @@ def run_multiturn_group(
         tokenizer_typed = cast(Tokenizer, tokenizer)
         raw_rollout_contract = getattr(env_typed, "retrain_rollout_contract", None)
         rollout_contract = (
-            raw_rollout_contract
-            if isinstance(raw_rollout_contract, Mapping)
-            else {}
+            raw_rollout_contract if isinstance(raw_rollout_contract, Mapping) else {}
         )
         context_window = rollout_contract.get("context_window")
         completion_reserve = rollout_contract.get("completion_reserve_tokens")
@@ -230,7 +245,7 @@ def run_multiturn_group(
                 ) -> tuple[int, PromptLike, list[int], list[int] | None] | None:
                     nonlocal echo_renderer_parity_failed
                     idx, state = cast(tuple[int, StateDict], raw_item)
-                    if await env_typed.is_completed(state):
+                    if state.get("is_completed") or await env_typed.is_completed(state):
                         return None
                     render_started = time.perf_counter()
                     prompt_messages = await env_typed.get_prompt_messages(state)
@@ -251,13 +266,23 @@ def run_multiturn_group(
                         and isinstance(completion_reserve, int)
                         and len(prompt_ids) + completion_reserve > context_window
                     ):
-                        raise RuntimeError(
-                            f"Full-history prompt for rollout {idx} has "
-                            f"{len(prompt_ids)} tokens; with the reserved "
-                            f"{completion_reserve}-token action it exceeds the "
-                            f"{context_window}-token context window. No action "
-                            "was sampled, sent to the environment, or optimizer."
+                        _mark_retrain_truncation(
+                            state,
+                            "retrain_context_window",
                         )
+                        per_rollout_turns[idx].append(
+                            VerifiersTurnSample(
+                                prompt_ids=list(prompt_ids),
+                                completion_ids=[],
+                                completion_logprobs=[],
+                                completion_text="",
+                                finish_reason="context_window",
+                                is_truncated=True,
+                                truncation_reason="context_window",
+                            )
+                        )
+                        rollout_timing.context_window_exhaustions += 1
+                        return None
                     observation_mask = prompt_utils.observation_mask(
                         tokenizer,
                         prompt_messages,
@@ -329,28 +354,12 @@ def run_multiturn_group(
                     list(group[0].token_ids) for group in sampled_groups
                 ]
                 completion_logprobs_batch = [
-                    list(group[0].logprobs)
-                    for group in sampled_groups
+                    list(group[0].logprobs) for group in sampled_groups
                 ]
-                finish_reasons = [
-                    group[0].finish_reason for group in sampled_groups
-                ]
+                finish_reasons = [group[0].finish_reason for group in sampled_groups]
                 token_limit_hits = [
-                    group[0].hit_token_limit
-                    for group in sampled_groups
+                    group[0].hit_token_limit for group in sampled_groups
                 ]
-                if any(token_limit_hits):
-                    rejected_rollouts = [
-                        active[pos][0]
-                        for pos, hit_token_limit in enumerate(token_limit_hits)
-                        if hit_token_limit
-                    ]
-                    raise RuntimeError(
-                        "Refusing incomplete sampled action(s) for rollout(s) "
-                        f"{rejected_rollouts}: generation did not finish with an "
-                        "explicit normal stop. No action from this sampled batch "
-                        "was sent to the environment or optimizer."
-                    )
                 decode_started = time.perf_counter()
                 completion_texts = tokenizer_typed.batch_decode(
                     completion_ids_batch,
@@ -358,7 +367,36 @@ def run_multiturn_group(
                 )
                 rollout_timing.decode_s += time.perf_counter() - decode_started
 
-                step_jobs = list(enumerate(active))
+                accepted_positions: list[int] = []
+                for pos, hit_token_limit in enumerate(token_limit_hits):
+                    if not hit_token_limit:
+                        accepted_positions.append(pos)
+                        continue
+                    idx, _messages, prompt_ids, observation_mask = active[pos]
+                    _mark_retrain_truncation(
+                        states[idx],
+                        "retrain_action_token_limit",
+                    )
+                    per_rollout_turns[idx].append(
+                        VerifiersTurnSample(
+                            prompt_ids=list(prompt_ids),
+                            completion_ids=list(completion_ids_batch[pos]),
+                            completion_logprobs=list(completion_logprobs_batch[pos]),
+                            completion_text=completion_texts[pos],
+                            finish_reason=finish_reasons[pos],
+                            is_truncated=True,
+                            truncation_reason="action_token_limit",
+                            observation_mask=(
+                                list(observation_mask)
+                                if observation_mask is not None
+                                else None
+                            ),
+                        )
+                    )
+                    rollout_timing.model_tokens += len(completion_ids_batch[pos])
+                    rollout_timing.action_token_limit_rejections += 1
+
+                step_jobs = [(pos, active[pos]) for pos in accepted_positions]
 
                 async def add_step(
                     raw_job: object,
@@ -495,6 +533,9 @@ def run_multiturn_group(
 
             async def render_completion_one(raw_state: object) -> None:
                 state = cast(StateDict, raw_state)
+                if _is_retrain_truncation(state) and not state.get("trajectory"):
+                    state["completion"] = []
+                    return
                 render_started = time.perf_counter()
                 await env_typed.render_completion(state)
                 rollout_timing.render_completion_s += (
@@ -505,12 +546,21 @@ def run_multiturn_group(
             score_started = time.perf_counter()
             await env_typed.rubric.score_group(states)
             rollout_timing.score_s += time.perf_counter() - score_started
+            for state in states:
+                if _is_retrain_truncation(state):
+                    # A rejected or unsampled action cannot satisfy a task. Keep
+                    # earlier transitions for ECHO, but never turn partial state
+                    # into policy-gradient reward.
+                    state["reward"] = 0.0
 
             all_branch_rewards: list[list[list[float]]] = []
             if tl_grpo:
                 # Compare each action against alternatives from the same state.
                 branch_started = time.perf_counter()
                 for i, state in enumerate(states):
+                    if _is_retrain_truncation(state):
+                        all_branch_rewards.append([])
+                        continue
                     branch_rewards = tl_branch.run(
                         state,
                         per_rollout_turns[i],

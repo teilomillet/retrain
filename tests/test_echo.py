@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from retrain.config import TrainConfig
 from retrain.training.echo import (
     EchoBuildStats,
     EchoLimitStats,
@@ -13,8 +14,10 @@ from retrain.training.echo import (
     common_prefix_len,
     limit_echo_masks,
     merge_echo_build_stats,
+    retain_all_echo_masks,
     run_rl_echo_train_step,
 )
+from retrain.training.rollout.state import RolloutAccumulator, prepare_echo_step_plan
 
 
 def test_strict_echo_live_observation_contract_accepts_real_tool_signal() -> None:
@@ -23,7 +26,9 @@ def test_strict_echo_live_observation_contract_accepts_real_tool_signal() -> Non
         build=EchoBuildStats(
             candidate_datums=2,
             candidate_tokens=3,
+            observation_mask_datums=2,
             observation_responses=2,
+            executed_transition_datums=2,
             bridged_transition_datums=2,
             explicit_transition_rollouts=1,
         ),
@@ -32,6 +37,100 @@ def test_strict_echo_live_observation_contract_accepts_real_tool_signal() -> Non
         eligible_rollouts=1,
         skipped_entropy_floor=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("build", "limit", "masks", "failure"),
+    [
+        (
+            EchoBuildStats(
+                candidate_tokens=3,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(kept_tokens=2),
+            [[0.1, 0.1]],
+            "all_candidate_tokens_retained",
+        ),
+        (
+            EchoBuildStats(
+                candidate_tokens=2,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(kept_tokens=2, truncated_tokens=1),
+            [[0.1, 0.1]],
+            "zero_truncated_tokens",
+        ),
+        (
+            EchoBuildStats(
+                candidate_tokens=2,
+                terminal_candidate_tokens=1,
+                observation_responses=1,
+                bridged_transition_datums=1,
+                explicit_transition_rollouts=1,
+            ),
+            EchoLimitStats(kept_tokens=2, kept_terminal_tokens=0),
+            [[0.1, 0.1]],
+            "all_terminal_tokens_retained",
+        ),
+    ],
+)
+def test_strict_echo_full_retention_contract_fails_on_information_loss(
+    build, limit, masks, failure
+) -> None:
+    with pytest.raises(RuntimeError, match=failure):
+        assert_echo_live_observation_contract(
+            required=True,
+            build=build,
+            limit=limit,
+            final_masks=masks,
+            eligible_rollouts=1,
+            skipped_entropy_floor=False,
+            target_retention="all",
+        )
+
+
+def test_strict_echo_bounded_retention_allows_declared_truncation() -> None:
+    assert_echo_live_observation_contract(
+        required=True,
+        build=EchoBuildStats(
+            candidate_tokens=3,
+            terminal_candidate_tokens=1,
+            observation_responses=1,
+            executed_transition_datums=1,
+            bridged_transition_datums=1,
+            explicit_transition_rollouts=1,
+        ),
+        limit=EchoLimitStats(kept_tokens=2, truncated_tokens=1),
+        final_masks=[[0.1, 0.1]],
+        eligible_rollouts=1,
+        skipped_entropy_floor=False,
+        target_retention="bounded",
+    )
+
+
+def test_strict_echo_full_retention_rejects_missing_transition_response() -> None:
+    with pytest.raises(RuntimeError, match="all_executed_transitions_observed"):
+        assert_echo_live_observation_contract(
+            required=True,
+            build=EchoBuildStats(
+                candidate_datums=1,
+                candidate_tokens=1,
+                observation_mask_datums=1,
+                observation_responses=1,
+                executed_transition_datums=2,
+                bridged_transition_datums=1,
+                explicit_transition_rollouts=2,
+            ),
+            limit=EchoLimitStats(kept_datums=1, kept_tokens=1),
+            final_masks=[[0.1]],
+            eligible_rollouts=2,
+            skipped_entropy_floor=False,
+            target_retention="all",
+        )
 
 
 @pytest.mark.parametrize(
@@ -456,11 +555,58 @@ def test_limit_echo_masks_counts_only_terminal_tokens_retained_after_cap() -> No
     assert stats.truncated_tokens == 1
 
 
+def test_retain_all_echo_masks_keeps_every_target_and_terminal_token() -> None:
+    rows = [[0.0, 0.2, 0.2], [0.1, 0.0, 0.1]]
+    terminal_masks = [[0, 0, 0], [1, 0, 1]]
+
+    retained, stats = retain_all_echo_masks(
+        rows,
+        terminal_observation_masks=terminal_masks,
+    )
+
+    assert retained is rows
+    assert stats == EchoLimitStats(
+        kept_datums=2,
+        kept_tokens=4,
+        kept_terminal_tokens=2,
+        truncated_tokens=0,
+    )
+
+
+def test_prepare_echo_step_plan_full_retention_bypasses_caps() -> None:
+    acc = RolloutAccumulator(
+        datum_echo_advantages=[[0.0, 0.2, 0.2], [0.2, 0.2]],
+        datum_echo_terminal_masks=[[0, 0, 0], [1, 1]],
+        echo_build=EchoBuildStats(candidate_tokens=4, terminal_candidate_tokens=2),
+        sampled_completion_token_count=1,
+        sampled_completion_surprisal_sum=0.0,
+    )
+    config = TrainConfig(
+        echo_enabled=True,
+        echo_target_retention="all",
+        echo_entropy_floor=0.0,
+        echo_max_tokens_per_step=1,
+        echo_max_token_ratio=0.01,
+    )
+
+    plan = prepare_echo_step_plan(config, acc)
+
+    assert plan.allowed_tokens == 4
+    assert plan.limit == EchoLimitStats(
+        kept_datums=2,
+        kept_tokens=4,
+        kept_terminal_tokens=2,
+        truncated_tokens=0,
+    )
+    assert acc.datum_echo_advantages == [[0.0, 0.2, 0.2], [0.2, 0.2]]
+
+
 def test_merge_echo_build_stats_adds_all_counters() -> None:
     left = EchoBuildStats(
         candidate_datums=1,
         candidate_tokens=2,
         observation_mask_datums=3,
+        executed_transition_datums=4,
         skipped_first_turns=4,
         skipped_no_suffix=5,
         skipped_low_overlap=6,
@@ -471,6 +617,7 @@ def test_merge_echo_build_stats_adds_all_counters() -> None:
         candidate_datums=8,
         candidate_tokens=9,
         observation_mask_datums=10,
+        executed_transition_datums=11,
         skipped_first_turns=11,
         skipped_no_suffix=12,
         skipped_low_overlap=13,
@@ -482,6 +629,7 @@ def test_merge_echo_build_stats_adds_all_counters() -> None:
         candidate_datums=9,
         candidate_tokens=11,
         observation_mask_datums=13,
+        executed_transition_datums=15,
         skipped_first_turns=15,
         skipped_no_suffix=17,
         skipped_low_overlap=19,

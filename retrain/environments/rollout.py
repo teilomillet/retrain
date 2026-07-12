@@ -35,6 +35,7 @@ class VerifiersTurnSample:
     completion_text: str
     finish_reason: str | None = None
     is_truncated: bool = False
+    truncation_reason: str | None = None
     observation_mask: list[int] | None = None
     echo_observation_capture_supported: bool = False
     post_observation_ids: list[int] | None = None
@@ -64,6 +65,8 @@ class VerifiersRolloutTiming:
     total_s: float = 0.0
     turns: int = 0
     model_tokens: int = 0
+    action_token_limit_rejections: int = 0
+    context_window_exhaustions: int = 0
     env_workers: int = 1
     buffer_size: int = 1
     env_timing_s: dict[str, float] | None = None
@@ -85,6 +88,12 @@ class VerifiersRolloutTiming:
             f"{prefix}total_s": self.total_s,
             f"{prefix}turns": float(self.turns),
             f"{prefix}model_tokens": float(self.model_tokens),
+            f"{prefix}action_token_limit_rejections": float(
+                self.action_token_limit_rejections
+            ),
+            f"{prefix}context_window_exhaustions": float(
+                self.context_window_exhaustions
+            ),
             f"{prefix}env_workers": float(self.env_workers),
             f"{prefix}buffer_size": float(self.buffer_size),
         }

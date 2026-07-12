@@ -217,7 +217,11 @@ def test_record_training_step_writes_all_step_outputs(capsys) -> None:
             tl_grpo_ema=0.9,
             surprisal_stats=[],
         ),
-        config=TrainConfig(echo_enabled=True, echo_weight=0.25),
+        config=TrainConfig(
+            echo_enabled=True,
+            echo_weight=0.25,
+            echo_target_retention="bounded",
+        ),
         backend_caps=BackendCapabilities(
             reports_sync_loss=True,
             preserves_token_advantages=True,

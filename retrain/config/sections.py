@@ -83,6 +83,7 @@ _TOML_MAP: dict[str, dict[str, str]] = {
         "enabled": "echo_enabled",
         "weight": "echo_weight",
         "loss_fn": "echo_loss_fn",
+        "target_retention": "echo_target_retention",
         "max_tokens_per_step": "echo_max_tokens_per_step",
         "max_token_ratio": "echo_max_token_ratio",
         "entropy_floor": "echo_entropy_floor",

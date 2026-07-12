@@ -177,6 +177,17 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
         errors.append(
             "echo_loss_fn must be 'cross_entropy' for paper-faithful ECHO."
         )
+    if config.echo_target_retention not in {"all", "bounded"}:
+        errors.append(
+            "echo_target_retention must be 'all' or 'bounded'. "
+            "Try: target_retention = \"all\""
+        )
+    if config.echo_target_retention == "all" and config.echo_entropy_floor != 0.0:
+        errors.append(
+            "echo_target_retention='all' requires echo_entropy_floor = 0.0 so "
+            "paper-faithful observation targets are not discarded. Use "
+            "target_retention = \"bounded\" for an explicit entropy-gated ablation."
+        )
     if config.echo_max_tokens_per_step <= 0:
         errors.append(
             "echo_max_tokens_per_step must be > 0. Try: echo_max_tokens_per_step = 2048"
@@ -187,7 +198,7 @@ def collect_bounds_errors(config: TrainConfig, errors: list[str]) -> None:
         )
     if config.echo_entropy_floor < 0.0:
         errors.append(
-            "echo_entropy_floor must be >= 0. Try: echo_entropy_floor = 0.01"
+            "echo_entropy_floor must be >= 0. Try: echo_entropy_floor = 0.0"
         )
     if config.echo_min_prompt_overlap < 0.0 or config.echo_min_prompt_overlap > 1.0:
         errors.append(

@@ -38,6 +38,7 @@ class TestDefaults:
         assert c.echo_enabled is False
         assert c.echo_weight == pytest.approx(0.05)
         assert c.echo_loss_fn == "cross_entropy"
+        assert c.echo_target_retention == "bounded"
         assert c.echo_max_tokens_per_step == 2048
         assert c.echo_max_token_ratio == pytest.approx(0.5)
         assert c.echo_entropy_floor == pytest.approx(0.01)
@@ -123,6 +124,7 @@ generation_top_surprisal_limit = 3
 enabled = true
 weight = 0.2
 loss_fn = "cross_entropy"
+target_retention = "bounded"
 max_tokens_per_step = 128
 max_token_ratio = 0.25
 entropy_floor = 0.05
@@ -165,11 +167,54 @@ min_prompt_overlap = 0.75
         assert c.echo_enabled is True
         assert c.echo_weight == pytest.approx(0.2)
         assert c.echo_loss_fn == "cross_entropy"
+        assert c.echo_target_retention == "bounded"
         assert c.echo_max_tokens_per_step == 128
         assert c.echo_max_token_ratio == pytest.approx(0.25)
         assert c.echo_entropy_floor == pytest.approx(0.05)
         assert c.echo_min_prompt_overlap == pytest.approx(0.75)
         assert c.echo_require_live_observation_bridge is False
+
+    def test_legacy_echo_section_keeps_bounded_retention(self, tmp_path):
+        """Pre-target_retention configs must retain their capped semantics."""
+        toml = tmp_path / "legacy-echo.toml"
+        toml.write_text(
+            """\
+[echo]
+enabled = true
+max_tokens_per_step = 128
+max_token_ratio = 0.25
+entropy_floor = 0.05
+"""
+        )
+
+        config = load_config(str(toml))
+
+        assert config.echo_target_retention == "bounded"
+        assert config.echo_max_tokens_per_step == 128
+        assert config.echo_max_token_ratio == pytest.approx(0.25)
+        assert config.echo_entropy_floor == pytest.approx(0.05)
+
+    def test_minimal_legacy_echo_section_keeps_legacy_defaults(self, tmp_path):
+        toml = tmp_path / "legacy-echo.toml"
+        toml.write_text("[echo]\nenabled = true\n")
+
+        config = load_config(str(toml))
+
+        assert config.echo_target_retention == "bounded"
+        assert config.echo_max_tokens_per_step == 2048
+        assert config.echo_max_token_ratio == pytest.approx(0.5)
+        assert config.echo_entropy_floor == pytest.approx(0.01)
+
+    def test_explicit_full_retention_is_paper_faithful(self, tmp_path):
+        toml = tmp_path / "paper-echo.toml"
+        toml.write_text(
+            '[echo]\nenabled = true\ntarget_retention = "all"\nentropy_floor = 0.0\n'
+        )
+
+        config = load_config(str(toml))
+
+        assert config.echo_target_retention == "all"
+        assert config.echo_entropy_floor == pytest.approx(0.0)
 
     def test_empty_string_ignored(self, tmp_path):
         """Empty-string TOML values should keep the default."""
@@ -887,6 +932,21 @@ class TestNumericValidation:
     def test_echo_rejects_non_cross_entropy_loss(self):
         with pytest.raises(ValueError, match="paper-faithful ECHO"):
             TrainConfig(echo_loss_fn="importance_sampling")
+
+    def test_echo_rejects_unknown_target_retention(self):
+        with pytest.raises(ValueError, match="echo_target_retention"):
+            TrainConfig(echo_target_retention="sampled")
+
+    def test_echo_full_retention_rejects_entropy_gate(self):
+        with pytest.raises(ValueError, match="requires echo_entropy_floor = 0.0"):
+            TrainConfig(echo_target_retention="all", echo_entropy_floor=0.01)
+
+    def test_echo_bounded_retention_allows_entropy_gate(self):
+        config = TrainConfig(
+            echo_target_retention="bounded",
+            echo_entropy_floor=0.01,
+        )
+        assert config.echo_entropy_floor == pytest.approx(0.01)
 
 
 # ---------------------------------------------------------------------------

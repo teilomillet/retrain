@@ -78,6 +78,7 @@ def optimizer_contract(config: TrainConfig) -> dict[str, object]:
             "enabled": config.echo_enabled,
             "loss_fn": config.echo_loss_fn,
             "weight": config.echo_weight,
+            "target_retention": config.echo_target_retention,
         },
     }
     return cast(

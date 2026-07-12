@@ -30,6 +30,7 @@ group_size = 4
 enabled = true
 weight = 0.2
 loss_fn = "cross_entropy"
+target_retention = "bounded"
 max_tokens_per_step = 1536
 max_token_ratio = 0.25
 entropy_floor = 0.02
@@ -55,7 +56,10 @@ def test_text_exposes_echo_and_environment_training_contract(tmp_path, capsys) -
     output = capsys.readouterr().out
     assert "condition     : grpo+none+echo" in output
     assert "echo          : weight=0.2 loss=cross_entropy" in output
-    assert "echo caps     : tokens/step=1536 ratio=0.25 entropy_floor=0.02" in output
+    assert (
+        "echo targets  : retention=bounded tokens/step=1536 ratio=0.25 "
+        "entropy_floor=0.02"
+    ) in output
     assert "echo bridge   : required=True" in output
     assert "env max_turns : 324" in output
     assert "env renderer  : quaero.render_observation" in output
@@ -72,6 +76,7 @@ def test_json_exposes_echo_and_environment_training_contract(tmp_path, capsys) -
     assert payload["echo_enabled"] is True
     assert payload["echo_weight"] == pytest.approx(0.2)
     assert payload["echo_loss_fn"] == "cross_entropy"
+    assert payload["echo_target_retention"] == "bounded"
     assert payload["echo_max_tokens_per_step"] == 1536
     assert payload["echo_max_token_ratio"] == pytest.approx(0.25)
     assert payload["echo_entropy_floor"] == pytest.approx(0.02)
@@ -83,3 +88,29 @@ def test_json_exposes_echo_and_environment_training_contract(tmp_path, capsys) -
     assert payload["environment_renderer"] == "quaero.render_observation"
     assert payload["environment_expected_task_source"] == "factory-v3"
     assert payload["environment_expected_task_ids"] == ["task-3000", "task-3001"]
+
+
+def test_text_exposes_uncapped_full_retention(tmp_path, capsys) -> None:
+    config_path = tmp_path / "echo-all.toml"
+    config_path.write_text(
+        '[echo]\nenabled = true\ntarget_retention = "all"\nentropy_floor = 0.0\n'
+    )
+
+    run_explain([str(config_path)])
+
+    output = capsys.readouterr().out
+    assert "echo targets  : retention=all caps=disabled entropy_floor=0.0" in output
+
+
+def test_json_marks_full_retention_caps_disabled(tmp_path, capsys) -> None:
+    config_path = tmp_path / "echo-all.toml"
+    config_path.write_text(
+        '[echo]\nenabled = true\ntarget_retention = "all"\nentropy_floor = 0.0\n'
+    )
+
+    run_explain(["--json", str(config_path)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["echo_target_retention"] == "all"
+    assert payload["echo_max_tokens_per_step"] is None
+    assert payload["echo_max_token_ratio"] is None

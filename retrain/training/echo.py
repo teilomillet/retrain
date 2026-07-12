@@ -43,7 +43,7 @@ class EchoRolloutDatum:
 
 @dataclass(frozen=True)
 class EchoBuildStats:
-    """Accounting for observation-token extraction before step-level caps."""
+    """Accounting for observation-token extraction before retention policy."""
 
     candidate_datums: int = 0
     candidate_tokens: int = 0
@@ -54,6 +54,7 @@ class EchoBuildStats:
     split_non_prefix: int = 0
     skipped_bad_observation_mask: int = 0
     observation_responses: int = 0
+    executed_transition_datums: int = 0
     bridged_transition_datums: int = 0
     bridge_failures: int = 0
     renderer_parity_failures: int = 0
@@ -63,7 +64,7 @@ class EchoBuildStats:
 
 @dataclass(frozen=True)
 class EchoLimitStats:
-    """Accounting after step-level ECHO token caps."""
+    """Accounting after applying the ECHO target-retention policy."""
 
     kept_datums: int = 0
     kept_tokens: int = 0
@@ -93,6 +94,9 @@ def merge_echo_build_stats(
         observation_responses=(
             left.observation_responses + right.observation_responses
         ),
+        executed_transition_datums=(
+            left.executed_transition_datums + right.executed_transition_datums
+        ),
         bridged_transition_datums=(
             left.bridged_transition_datums + right.bridged_transition_datums
         ),
@@ -117,14 +121,13 @@ def assert_echo_live_observation_contract(
     final_masks: Sequence[Sequence[float]],
     eligible_rollouts: int,
     skipped_entropy_floor: bool,
+    target_retention: str = "bounded",
 ) -> None:
     """Abort strict ECHO before optimization if tool-token signal is absent."""
 
     if not required:
         return
-    positive_final_tokens = sum(
-        value > 0.0 for row in final_masks for value in row
-    )
+    positive_final_tokens = sum(value > 0.0 for row in final_masks for value in row)
     checks = {
         "explicit_transition_rollouts": build.explicit_transition_rollouts > 0,
         "all_eligible_rollouts_use_explicit_bridge": (
@@ -136,12 +139,33 @@ def assert_echo_live_observation_contract(
         "zero_bridge_failures": build.bridge_failures == 0,
         "zero_renderer_parity_failures": build.renderer_parity_failures == 0,
         "candidate_tokens": build.candidate_tokens > 0,
+        "executed_transition_datums": build.executed_transition_datums > 0,
         "entropy_floor_not_skipped": not skipped_entropy_floor,
         "kept_tokens": limit.kept_tokens > 0,
-        "final_mask_matches_kept_tokens": (
-            positive_final_tokens == limit.kept_tokens
-        ),
+        "final_mask_matches_kept_tokens": (positive_final_tokens == limit.kept_tokens),
     }
+    if target_retention == "all":
+        checks.update(
+            {
+                "all_candidate_tokens_retained": (
+                    build.candidate_tokens == limit.kept_tokens
+                ),
+                "zero_truncated_tokens": limit.truncated_tokens == 0,
+                "all_terminal_tokens_retained": (
+                    build.terminal_candidate_tokens == limit.kept_terminal_tokens
+                ),
+                "all_executed_transitions_observed": (
+                    build.executed_transition_datums > 0
+                    and build.observation_responses == build.executed_transition_datums
+                ),
+                "all_executed_transitions_bridged": (
+                    build.bridged_transition_datums == build.executed_transition_datums
+                ),
+                "all_executed_transitions_have_targets": (
+                    build.observation_mask_datums == build.executed_transition_datums
+                ),
+            }
+        )
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
         raise RuntimeError(
@@ -149,7 +173,8 @@ def assert_echo_live_observation_contract(
             + ", ".join(failed)
             + f"; build={build!r}, limit={limit!r}, "
             + f"eligible_rollouts={eligible_rollouts}, "
-            + f"positive_final_tokens={positive_final_tokens}"
+            + f"positive_final_tokens={positive_final_tokens}, "
+            + f"target_retention={target_retention!r}"
         )
 
 
@@ -462,6 +487,7 @@ def _build_explicit_transition_datums(
         observation_mask_datums=sum(datum.positive_tokens > 0 for datum in datums),
         skipped_bad_observation_mask=bad_masks,
         observation_responses=observation_responses,
+        executed_transition_datums=len(turns),
         bridged_transition_datums=bridged_transition_datums,
         bridge_failures=bridge_failures,
         renderer_parity_failures=renderer_parity_failures,
@@ -565,6 +591,54 @@ def limit_echo_masks(
         kept_tokens=kept_tokens,
         kept_terminal_tokens=kept_terminal_tokens,
         truncated_tokens=truncated,
+    )
+
+
+def retain_all_echo_masks(
+    echo_advantages: list[list[float]],
+    *,
+    terminal_observation_masks: Sequence[Sequence[int]] | None = None,
+) -> tuple[list[list[float]], EchoLimitStats]:
+    """Keep every ECHO target while computing exact retention accounting."""
+
+    if terminal_observation_masks is None:
+        terminal_observation_masks = [([0] * len(row)) for row in echo_advantages]
+    if len(terminal_observation_masks) != len(echo_advantages):
+        raise ValueError("terminal observation masks must match ECHO rows")
+    if any(
+        len(mask) != len(row)
+        for row, mask in zip(
+            echo_advantages,
+            terminal_observation_masks,
+            strict=True,
+        )
+    ):
+        raise ValueError("terminal observation masks must match ECHO row lengths")
+
+    kept_datums = 0
+    kept_tokens = 0
+    kept_terminal_tokens = 0
+    for row, terminal_mask in zip(
+        echo_advantages,
+        terminal_observation_masks,
+        strict=True,
+    ):
+        row_kept = 0
+        for token_idx, advantage in enumerate(row):
+            if advantage <= 0.0:
+                continue
+            row_kept += 1
+            kept_tokens += 1
+            if terminal_mask[token_idx]:
+                kept_terminal_tokens += 1
+        if row_kept:
+            kept_datums += 1
+
+    return echo_advantages, EchoLimitStats(
+        kept_datums=kept_datums,
+        kept_tokens=kept_tokens,
+        kept_terminal_tokens=kept_terminal_tokens,
+        truncated_tokens=0,
     )
 
 

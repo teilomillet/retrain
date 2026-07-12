@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 
 from retrain.advantages import AdvantageResult, EntropyStats
 from retrain.config import TrainConfig
-from retrain.training.echo import EchoBuildStats, EchoLimitStats, limit_echo_masks
+from retrain.training.echo import (
+    EchoBuildStats,
+    EchoLimitStats,
+    limit_echo_masks,
+    retain_all_echo_masks,
+)
 from retrain.training.signals import RewardTieAccumulator
 from retrain.training.telemetry import EchoStepPlan
 
@@ -99,7 +104,7 @@ def prepare_echo_step_plan(
     config: TrainConfig,
     acc: RolloutAccumulator,
 ) -> EchoStepPlan:
-    """Apply ECHO token limits and return the values logged for this step."""
+    """Apply the ECHO retention policy and return step telemetry."""
     rl_completion_surprisal_mean = (
         acc.rl_completion_surprisal_sum / acc.rl_completion_token_count
         if acc.rl_completion_token_count > 0
@@ -121,6 +126,20 @@ def prepare_echo_step_plan(
         )
 
     reference_completion_tokens = acc.sampled_completion_token_count
+    if config.echo_target_retention == "all":
+        acc.datum_echo_advantages, limit = retain_all_echo_masks(
+            acc.datum_echo_advantages,
+            terminal_observation_masks=acc.datum_echo_terminal_masks,
+        )
+        return EchoStepPlan(
+            limit=limit,
+            allowed_tokens=acc.echo_build.candidate_tokens,
+            reference_completion_tokens=reference_completion_tokens,
+            skipped_entropy_floor=False,
+            rl_completion_surprisal_mean=rl_completion_surprisal_mean,
+            echo_completion_surprisal_mean=echo_completion_surprisal_mean,
+        )
+
     allowed_tokens = _echo_allowed_tokens(
         rl_completion_tokens=reference_completion_tokens,
         max_tokens_per_step=config.echo_max_tokens_per_step,

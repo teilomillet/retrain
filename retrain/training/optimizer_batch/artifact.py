@@ -21,6 +21,8 @@ from retrain.training.optimizer_batch.codec import (
     validate_batch,
 )
 from retrain.training.optimizer_batch.contract import (
+    _require_object,
+    _require_string,
     canonical_json_bytes,
     config_snapshot,
     optimizer_contract,
@@ -261,22 +263,6 @@ def _runtime_provenance() -> dict[str, object]:
         "cuda_version": cuda_version,
         "cuda_devices": cuda_devices,
     }
-
-
-def _require_object(parent: dict[str, object], key: str) -> dict[str, object]:
-    value = parent.get(key)
-    if not isinstance(value, dict):
-        raise ValueError(f"optimizer-batch manifest field {key!r} must be an object.")
-    return cast(dict[str, object], value)
-
-
-def _require_string(parent: dict[str, object], key: str) -> str:
-    value = parent.get(key)
-    if not isinstance(value, str) or not value:
-        raise ValueError(
-            f"optimizer-batch manifest field {key!r} must be a non-empty string."
-        )
-    return value
 
 
 def _require_int(parent: dict[str, object], key: str) -> int:

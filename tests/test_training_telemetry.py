@@ -174,6 +174,7 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
             observation_mask_datums=2,
             skipped_low_overlap=1,
             observation_responses=4,
+            executed_transition_datums=5,
             bridged_transition_datums=3,
             bridge_failures=1,
             renderer_parity_failures=1,
@@ -210,6 +211,7 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     config = TrainConfig(
         echo_enabled=True,
         echo_weight=0.25,
+        echo_target_retention="bounded",
         echo_entropy_floor=0.05,
     )
     backend_caps = BackendCapabilities(
@@ -263,12 +265,16 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
     assert metrics["backend/tokens_s"] == pytest.approx(12.0)
     assert metrics["process_max_rss_mb"] == pytest.approx(12.346)
     assert metrics["echo/token_ratio"] == pytest.approx(0.5)
+    assert metrics["echo/target_retention"] == "bounded"
+    assert metrics["echo/retention_ratio"] == pytest.approx(5 / 7)
     assert metrics["echo/observation_responses"] == 4
+    assert metrics["echo/executed_transition_datums"] == 5
     assert metrics["echo/bridged_transition_datums"] == 3
     assert metrics["echo/bridge_failures"] == 1
     assert metrics["echo/renderer_parity_failures"] == 1
     assert metrics["echo/terminal_candidate_tokens"] == 2
     assert metrics["echo/terminal_kept_tokens"] == 1
+    assert metrics["echo/terminal_retention_ratio"] == pytest.approx(0.5)
     assert metrics["echo/explicit_transition_rollouts"] == 2
     assert metrics["rl/action_token_datumization_ratio"] == pytest.approx(1.0)
     assert metrics["rl/sampled_action_tokens"] == 16
@@ -281,6 +287,7 @@ def test_step_telemetry_builders_share_one_metric_contract(monkeypatch) -> None:
 
     assert wandb["train/dg_eta"] == pytest.approx(0.3)
     assert wandb["train/echo/kept_tokens"] == 5
+    assert wandb["train/echo/target_retention"] == "bounded"
     assert wandb["train/rl/datumized_action_tokens"] == 12
     assert wandb["train/optimizer/logical_batch_sha256"] == "a" * 64
     assert wandb["train/optimizer/batch_sha256"] == "a" * 64
@@ -394,6 +401,7 @@ def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:
         "echo/loss": 0.0,
         "echo/train_time_s": 0.0,
         "echo/weight": 0.0,
+        "echo/target_retention": "all",
         "echo/allowed_tokens": 0,
         "echo/reference_completion_tokens": 0,
         "echo/completion_surprisal_mean": 0.0,
@@ -401,15 +409,18 @@ def test_wandb_keeps_zero_surprisal_defaults_when_jsonl_omits_them() -> None:
         "echo/candidate_tokens": 0,
         "echo/observation_mask_datums": 0,
         "echo/observation_responses": 0,
+        "echo/executed_transition_datums": 0,
         "echo/bridged_transition_datums": 0,
         "echo/bridge_failures": 0,
         "echo/renderer_parity_failures": 0,
         "echo/terminal_candidate_tokens": 0,
         "echo/terminal_kept_tokens": 0,
+        "echo/terminal_retention_ratio": 0.0,
         "echo/explicit_transition_rollouts": 0,
         "echo/kept_datums": 0,
         "echo/kept_tokens": 0,
         "echo/truncated_tokens": 0,
+        "echo/retention_ratio": 0.0,
         "echo/token_ratio": 0.0,
         "echo/skipped_low_overlap": 0,
         "echo/skipped_bad_observation_mask": 0,

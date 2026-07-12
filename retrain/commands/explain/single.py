@@ -228,8 +228,17 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         "echo_enabled": config.echo_enabled,
         "echo_weight": config.echo_weight,
         "echo_loss_fn": config.echo_loss_fn,
-        "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
-        "echo_max_token_ratio": config.echo_max_token_ratio,
+        "echo_target_retention": config.echo_target_retention,
+        "echo_max_tokens_per_step": (
+            config.echo_max_tokens_per_step
+            if config.echo_target_retention == "bounded"
+            else None
+        ),
+        "echo_max_token_ratio": (
+            config.echo_max_token_ratio
+            if config.echo_target_retention == "bounded"
+            else None
+        ),
         "echo_entropy_floor": config.echo_entropy_floor,
         "echo_min_prompt_overlap": config.echo_min_prompt_overlap,
         "echo_require_live_observation_bridge": (
@@ -282,12 +291,15 @@ def explain_single(config_path: str | None, fmt: str) -> None:
         print(
             f"  echo          : weight={config.echo_weight} loss={config.echo_loss_fn}"
         )
-        print(
-            "  echo caps     : "
-            f"tokens/step={config.echo_max_tokens_per_step} "
-            f"ratio={config.echo_max_token_ratio} "
-            f"entropy_floor={config.echo_entropy_floor}"
-        )
+        if config.echo_target_retention == "all":
+            print("  echo targets  : retention=all caps=disabled entropy_floor=0.0")
+        else:
+            print(
+                "  echo targets  : retention=bounded "
+                f"tokens/step={config.echo_max_tokens_per_step} "
+                f"ratio={config.echo_max_token_ratio} "
+                f"entropy_floor={config.echo_entropy_floor}"
+            )
         print(
             f"  echo bridge   : required={config.echo_require_live_observation_bridge}"
         )

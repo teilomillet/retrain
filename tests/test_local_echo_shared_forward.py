@@ -144,7 +144,9 @@ def _helper(model: torch.nn.Module) -> LocalTrainHelper:
     return helper
 
 
-def test_local_echo_hybrid_masks_use_one_forward_and_full_observation_denominator(monkeypatch) -> None:
+def test_local_echo_hybrid_masks_use_one_forward_and_full_observation_denominator(
+    monkeypatch,
+) -> None:
     helper = _helper(_ScalarLM())
     forward_calls = 0
 
@@ -191,6 +193,43 @@ def test_local_echo_hybrid_masks_use_one_forward_and_full_observation_denominato
     # The zero-logit fixture keeps the exact loss easy to inspect; gradients are
     # zero by construction, so the parameter need not change in this test.
     assert not changed
+
+
+def test_local_echo_averages_independently_normalized_rollouts(monkeypatch) -> None:
+    helper = _helper(_ScalarLM())
+
+    def zero_forward_logits(model, input_ids, attention_mask):
+        _ = attention_mask
+        return model.bias * 0.0 + torch.zeros(
+            (*input_ids.shape, 16),
+            dtype=torch.float32,
+        )
+
+    monkeypatch.setattr(local_mod, "forward_logits", zero_forward_logits)
+    input_ids = torch.tensor(
+        [[1, 2, 3, 4], [5, 6, 7, 8]],
+        dtype=torch.long,
+    )
+    zeros = torch.zeros_like(input_ids, dtype=torch.float32)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    echo_advantages = torch.tensor(
+        [[0.0, 0.1, 0.0, 0.0], [0.0, 0.2, 0.2, 0.0]],
+        dtype=torch.float32,
+    )
+
+    _rl_loss, echo_loss = helper._do_hybrid_mask_impl(
+        input_ids,
+        zeros,
+        zeros,
+        attention_mask,
+        echo_advantages,
+        torch.tensor([1.0, 2.0]),
+        "cross_entropy",
+    )
+
+    # Per-rollout losses are 0.1*ln(16) and 0.2*ln(16), then averaged.
+    # A global selected-token mean would instead be (0.5/3)*ln(16).
+    assert float(echo_loss) == pytest.approx(0.15 * math.log(16), rel=1e-5)
 
 
 def test_local_echo_mask_train_step_updates_model_with_real_logits(monkeypatch) -> None:
@@ -286,7 +325,9 @@ def test_local_echo_microbatch_padding_matches_full_batch_update() -> None:
     assert metrics["local_train_global_padded_tokens"] == 10
     assert metrics["local_train_microbatch_padded_tokens"] == 8
     assert metrics["local_train_padding_tokens_avoided"] == 2
-    for full_param, micro_param in zip(full_model.parameters(), micro_model.parameters()):
+    for full_param, micro_param in zip(
+        full_model.parameters(), micro_model.parameters()
+    ):
         assert torch.allclose(full_param, micro_param, atol=1e-6)
 
 
@@ -357,10 +398,14 @@ def test_selective_hidden_logprobs_match_dense_logits_on_selected_tokens() -> No
     hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
     dense_logits = model.lm_head(hidden[:, :-1, :])
     target_ids = input_ids[:, 1:]
-    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
-        2,
-        target_ids.unsqueeze(2),
-    ).squeeze(2)
+    expected = (
+        F.log_softmax(dense_logits.float(), dim=-1)
+        .gather(
+            2,
+            target_ids.unsqueeze(2),
+        )
+        .squeeze(2)
+    )
 
     assert torch.allclose(actual[target_mask], expected[target_mask])
     assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
@@ -381,10 +426,14 @@ def test_packed_quantized_lm_head_target_logprobs_match_dense() -> None:
     )
 
     dense_logits = lm_head(hidden)
-    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
-        2,
-        target_ids.unsqueeze(2),
-    ).squeeze(2)
+    expected = (
+        F.log_softmax(dense_logits.float(), dim=-1)
+        .gather(
+            2,
+            target_ids.unsqueeze(2),
+        )
+        .squeeze(2)
+    )
 
     assert actual is not None
     assert torch.allclose(actual, expected, atol=1e-6)
@@ -417,10 +466,14 @@ def test_selective_hidden_uses_packed_quantized_lm_head_path() -> None:
     hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
     dense_logits = model.lm_head(hidden[:, :-1, :])
     target_ids = input_ids[:, 1:]
-    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
-        2,
-        target_ids.unsqueeze(2),
-    ).squeeze(2)
+    expected = (
+        F.log_softmax(dense_logits.float(), dim=-1)
+        .gather(
+            2,
+            target_ids.unsqueeze(2),
+        )
+        .squeeze(2)
+    )
 
     assert torch.allclose(actual[target_mask], expected[target_mask], atol=1e-6)
     assert torch.equal(actual[~target_mask], torch.zeros_like(actual[~target_mask]))
@@ -565,7 +618,7 @@ def test_sparse_long_target_mask_skips_suffix_logits_for_hidden_path() -> None:
     helper._train_logits_to_keep_supported = True
     helper._selective_logprob_path_counts = {}
 
-    input_ids = (torch.arange(3008, dtype=torch.long).unsqueeze(0) % 16)
+    input_ids = torch.arange(3008, dtype=torch.long).unsqueeze(0) % 16
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     target_mask = torch.zeros((1, input_ids.shape[1] - 1), dtype=torch.bool)
     target_mask[:, 10] = True
@@ -580,10 +633,14 @@ def test_sparse_long_target_mask_skips_suffix_logits_for_hidden_path() -> None:
     hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
     dense_logits = model.lm_head(hidden[:, :-1, :])
     target_ids = input_ids[:, 1:]
-    expected = F.log_softmax(dense_logits.float(), dim=-1).gather(
-        2,
-        target_ids.unsqueeze(2),
-    ).squeeze(2)
+    expected = (
+        F.log_softmax(dense_logits.float(), dim=-1)
+        .gather(
+            2,
+            target_ids.unsqueeze(2),
+        )
+        .squeeze(2)
+    )
 
     assert actual.shape == target_mask.shape
     assert torch.allclose(actual[target_mask], expected[target_mask])
@@ -595,7 +652,9 @@ def test_sparse_long_target_mask_skips_suffix_logits_for_hidden_path() -> None:
     }
 
 
-def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch) -> None:
+def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(
+    monkeypatch,
+) -> None:
     torch.manual_seed(456)
     model = _TinyHiddenLM()
     helper = object.__new__(LocalTrainHelper)
@@ -650,10 +709,14 @@ def test_unsloth_fused_sft_loss_matches_dense_ce_on_constant_weights(monkeypatch
     hidden = model.model(input_ids, attention_mask=attention_mask).last_hidden_state
     dense_logits = model.lm_head(hidden[:, :-1, :])
     target_ids = input_ids[:, 1:]
-    expected_logprobs = F.log_softmax(dense_logits.float(), dim=-1).gather(
-        2,
-        target_ids.unsqueeze(2),
-    ).squeeze(2)
+    expected_logprobs = (
+        F.log_softmax(dense_logits.float(), dim=-1)
+        .gather(
+            2,
+            target_ids.unsqueeze(2),
+        )
+        .squeeze(2)
+    )
     weights = advantages[:, 1:]
     expected = (-expected_logprobs * weights).sum() / (weights > 0).sum()
 
@@ -709,7 +772,9 @@ def test_unsloth_fused_sft_loss_auto_falls_back_on_runtime_failure(monkeypatch) 
     assert helper._unsloth_fused_ce_runtime_disabled is True
 
 
-def test_unsloth_fused_sft_loss_auto_falls_back_on_hidden_runtime_failure(monkeypatch) -> None:
+def test_unsloth_fused_sft_loss_auto_falls_back_on_hidden_runtime_failure(
+    monkeypatch,
+) -> None:
     helper = object.__new__(LocalTrainHelper)
     helper.train_model = _TinyHiddenLM()
     helper.train_device = "cpu"
@@ -807,7 +872,9 @@ def test_unsloth_fused_sft_loss_auto_reraises_cuda_oom(monkeypatch) -> None:
         )
 
 
-def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(monkeypatch) -> None:
+def test_sft_train_step_auto_retries_after_fused_ce_runtime_failure(
+    monkeypatch,
+) -> None:
     helper = _helper(_ScalarLM())
     helper.train_unsloth_fused_ce = "auto"
     helper._unsloth_fused_ce_fallback_reason = ""
@@ -889,7 +956,9 @@ def test_sft_sequence_train_step_auto_retries_after_fused_ce_runtime_failure(
     assert metrics["local_train_unsloth_fused_ce_batches"] == 0
 
 
-def test_sft_train_step_auto_does_not_retry_unrelated_runtime_failure(monkeypatch) -> None:
+def test_sft_train_step_auto_does_not_retry_unrelated_runtime_failure(
+    monkeypatch,
+) -> None:
     helper = _helper(_ScalarLM())
     helper.train_unsloth_fused_ce = "auto"
     helper._unsloth_fused_ce_runtime_disabled = False

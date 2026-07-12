@@ -143,8 +143,17 @@ def init_wandb(
         "tl_grpo": int(config.tl_grpo),
         "echo_enabled": int(config.echo_enabled),
         "echo_weight": config.echo_weight,
-        "echo_max_tokens_per_step": config.echo_max_tokens_per_step,
-        "echo_max_token_ratio": config.echo_max_token_ratio,
+        "echo_target_retention": config.echo_target_retention,
+        "echo_max_tokens_per_step": (
+            config.echo_max_tokens_per_step
+            if config.echo_target_retention == "bounded"
+            else "disabled"
+        ),
+        "echo_max_token_ratio": (
+            config.echo_max_token_ratio
+            if config.echo_target_retention == "bounded"
+            else "disabled"
+        ),
         "echo_entropy_floor": config.echo_entropy_floor,
         "checkpoint_artifacts": config.checkpoint_artifacts,
     }

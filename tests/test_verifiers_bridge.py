@@ -133,8 +133,7 @@ class _StopAtCapHelper:
     ):
         del temperature, top_p
         return [
-            [([202] * max_tokens, [-0.1] * max_tokens, "stop")]
-            * num_samples
+            [([202] * max_tokens, [-0.1] * max_tokens, "stop")] * num_samples
             for _prompt in prompt_ids_batch
         ]
 
@@ -160,10 +159,32 @@ class _MixedStopLengthHelper:
         del temperature, top_p
         assert len(prompt_ids_batch) == 1
         assert num_samples == 2
-        return [[
-            ([203] * max_tokens, [-0.1] * max_tokens, "stop"),
-            ([204] * max_tokens, [-0.1] * max_tokens, "length"),
-        ]]
+        return [
+            [
+                ([203] * max_tokens, [-0.1] * max_tokens, "stop"),
+                ([204] * max_tokens, [-0.1] * max_tokens, "length"),
+            ]
+        ]
+
+    def sample(self, *args, **kwargs):
+        raise AssertionError("metadata sampling must be preferred")
+
+
+class _StopThenLengthHelper:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def sample_with_finish_reason(
+        self, prompt_ids_batch, num_samples, max_tokens, temperature, top_p
+    ):
+        del temperature, top_p
+        self.calls += 1
+        finish_reason = "stop" if self.calls == 1 else "length"
+        token = 205 if self.calls == 1 else 206
+        return [
+            [([token] * max_tokens, [-0.1] * max_tokens, finish_reason)] * num_samples
+            for _prompt in prompt_ids_batch
+        ]
 
     def sample(self, *args, **kwargs):
         raise AssertionError("metadata sampling must be preferred")
@@ -248,10 +269,6 @@ class _CleanupTrackingMultiTurnEnv:
 
 
 class _RejectAppliedTruncationEnv(_CleanupTrackingMultiTurnEnv):
-    def __init__(self) -> None:
-        super().__init__()
-        self.rubric = _RejectScoringRubric()
-
     async def add_trajectory_step(self, state, step):
         raise AssertionError("truncated action reached add_trajectory_step")
 
@@ -267,6 +284,16 @@ class _PromptOverflowEnv(_RejectAppliedTruncationEnv):
     }
 
 
+class _MixedTruncationEnv(_CleanupTrackingMultiTurnEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.applied_rollouts: list[int] = []
+
+    async def add_trajectory_step(self, state, step):
+        self.applied_rollouts.append(int(state["trajectory_id"]))
+        await super().add_trajectory_step(state, step)
+
+
 class _TwoTurnObservationEnv(_CleanupTrackingMultiTurnEnv):
     async def is_completed(self, state):
         return len(state["trajectory"]) >= 2
@@ -280,6 +307,30 @@ class _TwoTurnObservationEnv(_CleanupTrackingMultiTurnEnv):
             {"role": "assistant", "content": first_completion},
             {"role": "tool", "content": "result"},
         ]
+
+
+class _TwoTurnTruncationEnv(_TwoTurnObservationEnv):
+    def __init__(self) -> None:
+        super().__init__()
+        self.applied_steps = 0
+
+    async def add_trajectory_step(self, state, step):
+        self.applied_steps += 1
+        await super().add_trajectory_step(state, step)
+
+
+class _TwoTurnPromptOverflowEnv(_TwoTurnTruncationEnv):
+    retrain_rollout_contract = {
+        "history_turns": 0,
+        "context_window": 4,
+        "completion_reserve_tokens": 2,
+    }
+
+
+class _GrowingPromptTokenizer(_DummyTokenizer):
+    def apply_chat_template(self, messages, add_generation_prompt=True, tokenize=True):
+        del add_generation_prompt, tokenize
+        return list(range(len(messages) + 1))
 
 
 class _OpenEnvCleanupTrackingMultiTurnEnv(_CleanupTrackingMultiTurnEnv):
@@ -512,7 +563,9 @@ class TestRunMultiturnGroup:
             }
         ]
 
-    def test_token_limited_action_aborts_before_step_score_or_optimizer(self, monkeypatch):
+    def test_token_limited_action_is_unapplied_zero_reward_truncation(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(
             bridge_mod,
             "_require_verifiers",
@@ -520,49 +573,88 @@ class TestRunMultiturnGroup:
         )
         env = _RejectAppliedTruncationEnv()
 
-        with pytest.raises(RuntimeError, match="No action.*environment or optimizer"):
-            run_multiturn_group(
-                env,
-                helper=_length_helper(),
-                tokenizer=_DummyTokenizer(),
-                model_name="dummy-model",
-                prompt=[{"role": "user", "content": "hello"}],
-                answer="",
-                task="task",
-                info={},
-                num_rollouts=1,
-                max_tokens=2,
-                temperature=0.8,
-                top_p=0.95,
-            )
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=_length_helper(),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
 
+        assert rewards == [0.0]
+        assert len(turns[0]) == 1
+        assert turns[0][0].is_truncated is True
+        assert turns[0][0].truncation_reason == "action_token_limit"
+        assert timing.action_token_limit_rejections == 1
         assert env.cleaned == [0]
 
-    def test_mixed_stop_and_length_batch_is_atomic(self, monkeypatch):
+    def test_mixed_stop_and_length_only_applies_complete_action(self, monkeypatch):
         monkeypatch.setattr(
             bridge_mod,
             "_require_verifiers",
             lambda: _FakeVerifiersModule,
         )
-        env = _RejectAppliedTruncationEnv()
+        env = _MixedTruncationEnv()
 
-        with pytest.raises(RuntimeError, match="No action.*environment or optimizer"):
-            run_multiturn_group(
-                env,
-                helper=cast(TrainHelper, _MixedStopLengthHelper()),
-                tokenizer=_DummyTokenizer(),
-                model_name="dummy-model",
-                prompt=[{"role": "user", "content": "hello"}],
-                answer="",
-                task="task",
-                info={},
-                num_rollouts=2,
-                max_tokens=2,
-                temperature=0.8,
-                top_p=0.95,
-            )
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=cast(TrainHelper, _MixedStopLengthHelper()),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=2,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
 
+        assert rewards == [1.0, 0.0]
+        assert [turn.is_truncated for turn in turns[0]] == [False]
+        assert [turn.is_truncated for turn in turns[1]] == [True]
+        assert turns[1][0].truncation_reason == "action_token_limit"
+        assert env.applied_rollouts == [0]
+        assert timing.action_token_limit_rejections == 1
         assert env.cleaned == [0, 1]
+
+    def test_late_token_limit_preserves_completed_turns(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _TwoTurnTruncationEnv()
+
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=cast(TrainHelper, _StopThenLengthHelper()),
+            tokenizer=_RoleTemplateTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
+
+        assert rewards == [0.0]
+        assert [turn.is_truncated for turn in turns[0]] == [False, True]
+        assert turns[0][1].truncation_reason == "action_token_limit"
+        assert turns[0][0].completion_ids == [205, 205]
+        assert env.applied_steps == 1
+        assert timing.action_token_limit_rejections == 1
 
     def test_empty_sampler_group_aborts_before_environment_step(self, monkeypatch):
         monkeypatch.setattr(
@@ -619,7 +711,7 @@ class TestRunMultiturnGroup:
         assert turns[0][0].is_truncated is False
         assert env.cleaned == [0]
 
-    def test_full_history_prompt_overflow_aborts_before_sampling(self, monkeypatch):
+    def test_full_history_prompt_overflow_stops_without_sampling(self, monkeypatch):
         monkeypatch.setattr(
             bridge_mod,
             "_require_verifiers",
@@ -627,23 +719,60 @@ class TestRunMultiturnGroup:
         )
         env = _PromptOverflowEnv()
 
-        with pytest.raises(RuntimeError, match="No action was sampled"):
-            run_multiturn_group(
-                env,
-                helper=cast(TrainHelper, object()),
-                tokenizer=_DummyTokenizer(),
-                model_name="dummy-model",
-                prompt=[{"role": "user", "content": "hello"}],
-                answer="",
-                task="task",
-                info={},
-                num_rollouts=1,
-                max_tokens=2,
-                temperature=0.8,
-                top_p=0.95,
-            )
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=cast(TrainHelper, object()),
+            tokenizer=_DummyTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
 
+        assert rewards == [0.0]
+        assert len(turns[0]) == 1
+        assert turns[0][0].is_truncated is True
+        assert turns[0][0].truncation_reason == "context_window"
+        assert turns[0][0].completion_ids == []
+        assert timing.context_window_exhaustions == 1
         assert env.cleaned == [0]
+
+    def test_late_context_overflow_preserves_completed_turns(self, monkeypatch):
+        monkeypatch.setattr(
+            bridge_mod,
+            "_require_verifiers",
+            lambda: _FakeVerifiersModule,
+        )
+        env = _TwoTurnPromptOverflowEnv()
+
+        rewards, turns, *_rest, timing = run_multiturn_group(
+            env,
+            helper=_helper(),
+            tokenizer=_GrowingPromptTokenizer(),
+            model_name="dummy-model",
+            prompt=[{"role": "user", "content": "hello"}],
+            answer="",
+            task="task",
+            info={},
+            num_rollouts=1,
+            max_tokens=2,
+            temperature=0.8,
+            top_p=0.95,
+        )
+
+        assert rewards == [0.0]
+        assert len(turns[0]) == 2
+        assert turns[0][0].is_truncated is False
+        assert turns[0][1].is_truncated is True
+        assert turns[0][1].truncation_reason == "context_window"
+        assert turns[0][1].completion_ids == []
+        assert env.applied_steps == 1
+        assert timing.context_window_exhaustions == 1
 
     def test_live_completion_reserve_must_match_training_cap(self, monkeypatch):
         monkeypatch.setattr(

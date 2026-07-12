@@ -30,12 +30,16 @@ def print_config_summary(config: TrainConfig) -> None:
     if config.resume_from:
         lines.append(f"  resume_from   : {config.resume_from}")
     if config.echo_enabled:
-        lines.append(
-            "  echo          : "
-            f"on weight={config.echo_weight} "
-            f"cap={config.echo_max_tokens_per_step} "
-            f"ratio={config.echo_max_token_ratio}"
+        echo_summary = (
+            f"  echo          : on weight={config.echo_weight} "
+            f"retention={config.echo_target_retention}"
         )
+        if config.echo_target_retention == "bounded":
+            echo_summary += (
+                f" cap={config.echo_max_tokens_per_step} "
+                f"ratio={config.echo_max_token_ratio}"
+            )
+        lines.append(echo_summary)
     width = max(len(line) for line in lines) + 2
     sep = "-" * width
     print(sep)
