@@ -202,6 +202,7 @@ OPTIONS
         --echo-max-tokens-per-step
         --echo-min-prompt-overlap
         --echo-require-live-observation-bridge
+        --echo-target-retention
         --echo-weight
         --environment-args
         --environment-auto-install

@@ -11,9 +11,11 @@ GPU split mode (multi-GPU): separate devices for inference and training.
 - checkpoint() syncs LoRA weights train -> engine
 """
 
+from concurrent.futures import Future, ThreadPoolExecutor
+
 import torch
 from transformers import AutoModelForCausalLM
-from peft import get_peft_model
+from peft import PeftModel, get_peft_model
 
 from retrain.backends.determinism import establish_strict_determinism
 from retrain.backends.determinism import seed_strict_determinism
@@ -39,7 +41,7 @@ from retrain.backends.local.steps import dispatch as local_step_dispatch
 from retrain.backends.local.memory import (
     normalize_expandable_segments_mode,
 )
-from retrain.inference_engine import create_engine
+from retrain.inference_engine import InferenceEngine, create_engine
 from retrain.models.gemma4 import (
     forward_hidden_states_and_lm_head,
     forward_logits,
@@ -54,6 +56,27 @@ from retrain.models.oscar_qwen3 import (
 
 class LocalTrainHelper:
     """Local GPU backend: pluggable inference engine + PyTorch/PEFT training."""
+
+    # Runtime resources are constructed by local_bootstrap.initialize().  Keep
+    # their ownership explicit here so static analysis sees the same contract
+    # that Python establishes during __init__.
+    infer_device: str
+    train_device: str
+    split_mode: bool
+    _server_engine: bool
+    _external_engine: bool
+    use_amp: bool
+    amp_dtype: torch.dtype
+    _accelerator_metrics: dict[str, object]
+    train_model: PeftModel
+    _train_future: Future[float] | None
+    _pending_loss: float
+    _weight_snapshot: dict[str, torch.Tensor] | None
+    _weights_dirty: bool
+    engine: InferenceEngine
+    _train_executor: ThreadPoolExecutor
+    optimizer: torch.optim.Optimizer
+    scaler: torch.amp.GradScaler
 
     def __init__(
         self,
