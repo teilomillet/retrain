@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
+from retrain.environments.coerce import field as _field
+
 
 class OpenEnvProvenanceError(RuntimeError):
     """A reset observation did not match the configured training task set."""
@@ -193,9 +195,3 @@ def _validate_identity(
             f"{context} changed task_source for the preload seed: expected "
             f"{expected.task_source!r}, got {observed.task_source!r}."
         )
-
-
-def _field(container: object, name: str) -> object:
-    if isinstance(container, Mapping):
-        return cast(Mapping[str, object], container).get(name)
-    return getattr(container, name, None)

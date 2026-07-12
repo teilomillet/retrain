@@ -13,6 +13,10 @@ from renderers import (
     create_renderer,
 )
 
+from retrain.token_sequences import (
+    common_prefix_length as _common_prefix_len,
+    common_suffix_length as _common_suffix_len,
+)
 from retrain.types import PromptMessage
 
 
@@ -161,24 +165,3 @@ def _require_exact_prefix(full_ids: list[int], prefix: list[int]) -> None:
         raise EchoTokenBridgeError(
             "The token bridge changed or truncated model-sampled action tokens."
         )
-
-
-def _common_prefix_len(left: list[int], right: list[int]) -> int:
-    limit = min(len(left), len(right))
-    for idx in range(limit):
-        if left[idx] != right[idx]:
-            return idx
-    return limit
-
-
-def _common_suffix_len(
-    left: list[int],
-    right: list[int],
-    *,
-    prefix_len: int,
-) -> int:
-    limit = min(len(left), len(right)) - prefix_len
-    count = 0
-    while count < limit and left[-1 - count] == right[-1 - count]:
-        count += 1
-    return count

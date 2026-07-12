@@ -53,11 +53,7 @@ def _make_env_client() -> object | None:
     return verifier_client.make()
 
 
-def _coerce_int(raw: object) -> int:
-    try:
-        return int(cast(int | str | float, raw))
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"Expected int-like value, got {raw!r}.") from exc
+_coerce_int = coerce.integer
 
 
 def _coerce_float_list(raw: object) -> list[float]:

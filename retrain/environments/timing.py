@@ -6,6 +6,8 @@ import math
 from collections.abc import Mapping
 from typing import cast
 
+from retrain.environments.coerce import field as _object_field
+
 
 def collect_observation_timing(
     state: dict[str, object],
@@ -42,12 +44,6 @@ def collect_observation_timing(
                 cast(Mapping[object, object], candidate_map),
                 totals,
             )
-
-
-def _object_field(obj: object, key: str) -> object:
-    if isinstance(obj, Mapping):
-        return cast(Mapping[str, object], obj).get(key)
-    return getattr(obj, key, None)
 
 
 def _accumulate_numeric_timing(

@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from collections.abc import Sequence
 from typing import Protocol, cast
 
+from retrain.token_sequences import common_prefix_length as common_prefix_len
+
 
 class EchoTurnLike(Protocol):
     """Minimal turn shape produced by the verifiers bridge."""
@@ -176,16 +178,6 @@ def assert_echo_live_observation_contract(
             + f"positive_final_tokens={positive_final_tokens}, "
             + f"target_retention={target_retention!r}"
         )
-
-
-def common_prefix_len(left: list[int], right: list[int]) -> int:
-    """Return the length of the exact token prefix shared by two sequences."""
-
-    n = min(len(left), len(right))
-    for idx in range(n):
-        if left[idx] != right[idx]:
-            return idx
-    return n
 
 
 def build_rollout_echo_datum(

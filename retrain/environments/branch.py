@@ -6,6 +6,8 @@ import random
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol, cast
 
+from retrain.environments.coerce import reward as _coerce_reward
+
 if TYPE_CHECKING:
     from retrain.backends import TrainHelper
 
@@ -194,15 +196,6 @@ def run(
         valid_ops_so_far.append(operation)
 
     return branch_rewards
-
-
-def _coerce_reward(raw: object) -> float:
-    if raw is None:
-        return 0.0
-    try:
-        return float(cast(int | float | str, raw))
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _primary_continuation(

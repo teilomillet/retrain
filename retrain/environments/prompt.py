@@ -6,17 +6,15 @@ import inspect
 from collections.abc import Mapping
 from typing import cast
 
+from retrain.environments.coerce import integer as _coerce_int
+from retrain.token_sequences import (
+    common_prefix_length as _common_prefix_len,
+    common_suffix_length as _common_suffix_len,
+)
 from retrain.types import PromptLike
 
 
 _ECHO_OBSERVATION_ROLES = frozenset({"tool", "environment", "observation"})
-
-
-def _coerce_int(raw: object) -> int:
-    try:
-        return int(cast(int | str | float, raw))
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"Expected int-like value, got {raw!r}.") from exc
 
 
 def _coerce_int_ids(raw: object) -> list[int]:
@@ -130,30 +128,6 @@ def encode_for_sampling(tokenizer: object, prompt: PromptLike) -> list[int]:
 
 def _is_prefix(prefix: list[int], full: list[int]) -> bool:
     return len(prefix) <= len(full) and full[: len(prefix)] == prefix
-
-
-def _common_prefix_len(left: list[int], right: list[int]) -> int:
-    n = min(len(left), len(right))
-    for idx in range(n):
-        if left[idx] != right[idx]:
-            return idx
-    return n
-
-
-def _common_suffix_len(
-    left: list[int],
-    right: list[int],
-    *,
-    prefix_len: int,
-) -> int:
-    max_suffix = min(len(left), len(right)) - prefix_len
-    count = 0
-    while (
-        count < max_suffix
-        and left[len(left) - 1 - count] == right[len(right) - 1 - count]
-    ):
-        count += 1
-    return count
 
 
 def observation_mask(
