@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +39,19 @@ class _RecordingExecutor:
         self.submissions.append((fn, args))
         self.futures.append(future)
         return future
+
+
+class _BlockingFuture:
+    def __init__(self, result: float) -> None:
+        self._result = result
+        self.result_started = threading.Event()
+        self.release_result = threading.Event()
+
+    def result(self) -> float:
+        self.result_started.set()
+        if not self.release_result.wait(timeout=5):
+            raise AssertionError("timed out waiting to release prior training")
+        return self._result
 
 
 class _PrefixCacheEngine:
@@ -125,6 +139,45 @@ def test_split_sequence_submission_snapshots_caller_owned_rows() -> None:
         ((0.0, -0.1), (0.0, -0.2)),
         ((0.0, 1.0), (0.0, -1.0)),
     )
+
+
+def test_split_train_step_waits_before_updating_optimizer_options() -> None:
+    helper = _split_sequence_helper()
+    tokens = [[1, 2], [3, 4]]
+    logprobs = [[0.0, -0.1], [0.0, -0.2]]
+    advantages = [[0.0, 1.0], [0.0, -1.0]]
+    helper.train_step(
+        tokens,
+        logprobs,
+        advantages,
+        lr=3e-5,
+        weight_decay=0.1,
+    )
+    prior = _BlockingFuture(result=1.25)
+    helper._train_future = prior
+    outcome: list[float] = []
+
+    caller = threading.Thread(
+        target=lambda: outcome.append(
+            helper.train_step(
+                tokens,
+                logprobs,
+                advantages,
+                lr=2e-5,
+                weight_decay=0.2,
+            )
+        )
+    )
+    caller.start()
+    assert prior.result_started.wait(timeout=5)
+
+    assert helper.optimizer.param_groups == [{"lr": 3e-5, "weight_decay": 0.1}]
+
+    prior.release_result.set()
+    caller.join(timeout=5)
+    assert not caller.is_alive()
+    assert outcome == [pytest.approx(1.25)]
+    assert helper.optimizer.param_groups == [{"lr": 2e-5, "weight_decay": 0.2}]
 
 
 def test_checkpoint_does_not_wait_for_unfinished_training() -> None:

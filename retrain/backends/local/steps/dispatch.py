@@ -101,11 +101,12 @@ def train_step(
 
     _apply_plan_metadata(helper, plan)
     helper._clear_inference_prefix_cache()
+    if helper.split_mode:
+        _collect_pending_step(helper)
     _set_optimizer_options(helper, plan.optimizer)
 
     if plan.execution == "sequence":
         if helper.split_mode:
-            _collect_pending_step(helper)
             helper._train_future = helper._train_executor.submit(
                 helper._do_train_sequence_impl,
                 plan.rows.tokens,
@@ -126,7 +127,6 @@ def train_step(
         device=helper.train_device,
     )
     if helper.split_mode:
-        _collect_pending_step(helper)
         helper._train_future = helper._train_executor.submit(
             helper._do_train_impl,
             batch.input_ids,
