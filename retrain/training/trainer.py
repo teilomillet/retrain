@@ -193,7 +193,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # 4. Load tokenizer + lazy token/prompt caches
         # -----------------------------------------------------------------------
         print(f"Loading tokenizer for {config.model} ...")
-        from retrain.training.sft import sft_tokenizer_load_kwargs
+        from retrain.training.sft_data import sft_tokenizer_load_kwargs
 
         tokenizer = AutoTokenizer.from_pretrained(
             config.model,

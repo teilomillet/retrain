@@ -344,7 +344,7 @@ def _check_sft_data(
 
 def _verify_sft_config_data(result: ResumeCheckResult, config: TrainConfig) -> None:
     try:
-        from retrain.training.sft import load_sft_dataset, verify_sft_data_contract
+        from retrain.training.sft_data import load_sft_dataset, verify_sft_data_contract
 
         dataset = load_sft_dataset(config.sft_data_path)
         audit = verify_sft_data_contract(config, dataset.provenance)

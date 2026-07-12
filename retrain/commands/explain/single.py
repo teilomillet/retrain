@@ -38,7 +38,7 @@ def _sft_provenance_info(config: "TrainConfig") -> dict[str, object] | None:
     if not _should_load_sft_provenance(config):
         return None
 
-    from retrain.training.sft import load_sft_dataset, verify_sft_data_contract
+    from retrain.training.sft_data import load_sft_dataset, verify_sft_data_contract
 
     dataset = load_sft_dataset(str(getattr(config, "sft_data_path")))
     audit = verify_sft_data_contract(config, dataset.provenance)

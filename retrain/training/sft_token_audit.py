@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from retrain.io.digest import sha256_file as _file_sha256
+from retrain.training.sft_audit_common import (
+    load_audit_object as _load_audit_object,
+    mapping_field as _mapping_field,
+    sha256_field as _sha256_field,
+    validate_reported_checks as _validate_reported_checks,
+)
+
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
-    from retrain.training.sft import SftDataProvenance
+    from retrain.training.sft_data import SftDataProvenance
 
 
 def effective_sft_token_cap(config: "TrainConfig") -> int:
@@ -58,7 +65,11 @@ def verify_sft_token_audit_contract(
             f"{actual_audit_sha} for {audit_path}"
         )
 
-    audit = _load_audit_object(audit_path, audit_bytes)
+    audit = _load_audit_object(
+        audit_path,
+        audit_bytes,
+        audit_name="SFT token audit",
+    )
     errors: list[str] = []
     _validate_status(audit, errors)
 
@@ -152,29 +163,6 @@ def verify_sft_token_audit_contract(
     }
 
 
-def _load_audit_object(
-    path: Path,
-    raw_bytes: bytes,
-) -> Mapping[str, object]:
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(
-            f"Invalid SFT token audit file {path}: expected UTF-8 JSON."
-        ) from exc
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Invalid SFT token audit file {path}: invalid JSON: {exc.msg}."
-        ) from exc
-    if not isinstance(payload, Mapping):
-        raise ValueError(
-            f"Invalid SFT token audit file {path}: expected a JSON object."
-        )
-    return cast(Mapping[str, object], payload)
-
-
 def _validate_status(
     audit: Mapping[str, object],
     errors: list[str],
@@ -185,28 +173,7 @@ def _validate_status(
     status = audit.get("status")
     if status != "pass":
         errors.append(f"status must be 'pass', got {status!r}")
-
-    failed_checks = audit.get("failed_checks")
-    if failed_checks is not None:
-        if not isinstance(failed_checks, list):
-            errors.append("failed_checks must be a JSON array when present")
-        elif failed_checks:
-            errors.append(f"failed_checks must be empty, got {failed_checks!r}")
-    checks = audit.get("checks")
-    if checks is not None:
-        if not isinstance(checks, Mapping):
-            errors.append("checks must be a JSON object when present")
-        else:
-            non_passing = sorted(
-                str(name)
-                for name, passed in checks.items()
-                if type(passed) is not bool or passed is not True
-            )
-            if non_passing:
-                errors.append(
-                    "checks must contain only true booleans; non-passing "
-                    "keys: " + ", ".join(non_passing)
-                )
+    _validate_reported_checks(audit, errors)
 
 
 def _validate_training_contract(
@@ -413,39 +380,6 @@ def _resolve_project_root(
     return None
 
 
-def _mapping_field(
-    payload: Mapping[str, object],
-    key: str,
-    errors: list[str],
-) -> Mapping[str, object]:
-    value = payload.get(key)
-    if not isinstance(value, Mapping):
-        errors.append(f"{key} must be a JSON object")
-        return {}
-    return cast(Mapping[str, object], value)
-
-
-def _sha256_field(
-    payload: Mapping[str, object],
-    key: str,
-    errors: list[str],
-    *,
-    prefix: str,
-) -> str | None:
-    value = payload.get(key)
-    if not isinstance(value, str):
-        errors.append(f"{prefix}.{key} must be a 64-character SHA256 digest")
-        return None
-    if (
-        value != value.strip().lower()
-        or len(value) != 64
-        or any(ch not in "0123456789abcdef" for ch in value)
-    ):
-        errors.append(f"{prefix}.{key} must be a 64-character SHA256 digest")
-        return None
-    return value
-
-
 def _integer_field(
     payload: Mapping[str, object],
     key: str,
@@ -459,11 +393,3 @@ def _integer_field(
         errors.append(f"{prefix}.{key} must be an integer >= {minimum}")
         return None
     return value
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

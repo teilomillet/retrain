@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import retrain.training.sft as sft_module
+import retrain.training.sft_tokenization as sft_tokenization_module
 from retrain.config import TrainConfig, load_config
 from retrain.training.warmup import (
     load_sft_warmup_data,
@@ -514,7 +515,7 @@ class TestGenericSftJsonl:
                 ]
             )
         ]
-        real_signature = sft_module.inspect.signature
+        real_signature = sft_tokenization_module.inspect.signature
         signature_calls = 0
 
         def counting_signature(obj):
@@ -522,7 +523,11 @@ class TestGenericSftJsonl:
             signature_calls += 1
             return real_signature(obj)
 
-        monkeypatch.setattr(sft_module.inspect, "signature", counting_signature)
+        monkeypatch.setattr(
+            sft_tokenization_module.inspect,
+            "signature",
+            counting_signature,
+        )
 
         tokenize_sft_batch(tokenizer, examples, max_tokens=0)
 

@@ -8,9 +8,16 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from retrain.training.sft_audit_common import (
+    load_audit_object as _load_audit_object,
+    mapping_field as _mapping_field,
+    sha256_field as _sha256_field,
+    validate_reported_checks as _validate_reported_checks,
+)
+
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
-    from retrain.training.sft import SftDataProvenance
+    from retrain.training.sft_data import SftDataProvenance
 
 
 SFT_AUDIT_SCHEMA = "retrain.sft_audit.v1"
@@ -47,7 +54,11 @@ def verify_sft_audit_contract(
             f"for {audit_path}"
         )
 
-    audit = _load_audit_object(audit_path, audit_bytes)
+    audit = _load_audit_object(
+        audit_path,
+        audit_bytes,
+        audit_name="SFT audit",
+    )
     errors: list[str] = []
 
     schema = audit.get("schema")
@@ -113,87 +124,6 @@ def verify_sft_audit_contract(
         "corpus_mode": cast(str, corpus_mode),
         "lineage": dict(lineage),
     }
-
-
-def _load_audit_object(path: Path, raw_bytes: bytes) -> Mapping[str, object]:
-    try:
-        text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(
-            f"Invalid SFT audit file {path}: expected UTF-8 JSON."
-        ) from exc
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Invalid SFT audit file {path}: invalid JSON: {exc.msg}."
-        ) from exc
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"Invalid SFT audit file {path}: expected a JSON object.")
-    return cast(Mapping[str, object], payload)
-
-
-def _validate_reported_checks(
-    audit: Mapping[str, object],
-    errors: list[str],
-) -> None:
-    failed_checks = audit.get("failed_checks")
-    if failed_checks is not None:
-        if not isinstance(failed_checks, list):
-            errors.append("failed_checks must be a JSON array when present")
-        elif failed_checks:
-            errors.append(f"failed_checks must be empty, got {failed_checks!r}")
-
-    checks = audit.get("checks")
-    if checks is None:
-        return
-    if not isinstance(checks, Mapping):
-        errors.append("checks must be a JSON object when present")
-        return
-    non_passing = [
-        str(name)
-        for name, passed in checks.items()
-        if type(passed) is not bool or passed is not True
-    ]
-    if non_passing:
-        errors.append(
-            "checks must contain only true booleans; non-passing keys: "
-            + ", ".join(sorted(non_passing))
-        )
-
-
-def _mapping_field(
-    payload: Mapping[str, object],
-    key: str,
-    errors: list[str],
-) -> Mapping[str, object]:
-    value = payload.get(key)
-    if not isinstance(value, Mapping):
-        errors.append(f"{key} must be a JSON object")
-        return {}
-    return cast(Mapping[str, object], value)
-
-
-def _sha256_field(
-    payload: Mapping[str, object],
-    key: str,
-    errors: list[str],
-    *,
-    prefix: str = "audited_dataset",
-) -> str | None:
-    value = payload.get(key)
-    if not isinstance(value, str):
-        errors.append(f"{prefix}.{key} must be a 64-character SHA256 digest")
-        return None
-    digest = value.strip()
-    if (
-        digest != value
-        or len(digest) != 64
-        or any(ch not in "0123456789abcdef" for ch in digest)
-    ):
-        errors.append(f"{prefix}.{key} must be a 64-character SHA256 digest")
-        return None
-    return digest
 
 
 def _rows_field(

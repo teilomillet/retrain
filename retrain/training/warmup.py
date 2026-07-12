@@ -13,12 +13,9 @@ from retrain.io.log import JsonlLogger
 from retrain.process.metrics import max_rss_mb
 from retrain.training.log import WandbRunLike
 from retrain.training.recoverability import checkpoint_recoverability_wandb_metrics
-from retrain.training.sft import (
+from retrain.training.sft_data import (
     SftExample,
-    SftTokenizedExample,
-    build_sft_tokenized_batch,
     load_sft_dataset,
-    tokenize_sft_dataset,
     verify_sft_data_contract,
 )
 from retrain.training.sft_schedule import (
@@ -27,6 +24,15 @@ from retrain.training.sft_schedule import (
     build_sft_schedule_metrics,
     select_sft_batch_indices,
     verify_sft_resume_schedule_contract,
+)
+from retrain.training.sft_telemetry import (
+    build_sft_step_metrics,
+    build_warmup_sft_wandb_metrics,
+)
+from retrain.training.sft_tokenization import (
+    SftTokenizedExample,
+    build_sft_tokenized_batch,
+    tokenize_sft_dataset,
 )
 
 
@@ -212,27 +218,20 @@ def run_sft_warmup_step(
     )
 
     metrics: dict[str, int | float | str] = {
-        "step": step,
-        "loss": loss,
+        **build_sft_step_metrics(
+            config,
+            step=step,
+            loss=loss,
+            datums=len(batch),
+            total_tokens=tokenized.total_tokens,
+            supervised_tokens=tokenized.supervised_tokens,
+            batch_size=batch_size,
+            example_count=len(sft_data.examples),
+            elapsed=elapsed,
+            lr=effective_lr,
+        ),
         "sft_signal": sft_signal,
-        "phase": "sft",
-        "datums": len(batch),
-        "tokens": tokenized.total_tokens,
-        "supervised_tokens": tokenized.supervised_tokens,
-        "sft_batch_order": config.sft_batch_order,
-        "sft_length_bucket_size": int(config.sft_length_bucket_size),
-        "sft_reshuffle_each_epoch": int(config.sft_reshuffle_each_epoch),
-        "sft_unique_examples_seen": min(
-            len(sft_data.examples),
-            (step + 1) * batch_size,
-        ),
-        "sft_dataset_coverage": min(
-            1.0,
-            ((step + 1) * batch_size) / max(len(sft_data.examples), 1),
-        ),
-        "time_s": round(elapsed, 2),
         "advantage_mode": config.advantage_mode,
-        "lr": effective_lr,
     }
     metrics.update(
         build_sft_schedule_metrics(
@@ -256,35 +255,12 @@ def run_sft_warmup_step(
     steps_logger.log(metrics)
 
     if wandb_run is not None:
-        wandb_metrics: dict[str, int | float | str] = {
-            "train/loss": loss,
-            "train/sft_signal": sft_signal,
-            "train/sft_warmup": 1,
-            "train/step": step,
-            "train/lr": effective_lr,
-            "train/sft/epoch": metrics["sft_epoch"],
-            "train/sft/epoch_end": metrics["sft_epoch_end"],
-            "train/sft/epoch_seed": metrics["sft_epoch_seed"],
-            "train/sft/epoch_end_seed": metrics["sft_epoch_end_seed"],
-            "train/sft/epoch_sample_offset": metrics[
-                "sft_epoch_sample_offset"
-            ],
-            "train/sft/reshuffle_each_epoch": metrics[
-                "sft_reshuffle_each_epoch"
-            ],
-            "train/sft/batch_indices_sha256": metrics[
-                "sft_batch_indices_sha256"
-            ],
-            "train/sft/epoch_start_order_sha256": metrics[
-                "sft_epoch_start_order_sha256"
-            ],
-        }
-        if "sft_epoch_end_order_sha256" in metrics:
-            wandb_metrics["train/sft/epoch_end_order_sha256"] = metrics[
-                "sft_epoch_end_order_sha256"
-            ]
-        wandb_metrics.update(
-            checkpoint_recoverability_wandb_metrics(config, wandb_run)
+        wandb_metrics = build_warmup_sft_wandb_metrics(
+            metrics,
+            recoverability_metrics=checkpoint_recoverability_wandb_metrics(
+                config,
+                wandb_run,
+            ),
         )
         wandb_run.log(wandb_metrics, step=step)
 

@@ -11,7 +11,7 @@ from retrain.training.sft_audit import SFT_AUDIT_SCHEMA
 
 if TYPE_CHECKING:
     from retrain.config import TrainConfig
-    from retrain.training.sft import SftDataProvenance
+    from retrain.training.sft_data import SftDataProvenance
 
 SFT_RESUME_SCHEDULE_CONTRACT_VERSION = 3
 SFT_RESUME_SCHEDULE_ALGORITHM = "absolute_sample_seed_plus_epoch_v1"
