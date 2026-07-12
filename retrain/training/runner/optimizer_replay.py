@@ -26,7 +26,7 @@ from retrain.training.optimizer_batch import (
 from retrain.training.runner.result import (
     TrainingRunResult,
     build_run_result,
-    failed_run_result,
+    guarded_run_result,
 )
 
 
@@ -34,14 +34,7 @@ class OptimizerReplayRunner:
     """Replay one verified local optimizer batch without rollout side effects."""
 
     def run(self, config: TrainConfig) -> TrainingRunResult:
-        try:
-            return self._run(config)
-        except Exception as exc:
-            return failed_run_result(
-                config,
-                failure_status=f"exception:{type(exc).__name__}",
-                error_message=str(exc),
-            )
+        return guarded_run_result(config, lambda: self._run(config))
 
     def _run(self, config: TrainConfig) -> TrainingRunResult:
         from retrain.registry.builtin import get_registry

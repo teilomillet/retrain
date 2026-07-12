@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,3 +108,19 @@ def failed_run_result(
         failure_status=failure_status,
         error_message=error_message,
     )
+
+
+def guarded_run_result(
+    config: TrainConfig,
+    operation: Callable[[], TrainingRunResult],
+) -> TrainingRunResult:
+    """Convert a runner exception into the standard failed result."""
+
+    try:
+        return operation()
+    except Exception as exc:
+        return failed_run_result(
+            config,
+            failure_status=f"exception:{type(exc).__name__}",
+            error_message=str(exc),
+        )
