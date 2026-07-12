@@ -122,10 +122,7 @@ def validate_batch(batch: OptimizerBatch) -> None:
             for token in tokens
         ):
             raise ValueError(f"optimizer-batch row {index} has an invalid token id.")
-        if any(
-            not math.isfinite(float(value))
-            for value in (*logprobs, *advantages)
-        ):
+        if any(not math.isfinite(float(value)) for value in (*logprobs, *advantages)):
             raise ValueError(f"optimizer-batch row {index} has a non-finite float.")
     _validate_echo(batch, rows=rows)
     if not batch.torch_rng.cpu:
@@ -152,9 +149,7 @@ def batch_summary(batch: OptimizerBatch) -> dict[str, int | bool]:
         ),
         "echo_present": batch.echo_advantages is not None,
         "echo_nonzero_tokens": sum(
-            value != 0.0
-            for row in (batch.echo_advantages or [])
-            for value in row
+            value != 0.0 for row in (batch.echo_advantages or []) for value in row
         ),
         "torch_cpu_rng_bytes": len(batch.torch_rng.cpu),
         "torch_cuda_rng_devices": len(batch.torch_rng.cuda),
@@ -182,10 +177,7 @@ def _decode_echo(
     flat_echo = tensors["echo_advantages"].tolist()
     if len(flat_echo) != flat_token_count:
         raise ValueError("optimizer-batch flat ECHO tensor length does not match.")
-    counts = [
-        int(value)
-        for value in tensors["echo_full_observation_counts"].tolist()
-    ]
+    counts = [int(value) for value in tensors["echo_full_observation_counts"].tolist()]
     denominator_values = tensors["echo_rollout_denominator"].tolist()
     if len(denominator_values) != 1:
         raise ValueError("optimizer-batch ECHO denominator must be scalar.")

@@ -88,11 +88,13 @@ def _load_manifest(campaign_dir: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(
             f"Invalid manifest.json in {campaign_dir}: expected JSON object"
-    )
+        )
     return payload
 
 
-def _summarize_run(run_meta: dict[str, object], campaign_dir: Path) -> dict[str, object] | None:
+def _summarize_run(
+    run_meta: dict[str, object], campaign_dir: Path
+) -> dict[str, object] | None:
     run_dir = _resolve_run_dir(campaign_dir, run_meta.get("log_dir"))
     metrics_summary = scan_metrics_file(
         run_dir / "metrics.jsonl",
@@ -146,8 +148,7 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
     condition_rows: list[dict[str, object]] = []
     for idx, condition in enumerate(conditions, start=1):
         matching_runs = [
-            run_meta for run_meta in runs
-            if run_meta.get("condition") == condition
+            run_meta for run_meta in runs if run_meta.get("condition") == condition
         ]
         run_summaries = [
             run_summary
@@ -225,7 +226,8 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             row["final_correct_rate_delta_vs_baseline"] = final_mean - baseline_final
 
     completed_rows = [
-        row for row in condition_rows
+        row
+        for row in condition_rows
         if _required_float(row, "completed_runs") > 0
         and _safe_float(row.get("final_correct_rate_mean")) is not None
     ]
@@ -248,7 +250,9 @@ def summarize_delight_campaign(campaign_dir: Path) -> dict[str, object]:
             "condition_id": best_final["condition_id"],
             "condition": best_final["condition"],
             "final_correct_rate_mean": best_final["final_correct_rate_mean"],
-        } if best_final is not None else None,
+        }
+        if best_final is not None
+        else None,
     }
 
 
@@ -300,11 +304,13 @@ def render_delight_summary(summary: dict[str, object]) -> str:
             f"at {_fmt_percent(best_rate)} final correct rate"
         )
 
-    lines.extend([
-        "",
-        "| ID | Condition | Runs | Final CR | Delta vs C1 | Peak CR | Mean CR | Neutral | Breakthrough | Ordering | Eta |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "| ID | Condition | Runs | Final CR | Delta vs C1 | Peak CR | Mean CR | Neutral | Breakthrough | Ordering | Eta |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
 
     for row in condition_rows:
         final_mean = _safe_float(row.get("final_correct_rate_mean"))

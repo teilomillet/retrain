@@ -57,9 +57,7 @@ def save_state(tree: Tree) -> None:
             "result": ns.result,
             "started_at": ns.started_at,
             "completed_at": ns.completed_at,
-            "annotations": [
-                {"text": a.text, "at": a.at} for a in ns.annotations
-            ],
+            "annotations": [{"text": a.text, "at": a.at} for a in ns.annotations],
         }
 
     fd, tmp = tempfile.mkstemp(dir=str(sp.parent), suffix=".tmp")

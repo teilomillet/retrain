@@ -164,7 +164,9 @@ _BUILTIN_ALGORITHM_SPECS: dict[str, AlgorithmSpec] = {
 _ALGORITHM_SPEC_CACHE: dict[str, AlgorithmSpec] = {}
 
 
-def register_algorithm_mode(name: str, spec_or_fn: AlgorithmSpec | AlgorithmContextFn) -> None:
+def register_algorithm_mode(
+    name: str, spec_or_fn: AlgorithmSpec | AlgorithmContextFn
+) -> None:
     """Register or replace a short-name algorithm mode at runtime."""
     _validate_short_registry_name(name, label="Algorithm mode")
     if isinstance(spec_or_fn, AlgorithmSpec):
@@ -223,9 +225,7 @@ def _load_custom_algorithm_spec(dotted_path: str) -> AlgorithmSpec:
             name=dotted_path,
             compute=obj,  # type: ignore[invalid-argument-type]
             needs_planning=bool(getattr(obj, "needs_planning", False)),
-            uses_sepa_controller=bool(
-                getattr(obj, "uses_sepa_controller", False)
-            ),
+            uses_sepa_controller=bool(getattr(obj, "uses_sepa_controller", False)),
         )
     raise TypeError(
         f"algorithm_mode '{dotted_path}' must resolve to AlgorithmSpec "
@@ -248,6 +248,7 @@ def get_algorithm_spec(algorithm_mode: str) -> AlgorithmSpec:
 
 
 # ---------------------------------------------------------------------------
+
 
 def compute_algorithm_advantages(
     rewards_G: list[float],

@@ -41,7 +41,9 @@ def format_tree(tree: Tree) -> str:
     visited: set[str] = set()
 
     def _render_node(
-        node_id: str, prefix: str, child_prefix: str,
+        node_id: str,
+        prefix: str,
+        child_prefix: str,
     ) -> None:
         if node_id in visited:
             ns = node_state(tree, node_id)
@@ -61,7 +63,7 @@ def format_tree(tree: Tree) -> str:
             parts = [f"{k}={v}" for k, v in ns.result.items()]
             result_str = f"  ({', '.join(parts)})"
 
-        lines.append(f"{prefix}{icon} {node.id}  \"{node.label}\"{result_str}")
+        lines.append(f'{prefix}{icon} {node.id}  "{node.label}"{result_str}')
 
         for branch, children in (
             ("success", node.on_success),
@@ -152,24 +154,24 @@ def format_tree_json(tree: Tree) -> dict:
     for node in tree.nodes:
         ns = node_state(tree, node.id)
         status = effective_status(node.id, tree, parent_map)
-        nodes_out.append({
-            "id": node.id,
-            "label": node.label,
-            "campaign": node.campaign,
-            "status": status,
-            "outcome": ns.outcome,
-            "success": node.success,
-            "on_success": node.on_success,
-            "on_failure": node.on_failure,
-            "related": node.related,
-            "result": ns.result,
-            "campaign_dir": ns.campaign_dir,
-            "annotations": [
-                {"text": a.text, "at": a.at} for a in ns.annotations
-            ],
-            "notes": node.notes,
-            "refs": node.refs,
-        })
+        nodes_out.append(
+            {
+                "id": node.id,
+                "label": node.label,
+                "campaign": node.campaign,
+                "status": status,
+                "outcome": ns.outcome,
+                "success": node.success,
+                "on_success": node.on_success,
+                "on_failure": node.on_failure,
+                "related": node.related,
+                "result": ns.result,
+                "campaign_dir": ns.campaign_dir,
+                "annotations": [{"text": a.text, "at": a.at} for a in ns.annotations],
+                "notes": node.notes,
+                "refs": node.refs,
+            }
+        )
     return {
         "name": tree.name,
         "description": tree.description,

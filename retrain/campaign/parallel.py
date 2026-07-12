@@ -55,7 +55,9 @@ def run_parallel(
                     stderr=stderr_f,
                 )
                 (log_path / "run.pid").write_text(str(proc.pid))
-                print(f"[{finished}/{total}] {run['run_name']} started (pid={proc.pid})")
+                print(
+                    f"[{finished}/{total}] {run['run_name']} started (pid={proc.pid})"
+                )
                 active.append((proc, run, time.monotonic(), stdout_f, stderr_f))
                 if stagger_seconds > 0 and pending and len(active) < max_workers:
                     time.sleep(stagger_seconds)

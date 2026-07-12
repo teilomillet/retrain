@@ -79,9 +79,11 @@ def _normalize_advantage_compute(
     positional = [
         p
         for p in params.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
     if len(positional) == 1 and positional[0].name in {"ctx", "context"}:
+
         def _run_ctx_style(
             rewards: list[float], params_map: Mapping[str, object]
         ) -> list[float]:
@@ -136,9 +138,7 @@ def _coerce_advantages_output(
     return advantages
 
 
-def _as_advantage_spec(
-    name: str, compute: EpisodeAdvantageComputeFn
-) -> AdvantageSpec:
+def _as_advantage_spec(name: str, compute: EpisodeAdvantageComputeFn) -> AdvantageSpec:
     """Build an AdvantageSpec from a one-arg or two-arg callable."""
     return AdvantageSpec(name=name, compute=_normalize_advantage_compute(compute))
 
@@ -154,7 +154,8 @@ def _callable_takes_no_positional_args(obj: object) -> bool:
     positional = [
         p
         for p in sig.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        if p.kind
+        in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     ]
     accepts_varargs = any(
         p.kind is inspect.Parameter.VAR_POSITIONAL for p in sig.parameters.values()

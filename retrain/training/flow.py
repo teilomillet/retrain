@@ -62,6 +62,7 @@ _UNIFORMITY_EPS = 1e-6
 
 # ── Data types ───────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class FlowProbeCase:
     rewards: tuple[float, ...]
@@ -91,8 +92,8 @@ _FLOW_PROBE_CASES: tuple[FlowProbeCase, ...] = (
 
 @dataclass
 class TraceIssue:
-    severity: str   # "error" | "warning"
-    category: str   # "compat" | "probe" | "dep" | "config"
+    severity: str  # "error" | "warning"
+    category: str  # "compat" | "probe" | "dep" | "config"
     message: str
 
 
@@ -108,6 +109,7 @@ class TraceResult:
 
 
 # ── TrainingFlow ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class TrainingFlow:
@@ -142,35 +144,39 @@ class TrainingFlow:
                     self.config.algorithm_mode
                     in _SCALAR_BACKEND_DISALLOWED_BUILTIN_ALGORITHM_MODES
                 ):
-                    issues.append(TraceIssue(
-                        severity="error",
-                        category="compat",
-                        message=(
-                            f"backend='{self.config.backend}' with built-in "
-                            f"algorithm_mode='{self.config.algorithm_mode}' "
-                            "is disallowed: backend accepts one scalar advantage "
-                            "per sample, so built-in token-varying credit assignment "
-                            "would be reduced/lossy. Use a scalar-safe built-in mode "
-                            "(grpo_none|maxrl_none), switch backend, or use a custom "
-                            "dotted algorithm_mode with explicit scalar semantics."
-                        ),
-                    ))
+                    issues.append(
+                        TraceIssue(
+                            severity="error",
+                            category="compat",
+                            message=(
+                                f"backend='{self.config.backend}' with built-in "
+                                f"algorithm_mode='{self.config.algorithm_mode}' "
+                                "is disallowed: backend accepts one scalar advantage "
+                                "per sample, so built-in token-varying credit assignment "
+                                "would be reduced/lossy. Use a scalar-safe built-in mode "
+                                "(grpo_none|maxrl_none), switch backend, or use a custom "
+                                "dotted algorithm_mode with explicit scalar semantics."
+                            ),
+                        )
+                    )
             elif (
                 self.config.transform_mode
                 in _SCALAR_BACKEND_DISALLOWED_BUILTIN_TRANSFORM_MODES
             ):
-                issues.append(TraceIssue(
-                    severity="error",
-                    category="compat",
-                    message=(
-                        f"backend='{self.config.backend}' with built-in "
-                        f"transform_mode='{self.config.transform_mode}' "
-                        "is disallowed: backend accepts one scalar advantage "
-                        "per sample, so built-in token-varying transforms "
-                        "would be reduced/lossy. Use transform_mode='none', "
-                        "switch backend, or use a custom dotted transform_mode."
-                    ),
-                ))
+                issues.append(
+                    TraceIssue(
+                        severity="error",
+                        category="compat",
+                        message=(
+                            f"backend='{self.config.backend}' with built-in "
+                            f"transform_mode='{self.config.transform_mode}' "
+                            "is disallowed: backend accepts one scalar advantage "
+                            "per sample, so built-in token-varying transforms "
+                            "would be reduced/lossy. Use transform_mode='none', "
+                            "switch backend, or use a custom dotted transform_mode."
+                        ),
+                    )
+                )
 
         # Check 2 — synthetic probe
         for case in _FLOW_PROBE_CASES:
@@ -178,29 +184,31 @@ class TrainingFlow:
             try:
                 result = _run_probe(self, case)
             except Exception as exc:
-                issues.append(TraceIssue(
-                    severity="error",
-                    category="probe",
-                    message=(
-                        f"Advantage-flow probe failed: {exc}"
-                    ),
-                ))
+                issues.append(
+                    TraceIssue(
+                        severity="error",
+                        category="probe",
+                        message=(f"Advantage-flow probe failed: {exc}"),
+                    )
+                )
                 continue
 
             if (
                 not self.backend_capabilities.preserves_token_advantages
                 and not _token_advs_are_uniform(result.token_advs)
             ):
-                issues.append(TraceIssue(
-                    severity="error",
-                    category="probe",
-                    message=(
-                        f"backend='{self.config.backend}' does not preserve "
-                        "token-level advantages, but probe detected "
-                        f"token-varying advantages for "
-                        f"'{self.condition_label}'."
-                    ),
-                ))
+                issues.append(
+                    TraceIssue(
+                        severity="error",
+                        category="probe",
+                        message=(
+                            f"backend='{self.config.backend}' does not preserve "
+                            "token-level advantages, but probe detected "
+                            f"token-varying advantages for "
+                            f"'{self.condition_label}'."
+                        ),
+                    )
+                )
                 continue
 
             probe_passed += 1
@@ -208,82 +216,97 @@ class TrainingFlow:
         # Check 2b — ECHO needs token-preserving, strict shared-forward
         # backends because it adds prompt-side supervised token losses next to
         # sampled-token RL losses in the same actor pass.
-        if self.config.echo_enabled and not self.backend_capabilities.preserves_token_advantages:
-            issues.append(TraceIssue(
-                severity="error",
-                category="compat",
-                message=(
-                    f"backend='{self.config.backend}' cannot run ECHO: "
-                    "ECHO requires token-preserving training so prompt-side "
-                    "environment/tool tokens can carry their own loss mask. "
-                    "Use backend='local' or a backend that preserves "
-                    "token-level advantages."
-                ),
-            ))
+        if (
+            self.config.echo_enabled
+            and not self.backend_capabilities.preserves_token_advantages
+        ):
+            issues.append(
+                TraceIssue(
+                    severity="error",
+                    category="compat",
+                    message=(
+                        f"backend='{self.config.backend}' cannot run ECHO: "
+                        "ECHO requires token-preserving training so prompt-side "
+                        "environment/tool tokens can carry their own loss mask. "
+                        "Use backend='local' or a backend that preserves "
+                        "token-level advantages."
+                    ),
+                )
+            )
         elif (
             self.config.echo_enabled
             and not self.backend_capabilities.supports_echo_shared_forward
         ):
-            issues.append(TraceIssue(
-                severity="error",
-                category="compat",
-                message=(
-                    f"backend='{self.config.backend}' cannot run paper-faithful "
-                    "ECHO: ECHO requires RL and environment-token losses from "
-                    "the same actor forward/backward pass. Use backend='local' "
-                    "or a backend that declares supports_echo_shared_forward."
-                ),
-            ))
+            issues.append(
+                TraceIssue(
+                    severity="error",
+                    category="compat",
+                    message=(
+                        f"backend='{self.config.backend}' cannot run paper-faithful "
+                        "ECHO: ECHO requires RL and environment-token losses from "
+                        "the same actor forward/backward pass. Use backend='local' "
+                        "or a backend that declares supports_echo_shared_forward."
+                    ),
+                )
+            )
 
         # Check 3 — planning dependency
         if self.needs_planning and self.config.planning_detector in ("none", ""):
-            issues.append(TraceIssue(
-                severity="warning",
-                category="dep",
-                message=(
-                    "Algorithm/transform needs planning masks but "
-                    f"planning_detector='{self.config.planning_detector}'. "
-                    "Planning masks will be all-zeros."
-                ),
-            ))
+            issues.append(
+                TraceIssue(
+                    severity="warning",
+                    category="dep",
+                    message=(
+                        "Algorithm/transform needs planning masks but "
+                        f"planning_detector='{self.config.planning_detector}'. "
+                        "Planning masks will be all-zeros."
+                    ),
+                )
+            )
 
         if self.config.echo_enabled and self.config.environment_provider not in (
             "verifiers",
             "openenv",
         ):
-            issues.append(TraceIssue(
-                severity="warning",
-                category="config",
-                message=(
-                    "ECHO is enabled, but environment_provider is not "
-                    "'verifiers' or 'openenv'. No prompt-side environment/tool "
-                    "tokens will be extracted unless the training loop "
-                    "receives multi-turn environment turns."
-                ),
-            ))
+            issues.append(
+                TraceIssue(
+                    severity="warning",
+                    category="config",
+                    message=(
+                        "ECHO is enabled, but environment_provider is not "
+                        "'verifiers' or 'openenv'. No prompt-side environment/tool "
+                        "tokens will be extracted unless the training loop "
+                        "receives multi-turn environment turns."
+                    ),
+                )
+            )
 
         # Check 4 — SEPA consistency
         if self.uses_sepa_controller and self.config.sepa_steps <= 0:
-            issues.append(TraceIssue(
-                severity="warning",
-                category="config",
-                message=(
-                    "Transform uses SEPA controller but sepa_steps <= 0. "
-                    "SEPA lambda will stay at 0."
-                ),
-            ))
+            issues.append(
+                TraceIssue(
+                    severity="warning",
+                    category="config",
+                    message=(
+                        "Transform uses SEPA controller but sepa_steps <= 0. "
+                        "SEPA lambda will stay at 0."
+                    ),
+                )
+            )
 
         # Check 5 — backend loss semantics
         if not self.backend_capabilities.reports_sync_loss:
-            issues.append(TraceIssue(
-                severity="warning",
-                category="config",
-                message=(
-                    f"backend='{self.config.backend}' reports placeholder "
-                    "loss values (async design). Loss metrics will not "
-                    "reflect true training loss."
-                ),
-            ))
+            issues.append(
+                TraceIssue(
+                    severity="warning",
+                    category="config",
+                    message=(
+                        f"backend='{self.config.backend}' reports placeholder "
+                        "loss values (async design). Loss metrics will not "
+                        "reflect true training loss."
+                    ),
+                )
+            )
 
         return TraceResult(
             issues=issues,
@@ -293,6 +316,7 @@ class TrainingFlow:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
 
 def _token_advs_are_uniform(
     token_advs: list[list[float]],
@@ -387,6 +411,7 @@ def _condition_label(config: TrainConfig) -> str:
 
 # ── build_flow ───────────────────────────────────────────────────────────
 
+
 def build_flow(config: TrainConfig, *, gpu: bool = False) -> TrainingFlow:
     """Eagerly resolve all training-flow components.
 
@@ -409,10 +434,12 @@ def build_flow(config: TrainConfig, *, gpu: bool = False) -> TrainingFlow:
         uses_sepa = transform_spec.uses_sepa_controller
 
     backend_caps = resolve_backend_capabilities(
-        config.backend, config.backend_options,
+        config.backend,
+        config.backend_options,
     )
     cap_source = backend_capability_source(
-        config.backend, config.backend_options,
+        config.backend,
+        config.backend_options,
     )
     label = _condition_label(config)
 
@@ -427,7 +454,8 @@ def build_flow(config: TrainConfig, *, gpu: bool = False) -> TrainingFlow:
 
         backend = get_registry("backend").create(config.backend, config)
         planning_detector = get_registry("planning_detector").create(
-            config.planning_detector, config,
+            config.planning_detector,
+            config,
         )
         sepa_ctrl = SEPAController(
             sepa_steps=config.sepa_steps,

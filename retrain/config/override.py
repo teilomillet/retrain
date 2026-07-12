@@ -19,7 +19,9 @@ def _coerce_mapping_value(field_name: str, raw: object) -> dict[str, object]:
     """Coerce one mapping-style override."""
     mapping = as_object_table(raw)
     if mapping is None:
-        raise ValueError(f"{field_name} override must be a mapping of key=value options.")
+        raise ValueError(
+            f"{field_name} override must be a mapping of key=value options."
+        )
     return dict(mapping)
 
 
@@ -51,7 +53,9 @@ def _coerce_value(field_name: str, raw: object) -> object:
         if isinstance(raw, bool):
             return raw
         if not isinstance(raw, str):
-            raise ValueError(f"Expected string for {field_name}, got {type(raw).__name__}")
+            raise ValueError(
+                f"Expected string for {field_name}, got {type(raw).__name__}"
+            )
         return raw.lower() in ("1", "true", "yes")
     if ftype is int:
         if field_name == "seed":
@@ -100,8 +104,7 @@ def _parse_param_opt(raw_value: str, flag_name: str) -> tuple[str, object]:
     """Parse one repeatable parameter override from key=value format."""
     if "=" not in raw_value:
         raise ValueError(
-            f"Flag {flag_name} requires key=value "
-            f"(example: {flag_name} alpha=0.2)."
+            f"Flag {flag_name} requires key=value (example: {flag_name} alpha=0.2)."
         )
     key, value = raw_value.split("=", 1)
     key = key.strip()
@@ -113,7 +116,9 @@ def _parse_param_opt(raw_value: str, flag_name: str) -> tuple[str, object]:
         return key, ""
     if v.lower() in {"true", "false"}:
         return key, v.lower() == "true"
-    if (v.startswith("{") and v.endswith("}")) or (v.startswith("[") and v.endswith("]")):
+    if (v.startswith("{") and v.endswith("}")) or (
+        v.startswith("[") and v.endswith("]")
+    ):
         try:
             return key, json.loads(v)
         except json.JSONDecodeError:

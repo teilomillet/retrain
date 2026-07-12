@@ -19,6 +19,7 @@ from retrain.training.backpressure import (
 # Free functions
 # ---------------------------------------------------------------------------
 
+
 class TestUSLThroughput:
     def test_identity_at_p1(self):
         """C(1) = 1 for any sigma, kappa."""
@@ -73,6 +74,7 @@ class TestUSLOptimalP:
 # NoOpBackPressure
 # ---------------------------------------------------------------------------
 
+
 class TestNoOp:
     def test_always_hold(self):
         bp = NoOpBackPressure()
@@ -89,11 +91,14 @@ class TestNoOp:
 # USLBackPressure
 # ---------------------------------------------------------------------------
 
+
 def _make_obs(p: int, lam: float, sigma: float, kappa: float) -> StepObservation:
     """Create observation at concurrency p with throughput from true USL curve."""
     c = usl_throughput(float(p), sigma, kappa)
     tokens = int(lam * c)
-    return StepObservation(step_time_s=1.0, batch_size=p, group_size=1, total_tokens=tokens)
+    return StepObservation(
+        step_time_s=1.0, batch_size=p, group_size=1, total_tokens=tokens
+    )
 
 
 class TestDataStructures:
@@ -105,7 +110,11 @@ class TestDataStructures:
     def test_sliding_window_caps(self):
         bp = USLBackPressure(warmup_steps=0, ema_decay=0.0)
         for _ in range(200):
-            bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000))
+            bp.observe(
+                StepObservation(
+                    step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000
+                )
+            )
         assert len(bp.obs_p) == 100
         assert len(bp.obs_x) == 100
 
@@ -118,20 +127,42 @@ class TestIncrementalSums:
 
         for _ in range(150):
             p = random.randint(2, 50)
-            t = 500.0 * usl_throughput(float(p), 0.06, 0.004) * (1 + random.gauss(0, 0.02))
-            bp.observe(StepObservation(step_time_s=1.0, batch_size=p, group_size=1, total_tokens=int(t)))
+            t = (
+                500.0
+                * usl_throughput(float(p), 0.06, 0.004)
+                * (1 + random.gauss(0, 0.02))
+            )
+            bp.observe(
+                StepObservation(
+                    step_time_s=1.0, batch_size=p, group_size=1, total_tokens=int(t)
+                )
+            )
 
         # Recompute from scratch
         eps = bp.eps
-        ref = {"s0": 0, "s1": 0, "s2": 0, "s3": 0, "s4": 0, "sy": 0, "spy": 0, "sp2y": 0}
+        ref = {
+            "s0": 0,
+            "s1": 0,
+            "s2": 0,
+            "s3": 0,
+            "s4": 0,
+            "sy": 0,
+            "spy": 0,
+            "sp2y": 0,
+        }
         for p, x in zip(bp.obs_p, bp.obs_x):
             if x < eps:
                 continue
             y = p / x
             p2 = p * p
-            ref["s0"] += 1; ref["s1"] += p; ref["s2"] += p2
-            ref["s3"] += p2 * p; ref["s4"] += p2 * p2
-            ref["sy"] += y; ref["spy"] += p * y; ref["sp2y"] += p2 * y
+            ref["s0"] += 1
+            ref["s1"] += p
+            ref["s2"] += p2
+            ref["s3"] += p2 * p
+            ref["s4"] += p2 * p2
+            ref["sy"] += y
+            ref["spy"] += p * y
+            ref["sp2y"] += p2 * y
 
         for name, ref_val in ref.items():
             inc_val = getattr(bp, f"_{name}")
@@ -148,7 +179,11 @@ class TestParameterRecovery:
         for p in [2, 4, 6, 8, 10, 14, 18, 22, 26, 30, 35, 40, 50]:
             c = usl_throughput(float(p), TRUE_S, TRUE_K)
             t = TRUE_L * c * (1 + random.gauss(0, 0.005))
-            bp.observe(StepObservation(step_time_s=1.0, batch_size=p, group_size=1, total_tokens=int(t)))
+            bp.observe(
+                StepObservation(
+                    step_time_s=1.0, batch_size=p, group_size=1, total_tokens=int(t)
+                )
+            )
 
         assert bp.sigma == pytest.approx(TRUE_S, abs=0.02)
         assert bp.kappa == pytest.approx(TRUE_K, abs=0.001)
@@ -160,19 +195,43 @@ class TestParameterRecovery:
 class TestEMA:
     def test_seed_on_first_observation(self):
         bp = USLBackPressure(warmup_steps=0, ema_decay=0.9)
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000
+            )
+        )
         assert bp.ema_throughput == pytest.approx(1000.0)
 
     def test_skip_preserves_ema(self):
         bp = USLBackPressure(warmup_steps=0, ema_decay=0.9)
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000))
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=500, skipped=True))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000
+            )
+        )
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0,
+                batch_size=4,
+                group_size=1,
+                total_tokens=500,
+                skipped=True,
+            )
+        )
         assert bp.ema_throughput == pytest.approx(1000.0)
 
     def test_normal_update(self):
         bp = USLBackPressure(warmup_steps=0, ema_decay=0.9)
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000))
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=4, group_size=1, total_tokens=2000))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0, batch_size=4, group_size=1, total_tokens=1000
+            )
+        )
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0, batch_size=4, group_size=1, total_tokens=2000
+            )
+        )
         assert bp.ema_throughput == pytest.approx(0.9 * 1000 + 0.1 * 2000)
 
 
@@ -209,7 +268,14 @@ class TestRegimeClassification:
             bp.observe(_make_obs(p, lam, sigma, kappa))
         # Inject 1.5× model throughput
         c = usl_throughput(10.0, sigma, kappa)
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=10, group_size=1, total_tokens=int(lam * c * 1.5)))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0,
+                batch_size=10,
+                group_size=1,
+                total_tokens=int(lam * c * 1.5),
+            )
+        )
         assert bp.regime == "memory_bound"
 
     def test_model_based_retrograde(self):
@@ -219,7 +285,14 @@ class TestRegimeClassification:
         for p in [4, 8, 15]:
             bp.observe(_make_obs(p, lam, sigma, kappa))
         c = usl_throughput(10.0, sigma, kappa)
-        bp.observe(StepObservation(step_time_s=1.0, batch_size=10, group_size=1, total_tokens=int(lam * c * 0.5)))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0,
+                batch_size=10,
+                group_size=1,
+                total_tokens=int(lam * c * 0.5),
+            )
+        )
         assert bp.regime == "retrograde"
 
 
@@ -244,7 +317,9 @@ class TestRecommendActions:
 
     def test_low_p_increases_to_safe_target(self):
         """Increase action should target throttle_margin * p*, not 0.5 * p*."""
-        bp = USLBackPressure(warmup_steps=3, ema_decay=0.0, throttle_margin=0.85, increase_margin=0.5)
+        bp = USLBackPressure(
+            warmup_steps=3, ema_decay=0.0, throttle_margin=0.85, increase_margin=0.5
+        )
         for p in [4, 8, 12]:
             bp.observe(_make_obs(p, 1000, 0.05, 0.002))
         bp.observe(_make_obs(2, 1000, 0.05, 0.002))
@@ -292,7 +367,11 @@ class TestReset:
     def test_clears_all_state(self):
         bp = USLBackPressure(warmup_steps=5, min_batch_size=2, min_group_size=4)
         for p in [4, 8, 12, 16, 20, 24]:
-            bp.observe(StepObservation(step_time_s=1.0, batch_size=p, group_size=1, total_tokens=p * 100))
+            bp.observe(
+                StepObservation(
+                    step_time_s=1.0, batch_size=p, group_size=1, total_tokens=p * 100
+                )
+            )
 
         bp.reset()
         assert bp.step_count == 0
@@ -310,16 +389,19 @@ class TestReset:
 
 
 class TestValidation:
-    @pytest.mark.parametrize("kwargs,match", [
-        ({"warmup_steps": -1}, "warmup_steps"),
-        ({"ema_decay": 1.5}, "ema_decay"),
-        ({"throttle_margin": 0.0}, "throttle_margin"),
-        ({"increase_margin": 0.0}, "increase_margin"),
-        ({"min_batch_size": 0}, "min_batch_size"),
-        ({"min_batch_size": 10, "max_batch_size": 5}, "max_batch_size"),
-        ({"min_group_size": 0}, "min_group_size"),
-        ({"min_group_size": 10, "max_group_size": 5}, "max_group_size"),
-    ])
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"warmup_steps": -1}, "warmup_steps"),
+            ({"ema_decay": 1.5}, "ema_decay"),
+            ({"throttle_margin": 0.0}, "throttle_margin"),
+            ({"increase_margin": 0.0}, "increase_margin"),
+            ({"min_batch_size": 0}, "min_batch_size"),
+            ({"min_batch_size": 10, "max_batch_size": 5}, "max_batch_size"),
+            ({"min_group_size": 0}, "min_group_size"),
+            ({"min_group_size": 10, "max_group_size": 5}, "max_group_size"),
+        ],
+    )
     def test_invalid_params(self, kwargs, match):
         with pytest.raises(ValueError, match=match):
             USLBackPressure(**kwargs)

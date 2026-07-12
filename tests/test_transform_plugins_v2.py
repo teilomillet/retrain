@@ -38,10 +38,7 @@ class TestTransformPluginsV2:
     def test_context_transform_shape_validation(self, tmp_path, monkeypatch):
         module_name = "bad_shape_transform_plugin"
         plugin_file = Path(tmp_path) / f"{module_name}.py"
-        plugin_file.write_text(
-            "def my_transform(ctx):\n"
-            "    return [[0.0]]\n"
-        )
+        plugin_file.write_text("def my_transform(ctx):\n    return [[0.0]]\n")
         monkeypatch.syspath_prepend(str(tmp_path))
 
         with pytest.raises(ValueError, match="returned 1 sequences, expected 2"):

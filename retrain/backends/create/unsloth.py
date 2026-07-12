@@ -77,7 +77,9 @@ def create_unsloth(config: "TrainConfig") -> "TrainHelper":
         train_unsloth_fused_ce_torch_compile=bool(
             options.get("train_unsloth_fused_ce_torch_compile", True)
         ),
-        train_compile_selective_ce=str(options.get("train_compile_selective_ce", "off")),
+        train_compile_selective_ce=str(
+            options.get("train_compile_selective_ce", "off")
+        ),
         train_compile_selective_ce_min_tokens=backend_option_int(
             options,
             "train_compile_selective_ce_min_tokens",
@@ -118,9 +120,7 @@ def create_unsloth(config: "TrainConfig") -> "TrainHelper":
         qwen35_gated_delta_chunk_size=str(
             options.get("qwen35_gated_delta_chunk_size", "auto")
         ),
-        qwen35_gated_delta_kernel=str(
-            options.get("qwen35_gated_delta_kernel", "auto")
-        ),
+        qwen35_gated_delta_kernel=str(options.get("qwen35_gated_delta_kernel", "auto")),
     )
     setattr(helper, "sft_loss_fn", effective_sft_loss_fn(config))
     return helper

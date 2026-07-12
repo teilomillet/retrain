@@ -128,7 +128,9 @@ tl_grpo = true
 
 
 class _TinyTokenizer:
-    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+    def apply_chat_template(
+        self, messages, tokenize=False, add_generation_prompt=False
+    ):
         text = "".join(f"<{m['role']}>{m['content']}" for m in messages)
         if add_generation_prompt:
             text += "<assistant>"
@@ -154,9 +156,10 @@ def test_warmup_data_carries_exact_resume_schedule(tmp_path):
     data = load_sft_warmup_data(config, _TinyTokenizer())
 
     assert data is not None
-    assert data.schedule_contract["data_sha256"] == hashlib.sha256(
-        data_path.read_bytes()
-    ).hexdigest()
+    assert (
+        data.schedule_contract["data_sha256"]
+        == hashlib.sha256(data_path.read_bytes()).hexdigest()
+    )
     assert data.schedule_contract["data_rows"] == 1
     assert data.schedule_contract["batch_size"] == 1
     assert data.schedule_contract["max_tokens"] == 640
@@ -337,16 +340,16 @@ class TestGenericSftJsonl:
 
         assert len(dataset.examples) == 1
         assert dataset.provenance.data_path == str(data_path.resolve())
-        assert dataset.provenance.data_sha256 == hashlib.sha256(
-            payload.encode("utf-8")
-        ).hexdigest()
+        assert (
+            dataset.provenance.data_sha256
+            == hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        )
         assert dataset.provenance.data_rows == 1
         assert dataset.provenance.data_bytes == len(payload.encode("utf-8"))
         assert dataset.provenance.data_root == str(data_dir.resolve())
         assert dataset.provenance.data_path_status == "scratch"
         assert any(
-            "scratch/tmp" in warning
-            for warning in dataset.provenance.data_warnings
+            "scratch/tmp" in warning for warning in dataset.provenance.data_warnings
         )
 
     def test_load_sft_dataset_records_git_tracking_status(self, tmp_path):
@@ -421,7 +424,9 @@ class TestGenericSftJsonl:
         assert "sft_data_sha256 mismatch" in message
         assert "sft_data_rows mismatch" in message
 
-    def test_sft_snapshot_recoverability_records_large_data_without_copy(self, tmp_path):
+    def test_sft_snapshot_recoverability_records_large_data_without_copy(
+        self, tmp_path
+    ):
         data_path = tmp_path / "data" / "sft.jsonl"
         data_path.parent.mkdir()
         data_path.write_text(json.dumps({"text": "plain next-token text"}) + "\n")
@@ -438,7 +443,9 @@ class TestGenericSftJsonl:
 
         assert "resolved_config.json" in paths
         assert "sft_data.snapshot.jsonl" not in paths
-        recoverability = json.loads((log_dir / "sft_data_recoverability.json").read_text())
+        recoverability = json.loads(
+            (log_dir / "sft_data_recoverability.json").read_text()
+        )
         assert recoverability["copied"] is False
         assert recoverability["recoverable"] is False
         assert recoverability["source_sha256"] == dataset.provenance.data_sha256
@@ -562,9 +569,7 @@ class TestGenericSftJsonl:
             )
         )
         snapshots = sorted(
-            (hf_home / "hub" / "models--Qwen--Qwen3.5-4B" / "snapshots").glob(
-                "*"
-            )
+            (hf_home / "hub" / "models--Qwen--Qwen3.5-4B" / "snapshots").glob("*")
         )
         snapshot = next(
             (path for path in snapshots if (path / "tokenizer_config.json").is_file()),
@@ -645,7 +650,12 @@ class TestSftDataFormat:
     @pytest.fixture
     def sft_data_path(self):
         """Path to the generated SFT data."""
-        path = Path(__file__).resolve().parent.parent.parent / "python" / "scripts" / "warehouse_sft_data.jsonl"
+        path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "python"
+            / "scripts"
+            / "warehouse_sft_data.jsonl"
+        )
         if not path.exists():
             pytest.skip("SFT data not generated yet (run generate_sft_data.py)")
         return path
@@ -657,16 +667,18 @@ class TestSftDataFormat:
                 try:
                     json.loads(line)
                 except json.JSONDecodeError:
-                    pytest.fail(f"Line {i+1} is not valid JSON: {line[:100]}")
+                    pytest.fail(f"Line {i + 1} is not valid JSON: {line[:100]}")
 
     def test_every_example_has_messages(self, sft_data_path):
         """Every example must have a 'messages' key with 3 messages."""
         with open(sft_data_path) as f:
             for i, line in enumerate(f):
                 data = json.loads(line)
-                assert "messages" in data, f"Line {i+1} missing 'messages'"
+                assert "messages" in data, f"Line {i + 1} missing 'messages'"
                 msgs = data["messages"]
-                assert len(msgs) == 3, f"Line {i+1}: expected 3 messages, got {len(msgs)}"
+                assert len(msgs) == 3, (
+                    f"Line {i + 1}: expected 3 messages, got {len(msgs)}"
+                )
                 assert msgs[0]["role"] == "system"
                 assert msgs[1]["role"] == "user"
                 assert msgs[2]["role"] == "assistant"
@@ -680,8 +692,10 @@ class TestSftDataFormat:
                 try:
                     action = json.loads(action_str)
                 except json.JSONDecodeError:
-                    pytest.fail(f"Line {i+1}: assistant message is not valid JSON: {action_str[:100]}")
-                assert "kind" in action, f"Line {i+1}: action missing 'kind'"
+                    pytest.fail(
+                        f"Line {i + 1}: assistant message is not valid JSON: {action_str[:100]}"
+                    )
+                assert "kind" in action, f"Line {i + 1}: action missing 'kind'"
 
     def test_action_distribution_is_diverse(self, sft_data_path):
         """Actions should cover multiple types, not just one."""
@@ -695,7 +709,9 @@ class TestSftDataFormat:
                 else:
                     action_types.add(action["kind"])
         # Oracle should produce at least 5 different action types
-        assert len(action_types) >= 5, f"Only {len(action_types)} action types: {action_types}"
+        assert len(action_types) >= 5, (
+            f"Only {len(action_types)} action types: {action_types}"
+        )
 
     def test_no_empty_observations(self, sft_data_path):
         """User messages (observations) must not be empty."""
@@ -703,7 +719,9 @@ class TestSftDataFormat:
             for i, line in enumerate(f):
                 data = json.loads(line)
                 obs = data["messages"][1]["content"]
-                assert len(obs) > 10, f"Line {i+1}: observation too short ({len(obs)} chars)"
+                assert len(obs) > 10, (
+                    f"Line {i + 1}: observation too short ({len(obs)} chars)"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -725,17 +743,25 @@ class TestSftAdversarial:
         """A corrupt line in the middle should be detectable."""
         bad_file = tmp_path / "bad.jsonl"
         lines = [
-            json.dumps({"messages": [
-                {"role": "system", "content": "test"},
-                {"role": "user", "content": "obs"},
-                {"role": "assistant", "content": '{"kind":"wait"}'},
-            ]}),
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": "test"},
+                        {"role": "user", "content": "obs"},
+                        {"role": "assistant", "content": '{"kind":"wait"}'},
+                    ]
+                }
+            ),
             "THIS IS NOT JSON",
-            json.dumps({"messages": [
-                {"role": "system", "content": "test"},
-                {"role": "user", "content": "obs2"},
-                {"role": "assistant", "content": '{"kind":"wait"}'},
-            ]}),
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": "test"},
+                        {"role": "user", "content": "obs2"},
+                        {"role": "assistant", "content": '{"kind":"wait"}'},
+                    ]
+                }
+            ),
         ]
         bad_file.write_text("\n".join(lines))
 
@@ -750,11 +776,18 @@ class TestSftAdversarial:
         """Observations with huge JSON should still parse."""
         big_obs = json.dumps({"data": "x" * 50000})
         sft_file = tmp_path / "big.jsonl"
-        sft_file.write_text(json.dumps({"messages": [
-            {"role": "system", "content": "test"},
-            {"role": "user", "content": big_obs},
-            {"role": "assistant", "content": '{"kind":"wait"}'},
-        ]}) + "\n")
+        sft_file.write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": "test"},
+                        {"role": "user", "content": big_obs},
+                        {"role": "assistant", "content": '{"kind":"wait"}'},
+                    ]
+                }
+            )
+            + "\n"
+        )
 
         with open(sft_file) as f:
             data = json.loads(f.readline())
@@ -780,7 +813,12 @@ class TestWarehouseOracleData:
 
     @pytest.fixture
     def sft_data_path(self):
-        path = Path(__file__).resolve().parent.parent.parent / "python" / "scripts" / "warehouse_sft_data.jsonl"
+        path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "python"
+            / "scripts"
+            / "warehouse_sft_data.jsonl"
+        )
         if not path.exists():
             pytest.skip("SFT data not generated yet")
         return path
@@ -791,10 +829,17 @@ class TestWarehouseOracleData:
             for i, line in enumerate(f):
                 data = json.loads(line)
                 action = json.loads(data["messages"][2]["content"])
-                if action.get("kind") == "act" and action["action"].get("type") == "quote_client":
+                if (
+                    action.get("kind") == "act"
+                    and action["action"].get("type") == "quote_client"
+                ):
                     price = action["action"]["price_per_sqm_day_cents"]
-                    assert price > 0, f"Line {i+1}: quote price must be > 0, got {price}"
-                    assert price <= 500, f"Line {i+1}: quote price must be <= 500, got {price}"
+                    assert price > 0, (
+                        f"Line {i + 1}: quote price must be > 0, got {price}"
+                    )
+                    assert price <= 500, (
+                        f"Line {i + 1}: quote price must be <= 500, got {price}"
+                    )
 
     def test_upgrade_facility_appears_early(self, sft_data_path):
         """Oracle should upgrade facility in the first few turns of each episode."""
@@ -807,11 +852,18 @@ class TestWarehouseOracleData:
         for i in range(min(100, len(lines))):
             data = json.loads(lines[i])
             action = json.loads(data["messages"][2]["content"])
-            if action.get("kind") == "act" and action["action"].get("type") == "upgrade_facility":
+            if (
+                action.get("kind") == "act"
+                and action["action"].get("type") == "upgrade_facility"
+            ):
                 first_upgrade = i
                 break
-        assert first_upgrade is not None, "Oracle should upgrade facility in first episode"
-        assert first_upgrade < 10, f"Oracle should upgrade early, but first upgrade at turn {first_upgrade}"
+        assert first_upgrade is not None, (
+            "Oracle should upgrade facility in first episode"
+        )
+        assert first_upgrade < 10, (
+            f"Oracle should upgrade early, but first upgrade at turn {first_upgrade}"
+        )
 
     def test_advantage_mask_zeros_prompt_tokens(self, sft_data_path):
         """Advantages must be 0 for prompt tokens, 1 only for response tokens."""
@@ -826,8 +878,12 @@ class TestWarehouseOracleData:
 
         msgs = ex["messages"]
         prompt_msgs = msgs[:2]
-        full_text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-        prompt_text = tok.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True)
+        full_text = tok.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=False
+        )
+        prompt_text = tok.apply_chat_template(
+            prompt_msgs, tokenize=False, add_generation_prompt=True
+        )
         full_tokens = tok.encode(full_text, add_special_tokens=False)
         prompt_tokens = tok.encode(prompt_text, add_special_tokens=False)
 
@@ -853,13 +909,19 @@ class TestWarehouseOracleData:
             {"role": "system", "content": "You are a manager."},
             {"role": "user", "content": "intro message"},
             {"role": "user", "content": "obs turn 1"},
-            {"role": "assistant", "content": "<think>long reasoning</think>{\"kind\":\"wait\"}"},
+            {
+                "role": "assistant",
+                "content": '<think>long reasoning</think>{"kind":"wait"}',
+            },
             {"role": "user", "content": "obs turn 2"},
-            {"role": "assistant", "content": "<think>more thinking</think>{\"kind\":\"wait\"}"},
+            {
+                "role": "assistant",
+                "content": '<think>more thinking</think>{"kind":"wait"}',
+            },
             {"role": "user", "content": "obs turn 3"},
-            {"role": "assistant", "content": "{\"kind\":\"wait\"}"},
+            {"role": "assistant", "content": '{"kind":"wait"}'},
             {"role": "user", "content": "obs turn 4"},
-            {"role": "assistant", "content": "<think>reasoning</think>{\"kind\":\"act\"}"},
+            {"role": "assistant", "content": '<think>reasoning</think>{"kind":"act"}'},
             {"role": "user", "content": "obs turn 5 (current)"},
         ]
         windowed = env._apply_context_window(messages, max_context_turns=2)
@@ -887,7 +949,10 @@ class TestWarehouseOracleData:
         messages = [
             {"role": "system", "content": "sys"},
             {"role": "user", "content": "obs1"},
-            {"role": "assistant", "content": "<think>secret reasoning</think>{\"kind\":\"wait\"}"},
+            {
+                "role": "assistant",
+                "content": '<think>secret reasoning</think>{"kind":"wait"}',
+            },
             {"role": "user", "content": "obs2"},
         ]
         windowed = env._apply_context_window(messages, max_context_turns=3)
@@ -895,7 +960,9 @@ class TestWarehouseOracleData:
         # The old assistant message should have thinking stripped
         assistant_msgs = [m for m in windowed if m["role"] == "assistant"]
         for msg in assistant_msgs:
-            assert "<think>" not in msg["content"], f"Think tag not stripped: {msg['content'][:50]}"
+            assert "<think>" not in msg["content"], (
+                f"Think tag not stripped: {msg['content'][:50]}"
+            )
 
     def test_context_window_preserves_short_conversations(self):
         """Short conversations (under window) should be unchanged."""

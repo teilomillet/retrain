@@ -108,19 +108,13 @@ def apply_batch_advantage_normalization(
     if std_val < eps:
         result: list[list[float]] = []
         for seq in all_advantages:
-            result.append([
-                (a - mean_val) if a != 0.0 else 0.0
-                for a in seq
-            ])
+            result.append([(a - mean_val) if a != 0.0 else 0.0 for a in seq])
         return result, metrics
 
     denom = std_val + eps
     result = []
     for seq in all_advantages:
-        result.append([
-            (a - mean_val) / denom if a != 0.0 else 0.0
-            for a in seq
-        ])
+        result.append([(a - mean_val) / denom if a != 0.0 else 0.0 for a in seq])
     return result, metrics
 
 
@@ -129,9 +123,7 @@ def apply_batch_advantage_normalization(
 # ---------------------------------------------------------------------------
 
 
-def compute_maxrl_advantages(
-    rewards: list[float], eps: float = 1e-6
-) -> list[float]:
+def compute_maxrl_advantages(rewards: list[float], eps: float = 1e-6) -> list[float]:
     """A_i = (r_i - mean(r)) / (mean(r) + eps). Zero if mean(r) ~ 0."""
     n = len(rewards)
     if n == 0:
@@ -156,9 +148,7 @@ _BUILTIN_ADVANTAGE_SPECS: dict[str, AdvantageSpec] = {
 _ADVANTAGE_SPEC_CACHE: dict[str, AdvantageSpec] = {}
 
 
-def register_advantage_mode(
-    name: str, compute: EpisodeAdvantageComputeFn
-) -> None:
+def register_advantage_mode(name: str, compute: EpisodeAdvantageComputeFn) -> None:
     """Register or replace a short-name episode advantage mode at runtime."""
     _validate_short_registry_name(name, label="Advantage mode")
     _BUILTIN_ADVANTAGE_SPECS[name] = _as_advantage_spec(name, compute)

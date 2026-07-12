@@ -114,9 +114,7 @@ def parse_campaign_conditions(
             for a, t in DEFAULT_CONDITIONS
         ]
     if not isinstance(raw_conditions, list):
-        raise ValueError(
-            f"campaign.conditions must be a list in {campaign_path}"
-        )
+        raise ValueError(f"campaign.conditions must be a list in {campaign_path}")
 
     conditions: list[CampaignCondition] = []
     for idx, raw_condition in enumerate(raw_conditions):
@@ -141,8 +139,7 @@ def parse_campaign_conditions(
             )
 
         overrides = {
-            k: v for k, v in condition.items()
-            if k not in _CONDITION_EXTRA_KEYS
+            k: v for k, v in condition.items() if k not in _CONDITION_EXTRA_KEYS
         }
 
         try:

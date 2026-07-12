@@ -36,6 +36,7 @@ from retrain.advantages import (
 # GRPO
 # ---------------------------------------------------------------------------
 
+
 class TestGRPO:
     def test_basic(self):
         advs = compute_grpo_advantages([1.0, 0.0, 0.0, 1.0])
@@ -60,6 +61,7 @@ class TestGRPO:
 # MaxRL
 # ---------------------------------------------------------------------------
 
+
 class TestMaxRL:
     def test_basic(self):
         advs = compute_maxrl_advantages([1.0, 0.0, 1.0, 0.0])
@@ -78,7 +80,7 @@ class TestMaxRL:
 
     def test_inverse_weighting(self):
         # Higher mean → smaller magnitude advantages
-        advs_low = compute_maxrl_advantages([1.0, 0.0])   # mean=0.5
+        advs_low = compute_maxrl_advantages([1.0, 0.0])  # mean=0.5
         advs_high = compute_maxrl_advantages([1.0, 1.0, 0.0])  # mean=0.667
         # The positive advantage should be smaller when mean is higher
         assert abs(advs_high[0]) < abs(advs_low[0])
@@ -87,6 +89,7 @@ class TestMaxRL:
 # ---------------------------------------------------------------------------
 # GTPO weighting
 # ---------------------------------------------------------------------------
+
 
 class TestGTPO:
     def test_uniform_entropy(self):
@@ -114,6 +117,7 @@ class TestGTPO:
 # ---------------------------------------------------------------------------
 # HICRA
 # ---------------------------------------------------------------------------
+
 
 class TestHICRA:
     def test_planning_tokens_amplified(self):
@@ -145,6 +149,7 @@ class TestHICRA:
 # ---------------------------------------------------------------------------
 # SEPA pooling
 # ---------------------------------------------------------------------------
+
 
 class TestSEPAPooling:
     def test_exec_tokens_pooled(self):
@@ -182,6 +187,7 @@ class TestSEPAPooling:
 # SEPA amplification
 # ---------------------------------------------------------------------------
 
+
 class TestSEPAAmplification:
     def test_exec_tokens_amplified_away_from_mean(self):
         entropies = [0.1, 0.5, 0.9]
@@ -212,6 +218,7 @@ class TestSEPAAmplification:
 # Entropy stats
 # ---------------------------------------------------------------------------
 
+
 class TestEntropyStats:
     def test_basic(self):
         stats = compute_entropy_stats([0.1, 0.3, 0.5], [0.2, 0.4])
@@ -229,6 +236,7 @@ class TestEntropyStats:
 # ---------------------------------------------------------------------------
 # Planning token identification
 # ---------------------------------------------------------------------------
+
 
 class TestPlanningTokens:
     def test_basic_match(self):
@@ -274,6 +282,7 @@ class TestPlanningTokens:
 # ---------------------------------------------------------------------------
 # Entropy masking (Yue et al.)
 # ---------------------------------------------------------------------------
+
 
 class TestEntropyMask:
     def test_basic_masking(self):
@@ -338,8 +347,12 @@ class TestEntropyMask:
             transform_mode="gtpo",
             gtpo_beta=0.1,
         )
-        result_no_mask = compute_composable_advantages(**kwargs, post_process_params={"entropy_mask_rho": 0.0})
-        result_with_mask = compute_composable_advantages(**kwargs, post_process_params={"entropy_mask_rho": 0.0})
+        result_no_mask = compute_composable_advantages(
+            **kwargs, post_process_params={"entropy_mask_rho": 0.0}
+        )
+        result_with_mask = compute_composable_advantages(
+            **kwargs, post_process_params={"entropy_mask_rho": 0.0}
+        )
         assert result_no_mask.token_advs == result_with_mask.token_advs
         assert result_with_mask.extra_metrics == {}
 
@@ -347,6 +360,7 @@ class TestEntropyMask:
 # ---------------------------------------------------------------------------
 # Post-process hooks
 # ---------------------------------------------------------------------------
+
 
 class TestPostProcessHooks:
     def test_post_process_hook_called(self):
@@ -360,6 +374,7 @@ class TestPostProcessHooks:
             return scaled, {"scale_factor": factor}
 
         from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+
         spec = TransformSpec(name="test_hook", use_gtpo=True, post_process=_scale_hook)
         _BUILTIN_TRANSFORM_SPECS["test_hook"] = spec
         _TRANSFORM_SPEC_CACHE.pop("test_hook", None)
@@ -392,10 +407,12 @@ class TestPostProcessHooks:
 
     def test_post_process_wrong_sequence_count_raises(self):
         """Hook returning wrong number of sequences is caught."""
+
         def _bad_hook(all_token_advs, all_raw_entropies, params):
             return all_token_advs[:1], {}  # drop a sequence
 
         from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+
         spec = TransformSpec(name="bad_seq", use_gtpo=True, post_process=_bad_hook)
         _BUILTIN_TRANSFORM_SPECS["bad_seq"] = spec
         _TRANSFORM_SPEC_CACHE.pop("bad_seq", None)
@@ -414,10 +431,12 @@ class TestPostProcessHooks:
 
     def test_post_process_wrong_token_count_raises(self):
         """Hook returning wrong token count for a sequence is caught."""
+
         def _bad_hook(all_token_advs, all_raw_entropies, params):
             return [[0.0], all_token_advs[1]], {}  # truncate first sequence
 
         from retrain.advantages import _BUILTIN_TRANSFORM_SPECS, _TRANSFORM_SPEC_CACHE
+
         spec = TransformSpec(name="bad_tok", use_gtpo=True, post_process=_bad_hook)
         _BUILTIN_TRANSFORM_SPECS["bad_tok"] = spec
         _TRANSFORM_SPEC_CACHE.pop("bad_tok", None)
@@ -438,6 +457,7 @@ class TestPostProcessHooks:
 # ---------------------------------------------------------------------------
 # Composable pipeline
 # ---------------------------------------------------------------------------
+
 
 class TestComposablePipeline:
     def test_grpo_none(self):
@@ -469,7 +489,9 @@ class TestComposablePipeline:
         # All tokens are exec (masks all 0)
         all_surprisals = [0.5, 0.3, 0.8, 0.6]
         expected_mean = sum(all_surprisals) / len(all_surprisals)
-        expected_var = sum((s - expected_mean) ** 2 for s in all_surprisals) / len(all_surprisals)
+        expected_var = sum((s - expected_mean) ** 2 for s in all_surprisals) / len(
+            all_surprisals
+        )
         assert result.stats.exec_mean == pytest.approx(expected_mean)
         assert result.stats.exec_var == pytest.approx(expected_var)
         assert result.stats.exec_count == 4.0
@@ -570,7 +592,9 @@ class TestComposablePipeline:
             "gtpo_sepa_amp_c",
         ):
             result = compute_composable_advantages(
-                rewards, logprobs, masks,
+                rewards,
+                logprobs,
+                masks,
                 advantage_mode="grpo",
                 transform_mode=mode,
                 sepa_lambda=0.5,
@@ -586,8 +610,11 @@ class TestComposablePipeline:
         masks = [[0, 0], [0, 0]]
 
         result = compute_composable_advantages(
-            rewards, logprobs, masks,
-            advantage_mode="grpo", transform_mode="none",
+            rewards,
+            logprobs,
+            masks,
+            advantage_mode="grpo",
+            transform_mode="none",
         )
         grpo_advs = compute_grpo_advantages(rewards)
         for i in range(2):
@@ -657,6 +684,7 @@ class TestComposablePipeline:
 # Numeric guard tests (inf entropy)
 # ---------------------------------------------------------------------------
 
+
 class TestNumericGuards:
     def test_gtpo_weighting_handles_inf(self):
         """apply_gtpo_weighting clamps inf entropies to MAX_ENTROPY."""
@@ -665,9 +693,7 @@ class TestNumericGuards:
 
     def test_sepa_pooling_handles_inf(self):
         """apply_sepa_pooling clamps inf entropies to MAX_ENTROPY."""
-        result = apply_sepa_pooling(
-            [float("inf"), 0.5, 0.3], [0, 0, 0], lambda_t=0.5
-        )
+        result = apply_sepa_pooling([float("inf"), 0.5, 0.3], [0, 0, 0], lambda_t=0.5)
         assert all(math.isfinite(r) for r in result)
 
     def test_entropy_stats_handles_inf(self):
@@ -694,6 +720,7 @@ class TestNumericGuards:
 # ---------------------------------------------------------------------------
 # Uncertainty registry
 # ---------------------------------------------------------------------------
+
 
 class TestUncertaintyRegistry:
     def test_builtin_spec_lookup(self):
@@ -757,6 +784,7 @@ class TestUncertaintyRegistry:
 # Predictive variance signal
 # ---------------------------------------------------------------------------
 
+
 class TestPredictiveVariance:
     def test_value_correctness(self):
         """p * (1 - p) for known logprobs."""
@@ -811,6 +839,7 @@ class TestPredictiveVariance:
 # ---------------------------------------------------------------------------
 # Precomputed Shannon entropy
 # ---------------------------------------------------------------------------
+
 
 class TestPrecomputedShannonEntropy:
     def test_compute_uses_precomputed_entropy(self):

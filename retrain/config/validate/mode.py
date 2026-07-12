@@ -25,9 +25,7 @@ if TYPE_CHECKING:
 
 def collect_mode_errors(config: TrainConfig, errors: list[str]) -> None:
     try:
-        config.uncertainty_kind = canonicalize_uncertainty_kind(
-            config.uncertainty_kind
-        )
+        config.uncertainty_kind = canonicalize_uncertainty_kind(config.uncertainty_kind)
     except ValueError as exc:
         errors.append(str(exc))
 
@@ -62,9 +60,7 @@ def collect_mode_errors(config: TrainConfig, errors: list[str]) -> None:
     for field_name in ("algorithm_params", "advantage_params", "transform_params"):
         value = getattr(config, field_name)
         if not isinstance(value, dict):
-            errors.append(
-                f"{field_name} must be a mapping table."
-            )
+            errors.append(f"{field_name} must be a mapping table.")
 
     uncertainty_overrides: list[tuple[str, str]] = []
     if isinstance(config.transform_params, dict):
@@ -99,9 +95,7 @@ def collect_mode_errors(config: TrainConfig, errors: list[str]) -> None:
             config.algorithm_params["transform_params"] = nested_transform_params
         elif raw_transform_params is not None:
             nested_transform_params = None
-            errors.append(
-                "algorithm_params.transform_params must be a mapping table."
-            )
+            errors.append("algorithm_params.transform_params must be a mapping table.")
         else:
             nested_transform_params = None
         if nested_transform_params is not None:

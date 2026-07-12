@@ -222,7 +222,9 @@ class TestTTTDiscoverRunner:
             condition_label="discover_entropic",
         )
 
-        monkeypatch.setattr("retrain.training.discover.build_flow", lambda config, gpu=True: flow)
+        monkeypatch.setattr(
+            "retrain.training.discover.build_flow", lambda config, gpu=True: flow
+        )
         monkeypatch.setattr(
             "retrain.training.discover._load_discovery_source",
             lambda config: (

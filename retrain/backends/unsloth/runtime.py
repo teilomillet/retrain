@@ -18,7 +18,5 @@ def load_fast_language_model() -> FastLanguageModel:
     try:
         fast_language_model = getattr(unsloth, "FastLanguageModel")
     except AttributeError as exc:
-        raise ImportError(
-            "Unsloth module does not expose FastLanguageModel."
-        ) from exc
+        raise ImportError("Unsloth module does not expose FastLanguageModel.") from exc
     return cast(FastLanguageModel, fast_language_model)

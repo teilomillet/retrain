@@ -58,14 +58,24 @@ def render_prometheus_text(snapshots: list[RunSnapshot]) -> str:
             "gauge",
             lambda s: 1 if s.metrics_present else 0,
         ),
-        ("soma_retrain_latest_step", "Latest completed training step.", "gauge", lambda s: s.latest_step),
+        (
+            "soma_retrain_latest_step",
+            "Latest completed training step.",
+            "gauge",
+            lambda s: s.latest_step,
+        ),
         (
             "soma_retrain_latest_mean_reward",
             "Latest mean reward from metrics.jsonl.",
             "gauge",
             lambda s: s.latest_mean_reward,
         ),
-        ("soma_retrain_latest_loss", "Latest loss from metrics.jsonl.", "gauge", lambda s: s.latest_loss),
+        (
+            "soma_retrain_latest_loss",
+            "Latest loss from metrics.jsonl.",
+            "gauge",
+            lambda s: s.latest_loss,
+        ),
         (
             "soma_retrain_latest_max_token_hit_rate",
             "Latest max-token hit rate from metrics.jsonl.",

@@ -60,9 +60,7 @@ def _run_campaign_summary(
     if not script_path.is_absolute():
         script_path = Path(campaign_path).resolve().parent / script_path
     if not script_path.is_file():
-        raise ValueError(
-            f"campaign.summary_script does not exist: {script_path}"
-        )
+        raise ValueError(f"campaign.summary_script does not exist: {script_path}")
 
     cmd = [sys.executable, str(script_path), str(campaign_dir), *summary_args]
     print(f"Running summary: {' '.join(cmd)}")
@@ -107,15 +105,17 @@ def run_campaign(campaign_path: str) -> str:
         for seed in seeds:
             run_name = f"{condition}_s{seed}"
             log_dir = str(campaign_dir / "runs" / run_name)
-            runs.append({
-                "condition": condition,
-                "advantage_mode": cond.advantage_mode,
-                "transform_mode": cond.transform_mode,
-                "overrides": cond.overrides,
-                "seed": seed,
-                "run_name": run_name,
-                "log_dir": log_dir,
-            })
+            runs.append(
+                {
+                    "condition": condition,
+                    "advantage_mode": cond.advantage_mode,
+                    "transform_mode": cond.transform_mode,
+                    "overrides": cond.overrides,
+                    "seed": seed,
+                    "run_name": run_name,
+                    "log_dir": log_dir,
+                }
+            )
 
     # Write manifest
     manifest: dict[str, object] = {
@@ -134,7 +134,9 @@ def run_campaign(campaign_path: str) -> str:
 
     # Summary
     mode_str = "parallel" if parallel else "sequential"
-    print(f"Campaign: {len(conditions)} conditions x {len(seeds)} seeds = {len(runs)} runs ({mode_str})")
+    print(
+        f"Campaign: {len(conditions)} conditions x {len(seeds)} seeds = {len(runs)} runs ({mode_str})"
+    )
     print(f"  conditions: {', '.join(c.label for c in conditions)}")
     print(f"  seeds:      {seeds}")
     print(f"  max_steps:  {max_steps}")
@@ -170,9 +172,7 @@ def run_campaign(campaign_path: str) -> str:
 
         # Auto-squeeze after ALL parallel runs complete
         if squeeze_cfg:
-            first_ok = next(
-                (r for r in runs if r.get("returncode") == 0), None
-            )
+            first_ok = next((r for r in runs if r.get("returncode") == 0), None)
             if first_ok:
                 adapter_dir = Path(first_ok["log_dir"])
                 # Find adapter path in log dir (convention: adapters subdir or log_dir itself)

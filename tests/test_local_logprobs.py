@@ -88,9 +88,13 @@ def test_shifted_token_logprobs_dense_path_gathers_target_tokens() -> None:
     )
 
     logits = fake_forward_logits(None, input_ids, attention_mask)[:, :-1]
-    expected = torch.log_softmax(logits, dim=-1).gather(
-        2,
-        input_ids[:, 1:].unsqueeze(2),
-    ).squeeze(2)
+    expected = (
+        torch.log_softmax(logits, dim=-1)
+        .gather(
+            2,
+            input_ids[:, 1:].unsqueeze(2),
+        )
+        .squeeze(2)
+    )
     assert torch.allclose(actual, expected)
     assert owner._loss_path_counts == {"dense_logprob": 1}

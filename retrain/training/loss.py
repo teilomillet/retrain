@@ -38,9 +38,8 @@ def compute_policy_loss(
             with torch.no_grad():
                 valid_adv = adv[valid]
                 valid_logp = new_logprobs[valid]
-                cov_values = (
-                    (valid_adv - valid_adv.mean())
-                    * (valid_logp - valid_logp.mean())
+                cov_values = (valid_adv - valid_adv.mean()) * (
+                    valid_logp - valid_logp.mean()
                 )
                 k_tokens = max(
                     1,
@@ -72,15 +71,12 @@ def compute_policy_loss(
         eps_low = clip_eps if clip_eps > 0 else 1.0
         eps_high = clip_eps_high if clip_eps_high > 0 else eps_low
         pg_loss_unclipped = -(ratio * adv)
-        pg_loss_clipped = -(
-            torch.clamp(ratio, 1.0 - eps_low, 1.0 + eps_high) * adv
-        )
+        pg_loss_clipped = -(torch.clamp(ratio, 1.0 - eps_low, 1.0 + eps_high) * adv)
         clip_by_origin = (pg_loss_clipped > pg_loss_unclipped) & (mask > 0)
         per_token_loss = torch.maximum(pg_loss_unclipped, pg_loss_clipped)
         with torch.no_grad():
-            cov_all = (
-                (adv - _masked_mean(adv, mask_float, denom))
-                * (new_logprobs - _masked_mean(new_logprobs, mask_float, denom))
+            cov_all = (adv - _masked_mean(adv, mask_float, denom)) * (
+                new_logprobs - _masked_mean(new_logprobs, mask_float, denom)
             )
             eligible = (
                 (mask > 0)

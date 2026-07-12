@@ -77,7 +77,14 @@ class TestScanRun:
         _write_metrics(
             run_dir / "metrics.jsonl",
             [
-                {"step": 0, "condition": "grpo+none", "loss": 1.0, "mean_reward": 0.1, "correct_rate": 0.05, "step_time_s": 10.0},
+                {
+                    "step": 0,
+                    "condition": "grpo+none",
+                    "loss": 1.0,
+                    "mean_reward": 0.1,
+                    "correct_rate": 0.05,
+                    "step_time_s": 10.0,
+                },
                 {
                     "step": 1,
                     "condition": "grpo+none",
@@ -210,7 +217,16 @@ class TestScanRun:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "grpo+none", "loss": 0.5, "correct_rate": 0.3, "mean_reward": 0.5, "step_time_s": 5.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "grpo+none",
+                    "loss": 0.5,
+                    "correct_rate": 0.3,
+                    "mean_reward": 0.5,
+                    "step_time_s": 5.0,
+                }
+            ],
         )
         _write_trainer_state(
             run_dir / "trainer_state.json",
@@ -248,7 +264,16 @@ class TestScanRun:
         metrics_path = run_dir / "metrics.jsonl"
         _write_metrics(
             metrics_path,
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         # Set mtime to 10 minutes ago
         old_time = time.time() - 600
@@ -262,7 +287,16 @@ class TestScanRun:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         result = scan_run(run_dir)
         assert result is not None
@@ -291,10 +325,30 @@ class TestScanCampaign:
             "max_steps": 100,
             "num_runs": 4,
             "runs": [
-                {"condition": "grpo+none", "seed": 42, "run_name": "grpo+none_s42", "log_dir": str(campaign_dir / "runs" / "grpo+none_s42")},
-                {"condition": "grpo+none", "seed": 101, "run_name": "grpo+none_s101", "log_dir": str(campaign_dir / "runs" / "grpo+none_s101")},
-                {"condition": "maxrl+gtpo_sepa", "seed": 42, "run_name": "maxrl+gtpo_sepa_s42", "log_dir": str(campaign_dir / "runs" / "maxrl+gtpo_sepa_s42")},
-                {"condition": "maxrl+gtpo_sepa", "seed": 101, "run_name": "maxrl+gtpo_sepa_s101", "log_dir": str(campaign_dir / "runs" / "maxrl+gtpo_sepa_s101")},
+                {
+                    "condition": "grpo+none",
+                    "seed": 42,
+                    "run_name": "grpo+none_s42",
+                    "log_dir": str(campaign_dir / "runs" / "grpo+none_s42"),
+                },
+                {
+                    "condition": "grpo+none",
+                    "seed": 101,
+                    "run_name": "grpo+none_s101",
+                    "log_dir": str(campaign_dir / "runs" / "grpo+none_s101"),
+                },
+                {
+                    "condition": "maxrl+gtpo_sepa",
+                    "seed": 42,
+                    "run_name": "maxrl+gtpo_sepa_s42",
+                    "log_dir": str(campaign_dir / "runs" / "maxrl+gtpo_sepa_s42"),
+                },
+                {
+                    "condition": "maxrl+gtpo_sepa",
+                    "seed": 101,
+                    "run_name": "maxrl+gtpo_sepa_s101",
+                    "log_dir": str(campaign_dir / "runs" / "maxrl+gtpo_sepa_s101"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -302,7 +356,16 @@ class TestScanCampaign:
         # Write metrics for 2 of 4 runs
         _write_metrics(
             campaign_dir / "runs" / "grpo+none_s42" / "metrics.jsonl",
-            [{"step": 99, "condition": "grpo+none", "loss": 0.3, "correct_rate": 0.45, "mean_reward": 0.6, "step_time_s": 5.0}],
+            [
+                {
+                    "step": 99,
+                    "condition": "grpo+none",
+                    "loss": 0.3,
+                    "correct_rate": 0.45,
+                    "mean_reward": 0.6,
+                    "step_time_s": 5.0,
+                }
+            ],
         )
         _write_trainer_state(
             campaign_dir / "runs" / "grpo+none_s42" / "trainer_state.json",
@@ -310,7 +373,16 @@ class TestScanCampaign:
         )
         _write_metrics(
             campaign_dir / "runs" / "grpo+none_s101" / "metrics.jsonl",
-            [{"step": 50, "condition": "grpo+none", "loss": 0.5, "correct_rate": 0.30, "mean_reward": 0.4, "step_time_s": 3.0}],
+            [
+                {
+                    "step": 50,
+                    "condition": "grpo+none",
+                    "loss": 0.5,
+                    "correct_rate": 0.30,
+                    "mean_reward": 0.4,
+                    "step_time_s": 3.0,
+                }
+            ],
         )
 
         result = scan_campaign(campaign_dir)
@@ -349,7 +421,16 @@ class TestScanAll:
         run_dir = logs / "train"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 5, "condition": "grpo+none", "loss": 0.7, "correct_rate": 0.2, "mean_reward": 0.3, "step_time_s": 2.0}],
+            [
+                {
+                    "step": 5,
+                    "condition": "grpo+none",
+                    "loss": 0.7,
+                    "correct_rate": 0.2,
+                    "mean_reward": 0.3,
+                    "step_time_s": 2.0,
+                }
+            ],
         )
         runs, campaigns = scan_all(logs)
         assert len(runs) == 1
@@ -359,10 +440,20 @@ class TestScanAll:
     def test_newest_first_sort(self, tmp_path):
         """Campaigns should be sorted newest-first by directory name."""
         logs = tmp_path / "logs"
-        for name in ["campaign_20260101_000000", "campaign_20260225_120000", "campaign_20260115_060000"]:
+        for name in [
+            "campaign_20260101_000000",
+            "campaign_20260225_120000",
+            "campaign_20260115_060000",
+        ]:
             d = logs / name
             d.mkdir(parents=True)
-            manifest = {"conditions": [], "seeds": [], "max_steps": 10, "num_runs": 0, "runs": []}
+            manifest = {
+                "conditions": [],
+                "seeds": [],
+                "max_steps": 10,
+                "num_runs": 0,
+                "runs": [],
+            }
             (d / "manifest.json").write_text(json.dumps(manifest))
 
         _, campaigns = scan_all(logs)
@@ -457,7 +548,14 @@ class TestFormatters:
         assert "done" in text
 
     def test_format_campaign(self):
-        r42 = RunSummary(path="r1", step=99, completed=True, max_steps=100, correct_rate=0.45, wall_time_s=30.0)
+        r42 = RunSummary(
+            path="r1",
+            step=99,
+            completed=True,
+            max_steps=100,
+            correct_rate=0.45,
+            wall_time_s=30.0,
+        )
         camp = CampaignSummary(
             path="logs/campaign_001",
             conditions=["grpo+none"],
@@ -487,8 +585,16 @@ class TestCampaignWithStepProgress:
             "max_steps": 100,
             "num_runs": 2,
             "runs": [
-                {"condition": "cond_a", "seed": 42, "log_dir": str(campaign_dir / "runs" / "cond_a_s42")},
-                {"condition": "cond_a", "seed": 101, "log_dir": str(campaign_dir / "runs" / "cond_a_s101")},
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s42"),
+                },
+                {
+                    "condition": "cond_a",
+                    "seed": 101,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s101"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -496,12 +602,32 @@ class TestCampaignWithStepProgress:
         # Run at step 41 (0-indexed), active
         _write_metrics(
             campaign_dir / "runs" / "cond_a_s42" / "metrics.jsonl",
-            [{"step": i, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(42)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(42)
+            ],
         )
         # Run completed
         _write_metrics(
             campaign_dir / "runs" / "cond_a_s101" / "metrics.jsonl",
-            [{"step": i, "condition": "cond_a", "loss": 0.3, "correct_rate": 0.4, "mean_reward": 0.5, "step_time_s": 1.0} for i in range(100)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.3,
+                    "correct_rate": 0.4,
+                    "mean_reward": 0.5,
+                    "step_time_s": 1.0,
+                }
+                for i in range(100)
+            ],
         )
         _write_trainer_state(
             campaign_dir / "runs" / "cond_a_s101" / "trainer_state.json",
@@ -526,7 +652,11 @@ class TestCampaignWithStepProgress:
             "max_steps": 100,
             "num_runs": 1,
             "runs": [
-                {"condition": "cond_a", "seed": 42, "log_dir": str(campaign_dir / "runs" / "cond_a_s42")},
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s42"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -534,7 +664,17 @@ class TestCampaignWithStepProgress:
         metrics_path = campaign_dir / "runs" / "cond_a_s42" / "metrics.jsonl"
         _write_metrics(
             metrics_path,
-            [{"step": i, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(13)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(13)
+            ],
         )
         # Make it stale
         old_time = time.time() - 600
@@ -555,7 +695,11 @@ class TestCampaignWithStepProgress:
             "max_steps": 100,
             "num_runs": 1,
             "runs": [
-                {"condition": "cond_a", "seed": 42, "log_dir": str(campaign_dir / "runs" / "cond_a_s42")},
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s42"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -613,12 +757,28 @@ class TestActiveFilter:
             "seeds": [42],
             "max_steps": 10,
             "num_runs": 1,
-            "runs": [{"condition": "cond_a", "seed": 42, "log_dir": str(c1 / "runs" / "cond_a_s42")}],
+            "runs": [
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(c1 / "runs" / "cond_a_s42"),
+                }
+            ],
         }
         (c1 / "manifest.json").write_text(json.dumps(m1))
         _write_metrics(
             c1 / "runs" / "cond_a_s42" / "metrics.jsonl",
-            [{"step": i, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(10)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(10)
+            ],
         )
         _write_trainer_state(
             c1 / "runs" / "cond_a_s42" / "trainer_state.json",
@@ -633,12 +793,28 @@ class TestActiveFilter:
             "seeds": [42],
             "max_steps": 100,
             "num_runs": 1,
-            "runs": [{"condition": "cond_b", "seed": 42, "log_dir": str(c2 / "runs" / "cond_b_s42")}],
+            "runs": [
+                {
+                    "condition": "cond_b",
+                    "seed": 42,
+                    "log_dir": str(c2 / "runs" / "cond_b_s42"),
+                }
+            ],
         }
         (c2 / "manifest.json").write_text(json.dumps(m2))
         _write_metrics(
             c2 / "runs" / "cond_b_s42" / "metrics.jsonl",
-            [{"step": i, "condition": "cond_b", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(10)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_b",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(10)
+            ],
         )
 
         _, all_campaigns = scan_all(logs)
@@ -658,13 +834,28 @@ class TestActiveFilter:
             "seeds": [42],
             "max_steps": 100,
             "num_runs": 1,
-            "runs": [{"condition": "cond_a", "seed": 42, "log_dir": str(c1 / "runs" / "cond_a_s42")}],
+            "runs": [
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(c1 / "runs" / "cond_a_s42"),
+                }
+            ],
         }
         (c1 / "manifest.json").write_text(json.dumps(m1))
         metrics_path = c1 / "runs" / "cond_a_s42" / "metrics.jsonl"
         _write_metrics(
             metrics_path,
-            [{"step": 5, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 5,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         # Make stale
         old_time = time.time() - 600
@@ -706,7 +897,16 @@ class TestRunPidFile:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         (run_dir / "run.pid").write_text(str(os.getpid()))
 
@@ -720,7 +920,16 @@ class TestRunPidFile:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         (run_dir / "run.pid").write_text("4000000")
 
@@ -760,7 +969,11 @@ class TestRunnerPidOverridesStaleness:
             "num_runs": 1,
             "runner_pid": os.getpid(),
             "runs": [
-                {"condition": "cond_a", "seed": 42, "log_dir": str(campaign_dir / "runs" / "cond_a_s42")},
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s42"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -768,7 +981,17 @@ class TestRunnerPidOverridesStaleness:
         metrics_path = campaign_dir / "runs" / "cond_a_s42" / "metrics.jsonl"
         _write_metrics(
             metrics_path,
-            [{"step": i, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(13)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(13)
+            ],
         )
         # Make it stale
         old_time = time.time() - 600
@@ -792,7 +1015,11 @@ class TestRunnerPidOverridesStaleness:
             "num_runs": 1,
             "runner_pid": os.getpid(),
             "runs": [
-                {"condition": "cond_a", "seed": 42, "log_dir": str(campaign_dir / "runs" / "cond_a_s42")},
+                {
+                    "condition": "cond_a",
+                    "seed": 42,
+                    "log_dir": str(campaign_dir / "runs" / "cond_a_s42"),
+                },
             ],
         }
         (campaign_dir / "manifest.json").write_text(json.dumps(manifest))
@@ -800,7 +1027,17 @@ class TestRunnerPidOverridesStaleness:
         metrics_path = campaign_dir / "runs" / "cond_a_s42" / "metrics.jsonl"
         _write_metrics(
             metrics_path,
-            [{"step": i, "condition": "cond_a", "loss": 0.5, "correct_rate": 0.1, "mean_reward": 0.2, "step_time_s": 1.0} for i in range(13)],
+            [
+                {
+                    "step": i,
+                    "condition": "cond_a",
+                    "loss": 0.5,
+                    "correct_rate": 0.1,
+                    "mean_reward": 0.2,
+                    "step_time_s": 1.0,
+                }
+                for i in range(13)
+            ],
         )
         old_time = time.time() - 600
         os.utime(metrics_path, (old_time, old_time))
@@ -830,26 +1067,35 @@ class TestFormatSummaryBanner:
     def test_mixed_campaigns(self):
         """Banner counts from a mix of running/partial/done campaigns."""
         # Campaign 1: running — 1 active run, 1 pending
-        c1 = self._make_campaign("running", {
-            "cond_a": {
-                42: RunSummary(path="r1", step=10),
-                101: None,
+        c1 = self._make_campaign(
+            "running",
+            {
+                "cond_a": {
+                    42: RunSummary(path="r1", step=10),
+                    101: None,
+                },
             },
-        })
+        )
         # Campaign 2: partial — 1 done, 1 dead (stale, not alive)
-        c2 = self._make_campaign("partial", {
-            "cond_b": {
-                42: RunSummary(path="r2", step=99, completed=True),
-                101: RunSummary(path="r3", step=5, stale=True),
+        c2 = self._make_campaign(
+            "partial",
+            {
+                "cond_b": {
+                    42: RunSummary(path="r2", step=99, completed=True),
+                    101: RunSummary(path="r3", step=5, stale=True),
+                },
             },
-        })
+        )
         # Campaign 3: done — 2 done
-        c3 = self._make_campaign("done", {
-            "cond_c": {
-                42: RunSummary(path="r4", step=99, completed=True),
-                101: RunSummary(path="r5", step=99, completed=True),
+        c3 = self._make_campaign(
+            "done",
+            {
+                "cond_c": {
+                    42: RunSummary(path="r4", step=99, completed=True),
+                    101: RunSummary(path="r5", step=99, completed=True),
+                },
             },
-        })
+        )
 
         banner = format_summary_banner([c1, c2, c3])
         assert "1 running" in banner
@@ -868,34 +1114,44 @@ class TestFormatSummaryBanner:
 
     def test_stale_but_runner_alive_counts_as_active(self):
         """Stale run with runner_alive should count as active, not dead."""
-        c = self._make_campaign("running", {
-            "cond_a": {
-                42: RunSummary(path="r1", step=5, stale=True),
+        c = self._make_campaign(
+            "running",
+            {
+                "cond_a": {
+                    42: RunSummary(path="r1", step=5, stale=True),
+                },
             },
-        }, runner_alive=True)
+            runner_alive=True,
+        )
         banner = format_summary_banner([c])
         assert "1 active" in banner
         assert "dead" not in banner
 
     def test_stale_but_run_alive_counts_as_active(self):
         """Stale run with run.alive should count as active, not dead."""
-        c = self._make_campaign("running", {
-            "cond_a": {
-                42: RunSummary(path="r1", step=5, stale=True, alive=True),
+        c = self._make_campaign(
+            "running",
+            {
+                "cond_a": {
+                    42: RunSummary(path="r1", step=5, stale=True, alive=True),
+                },
             },
-        })
+        )
         banner = format_summary_banner([c])
         assert "1 active" in banner
         assert "dead" not in banner
 
     def test_dead_campaign_pending_not_counted(self):
         """None slots in dead campaigns are debris, not pending."""
-        c = self._make_campaign("dead", {
-            "cond_a": {
-                42: None,
-                101: None,
+        c = self._make_campaign(
+            "dead",
+            {
+                "cond_a": {
+                    42: None,
+                    101: None,
+                },
             },
-        })
+        )
         banner = format_summary_banner([c])
         assert "pending" not in banner
 
@@ -906,7 +1162,16 @@ class TestTrainerField:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         (run_dir / "run_meta.json").write_text(json.dumps({"trainer": "command"}))
 
@@ -919,7 +1184,16 @@ class TestTrainerField:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
 
         result = scan_run(run_dir)
@@ -975,7 +1249,16 @@ class TestTrainerField:
         run_dir = tmp_path / "run1"
         _write_metrics(
             run_dir / "metrics.jsonl",
-            [{"step": 0, "condition": "test", "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}],
+            [
+                {
+                    "step": 0,
+                    "condition": "test",
+                    "loss": 1.0,
+                    "correct_rate": 0.0,
+                    "mean_reward": 0.0,
+                    "step_time_s": 1.0,
+                }
+            ],
         )
         (run_dir / "run_meta.json").write_text("{invalid json")
 

@@ -98,7 +98,9 @@ def _param_int(params: dict[str, object], key: str, default: int) -> int:
     return default
 
 
-def _load_discovery_source(config) -> tuple[Example, object | None, RewardFunction | None]:
+def _load_discovery_source(
+    config,
+) -> tuple[Example, object | None, RewardFunction | None]:
     """Load the single problem used by TTT-Discover."""
 
     from retrain.registry.builtin import get_registry
@@ -145,10 +147,7 @@ def _score_completion_texts(
 ) -> list[float]:
     if verifiers_env is None:
         assert reward_fn is not None
-        return [
-            float(reward_fn.score(text, answer))
-            for text in completion_texts
-        ]
+        return [float(reward_fn.score(text, answer)) for text in completion_texts]
     return score_singleturn_group(
         verifiers_env,
         prompt=prompt,
@@ -157,6 +156,7 @@ def _score_completion_texts(
         info=info,
         completion_texts=completion_texts,
     )
+
 
 class TTTDiscoverRunner:
     """Online discovery runner with reusable start states."""
@@ -259,7 +259,9 @@ class TTTDiscoverRunner:
                     prompt_obj = build_discovery_prompt(
                         example.prompt,
                         start_text=entry.text,
-                        context_entries=archive.context_entries(entry.entry_id, context_k),
+                        context_entries=archive.context_entries(
+                            entry.entry_id, context_k
+                        ),
                         candidate_char_limit=candidate_char_limit,
                         context_char_limit=context_char_limit,
                     )
@@ -394,12 +396,14 @@ class TTTDiscoverRunner:
                     if reward_tie_stats["eligible"]:
                         batch_reward_tie_eligible_groups += 1
                         batch_reward_tie_groups += int(reward_tie_stats["has_tie"])
-                        batch_reward_uniform_groups += int(reward_tie_stats["is_uniform"])
+                        batch_reward_uniform_groups += int(
+                            reward_tie_stats["is_uniform"]
+                        )
                         batch_reward_tied_pairs += reward_tie_stats["tied_pairs"]
                         batch_reward_total_pairs += reward_tie_stats["total_pairs"]
-                        batch_reward_unique_fraction_sum += (
-                            reward_tie_stats["unique_count"] / len(rewards_G)
-                        )
+                        batch_reward_unique_fraction_sum += reward_tie_stats[
+                            "unique_count"
+                        ] / len(rewards_G)
 
                     if reward_tie_stats["is_uniform"]:
                         if config.batch_advantage_norm:
@@ -436,7 +440,9 @@ class TTTDiscoverRunner:
                     for s_idx, sample in enumerate(decoded_group):
                         seq_advs = adv_result.token_advs[s_idx]
                         full_tokens = list(prompt_ids) + list(sample.token_ids)
-                        padded_logprobs = [0.0] * len(prompt_ids) + list(sample.logprobs)
+                        padded_logprobs = [0.0] * len(prompt_ids) + list(
+                            sample.logprobs
+                        )
                         padded_advantages = [0.0] * len(prompt_ids) + list(seq_advs)
                         all_datum_tokens.append(full_tokens)
                         all_datum_logprobs.append(padded_logprobs)
@@ -574,9 +580,7 @@ class TTTDiscoverRunner:
                 metrics: dict[str, float] = {}
                 if batch_adv_results:
                     keys = {
-                        k
-                        for result in batch_adv_results
-                        for k in result.extra_metrics
+                        k for result in batch_adv_results for k in result.extra_metrics
                     }
                     for key in keys:
                         vals = [

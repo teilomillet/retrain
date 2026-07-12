@@ -15,10 +15,7 @@ _ENERGY_PIPELINE_SPEC = importlib.util.spec_from_file_location(
     "energy_pipeline_test_module",
     _ENERGY_PIPELINE_PATH,
 )
-assert (
-    _ENERGY_PIPELINE_SPEC is not None
-    and _ENERGY_PIPELINE_SPEC.loader is not None
-)
+assert _ENERGY_PIPELINE_SPEC is not None and _ENERGY_PIPELINE_SPEC.loader is not None
 _ENERGY_PIPELINE = importlib.util.module_from_spec(_ENERGY_PIPELINE_SPEC)
 sys.modules[_ENERGY_PIPELINE_SPEC.name] = _ENERGY_PIPELINE
 _ENERGY_PIPELINE_SPEC.loader.exec_module(_ENERGY_PIPELINE)
@@ -61,7 +58,9 @@ def test_approved_export_handoff_resolves_relative_paths(tmp_path):
     assert cfg.approved_export_path == str(export_index_path.resolve())
     assert cfg.model == "candidate/model"
     assert cfg.sft_data_path == str(dataset_path.resolve())
-    assert cfg.artifact_dir == str(export_root / "retrain_runs" / "energy.job123.abc123")
+    assert cfg.artifact_dir == str(
+        export_root / "retrain_runs" / "energy.job123.abc123"
+    )
 
 
 def test_pipeline_config_defaults_match_budgeted_energy_paths() -> None:

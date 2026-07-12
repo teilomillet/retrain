@@ -223,8 +223,7 @@ def test_local_backend_contract(monkeypatch):
         == "auto"
     )
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
-        is False
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"] is False
     )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic_seed"]
@@ -241,7 +240,9 @@ def test_local_backend_contract(monkeypatch):
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_quant_mode"]
         == "k-channel"
     )
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_group_size"] == 0
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_group_size"] == 0
+    )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_oscar_kv_rotation"]
         == "hadamard"
@@ -259,7 +260,9 @@ def test_local_backend_contract(monkeypatch):
         ]
         == "sdpa"
     )
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is True
+    )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "gradient_checkpointing_use_reentrant"
@@ -280,10 +283,17 @@ def test_local_backend_contract(monkeypatch):
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["qwen35_gated_delta_kernel"]
         == "auto"
     )
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_to_transform"] == ""
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_pattern"] == "layers"
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_to_transform"] == ""
+    )
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["lora_layers_pattern"]
+        == "layers"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is True
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "standard"
+    )
 
 
 def test_local_backend_passes_memory_control_options(monkeypatch):
@@ -340,11 +350,13 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         == "off"
     )
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
-        is False
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"] is False
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["sample_use_cache"] is False
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"] is False
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["gradient_checkpointing"]
+        is False
+    )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
             "gradient_checkpointing_use_reentrant"
@@ -362,9 +374,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         is True
     )
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
-            "train_save_on_cpu_pin_memory"
-        ]
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_save_on_cpu_pin_memory"]
         is False
     )
     assert (
@@ -374,9 +384,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         == 512
     )
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
-            "train_save_on_cpu_min_numel"
-        ]
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_save_on_cpu_min_numel"]
         == 65536
     )
     assert (
@@ -396,9 +404,7 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         is False
     )
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"][
-            "train_compile_selective_ce"
-        ]
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["train_compile_selective_ce"]
         == "auto"
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["trust_remote_code"] is True
@@ -424,7 +430,9 @@ def test_local_backend_passes_memory_control_options(monkeypatch):
         == 256
     )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["prefix_caching"] is False
-    assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
+    assert (
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["policy_loss_mode"] == "kl_cov"
+    )
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_percent"] == 0.4
     assert _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["kl_cov_coef"] == 0.5
 
@@ -450,8 +458,7 @@ def test_local_backend_prepares_strict_determinism_before_helper_import(monkeypa
 
     assert prepared == [True]
     assert (
-        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"]
-        is True
+        _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic"] is True
     )
     assert (
         _FakeLocalTrainHelper.init_calls[-1]["kwargs"]["strict_deterministic_seed"]

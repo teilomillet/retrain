@@ -31,9 +31,7 @@ class JsonlLogger:
         self.enabled = enabled
         self.flush_every = max(1, int(flush_every))
         self.flush_interval_s = (
-            None
-            if flush_interval_s is None
-            else max(0.0, float(flush_interval_s))
+            None if flush_interval_s is None else max(0.0, float(flush_interval_s))
         )
         self._path = Path(file_path)
         self._buffer: list[str] = []

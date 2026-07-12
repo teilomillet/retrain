@@ -82,7 +82,9 @@ def patch_qwen35_gated_delta_kernel(
     flash_qla_l2norm: _L2NormFn | None = None
     if raw_mode == "flash_qla":
         if not module_available("flash_qla"):
-            raise RuntimeError("qwen35_gated_delta_kernel='flash_qla' requires flash-qla.")
+            raise RuntimeError(
+                "qwen35_gated_delta_kernel='flash_qla' requires flash-qla."
+            )
         if not _flash_qla_supported(device):
             major, minor = _cuda_capability(device)
             raise RuntimeError(

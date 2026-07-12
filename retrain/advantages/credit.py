@@ -49,10 +49,7 @@ def apply_hicra(
         )
     if alpha == 0.0:
         return list(token_advs)
-    return [
-        a + alpha * abs(a) if m else a
-        for a, m in zip(token_advs, planning_mask)
-    ]
+    return [a + alpha * abs(a) if m else a for a, m in zip(token_advs, planning_mask)]
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +57,7 @@ def apply_hicra(
 # ---------------------------------------------------------------------------
 
 
-def compute_entropy_mask_threshold(
-    all_entropies: list[float], rho: float
-) -> float:
+def compute_entropy_mask_threshold(all_entropies: list[float], rho: float) -> float:
     """Compute the threshold for top-ρ entropy masking.
 
     Returns the entropy value at the ρ-percentile boundary (descending).
@@ -84,10 +79,7 @@ def apply_entropy_mask(
     token_advs: list[float], entropies: list[float], threshold: float
 ) -> list[float]:
     """Zero out advantages for tokens below the entropy threshold."""
-    return [
-        a if e >= threshold else 0.0
-        for a, e in zip(token_advs, entropies)
-    ]
+    return [a if e >= threshold else 0.0 for a, e in zip(token_advs, entropies)]
 
 
 def surprisal_mask_post_process(

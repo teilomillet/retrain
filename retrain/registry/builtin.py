@@ -82,8 +82,7 @@ def get_registry(name: str) -> KnownRegistry:
         return _ALL_REGISTRIES[name]
     except KeyError:
         raise KeyError(
-            f"No registry '{name}'. "
-            f"Available: {sorted(_ALL_REGISTRIES)}"
+            f"No registry '{name}'. Available: {sorted(_ALL_REGISTRIES)}"
         ) from None
 
 
@@ -99,6 +98,7 @@ for _backend_name, _backend_definition in get_builtin_backend_definitions().item
 
 # -- inference_engine (for doctor diagnostics) -----------------------------
 
+
 def _noop_inference_engine(config: TrainConfig) -> None:
     """Reserve inference-engine names; construction lives in retrain.inference_engine."""
 
@@ -109,9 +109,11 @@ for _engine_name in ("pytorch", "max", "vllm", "sglang", "trtllm", "mlx", "opena
 
 # -- reward ----------------------------------------------------------------
 
+
 @reward.register("match")
 def _reward_match(config: TrainConfig) -> RewardFunction:
     from retrain.rewards.boxed import BoxedMathReward
+
     return BoxedMathReward()
 
 
@@ -119,6 +121,7 @@ def _reward_match(config: TrainConfig) -> RewardFunction:
 def _reward_math(config: TrainConfig) -> RewardFunction:
     try:
         from retrain.rewards.verifiers import VerifiersMathReward
+
         return VerifiersMathReward()
     except ImportError:
         raise ImportError(
@@ -131,6 +134,7 @@ def _reward_math(config: TrainConfig) -> RewardFunction:
 def _reward_judge(config: TrainConfig) -> RewardFunction:
     try:
         from retrain.rewards.verifiers import VerifiersJudgeReward
+
         model = config.reward_judge_model or "gpt-4o-mini"
         return VerifiersJudgeReward(model=model)
     except ImportError:
@@ -143,6 +147,7 @@ def _reward_judge(config: TrainConfig) -> RewardFunction:
 @reward.register("custom")
 def _reward_custom(config: TrainConfig) -> RewardFunction:
     from retrain.rewards.custom import CustomReward
+
     if not config.reward_custom_module:
         raise ValueError(
             "Reward type 'custom' requires [reward] custom_module to be set."
@@ -155,9 +160,11 @@ def _reward_custom(config: TrainConfig) -> RewardFunction:
 
 # -- planning_detector ----------------------------------------------------
 
+
 @planning_detector.register("regex")
 def _detector_regex(config: TrainConfig) -> PlanningDetector:
     from retrain.planning.create import create_planning_detector
+
     # Reuse existing factory for regex — it handles strategic_grams parsing
     return create_planning_detector(config)
 
@@ -165,6 +172,7 @@ def _detector_regex(config: TrainConfig) -> PlanningDetector:
 @planning_detector.register("semantic")
 def _detector_semantic(config: TrainConfig) -> PlanningDetector:
     from retrain.planning.semantic import SemanticPlanningDetector
+
     return SemanticPlanningDetector(
         model_name=config.planning_model,
         threshold=config.planning_threshold,
@@ -173,23 +181,28 @@ def _detector_semantic(config: TrainConfig) -> PlanningDetector:
 
 # -- data_source -----------------------------------------------------------
 
+
 @data_source.register("math")
 def _data_math(config: TrainConfig) -> DataSource:
     from retrain.data.math import MathDataSource
+
     return MathDataSource(config.max_examples)
 
 
 # -- backpressure ----------------------------------------------------------
 
+
 @backpressure.register("noop")
 def _bp_noop(config: TrainConfig) -> BackPressure:
     from retrain.training.backpressure import NoOpBackPressure
+
     return NoOpBackPressure()
 
 
 @backpressure.register("usl")
 def _bp_usl(config: TrainConfig) -> BackPressure:
     from retrain.training.backpressure import USLBackPressure
+
     return USLBackPressure(
         warmup_steps=config.bp_warmup_steps,
         ema_decay=config.bp_ema_decay,
@@ -204,9 +217,11 @@ def _bp_usl(config: TrainConfig) -> BackPressure:
 
 # -- trainer ---------------------------------------------------------------
 
+
 @trainer.register("retrain")
 def _trainer_retrain(config: TrainConfig) -> TrainingRunner:
     from retrain.training.runner import RetainRunner
+
     return RetainRunner()
 
 
@@ -220,12 +235,14 @@ def _trainer_optimizer_replay(config: TrainConfig) -> TrainingRunner:
 @trainer.register("sft")
 def _trainer_sft(config: TrainConfig) -> TrainingRunner:
     from retrain.training.runner import SftRunner
+
     return SftRunner()
 
 
 @trainer.register("command")
 def _trainer_command(config: TrainConfig) -> TrainingRunner:
     from retrain.training.runner import CommandRunner
+
     if not config.trainer_command:
         raise ValueError(
             "trainer='command' requires [training] trainer_command to be set."
@@ -236,6 +253,7 @@ def _trainer_command(config: TrainConfig) -> TrainingRunner:
 @trainer.register("ttt_discover")
 def _trainer_ttt_discover(config: TrainConfig) -> TrainingRunner:
     from retrain.training.discover import TTTDiscoverRunner
+
     return TTTDiscoverRunner()
 
 

@@ -63,7 +63,9 @@ def _tail_jsonl(path: Path, limit: int) -> list[JsonObject]:
 def _int_list(value: object) -> list[int]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, int) and not isinstance(item, bool)]
+    return [
+        item for item in value if isinstance(item, int) and not isinstance(item, bool)
+    ]
 
 
 def _infer_phase(run_name: str, metrics_entry: JsonObject | None) -> str:
@@ -149,14 +151,11 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
     sample_result_age_seconds = _event_age(latest_result_row)
     trainer_state = _read_trainer_state(path)
     completed = _completed_from_state(trainer_state)
-    active = (
-        not completed
-        and (
-            (metrics_age_seconds is not None and metrics_age_seconds <= _ACTIVE_AGE_SECONDS)
-            or (
-                sample_event_age_seconds is not None
-                and sample_event_age_seconds <= _ACTIVE_AGE_SECONDS
-            )
+    active = not completed and (
+        (metrics_age_seconds is not None and metrics_age_seconds <= _ACTIVE_AGE_SECONDS)
+        or (
+            sample_event_age_seconds is not None
+            and sample_event_age_seconds <= _ACTIVE_AGE_SECONDS
         )
     )
 
@@ -176,7 +175,9 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
     ]
     result_latencies = [
         latency
-        for latency in (float_or_none(row.get("result_latency_s")) for row in result_rows)
+        for latency in (
+            float_or_none(row.get("result_latency_s")) for row in result_rows
+        )
         if latency is not None
     ]
     error_counter = Counter(
@@ -196,15 +197,39 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         resume_mode=_state_str(trainer_state, "resume_mode"),
         resume_warning=_state_str(trainer_state, "resume_warning"),
         latest_step=int_or_none(latest_metrics.get("step")) if latest_metrics else None,
-        latest_mean_reward=float_or_none(latest_metrics.get("mean_reward")) if latest_metrics else None,
-        latest_loss=float_or_none(latest_metrics.get("loss")) if latest_metrics else None,
-        latest_max_token_hit_rate=float_or_none(latest_metrics.get("max_token_hit_rate")) if latest_metrics else None,
-        latest_invalid_action_rate=float_or_none(latest_metrics.get("behavior/invalid_action_rate")) if latest_metrics else None,
-        latest_avg_response_chars=float_or_none(latest_metrics.get("behavior/avg_response_chars")) if latest_metrics else None,
-        latest_step_time_s=float_or_none(latest_metrics.get("step_time_s")) if latest_metrics else None,
-        latest_tokens_per_second=float_or_none(latest_metrics.get("tokens_per_second")) if latest_metrics else None,
-        latest_sample_share=float_or_none(latest_metrics.get("sample_share")) if latest_metrics else None,
-        latest_train_share=float_or_none(latest_metrics.get("train_share")) if latest_metrics else None,
+        latest_mean_reward=float_or_none(latest_metrics.get("mean_reward"))
+        if latest_metrics
+        else None,
+        latest_loss=float_or_none(latest_metrics.get("loss"))
+        if latest_metrics
+        else None,
+        latest_max_token_hit_rate=float_or_none(
+            latest_metrics.get("max_token_hit_rate")
+        )
+        if latest_metrics
+        else None,
+        latest_invalid_action_rate=float_or_none(
+            latest_metrics.get("behavior/invalid_action_rate")
+        )
+        if latest_metrics
+        else None,
+        latest_avg_response_chars=float_or_none(
+            latest_metrics.get("behavior/avg_response_chars")
+        )
+        if latest_metrics
+        else None,
+        latest_step_time_s=float_or_none(latest_metrics.get("step_time_s"))
+        if latest_metrics
+        else None,
+        latest_tokens_per_second=float_or_none(latest_metrics.get("tokens_per_second"))
+        if latest_metrics
+        else None,
+        latest_sample_share=float_or_none(latest_metrics.get("sample_share"))
+        if latest_metrics
+        else None,
+        latest_train_share=float_or_none(latest_metrics.get("train_share"))
+        if latest_metrics
+        else None,
         latest_train_time_semantics=(
             str(latest_metrics.get("train_time_semantics"))
             if latest_metrics
@@ -221,7 +246,11 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
             if latest_metrics
             else None
         ),
-        latest_process_max_rss_mb=float_or_none(latest_metrics.get("process_max_rss_mb")) if latest_metrics else None,
+        latest_process_max_rss_mb=float_or_none(
+            latest_metrics.get("process_max_rss_mb")
+        )
+        if latest_metrics
+        else None,
         metrics_age_seconds=metrics_age_seconds,
         sample_event_age_seconds=sample_event_age_seconds,
         sample_result_age_seconds=sample_result_age_seconds,
@@ -231,8 +260,12 @@ def _scan_run(path: Path, now: float) -> RunSnapshot | None:
         recent_timeout_count=error_counter.get("TimeoutError", 0),
         recent_prompt_tokens_last=prompt_tokens[-1] if prompt_tokens else None,
         recent_prompt_tokens_max=max(prompt_tokens) if prompt_tokens else None,
-        recent_completion_tokens_last=completion_tokens[-1] if completion_tokens else None,
-        recent_completion_tokens_max=max(completion_tokens) if completion_tokens else None,
+        recent_completion_tokens_last=completion_tokens[-1]
+        if completion_tokens
+        else None,
+        recent_completion_tokens_max=max(completion_tokens)
+        if completion_tokens
+        else None,
         recent_result_latency_last_s=result_latencies[-1] if result_latencies else None,
         recent_result_latency_max_s=max(result_latencies) if result_latencies else None,
     )

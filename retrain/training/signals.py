@@ -85,9 +85,7 @@ def prepare_algorithm_params_for_step(
     prepared = dict(params)
     raw_transform_params = prepared.get("transform_params")
     transform_params = (
-        dict(raw_transform_params)
-        if isinstance(raw_transform_params, Mapping)
-        else {}
+        dict(raw_transform_params) if isinstance(raw_transform_params, Mapping) else {}
     )
     prepared["transform_params"] = prepare_transform_params_for_step(
         transform_params,
@@ -157,10 +155,7 @@ def assert_uniform_completion_advantages_for_non_preserving_backend(
             continue
         prompt_len = 0
         for logprob, advantage in zip(logprobs[:n_tokens], advantages[:n_tokens]):
-            if (
-                abs(logprob) <= _PROMPT_PAD_EPS
-                and abs(advantage) <= _PROMPT_PAD_EPS
-            ):
+            if abs(logprob) <= _PROMPT_PAD_EPS and abs(advantage) <= _PROMPT_PAD_EPS:
                 prompt_len += 1
             else:
                 break

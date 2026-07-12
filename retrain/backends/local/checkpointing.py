@@ -60,8 +60,7 @@ def _apply_layer_policy(model: object, skip_last_n: int) -> CheckpointingMetrics
         for module in layers[-skipped:]:
             setattr(module, "gradient_checkpointing", False)
     enabled = sum(
-        int(bool(getattr(module, "gradient_checkpointing", False)))
-        for module in layers
+        int(bool(getattr(module, "gradient_checkpointing", False))) for module in layers
     )
     return {
         "total": len(layers),

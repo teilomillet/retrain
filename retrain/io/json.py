@@ -43,8 +43,11 @@ def dumps_jsonl(entry: object) -> str:
             entry,
             option=_orjson.OPT_APPEND_NEWLINE,
         ).decode("utf-8")
-    return _json.dumps(
-        entry,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ) + "\n"
+    return (
+        _json.dumps(
+            entry,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )

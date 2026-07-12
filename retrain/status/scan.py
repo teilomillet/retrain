@@ -55,10 +55,7 @@ def campaign_status(
     # If the campaign runner is alive, stale-but-not-completed runs with
     # metrics are still active (slow steps on large models).
     if runner_alive:
-        active += sum(
-            1 for r in runs
-            if not r.completed and r.stale and r.step >= 0
-        )
+        active += sum(1 for r in runs if not r.completed and r.stale and r.step >= 0)
 
     if completed == num_runs and num_runs > 0:
         return "done"

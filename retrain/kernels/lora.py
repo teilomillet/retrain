@@ -240,7 +240,9 @@ def parse_lora_layers_to_transform(spec, layer_count=0):
                 ) from None
 
     if not layers:
-        raise ValueError(f"Invalid lora_layers_to_transform={raw!r}: no layers selected.")
+        raise ValueError(
+            f"Invalid lora_layers_to_transform={raw!r}: no layers selected."
+        )
     if any(layer < 0 for layer in layers):
         raise ValueError(
             f"Invalid lora_layers_to_transform={raw!r}: layer ids must be >= 0."

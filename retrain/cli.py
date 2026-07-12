@@ -114,8 +114,12 @@ def _commands(cli_name: str) -> dict[str, Callable[[list[str]], None]]:
         "help": lambda rest: print_help(cli_name),
         "-h": lambda rest: print_help(cli_name),
         "--help": lambda rest: print_help(cli_name),
-        "man": lambda rest: manual_command.run(rest, cli_name=cli_name, manual_path=_manual_path),
-        "manual": lambda rest: manual_command.run(rest, cli_name=cli_name, manual_path=_manual_path),
+        "man": lambda rest: manual_command.run(
+            rest, cli_name=cli_name, manual_path=_manual_path
+        ),
+        "manual": lambda rest: manual_command.run(
+            rest, cli_name=cli_name, manual_path=_manual_path
+        ),
         "backends": run_backends,
         "doctor": lambda rest: run_doctor(),
         "migrate-config": run_migrate_config,
@@ -157,7 +161,11 @@ def main() -> None:
             config_path = "retrain.toml"
         elif not overrides:
             if sys.stdin.isatty():
-                answer = input("No retrain.toml found. Create one now? [Y/n]: ").strip().lower()
+                answer = (
+                    input("No retrain.toml found. Create one now? [Y/n]: ")
+                    .strip()
+                    .lower()
+                )
                 if answer in ("", "y", "yes"):
                     run_init(cli_name=cli_name)
                     sys.exit(0)
@@ -186,19 +194,19 @@ def main() -> None:
         kind = config_kind(config_path)
         if kind == "campaign":
             from retrain.campaign.run import run_campaign
+
             run_campaign(config_path)
             return
         if kind == "squeeze":
             from retrain.squeeze.run import run_squeeze
+
             run_squeeze(config_path)
             return
     from retrain.config import load_config
     from retrain.registry.builtin import get_registry
 
     pristine_config = (
-        load_config(config_path)
-        if config_path is not None and overrides
-        else None
+        load_config(config_path) if config_path is not None and overrides else None
     )
     config = load_config(config_path, overrides=overrides)
     try:

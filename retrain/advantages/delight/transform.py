@@ -16,6 +16,7 @@ from retrain.advantages.delight.scale import _resolve_delight_norm_mode
 from retrain.advantages.stats import compute_surprisal_stats
 from retrain.advantages.types import AdvantageResult, TransformContext
 
+
 def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
     """Delightful Policy Gradient transform (Osband 2026, arxiv:2603.14608).
 
@@ -51,9 +52,7 @@ def _compute_delight_transform(ctx: TransformContext) -> AdvantageResult:
                 all_exec_surprisals.append(s)
 
     stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
-    extra = _compute_delight_gate_metrics(
-        ctx, all_token_advs, eta, norm_mode=norm_mode
-    )
+    extra = _compute_delight_gate_metrics(ctx, all_token_advs, eta, norm_mode=norm_mode)
     extra.update(eta_metrics)
     return AdvantageResult(all_token_advs, True, stats, extra_metrics=extra)
 
@@ -74,7 +73,11 @@ def _compute_delight_sepa_transform(ctx: TransformContext) -> AdvantageResult:
     eta, eta_metrics = _resolve_delight_eta(ctx, norm_mode=norm_mode)
     # Allow fixed lambda override from transform_params (bypasses SEPA ramp)
     lam_override = ctx.params.get("delight_lambda")
-    lam = float(cast(float, lam_override)) if lam_override is not None else ctx.sepa_lambda
+    lam = (
+        float(cast(float, lam_override))
+        if lam_override is not None
+        else ctx.sepa_lambda
+    )
     all_token_advs: list[list[float]] = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []
@@ -113,7 +116,11 @@ def _compute_hard_delight_transform(ctx: TransformContext) -> AdvantageResult:
     """
     k_frac = float(cast(float, ctx.params.get("delight_k_frac", 0.2)))
     lam_override = ctx.params.get("delight_lambda")
-    lam = float(cast(float, lam_override)) if lam_override is not None else ctx.sepa_lambda
+    lam = (
+        float(cast(float, lam_override))
+        if lam_override is not None
+        else ctx.sepa_lambda
+    )
     all_token_advs: list[list[float]] = []
     all_exec_surprisals: list[float] = []
     all_plan_surprisals: list[float] = []

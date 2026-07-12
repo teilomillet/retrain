@@ -39,8 +39,7 @@ def compute_advantages(
     eps = 1e-8
     if outcome_baseline is not None:
         outcome_advantages: list[float] = [
-            _coerce_reward(state.get("reward")) - outcome_baseline
-            for state in states
+            _coerce_reward(state.get("reward")) - outcome_baseline for state in states
         ]
     else:
         outcome_advantages = [
@@ -246,9 +245,7 @@ def _fork_and_measure(
     alt_snapshot = fork_execute(ops)
     run_data = alt_snapshot.get("run")
     run_map: Mapping[str, object] = (
-        cast(Mapping[str, object], run_data)
-        if isinstance(run_data, Mapping)
-        else {}
+        cast(Mapping[str, object], run_data) if isinstance(run_data, Mapping) else {}
     )
     return _coerce_reward(run_map.get("cumulative_reward", 0.0)) - pre_cumulative
 

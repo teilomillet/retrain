@@ -34,7 +34,9 @@ def test_sft_batch_metrics_describe_logical_padding_and_supervision():
 
 
 def test_effective_sft_loss_preserves_legacy_warmup_default():
-    assert effective_sft_loss_fn(TrainConfig(trainer="retrain")) == "importance_sampling"
+    assert (
+        effective_sft_loss_fn(TrainConfig(trainer="retrain")) == "importance_sampling"
+    )
 
 
 def test_effective_sft_loss_uses_cross_entropy_for_standalone_sft_auto():

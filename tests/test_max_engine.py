@@ -126,9 +126,7 @@ def _install_fake_max(monkeypatch: pytest.MonkeyPatch) -> None:
             PipelineConfig=_FakePipelineConfig,
         ),
         "max.interfaces": _module("max.interfaces"),
-        "max.interfaces.pipeline_variants": _module(
-            "max.interfaces.pipeline_variants"
-        ),
+        "max.interfaces.pipeline_variants": _module("max.interfaces.pipeline_variants"),
         "max.interfaces.pipeline_variants.text_generation": _module(
             "max.interfaces.pipeline_variants.text_generation",
             TextGenerationRequest=_FakeTextGenerationRequest,

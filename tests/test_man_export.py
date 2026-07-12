@@ -21,12 +21,7 @@ class TestParseManual:
         assert sections[2].heading == "COMMANDS"
 
     def test_auto_block_markers_stripped(self):
-        text = (
-            "COMMANDS\n"
-            "<<AUTO:COMMANDS>>\n"
-            "    some content\n"
-            "<<END:AUTO:COMMANDS>>\n"
-        )
+        text = "COMMANDS\n<<AUTO:COMMANDS>>\n    some content\n<<END:AUTO:COMMANDS>>\n"
         sections = parse_manual(text)
         assert len(sections) == 1
         body = "\n".join(sections[0].body_lines)
@@ -146,9 +141,7 @@ class TestToHtml:
         assert "</pre>" in result
 
     def test_html_escaping(self):
-        sections = [
-            ManualSection(heading="TEST", body_lines=["    x < y & z > w"])
-        ]
+        sections = [ManualSection(heading="TEST", body_lines=["    x < y & z > w"])]
         result = to_html(sections)
         assert "&lt;" in result
         assert "&amp;" in result

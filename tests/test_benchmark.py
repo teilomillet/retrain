@@ -246,9 +246,9 @@ def test_mixed_suite_does_not_average_enqueue_with_synchronous_train_time(
     summary = summarize_suite(root)
 
     assert summary.aggregates["mean_train_time_s"].mean == pytest.approx(1.0)
-    assert summary.aggregates[
-        "mean_train_submit_enqueue_time_s"
-    ].mean == pytest.approx(0.1)
+    assert summary.aggregates["mean_train_submit_enqueue_time_s"].mean == pytest.approx(
+        0.1
+    )
 
 
 def test_summarize_run_aggregates_multiple_rows(tmp_path) -> None:
@@ -361,7 +361,9 @@ def test_run_benchmark_suite_creates_repeated_runs(tmp_path) -> None:
     assert suite.aggregates["mean_rollout_env_dbt_total_s"].mean == 0.25
 
     payload = suite.to_dict()
-    summary_json = json.loads((tmp_path / "bench" / "benchmark_summary.json").read_text())
+    summary_json = json.loads(
+        (tmp_path / "bench" / "benchmark_summary.json").read_text()
+    )
     runs_payload = cast(list[dict[str, object]], payload["runs"])
     aggregates_payload = cast(dict[str, dict[str, object]], payload["aggregates"])
     assert payload == asdict(suite)

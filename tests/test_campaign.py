@@ -85,16 +85,23 @@ class TestParseCampaignConditions:
         )
         assert len(conditions) == 1
         assert conditions[0].overrides == {"uncertainty_kind": "predictive_variance"}
-        assert conditions[0].label == "maxrl+gtpo_sepa~uncertainty_kind=predictive_variance"
+        assert (
+            conditions[0].label
+            == "maxrl+gtpo_sepa~uncertainty_kind=predictive_variance"
+        )
 
     def test_non_list_conditions_raises(self):
         with pytest.raises(ValueError, match="campaign.conditions must be a list"):
             parse_campaign_conditions({"advantage_mode": "grpo"}, "campaign.toml")
 
     def test_missing_keys_raises(self):
-        with pytest.raises(ValueError, match="advantage_mode must be a non-empty string"):
+        with pytest.raises(
+            ValueError, match="advantage_mode must be a non-empty string"
+        ):
             parse_campaign_conditions([{"transform_mode": "none"}], "campaign.toml")
-        with pytest.raises(ValueError, match="transform_mode must be a non-empty string"):
+        with pytest.raises(
+            ValueError, match="transform_mode must be a non-empty string"
+        ):
             parse_campaign_conditions([{"advantage_mode": "grpo"}], "campaign.toml")
 
     def test_invalid_mode_raises(self):
@@ -146,9 +153,7 @@ class TestParseCampaignConditions:
 
     def test_delight_gate_campaign_matrix_stays_in_sync(self):
         campaign_path = (
-            Path(__file__).resolve().parents[1]
-            / "campaigns"
-            / "delight-gate.toml"
+            Path(__file__).resolve().parents[1] / "campaigns" / "delight-gate.toml"
         )
         with open(campaign_path, "rb") as f:
             data = tomllib.load(f)
@@ -163,12 +168,16 @@ class TestParseCampaignConditions:
         assert len(conditions) == 9
 
         adaptive_conditions = [
-            cond for cond in conditions
-            if cond.overrides.get("transform_params", {}).get("delight_eta_mode") == "adaptive"
+            cond
+            for cond in conditions
+            if cond.overrides.get("transform_params", {}).get("delight_eta_mode")
+            == "adaptive"
         ]
         mad_scale_conditions = [
-            cond for cond in conditions
-            if cond.overrides.get("transform_params", {}).get("delight_norm_mode") == "mad_scale"
+            cond
+            for cond in conditions
+            if cond.overrides.get("transform_params", {}).get("delight_norm_mode")
+            == "mad_scale"
         ]
 
         assert len(adaptive_conditions) == 3
@@ -176,8 +185,12 @@ class TestParseCampaignConditions:
         for cond in adaptive_conditions:
             transform_params = cond.overrides["transform_params"]
             assert transform_params["delight_eta_ema_decay"] == pytest.approx(0.8)
-            assert transform_params["delight_eta_target_neutral_frac"] == pytest.approx(0.6)
-            assert transform_params["delight_eta_target_ordering_gap"] == pytest.approx(0.1)
+            assert transform_params["delight_eta_target_neutral_frac"] == pytest.approx(
+                0.6
+            )
+            assert transform_params["delight_eta_target_ordering_gap"] == pytest.approx(
+                0.1
+            )
 
 
 class TestCampaignSeeds:
@@ -430,6 +443,7 @@ class TestRunParallel:
             def poll_fn():
                 current_concurrent[0] -= 1
                 return 0
+
             mock.poll.side_effect = [None, poll_fn]
             return mock
 
@@ -443,7 +457,9 @@ class TestRunParallel:
             mock.poll.return_value = 0  # immediately done
             return mock
 
-        with patch("retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc_simple):
+        with patch(
+            "retrain.campaign.parallel.subprocess.Popen", side_effect=make_proc_simple
+        ):
             with patch("retrain.campaign.parallel.time.sleep"):
                 result = run_parallel(runs, max_workers=2)
 
@@ -461,7 +477,7 @@ class TestParallelCampaignConfig:
         """No parallel field → sequential execution (run_campaign reads False)."""
         toml_path = tmp_path / "campaign.toml"
         toml_path.write_text(
-            '[campaign]\nseeds = [42]\nmax_steps = 10\n\n'
+            "[campaign]\nseeds = [42]\nmax_steps = 10\n\n"
             '[[campaign.conditions]]\nadvantage_mode = "grpo"\ntransform_mode = "none"\n'
         )
         with open(str(toml_path), "rb") as f:
@@ -473,7 +489,7 @@ class TestParallelCampaignConfig:
         """parallel = true is read correctly from TOML."""
         toml_path = tmp_path / "campaign.toml"
         toml_path.write_text(
-            '[campaign]\nseeds = [42]\nmax_steps = 10\nparallel = true\nmax_workers = 2\n\n'
+            "[campaign]\nseeds = [42]\nmax_steps = 10\nparallel = true\nmax_workers = 2\n\n"
             '[[campaign.conditions]]\nadvantage_mode = "grpo"\ntransform_mode = "none"\n'
         )
         with open(str(toml_path), "rb") as f:
@@ -490,9 +506,9 @@ class TestParallelCampaignConfig:
         """
         toml_path = tmp_path / "campaign.toml"
         toml_path.write_text(
-            '[campaign]\nseeds = [42]\nmax_steps = 10\nparallel = true\n\n'
+            "[campaign]\nseeds = [42]\nmax_steps = 10\nparallel = true\n\n"
             '[[campaign.conditions]]\nadvantage_mode = "grpo"\ntransform_mode = "none"\n\n'
-            '[squeeze]\nmin_variance_retention = 0.95\n'
+            "[squeeze]\nmin_variance_retention = 0.95\n"
         )
 
         # Mock run_parallel to return runs with returncode=0
@@ -509,17 +525,24 @@ class TestParallelCampaignConfig:
 
         with patch("retrain.campaign.run.run_parallel", side_effect=mock_run_parallel):
             with patch("retrain.campaign.run.write_run_configs"):
-                with patch("retrain.campaign.run.auto_squeeze", side_effect=mock_auto_squeeze):
-                    with patch("retrain.campaign.run.load_config", return_value=TrainConfig()):
+                with patch(
+                    "retrain.campaign.run.auto_squeeze", side_effect=mock_auto_squeeze
+                ):
+                    with patch(
+                        "retrain.campaign.run.load_config", return_value=TrainConfig()
+                    ):
                         import os
+
                         old_cwd = os.getcwd()
                         os.chdir(tmp_path)
                         try:
-                                                        run_campaign(str(toml_path))
+                            run_campaign(str(toml_path))
                         finally:
                             os.chdir(old_cwd)
 
-        assert squeeze_called[0], "Squeeze should be called after parallel runs complete"
+        assert squeeze_called[0], (
+            "Squeeze should be called after parallel runs complete"
+        )
 
     def test_run_campaign_records_summary_result(self, tmp_path):
         summary_script = tmp_path / "summary.py"
@@ -527,12 +550,12 @@ class TestParallelCampaignConfig:
 
         toml_path = tmp_path / "campaign.toml"
         toml_path.write_text(
-            '[campaign]\n'
-            'seeds = [42]\n'
-            'max_steps = 10\n'
-            'parallel = true\n'
+            "[campaign]\n"
+            "seeds = [42]\n"
+            "max_steps = 10\n"
+            "parallel = true\n"
             'summary_script = "summary.py"\n\n'
-            '[[campaign.conditions]]\n'
+            "[[campaign.conditions]]\n"
             'advantage_mode = "grpo"\n'
             'transform_mode = "none"\n'
         )
@@ -544,8 +567,13 @@ class TestParallelCampaignConfig:
             return runs
 
         with patch("retrain.campaign.run.run_parallel", side_effect=mock_run_parallel):
-            with patch("retrain.campaign.run.subprocess.run", return_value=MagicMock(returncode=0)) as run_mock:
-                with patch("retrain.campaign.run.load_config", return_value=TrainConfig()):
+            with patch(
+                "retrain.campaign.run.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as run_mock:
+                with patch(
+                    "retrain.campaign.run.load_config", return_value=TrainConfig()
+                ):
                     import os
 
                     old_cwd = os.getcwd()

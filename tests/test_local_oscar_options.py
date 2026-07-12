@@ -10,7 +10,9 @@ from retrain.backends.local.train import LocalTrainHelper
 
 
 def test_local_helper_rejects_oscar_with_non_pytorch_engine() -> None:
-    with pytest.raises(ValueError, match="only supported with inference.engine='pytorch'"):
+    with pytest.raises(
+        ValueError, match="only supported with inference.engine='pytorch'"
+    ):
         LocalTrainHelper(
             "Qwen/Qwen3-4B-Instruct-2507",
             "/tmp/retrain-oscar-test",

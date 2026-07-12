@@ -319,14 +319,14 @@ class TestTOMLLoading:
 
     def test_minimal_toml(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[training]\nbatch_size = 32\n')
+            f.write("[training]\nbatch_size = 32\n")
             f.flush()
             c = load_config(f.name)
         assert c.batch_size == 32
 
     def test_toml_override_by_cli(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".toml", mode="w", delete=False) as f:
-            f.write('[training]\nbatch_size = 32\n')
+            f.write("[training]\nbatch_size = 32\n")
             f.flush()
             c = load_config(f.name, overrides={"batch_size": 64})
         assert c.batch_size == 64
@@ -377,9 +377,7 @@ class TestEnvironmentValidation:
             TrainConfig(environment_provider="verifiers")
 
     def test_verifiers_with_id_valid(self) -> None:
-        c = TrainConfig(
-            environment_provider="verifiers", environment_id="math_verify"
-        )
+        c = TrainConfig(environment_provider="verifiers", environment_id="math_verify")
         assert c.environment_provider == "verifiers"
 
     def test_invalid_environment_provider(self) -> None:

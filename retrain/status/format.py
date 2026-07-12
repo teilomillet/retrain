@@ -26,11 +26,13 @@ def _truncate_condition(label: str, max_width: int = _COND_MAX_WIDTH) -> str:
     """Truncate a long condition label from the left, preserving the end."""
     if len(label) <= max_width:
         return label
-    return "..." + label[-(max_width - 3):]
+    return "..." + label[-(max_width - 3) :]
 
 
 def _run_cell(
-    run: RunSummary | None, max_steps: int, runner_alive: bool = False,
+    run: RunSummary | None,
+    max_steps: int,
+    runner_alive: bool = False,
 ) -> str:
     """Format a single matrix cell showing step progress.
 
@@ -94,7 +96,12 @@ def format_summary_banner(campaigns: list[CampaignSummary]) -> str:
 
     # Build run part — always show in fixed order, skip zeros
     run_parts: list[str] = []
-    for n, label in [(r_active, "active"), (r_dead, "dead"), (r_done, "done"), (r_pending, "pending")]:
+    for n, label in [
+        (r_active, "active"),
+        (r_dead, "dead"),
+        (r_done, "done"),
+        (r_pending, "pending"),
+    ]:
         if n:
             run_parts.append(f"{n} {label}")
 

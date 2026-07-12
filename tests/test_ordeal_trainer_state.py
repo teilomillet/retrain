@@ -26,9 +26,7 @@ valid_number = no_nan & no_inf
 step_st = st.integers(min_value=0, max_value=10000)
 count_st = st.integers(min_value=0, max_value=100000)
 batch_st = st.integers(min_value=1, max_value=256)
-ema_st = st.floats(
-    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
-)
+ema_st = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
 
 
 # ═══════════════════════════════════════════
@@ -80,9 +78,7 @@ class TestStateRoundtrip:
         assert loaded["checkpoint_name"] == f"ckpt_{step}"
 
     @given(tl_ema=ema_st, delight_ema=ema_st)
-    def test_optional_fields_roundtrip(
-        self, tl_ema: float, delight_ema: float
-    ) -> None:
+    def test_optional_fields_roundtrip(self, tl_ema: float, delight_ema: float) -> None:
         """Optional float fields survive roundtrip."""
         import tempfile
 

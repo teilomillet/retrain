@@ -50,6 +50,5 @@ def create_reward(config: TrainConfig) -> RewardFunction:
         )
 
     raise ValueError(
-        f"Unknown reward type '{rtype}'. "
-        "Choose from: match, math, judge, custom"
+        f"Unknown reward type '{rtype}'. Choose from: match, math, judge, custom"
     )

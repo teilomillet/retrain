@@ -56,8 +56,7 @@ def run(args: list[str], cli_name: str | None = None) -> None:
 
     if kind not in KINDS:
         print(
-            f"Invalid --kind '{kind}'. "
-            f"Choose one of: {sorted(KINDS)}",
+            f"Invalid --kind '{kind}'. Choose one of: {sorted(KINDS)}",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -15,6 +15,7 @@ from retrain.advantages.credit import (
 # EntropyStats
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class EntropyStats:
     """Summary stats for execution vs planning token-surprisal distributions.
@@ -24,6 +25,7 @@ class EntropyStats:
     and dashboards. Values are sampled-token surprisal (-logprob), not full
     Shannon entropy.
     """
+
     exec_mean: float = 0.0
     exec_var: float = 0.0
     exec_count: float = 0.0
@@ -42,6 +44,7 @@ class EntropyStats:
 @dataclass
 class AdvantageResult:
     """Result of composable advantage computation."""
+
     token_advs: list[list[float]] = field(default_factory=list)
     has_stats: bool = False
     stats: EntropyStats = field(default_factory=EntropyStats)
@@ -78,7 +81,9 @@ class TransformContext:
     hicra_alpha: float = 0.2
     token_distributions_G: list[list[list[float]]] | None = None
 
-    def gtpo(self, advantage: float, surprisals: list[float], beta: float | None = None) -> list[float]:
+    def gtpo(
+        self, advantage: float, surprisals: list[float], beta: float | None = None
+    ) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_gtpo_weighting(
             advantage,
@@ -86,7 +91,12 @@ class TransformContext:
             beta=self.gtpo_beta if beta is None else beta,
         )
 
-    def hicra(self, token_advs: list[float], planning_mask: list[int], alpha: float | None = None) -> list[float]:
+    def hicra(
+        self,
+        token_advs: list[float],
+        planning_mask: list[int],
+        alpha: float | None = None,
+    ) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_hicra(
             token_advs,
@@ -94,7 +104,12 @@ class TransformContext:
             alpha=self.hicra_alpha if alpha is None else alpha,
         )
 
-    def sepa_pool(self, surprisals: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
+    def sepa_pool(
+        self,
+        surprisals: list[float],
+        planning_mask: list[int],
+        lambda_t: float | None = None,
+    ) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_sepa_pooling(
             surprisals,
@@ -102,7 +117,12 @@ class TransformContext:
             self.sepa_lambda if lambda_t is None else lambda_t,
         )
 
-    def sepa_amp(self, surprisals: list[float], planning_mask: list[int], lambda_t: float | None = None) -> list[float]:
+    def sepa_amp(
+        self,
+        surprisals: list[float],
+        planning_mask: list[int],
+        lambda_t: float | None = None,
+    ) -> list[float]:
         """Utility helper exposed to transform plugins."""
         return apply_sepa_amplification(
             surprisals,
@@ -152,6 +172,7 @@ class AlgorithmOutput:
 # ---------------------------------------------------------------------------
 # Uncertainty specs (pluggable token-uncertainty signals)
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class UncertaintyContext:

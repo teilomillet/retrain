@@ -81,7 +81,9 @@ def run(args: list[str]) -> None:
                 if show_all:
                     print(f"No runs or campaigns found in {root}")
                 else:
-                    print(f"No active campaigns in {root}  (use --all to see everything)")
+                    print(
+                        f"No active campaigns in {root}  (use --all to see everything)"
+                    )
             else:
                 if campaigns:
                     for campaign in campaigns:

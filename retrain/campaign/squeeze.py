@@ -35,10 +35,13 @@ def auto_squeeze(
         squeeze_cfg.get("min_variance_retention", 0.95),
         "squeeze.min_variance_retention",
     )
-    source_rank = int_from_object(
-        squeeze_cfg.get("source_rank", 0),
-        "squeeze.source_rank",
-    ) or lora_rank
+    source_rank = (
+        int_from_object(
+            squeeze_cfg.get("source_rank", 0),
+            "squeeze.source_rank",
+        )
+        or lora_rank
+    )
 
     print(f"\n{'=' * 60}")
     print(f"Auto-squeeze: analyzing {adapter_path}")
@@ -127,12 +130,14 @@ def _log_squeeze_to_wandb(
     # Line chart data: log each rank as a step for a clean variance curve
     for k in analysis.target_ranks:
         vals = [layer.variance_at_rank[k] for layer in analysis.layers]
-        run.log({
-            "squeeze/mean_variance": analysis.mean_variance[k],
-            "squeeze/min_variance": min(vals),
-            "squeeze/max_variance": max(vals),
-            "squeeze/rank": k,
-        })
+        run.log(
+            {
+                "squeeze/mean_variance": analysis.mean_variance[k],
+                "squeeze/min_variance": min(vals),
+                "squeeze/max_variance": max(vals),
+                "squeeze/rank": k,
+            }
+        )
 
     # Summary metrics
     run.summary["squeeze/recommended_rank"] = analysis.recommended_rank

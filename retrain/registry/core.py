@@ -33,11 +33,13 @@ class Registry(Generic[T]):
         self, name: str
     ) -> Callable[[Callable[[TrainConfig], T]], Callable[[TrainConfig], T]]:
         """Decorator to register a lazy factory under *name*."""
+
         def decorator(
             fn: Callable[[TrainConfig], T],
         ) -> Callable[[TrainConfig], T]:
             self._factories[name] = fn
             return fn
+
         return decorator
 
     def create(self, name: str, config: TrainConfig) -> T:
@@ -78,8 +80,6 @@ class Registry(Generic[T]):
         )
         factory = resolved.obj
         if not callable(factory):
-            raise TypeError(
-                f"Dotted import target '{dotted}' is not callable."
-            )
+            raise TypeError(f"Dotted import target '{dotted}' is not callable.")
         typed_factory = cast(Callable[[TrainConfig], T], factory)
         return typed_factory(config)

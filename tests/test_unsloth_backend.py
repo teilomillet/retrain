@@ -51,7 +51,9 @@ class _TinyCausalModel(torch.nn.Module):
     def to(self, *args, **kwargs):
         self.to_calls.append((args, dict(kwargs)))
         if self.raise_on_to:
-            raise AssertionError("quantized Unsloth models must not be moved with .to()")
+            raise AssertionError(
+                "quantized Unsloth models must not be moved with .to()"
+            )
         return super().to(*args, **kwargs)
 
     def print_trainable_parameters(self):

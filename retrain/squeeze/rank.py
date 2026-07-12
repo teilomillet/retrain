@@ -55,7 +55,9 @@ def squeeze_layer(
         LayerSqueeze with singular values and variance at each target rank.
     """
     r = A.shape[1]
-    assert B.shape[0] == r, f"Rank mismatch: A has {A.shape[1]} cols, B has {B.shape[0]} rows"
+    assert B.shape[0] == r, (
+        f"Rank mismatch: A has {A.shape[1]} cols, B has {B.shape[0]} rows"
+    )
 
     # QR decompositions (memory-efficient: never form m×n)
     Q_A, R_A = torch.linalg.qr(A)  # Q_A: (m, r), R_A: (r, r)
@@ -66,7 +68,7 @@ def squeeze_layer(
     _, S, _ = torch.linalg.svd(M)  # S: (r,)
 
     # Variance retention: V(k) = sum(s²[:k]) / sum(s²)
-    s_squared = S ** 2
+    s_squared = S**2
     total_var = s_squared.sum().item()
 
     variance_at_rank: dict[int, float] = {}
@@ -106,15 +108,15 @@ def compress_layer(
     U, S, Vh = torch.linalg.svd(M)
 
     # Truncate to target rank
-    U_k = U[:, :k]       # (r, k)
-    S_k = S[:k]           # (k,)
-    Vh_k = Vh[:k, :]      # (k, r)
+    U_k = U[:, :k]  # (r, k)
+    S_k = S[:k]  # (k,)
+    Vh_k = Vh[:k, :]  # (k, r)
 
     sqrt_S = torch.sqrt(S_k)
 
     # Reconstruct compressed factors
-    A_tgt = Q_A @ U_k @ torch.diag(sqrt_S)          # (m, k)
-    B_tgt = torch.diag(sqrt_S) @ Vh_k @ Q_B.t()     # (k, n)
+    A_tgt = Q_A @ U_k @ torch.diag(sqrt_S)  # (m, k)
+    B_tgt = torch.diag(sqrt_S) @ Vh_k @ Q_B.t()  # (k, n)
 
     return A_tgt, B_tgt
 

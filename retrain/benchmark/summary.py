@@ -110,8 +110,7 @@ class BenchmarkSuiteSummary:
             "wandb_disabled": self.wandb_disabled,
             "runs": [run.to_dict() for run in self.runs],
             "aggregates": {
-                key: stat.to_dict()
-                for key, stat in self.aggregates.items()
+                key: stat.to_dict() for key, stat in self.aggregates.items()
             },
         }
 
@@ -181,7 +180,9 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
 
     last = metrics_summary.last
     generations_path = run_dir / "emergence" / "generations.jsonl"
-    generations_bytes = generations_path.stat().st_size if generations_path.is_file() else 0
+    generations_bytes = (
+        generations_path.stat().st_size if generations_path.is_file() else 0
+    )
 
     return RunBenchmarkSummary(
         label=run_dir.name,
@@ -190,9 +191,12 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
         wall_time_s=metrics_summary.wall_time_s,
         mean_step_time_s=(
             metrics_summary.wall_time_s / metrics_summary.step_time_count
-            if metrics_summary.step_time_count > 0 else 0.0
+            if metrics_summary.step_time_count > 0
+            else 0.0
         ),
-        median_step_time_s=median(metrics_summary.step_times) if metrics_summary.step_times else 0.0,
+        median_step_time_s=median(metrics_summary.step_times)
+        if metrics_summary.step_times
+        else 0.0,
         p95_step_time_s=_p95(metrics_summary.step_times),
         mean_sample_time_s=metrics_summary.mean("sample_time_s") or 0.0,
         mean_train_time_s=metrics_summary.mean("train_time_s") or 0.0,
@@ -250,7 +254,9 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
         engine_prefix_cache_reused_tokens=int_or_none(
             last.get("engine_prefix_cache_reused_tokens")
         ),
-        engine_prefix_cache_entries=int_or_none(last.get("engine_prefix_cache_entries")),
+        engine_prefix_cache_entries=int_or_none(
+            last.get("engine_prefix_cache_entries")
+        ),
         mean_engine_generation_wall_s=metrics_summary.mean("engine_generation_wall_s"),
         mean_engine_prompt_prefill_s=metrics_summary.mean("engine_prompt_prefill_s"),
         mean_engine_decode_s=metrics_summary.mean("engine_decode_s"),
@@ -274,9 +280,7 @@ def summarize_run(run_dir: Path) -> RunBenchmarkSummary:
         mean_rollout_scheduler_worker_s=metrics_summary.mean(
             "rollout/scheduler_worker_s"
         ),
-        mean_rollout_scheduler_wait_s=metrics_summary.mean(
-            "rollout/scheduler_wait_s"
-        ),
+        mean_rollout_scheduler_wait_s=metrics_summary.mean("rollout/scheduler_wait_s"),
         mean_rollout_scheduler_buffer_wait_s=metrics_summary.mean(
             "rollout/scheduler_buffer_wait_s"
         ),

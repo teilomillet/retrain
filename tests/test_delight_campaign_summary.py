@@ -32,8 +32,20 @@ def test_summarize_delight_campaign_writes_reports(tmp_path):
     _write_metrics(
         cond_a_run,
         [
-            {"step": 0, "loss": 1.0, "correct_rate": 0.30, "mean_reward": 0.30, "step_time_s": 1.0},
-            {"step": 1, "loss": 0.9, "correct_rate": 0.40, "mean_reward": 0.40, "step_time_s": 1.0},
+            {
+                "step": 0,
+                "loss": 1.0,
+                "correct_rate": 0.30,
+                "mean_reward": 0.30,
+                "step_time_s": 1.0,
+            },
+            {
+                "step": 1,
+                "loss": 0.9,
+                "correct_rate": 0.40,
+                "mean_reward": 0.40,
+                "step_time_s": 1.0,
+            },
         ],
     )
     _write_metrics(

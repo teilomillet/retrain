@@ -77,7 +77,9 @@ def _install_fake_prime_rl(monkeypatch):
 
     prime_rl_transport.TrainingSample = _FakeTrainingSample
     prime_rl_transport.TrainingBatch = _FakeTrainingBatch
-    prime_rl_transport.setup_training_batch_sender = lambda output_dir, transport: sender
+    prime_rl_transport.setup_training_batch_sender = lambda output_dir, transport: (
+        sender
+    )
 
     monkeypatch.setitem(sys.modules, "prime_rl", prime_rl)
     monkeypatch.setitem(sys.modules, "prime_rl.configs", prime_rl_configs)

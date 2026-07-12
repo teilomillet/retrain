@@ -102,9 +102,9 @@ def pad_microbatch(
         device=device,
     )
     max_len = input_ids.shape[1]
-    attention_mask = (
-        torch.arange(max_len, device=device).unsqueeze(0) < lengths.unsqueeze(1)
-    )
+    attention_mask = torch.arange(max_len, device=device).unsqueeze(
+        0
+    ) < lengths.unsqueeze(1)
     return input_ids, advantages, attention_mask
 
 
@@ -147,9 +147,7 @@ def crop_supervised_context(
 
     cropped_tokens: TokenRows = []
     cropped_logprobs: FloatRows | None = [] if all_logprobs is not None else None
-    cropped_advantages: FloatRows | None = (
-        [] if all_advantages is not None else None
-    )
+    cropped_advantages: FloatRows | None = [] if all_advantages is not None else None
     cropped_echo: FloatRows | None = [] if echo_advantages is not None else None
     rows_cropped = 0
     tokens_removed = 0

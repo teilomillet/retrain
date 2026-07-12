@@ -117,7 +117,9 @@ def _probe_http_endpoint(
     )
 
 
-def probe_backend_runtime(config: TrainConfig | None = None) -> list[BackendRuntimeProbe]:
+def probe_backend_runtime(
+    config: TrainConfig | None = None,
+) -> list[BackendRuntimeProbe]:
     """Run lightweight runtime probes for built-in backends."""
     probes: list[BackendRuntimeProbe] = []
 
@@ -217,7 +219,9 @@ def probe_backend_runtime(config: TrainConfig | None = None) -> list[BackendRunt
         prime_url = ""
         if config is not None:
             prime_url = config.inference_url or config.base_url
-        prime_url = prime_url or os.getenv("RETRAIN_PRIME_RL_URL", "http://localhost:8000")
+        prime_url = prime_url or os.getenv(
+            "RETRAIN_PRIME_RL_URL", "http://localhost:8000"
+        )
         hit = _probe_http_endpoint(prime_url, ("/health", "/v1/models", "/"))
         probes.append(
             BackendRuntimeProbe(

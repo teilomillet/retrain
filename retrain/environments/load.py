@@ -55,9 +55,7 @@ def parse_args(raw: str | JSONObject | None) -> JSONObject:
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"[environment].args must be valid JSON, got: {raw}"
-        ) from exc
+        raise ValueError(f"[environment].args must be valid JSON, got: {raw}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("[environment].args must decode to a JSON object.")
     return cast(JSONObject, parsed)
@@ -178,8 +176,7 @@ def load_environment(
     except Exception as exc:
         suggestion_hint = format_hub_suggestions(env_id)
         raise RuntimeError(
-            f"Failed to load verifiers environment '{env_id}': {exc}."
-            f"{suggestion_hint}"
+            f"Failed to load verifiers environment '{env_id}': {exc}.{suggestion_hint}"
         ) from exc
 
 

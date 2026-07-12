@@ -28,9 +28,9 @@ class _ExporterHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
         if self.path in ("/v1/runs", "/v1/runs/"):
-            payload = _render_runs_json(self.root, snapshots, generated_at=time.time()).encode(
-                "utf-8"
-            )
+            payload = _render_runs_json(
+                self.root, snapshots, generated_at=time.time()
+            ).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -59,7 +59,9 @@ class _ExporterHandler(BaseHTTPRequestHandler):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Expose live retrain run progress.")
-    parser.add_argument("--root", default="logs", help="Root directory containing retrain run dirs")
+    parser.add_argument(
+        "--root", default="logs", help="Root directory containing retrain run dirs"
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9108)
     args = parser.parse_args(argv)

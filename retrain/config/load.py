@@ -61,8 +61,7 @@ def load_config(
                 )
             else:
                 raise ValueError(
-                    "Invalid [plugins].search_paths value. "
-                    "Use a TOML list of strings."
+                    "Invalid [plugins].search_paths value. Use a TOML list of strings."
                 )
 
         optimizer_batch_sec = data.get("optimizer_batch")
@@ -128,8 +127,7 @@ def load_config(
                 raw_map = algorithm_sec[key]
                 if not isinstance(raw_map, dict):
                     raise ValueError(
-                        f"Invalid [algorithm].{key} value. "
-                        "Use a TOML table."
+                        f"Invalid [algorithm].{key} value. Use a TOML table."
                     )
                 setattr(config, field_name, dict(raw_map))
 

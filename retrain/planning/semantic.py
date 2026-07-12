@@ -70,6 +70,7 @@ _EXECUTION_ANCHORS = [
     "collecting like terms on the left",
 ]
 
+
 class SemanticPlanningDetector:
     """Embedding-based planning detector using sentence-transformers.
 
@@ -103,12 +104,8 @@ class SemanticPlanningDetector:
         self._model = sentence_transformer(model_name)
 
         # Pre-compute centroids
-        plan_embs = self._model.encode(
-            _PLANNING_ANCHORS, normalize_embeddings=True
-        )
-        exec_embs = self._model.encode(
-            _EXECUTION_ANCHORS, normalize_embeddings=True
-        )
+        plan_embs = self._model.encode(_PLANNING_ANCHORS, normalize_embeddings=True)
+        exec_embs = self._model.encode(_EXECUTION_ANCHORS, normalize_embeddings=True)
         plan_centroid = np.mean(plan_embs, axis=0)
         plan_centroid /= np.linalg.norm(plan_centroid)
         exec_centroid = np.mean(exec_embs, axis=0)
@@ -129,9 +126,7 @@ class SemanticPlanningDetector:
             return [0] * n
 
         # 2. Batch embed all windows
-        embs = self._model.encode(
-            windows, normalize_embeddings=True, batch_size=256
-        )
+        embs = self._model.encode(windows, normalize_embeddings=True, batch_size=256)
 
         # 3. Classify each window by centroid distance
         plan_sims = embs @ self._plan_centroid
@@ -140,10 +135,7 @@ class SemanticPlanningDetector:
         # 4. Map classifications back to token mask
         mask = [0] * n
         for i in range(len(windows)):
-            if (
-                plan_sims[i] > exec_sims[i] + self._threshold
-                and plan_sims[i] > 0.25
-            ):
+            if plan_sims[i] > exec_sims[i] + self._threshold and plan_sims[i] > 0.25:
                 start, end = window_spans[i]
                 for j in range(start, end):
                     mask[j] = 1

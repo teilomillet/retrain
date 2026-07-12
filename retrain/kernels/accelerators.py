@@ -101,7 +101,9 @@ def install_cudnn_causal_conv1d_shim(*, enabled: bool) -> dict[str, object]:
         activation=None,
     ):
         if seq_idx is not None:
-            raise NotImplementedError("cuDNN causal_conv1d shim does not support seq_idx")
+            raise NotImplementedError(
+                "cuDNN causal_conv1d shim does not support seq_idx"
+            )
         dtype_in = x.dtype
         width = int(weight.shape[1])
         seqlen = int(x.shape[-1])
@@ -166,22 +168,18 @@ def install_cudnn_causal_conv1d_shim(*, enabled: bool) -> dict[str, object]:
         width = int(weight.shape[1])
         state_len = int(conv_state.shape[-1])
         if cache_seqlens is not None:
-            width_idx = (
-                torch.arange(
-                    -(width - 1),
-                    0,
-                    dtype=torch.long,
-                    device=x.device,
-                ).unsqueeze(0)
-                + cache_seqlens.unsqueeze(1)
-            )
+            width_idx = torch.arange(
+                -(width - 1),
+                0,
+                dtype=torch.long,
+                device=x.device,
+            ).unsqueeze(0) + cache_seqlens.unsqueeze(1)
             width_idx = torch.remainder(width_idx, state_len).unsqueeze(1)
             width_idx = width_idx.expand(batch, dim, -1)
             prev = conv_state.gather(2, width_idx)
-            copy_idx = (
-                torch.arange(seqlen, dtype=torch.long, device=x.device).unsqueeze(0)
-                + cache_seqlens.unsqueeze(1)
-            )
+            copy_idx = torch.arange(
+                seqlen, dtype=torch.long, device=x.device
+            ).unsqueeze(0) + cache_seqlens.unsqueeze(1)
             copy_idx = torch.remainder(copy_idx, state_len).unsqueeze(1)
             copy_idx = copy_idx.expand(batch, dim, -1)
             conv_state.scatter_(2, copy_idx, x)

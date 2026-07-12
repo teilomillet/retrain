@@ -90,12 +90,14 @@ def _make_campaign_dir(
         state = run_info.get("trainer_state", {"checkpoint_name": "final", "step": 49})
         (run_dir / "trainer_state.json").write_text(json.dumps(state))
 
-        run_defs.append({
-            "run_name": name,
-            "log_dir": str(run_dir),
-            "condition": run_info.get("condition", "grpo+none"),
-            "seed": run_info.get("seed", 42),
-        })
+        run_defs.append(
+            {
+                "run_name": name,
+                "log_dir": str(run_dir),
+                "condition": run_info.get("condition", "grpo+none"),
+                "seed": run_info.get("seed", 42),
+            }
+        )
 
     manifest = {
         "timestamp": "20260228_100000",
@@ -340,16 +342,30 @@ class TestEvaluateNode:
 
         campaign_dir = _make_campaign_dir(
             tmp_path,
-            runs=[{
-                "run_name": "grpo+none_s42",
-                "condition": "grpo+none",
-                "seed": 42,
-                "metrics": [
-                    {"step": 0, "correct_rate": 0.5, "loss": 0.1, "mean_reward": 0.5, "condition": "grpo+none"},
-                    {"step": 50, "correct_rate": 0.60, "loss": 0.05, "mean_reward": 0.6, "condition": "grpo+none"},
-                ],
-                "trainer_state": {"checkpoint_name": "final", "step": 49},
-            }],
+            runs=[
+                {
+                    "run_name": "grpo+none_s42",
+                    "condition": "grpo+none",
+                    "seed": 42,
+                    "metrics": [
+                        {
+                            "step": 0,
+                            "correct_rate": 0.5,
+                            "loss": 0.1,
+                            "mean_reward": 0.5,
+                            "condition": "grpo+none",
+                        },
+                        {
+                            "step": 50,
+                            "correct_rate": 0.60,
+                            "loss": 0.05,
+                            "mean_reward": 0.6,
+                            "condition": "grpo+none",
+                        },
+                    ],
+                    "trainer_state": {"checkpoint_name": "final", "step": 49},
+                }
+            ],
         )
 
         tree.state.nodes["a"] = NodeState(
@@ -368,15 +384,23 @@ class TestEvaluateNode:
 
         campaign_dir = _make_campaign_dir(
             tmp_path,
-            runs=[{
-                "run_name": "grpo+none_s42",
-                "condition": "grpo+none",
-                "seed": 42,
-                "metrics": [
-                    {"step": 50, "correct_rate": 0.40, "loss": 0.1, "mean_reward": 0.4, "condition": "grpo+none"},
-                ],
-                "trainer_state": {"checkpoint_name": "final", "step": 49},
-            }],
+            runs=[
+                {
+                    "run_name": "grpo+none_s42",
+                    "condition": "grpo+none",
+                    "seed": 42,
+                    "metrics": [
+                        {
+                            "step": 50,
+                            "correct_rate": 0.40,
+                            "loss": 0.1,
+                            "mean_reward": 0.4,
+                            "condition": "grpo+none",
+                        },
+                    ],
+                    "trainer_state": {"checkpoint_name": "final", "step": 49},
+                }
+            ],
         )
 
         tree.state.nodes["a"] = NodeState(
@@ -407,7 +431,13 @@ class TestEvaluateNode:
                     "condition": "grpo+none",
                     "seed": 42,
                     "metrics": [
-                        {"step": 50, "correct_rate": 0.70, "loss": 0.05, "mean_reward": 0.7, "condition": "grpo+none"},
+                        {
+                            "step": 50,
+                            "correct_rate": 0.70,
+                            "loss": 0.05,
+                            "mean_reward": 0.7,
+                            "condition": "grpo+none",
+                        },
                     ],
                     "trainer_state": {"checkpoint_name": "final", "step": 49},
                 },
@@ -416,7 +446,13 @@ class TestEvaluateNode:
                     "condition": "grpo+none",
                     "seed": 101,
                     "metrics": [
-                        {"step": 50, "correct_rate": 0.50, "loss": 0.1, "mean_reward": 0.5, "condition": "grpo+none"},
+                        {
+                            "step": 50,
+                            "correct_rate": 0.50,
+                            "loss": 0.1,
+                            "mean_reward": 0.5,
+                            "condition": "grpo+none",
+                        },
                     ],
                     "trainer_state": {"checkpoint_name": "final", "step": 49},
                 },

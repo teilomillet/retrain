@@ -137,12 +137,15 @@ def compress_adapter(
             json.dump(config, f, indent=2)
             f.write("\n")
 
-    print(f"Compressed adapter saved to {output_path} (rank {source_rank} -> {target_rank})")
+    print(
+        f"Compressed adapter saved to {output_path} (rank {source_rank} -> {target_rank})"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def run_squeeze(config_path: str) -> None:
     """Entry point: load TOML, analyze adapter, print table, optionally compress."""
@@ -180,8 +183,10 @@ def run_squeeze(config_path: str) -> None:
             f"{k:>6}  {mean_v * 100:>8.2f}%  {min_v * 100:>8.2f}%  {max_v * 100:>8.2f}%{marker}"
         )
 
-    print(f"\nRecommended rank: {analysis.recommended_rank} "
-          f"(>= {analysis.min_variance_retention * 100:.0f}% variance retained)")
+    print(
+        f"\nRecommended rank: {analysis.recommended_rank} "
+        f"(>= {analysis.min_variance_retention * 100:.0f}% variance retained)"
+    )
 
     # Compress if requested
     target = cfg.compress_to if cfg.compress_to > 0 else analysis.recommended_rank

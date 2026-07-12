@@ -76,9 +76,7 @@ def load_sft_warmup_data(
     verify_sft_data_contract(config, dataset.provenance)
     examples = dataset.examples
     token_limit = (
-        config.sft_max_tokens
-        if config.sft_max_tokens > 0
-        else config.max_tokens + 512
+        config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens + 512
     )
     tokenized = tokenize_sft_dataset(tokenizer, examples, max_tokens=token_limit)
     lengths = [example.total_tokens for example in tokenized]
@@ -90,9 +88,7 @@ def load_sft_warmup_data(
         length_bucket_size=config.sft_length_bucket_size,
     )
     batch_size = (
-        config.sft_batch_size
-        if config.sft_batch_size > 0
-        else min(16, len(examples))
+        config.sft_batch_size if config.sft_batch_size > 0 else min(16, len(examples))
     )
     schedule_contract = build_sft_resume_schedule_contract(
         config,
@@ -194,8 +190,7 @@ def run_sft_warmup_step(
 
     effective_lr = config.sft_lr if config.sft_lr > 0 else config.lr
     print(
-        f"Step {step} [SFT warmup]: {len(batch)} examples "
-        f"(lr={effective_lr:.1e})...",
+        f"Step {step} [SFT warmup]: {len(batch)} examples (lr={effective_lr:.1e})...",
         flush=True,
     )
     loss = run_sft_train_step(

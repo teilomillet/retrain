@@ -49,9 +49,15 @@ logprobs = st.lists(
 )
 
 beta_st = st.floats(min_value=0.0, max_value=2.0, allow_nan=False, allow_infinity=False)
-alpha_st = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
-lambda_st = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
-k_frac_st = st.floats(min_value=0.01, max_value=1.0, allow_nan=False, allow_infinity=False)
+alpha_st = st.floats(
+    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
+)
+lambda_st = st.floats(
+    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
+)
+k_frac_st = st.floats(
+    min_value=0.01, max_value=1.0, allow_nan=False, allow_infinity=False
+)
 
 # ── Invariants ──
 
@@ -560,9 +566,7 @@ class TestDelightGatingProperties:
         ),
         k=k_frac_st,
     )
-    def test_zero_advantage_all_zeros(
-        self, surprisals_: list[float], k: float
-    ) -> None:
+    def test_zero_advantage_all_zeros(self, surprisals_: list[float], k: float) -> None:
         result = apply_hard_delight_gating(0.0, surprisals_, k)
         assert all(v == 0.0 for v in result)
 

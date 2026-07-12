@@ -18,12 +18,10 @@ class TestPluginResolver:
         (tmp_path / "plugins").mkdir()
         (tmp_path / "plugins" / "__init__.py").write_text("")
         (tmp_path / "plugins" / "my_mod.py").write_text(
-            "def make(config=None):\n"
-            "    return 'from_plugins'\n"
+            "def make(config=None):\n    return 'from_plugins'\n"
         )
         (tmp_path / "my_mod.py").write_text(
-            "def make(config=None):\n"
-            "    return 'from_root'\n"
+            "def make(config=None):\n    return 'from_root'\n"
         )
         monkeypatch.syspath_prepend(str(tmp_path))
         set_plugin_runtime(["plugins"], strict=True)
@@ -42,8 +40,7 @@ class TestPluginResolver:
         (tmp_path / "plugins").mkdir()
         (tmp_path / "plugins" / "__init__.py").write_text("")
         (tmp_path / "plugins" / "cached_mod.py").write_text(
-            "def make(config=None):\n"
-            "    return 'x'\n"
+            "def make(config=None):\n    return 'x'\n"
         )
         monkeypatch.syspath_prepend(str(tmp_path))
         sys.modules.pop("plugins", None)
@@ -67,7 +64,9 @@ class TestPluginResolver:
 
     def test_standardized_import_error_message(self):
         set_plugin_runtime(["plugins"], strict=True)
-        with pytest.raises(ImportError, match="Failed to resolve transform_mode plugin"):
+        with pytest.raises(
+            ImportError, match="Failed to resolve transform_mode plugin"
+        ):
             resolve_dotted_attribute(
                 "definitely_not_real.mod",
                 selector="transform_mode",

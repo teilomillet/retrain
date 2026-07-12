@@ -57,9 +57,7 @@ def _validate_rows(
     name: str,
 ) -> None:
     if len(values) != len(tokens):
-        raise ValueError(
-            f"{name} has {len(values)} rows, expected {len(tokens)}."
-        )
+        raise ValueError(f"{name} has {len(values)} rows, expected {len(tokens)}.")
     for row_index, (token_row, value_row) in enumerate(zip(tokens, values)):
         if len(value_row) != len(token_row):
             raise ValueError(

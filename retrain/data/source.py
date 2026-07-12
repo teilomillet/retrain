@@ -11,6 +11,7 @@ from retrain.types import ExampleInfoLike, PromptLike
 @dataclass
 class Example:
     """A single training example: prompt + reference answer."""
+
     prompt: PromptLike
     reference: str
     task: str = "default"

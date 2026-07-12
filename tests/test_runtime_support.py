@@ -101,7 +101,9 @@ def test_example_prompt_cache_uses_supplied_callables() -> None:
     cache = ExamplePromptCache(
         tokenizer=object(),
         prompts=["alpha"],
-        encoder=lambda tokenizer, prompt: calls.append((tokenizer, prompt)) or [1, 2, 3],
+        encoder=lambda tokenizer, prompt: (
+            calls.append((tokenizer, prompt)) or [1, 2, 3]
+        ),
         preview_renderer=lambda prompt: previews.append(prompt) or "preview",
         counters=counters,
     )

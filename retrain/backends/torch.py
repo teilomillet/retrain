@@ -26,7 +26,11 @@ def pad_to_width(tensor: torch.Tensor, width: int, value: float | int) -> torch.
 
 
 def is_cuda_device(device: object) -> bool:
-    return isinstance(device, str) and device.startswith("cuda") and torch.cuda.is_available()
+    return (
+        isinstance(device, str)
+        and device.startswith("cuda")
+        and torch.cuda.is_available()
+    )
 
 
 def timer_start(device: str):

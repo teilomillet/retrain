@@ -179,8 +179,12 @@ class _BackendService:
         for prompt_idx, prompt_ids in enumerate(prompt_ids_list):
             group: list[dict[str, object]] = []
             for sample_idx in range(num_samples):
-                token_count = min(token_cap, 1 + ((prompt_idx + sample_idx) % token_cap))
-                token_base = self.visible_version * 1000 + prompt_idx * 100 + sample_idx * 10
+                token_count = min(
+                    token_cap, 1 + ((prompt_idx + sample_idx) % token_cap)
+                )
+                token_base = (
+                    self.visible_version * 1000 + prompt_idx * 100 + sample_idx * 10
+                )
                 token_ids = [token_base + i for i in range(token_count)]
                 logprobs = [-(0.1 + 0.01 * i) for i in range(token_count)]
                 group.append(
@@ -295,7 +299,9 @@ def _transport_sample(
     temperature: float,
     top_p: float,
 ) -> str:
-    payload = service.sample(prompt_ids_list, num_samples, max_tokens, temperature, top_p)
+    payload = service.sample(
+        prompt_ids_list, num_samples, max_tokens, temperature, top_p
+    )
     if _SAMPLE_MISSING_GROUPS:
         payload = dict(payload)
         payload.pop("groups", None)
@@ -317,12 +323,22 @@ def _transport_sample(
     if _SAMPLE_ENTRY_NOT_OBJECT:
         payload = dict(payload)
         groups = payload.get("groups")
-        if isinstance(groups, list) and groups and isinstance(groups[0], list) and groups[0]:
+        if (
+            isinstance(groups, list)
+            and groups
+            and isinstance(groups[0], list)
+            and groups[0]
+        ):
             payload["groups"] = [[123, *groups[0][1:]], *groups[1:]]
     if _SAMPLE_MISSING_TOKEN_FIELDS:
         payload = dict(payload)
         groups = payload.get("groups")
-        if isinstance(groups, list) and groups and isinstance(groups[0], list) and groups[0]:
+        if (
+            isinstance(groups, list)
+            and groups
+            and isinstance(groups[0], list)
+            and groups[0]
+        ):
             first_entry = groups[0][0]
             if isinstance(first_entry, dict):
                 first_entry = dict(first_entry)
@@ -332,7 +348,12 @@ def _transport_sample(
     if _SAMPLE_ENTRY_VERSION_MISMATCH:
         payload = dict(payload)
         groups = payload.get("groups")
-        if isinstance(groups, list) and groups and isinstance(groups[0], list) and groups[0]:
+        if (
+            isinstance(groups, list)
+            and groups
+            and isinstance(groups[0], list)
+            and groups[0]
+        ):
             first_entry = groups[0][0]
             if isinstance(first_entry, dict):
                 first_entry = dict(first_entry)
@@ -341,7 +362,12 @@ def _transport_sample(
     if _SAMPLE_BAD_LOGPROB_LENGTH:
         payload = dict(payload)
         groups = payload.get("groups")
-        if isinstance(groups, list) and groups and isinstance(groups[0], list) and groups[0]:
+        if (
+            isinstance(groups, list)
+            and groups
+            and isinstance(groups[0], list)
+            and groups[0]
+        ):
             first_entry = groups[0][0]
             if isinstance(first_entry, dict):
                 first_entry = dict(first_entry)
@@ -495,7 +521,9 @@ class _RemoteBackendAdapter:
             if not isinstance(group_raw, list):
                 raise BackendProtocolError("sample group is not a list")
             if len(group_raw) != num_samples:
-                raise BackendProtocolError("sample returned wrong number of completions")
+                raise BackendProtocolError(
+                    "sample returned wrong number of completions"
+                )
             group: list[tuple[list[int], list[float]]] = []
             for entry_raw in group_raw:
                 if not isinstance(entry_raw, dict):
@@ -504,11 +532,15 @@ class _RemoteBackendAdapter:
                 logprobs = entry_raw.get("logprobs")
                 sample_version = entry_raw.get("version")
                 if not isinstance(token_ids, list) or not isinstance(logprobs, list):
-                    raise BackendProtocolError("sample entry missing token_ids/logprobs")
+                    raise BackendProtocolError(
+                        "sample entry missing token_ids/logprobs"
+                    )
                 if not isinstance(sample_version, int) or sample_version != version:
                     raise BackendProtocolError("sample entry version mismatch")
                 if len(token_ids) != len(logprobs):
-                    raise BackendProtocolError("sample token_ids/logprobs length mismatch")
+                    raise BackendProtocolError(
+                        "sample token_ids/logprobs length mismatch"
+                    )
                 group.append(
                     (
                         [int(tok) for tok in token_ids],
@@ -562,7 +594,9 @@ class _RemoteBackendAdapter:
                     op="train_step",
                 )
                 _require_str(payload, "request_id", op="train_step")
-                applied_version = _require_int(payload, "applied_version", op="train_step")
+                applied_version = _require_int(
+                    payload, "applied_version", op="train_step"
+                )
                 dedup = _require_bool(payload, "dedup", op="train_step")
                 if dedup:
                     self.seen_dedup_retry = True

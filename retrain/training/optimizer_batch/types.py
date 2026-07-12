@@ -29,9 +29,7 @@ class OptimizerBatch:
     echo_advantages: list[list[float]] | None = None
     echo_full_observation_counts: list[int] | None = None
     echo_rollout_denominator: int | None = None
-    torch_rng: TorchRngState = field(
-        default_factory=lambda: TorchRngState(cpu=b"")
-    )
+    torch_rng: TorchRngState = field(default_factory=lambda: TorchRngState(cpu=b""))
 
 
 @dataclass(frozen=True)

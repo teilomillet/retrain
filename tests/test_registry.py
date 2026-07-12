@@ -26,6 +26,7 @@ from retrain.registry.health import check_environment, probe_backend_runtime
 # Registry class basics
 # ---------------------------------------------------------------------------
 
+
 class TestRegistryCore:
     def test_register_and_create(self):
         reg = Registry("test")
@@ -71,7 +72,10 @@ class TestRegistryCore:
             mock_mod = MagicMock()
             mock_mod.MyPlugin = mock_cls
             # First candidate may be prefixed by plugin search path.
-            mock_import.side_effect = [ModuleNotFoundError("no plugin prefix"), mock_mod]
+            mock_import.side_effect = [
+                ModuleNotFoundError("no plugin prefix"),
+                mock_mod,
+            ]
 
             result = reg.create("mypkg.module.MyPlugin", config)
 
@@ -96,10 +100,17 @@ class TestRegistryCore:
 # get_registry
 # ---------------------------------------------------------------------------
 
+
 class TestGetRegistry:
     def test_known_registries(self):
-        for name in ("backend", "reward", "planning_detector",
-                     "data_source", "backpressure", "inference_engine"):
+        for name in (
+            "backend",
+            "reward",
+            "planning_detector",
+            "data_source",
+            "backpressure",
+            "inference_engine",
+        ):
             reg = get_registry(name)
             assert reg.kind == name
 
@@ -111,6 +122,7 @@ class TestGetRegistry:
 # ---------------------------------------------------------------------------
 # Built-in registrations — verify names are registered
 # ---------------------------------------------------------------------------
+
 
 class TestBuiltinNames:
     def test_backend_names(self):
@@ -146,6 +158,7 @@ class TestBuiltinNames:
 # ---------------------------------------------------------------------------
 # Built-in creation (mock heavy deps)
 # ---------------------------------------------------------------------------
+
 
 class TestBuiltinCreation:
     def test_reward_match(self):
@@ -280,6 +293,7 @@ class TestBuiltinCreation:
 # check_environment
 # ---------------------------------------------------------------------------
 
+
 class TestCheckEnvironment:
     def test_full_scan_returns_all_known(self):
         results = check_environment(config=None)
@@ -287,8 +301,9 @@ class TestCheckEnvironment:
         assert names >= {"local", "tinker", "prime_rl", "math", "judge", "semantic"}
 
     def test_config_scoped_check(self):
-        config = TrainConfig(backend="local", reward_type="match",
-                             planning_detector="regex")
+        config = TrainConfig(
+            backend="local", reward_type="match", planning_detector="regex"
+        )
         results = check_environment(config=config)
         names = {r[0] for r in results}
         # "match" and "regex" have no entry in _DEPENDENCY_MAP
@@ -424,7 +439,9 @@ class TestRuntimeProbes:
             SimpleNamespace(FastLanguageModel=_FastLanguageModel),
         )
 
-        probe = next(p for p in probe_backend_runtime(config=None) if p.backend == "unsloth")
+        probe = next(
+            p for p in probe_backend_runtime(config=None) if p.backend == "unsloth"
+        )
 
         assert probe.status == "ok"
         assert "FastLanguageModel API ok" in probe.detail
@@ -445,7 +462,9 @@ class TestRuntimeProbes:
             SimpleNamespace(FastLanguageModel=_DriftedFastLanguageModel),
         )
 
-        probe = next(p for p in probe_backend_runtime(config=None) if p.backend == "unsloth")
+        probe = next(
+            p for p in probe_backend_runtime(config=None) if p.backend == "unsloth"
+        )
 
         assert probe.status == "fail"
         assert "FastLanguageModel API is incompatible" in probe.detail
@@ -454,6 +473,7 @@ class TestRuntimeProbes:
 # ---------------------------------------------------------------------------
 # Backward compatibility
 # ---------------------------------------------------------------------------
+
 
 class TestBackwardCompat:
     def test_existing_config_values_accepted(self):
@@ -479,9 +499,11 @@ class TestBackwardCompat:
     def test_create_reward_still_importable(self):
         """create_reward remains importable for external code."""
         from retrain.rewards import create_reward
+
         assert callable(create_reward)
 
     def test_create_planning_detector_still_importable(self):
         """create_planning_detector remains importable for external code."""
         from retrain.planning.create import create_planning_detector
+
         assert callable(create_planning_detector)

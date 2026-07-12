@@ -53,7 +53,9 @@ _LIVE_LORA_INT_ID = 0
 class OpenAIEngine(InferenceEngine):
     """HTTP client targeting OpenAI-compatible /v1/completions endpoints."""
 
-    def __init__(self, base_url: str, model_name: str, engine_type: str = "openai") -> None:
+    def __init__(
+        self, base_url: str, model_name: str, engine_type: str = "openai"
+    ) -> None:
         """Initialize the HTTP engine.
 
         Args:
@@ -134,7 +136,9 @@ class OpenAIEngine(InferenceEngine):
                 raw_text = choice.get("text", "")
                 text = raw_text if isinstance(raw_text, str) else ""
                 raw_finish_reason = choice.get("finish_reason")
-                finish_reason = raw_finish_reason if isinstance(raw_finish_reason, str) else None
+                finish_reason = (
+                    raw_finish_reason if isinstance(raw_finish_reason, str) else None
+                )
                 logprobs_info = choice.get("logprobs", {})
 
                 token_ids, logprobs = self._recover_tokens(
@@ -322,11 +326,11 @@ class OpenAIEngine(InferenceEngine):
         prompt_ids: list[int],
     ) -> tuple[list[int], list[float]]:
         if len(ids) > len(logprobs) and len(logprobs) > 0:
-            ids = ids[-len(logprobs):]
-        if len(ids) >= len(prompt_ids) and ids[:len(prompt_ids)] == prompt_ids:
-            ids = ids[len(prompt_ids):]
+            ids = ids[-len(logprobs) :]
+        if len(ids) >= len(prompt_ids) and ids[: len(prompt_ids)] == prompt_ids:
+            ids = ids[len(prompt_ids) :]
             if len(logprobs) > len(ids):
-                logprobs = logprobs[-len(ids):]
+                logprobs = logprobs[-len(ids) :]
         n = min(len(ids), len(logprobs))
         return list(ids[:n]), list(logprobs[:n])
 
@@ -368,8 +372,10 @@ class OpenAIEngine(InferenceEngine):
             print(f"Server adapter reloaded from {adapter_path}")
         except Exception as e:
             self._adapter_reload_failures += 1
-            print(f"Warning: adapter reload failed ({e}). "
-                  f"Server may not support dynamic LoRA loading.")
+            print(
+                f"Warning: adapter reload failed ({e}). "
+                f"Server may not support dynamic LoRA loading."
+            )
 
     def _adapter_reload_endpoint(self) -> str:
         if self.engine_type == "sglang":
@@ -418,7 +424,7 @@ class OpenAIEngine(InferenceEngine):
                 return cast(dict[str, object], resp.json())
             except requests.exceptions.ConnectionError:
                 if attempt < max_retries - 1:
-                    wait = 2 ** attempt
+                    wait = 2**attempt
                     print(f"Connection error to {url}, retrying in {wait}s...")
                     time.sleep(wait)
                 else:

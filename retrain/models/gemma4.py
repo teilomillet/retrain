@@ -8,8 +8,13 @@ from retrain.tokens.ids import model_eos_token_ids
 
 
 DEFAULT_LORA_TARGET_MODULES = (
-    "q_proj", "k_proj", "v_proj", "o_proj",
-    "gate_proj", "up_proj", "down_proj",
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
 )
 
 
@@ -50,7 +55,9 @@ def is_gemma4_text_model(model) -> bool:
     )
 
 
-def resolve_lora_target_modules(model, suffixes: Iterable[str] = DEFAULT_LORA_TARGET_MODULES):
+def resolve_lora_target_modules(
+    model, suffixes: Iterable[str] = DEFAULT_LORA_TARGET_MODULES
+):
     """Use exact language-tower targets for Gemma4; suffixes for normal CausalLMs."""
     suffixes = tuple(suffixes)
     if not is_gemma4_text_model(model):
@@ -63,7 +70,9 @@ def resolve_lora_target_modules(model, suffixes: Iterable[str] = DEFAULT_LORA_TA
         if name.startswith("model.language_model.") and name.endswith(suffixes)
     ]
     if not targets:
-        raise RuntimeError("Gemma4 text model found, but no language LoRA target modules matched")
+        raise RuntimeError(
+            "Gemma4 text model found, but no language LoRA target modules matched"
+        )
     return targets
 
 

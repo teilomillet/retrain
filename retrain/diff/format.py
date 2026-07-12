@@ -85,7 +85,9 @@ def format_diff(result: DiffResult) -> str:
     lines.append(f"  {'wall_time':>15s}  {ta:>{w_label}s}  {tb:>{w_label}s}")
 
     # Steps
-    lines.append(f"  {'steps':>15s}  {str(result.steps_a):>{w_label}s}  {str(result.steps_b):>{w_label}s}")
+    lines.append(
+        f"  {'steps':>15s}  {str(result.steps_a):>{w_label}s}  {str(result.steps_b):>{w_label}s}"
+    )
 
     perf_order = [
         ("mean_step_time_s", "s"),

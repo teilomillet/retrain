@@ -161,9 +161,9 @@ def render_environment(cli_name: str) -> list[str]:
 
     lines = [
         f"    {cli_name} trains on environments for RLVR data.",
-        "    Set [environment].provider = \"verifiers\" and specify a Hub ID,",
-        "    or provider = \"openenv\" with the URL of a running OpenEnv gym",
-        "    server (id = \"http://localhost:8765\").",
+        '    Set [environment].provider = "verifiers" and specify a Hub ID,',
+        '    or provider = "openenv" with the URL of a running OpenEnv gym',
+        '    server (id = "http://localhost:8765").',
         "",
         "    Trainable verifiers examples:",
     ]

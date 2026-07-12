@@ -68,9 +68,9 @@ def ws_url(base_url: str) -> str:
     """Convert an http(s)/ws(s) base URL to the ``/ws`` endpoint URL."""
     url = base_url.strip().rstrip("/")
     if url.startswith("http://"):
-        url = "ws://" + url[len("http://"):]
+        url = "ws://" + url[len("http://") :]
     elif url.startswith("https://"):
-        url = "wss://" + url[len("https://"):]
+        url = "wss://" + url[len("https://") :]
     if not url.startswith(("ws://", "wss://")):
         raise ValueError(
             f"OpenEnv base URL must be http(s):// or ws(s)://, got '{base_url}'."
@@ -82,9 +82,9 @@ def http_url(base_url: str) -> str:
     """Convert an http(s)/ws(s) base URL to its plain-HTTP form."""
     url = base_url.strip().rstrip("/")
     if url.startswith("ws://"):
-        url = "http://" + url[len("ws://"):]
+        url = "http://" + url[len("ws://") :]
     elif url.startswith("wss://"):
-        url = "https://" + url[len("wss://"):]
+        url = "https://" + url[len("wss://") :]
     return url
 
 

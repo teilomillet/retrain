@@ -67,9 +67,7 @@ def backward_microbatch(
     forward_s_total = 0.0
     backward_s_total = 0.0
     while True:
-        fused_ce_attempts_before = int(
-            getattr(helper, "_unsloth_fused_ce_attempts", 0)
-        )
+        fused_ce_attempts_before = int(getattr(helper, "_unsloth_fused_ce_attempts", 0))
         loss_counts = getattr(helper, "_loss_path_counts", {})
         fused_ce_batches_before = int(loss_counts.get("unsloth_fused_ce", 0))
         timer = timer_start(helper.train_device)
@@ -108,7 +106,9 @@ def backward_microbatch(
         return masked_loss, token_count_value, forward_s_total, backward_s_total
 
 
-def run_padded(helper: "LocalTrainHelper", input_ids, advantages, attention_mask) -> float:
+def run_padded(
+    helper: "LocalTrainHelper", input_ids, advantages, attention_mask
+) -> float:
     """Execute one weighted cross-entropy SFT/ECHO update synchronously."""
     helper.train_model.train()
     helper.optimizer.zero_grad()
@@ -196,13 +196,7 @@ def run_sequence(helper: "LocalTrainHelper", all_tokens, all_advantages) -> floa
 
     try:
         total_tokens_value = float(
-            sum(
-                1
-                for row in all_advantages
-                for value in row[1:]
-                if value > 0.0
-            )
-            or 1
+            sum(1 for row in all_advantages for value in row[1:] if value > 0.0) or 1
         )
         loss_sum = 0.0
 

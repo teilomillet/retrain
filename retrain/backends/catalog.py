@@ -191,7 +191,9 @@ def _resolve_hook_value(raw: object, backend_options: Mapping[str, object]) -> o
         return callback()
 
 
-def _import_plugin_target(backend_name: str) -> tuple[object, object] | tuple[None, None]:
+def _import_plugin_target(
+    backend_name: str,
+) -> tuple[object, object] | tuple[None, None]:
     module_path, _, attr_name = backend_name.rpartition(".")
     if not module_path or not attr_name:
         return None, None

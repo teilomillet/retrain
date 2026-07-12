@@ -153,10 +153,12 @@ class MAXLocalEngine(InferenceEngine):
                             logprobs.extend(lp.token_log_probabilities)
 
                 min_len = min(len(token_ids), len(logprobs))
-                group.append(SampleResult(
-                    token_ids=list(token_ids[:min_len]),
-                    logprobs=logprobs[:min_len],
-                ))
+                group.append(
+                    SampleResult(
+                        token_ids=list(token_ids[:min_len]),
+                        logprobs=logprobs[:min_len],
+                    )
+                )
             results.append(group)
 
         return results

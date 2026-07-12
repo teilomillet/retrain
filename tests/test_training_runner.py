@@ -226,7 +226,9 @@ class TestCommandRunnerConfigExport:
 
 
 class _FakeTokenizer:
-    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False):
+    def apply_chat_template(
+        self, messages, tokenize=False, add_generation_prompt=False
+    ):
         rendered = "".join(f"{m['role']}:{m['content']}\n" for m in messages)
         if add_generation_prompt:
             rendered += "assistant:"
@@ -458,9 +460,10 @@ class TestSftRunner:
         assert state["checkpoint_path"] == str(adapter_path / "final")
         assert state["resume_mode"] == "adapter_only"
         assert "optimizer/scaler/RNG" in state["resume_warning"]
-        assert state["sft_schedule"]["data_sha256"] == hashlib.sha256(
-            data_path.read_bytes()
-        ).hexdigest()
+        assert (
+            state["sft_schedule"]["data_sha256"]
+            == hashlib.sha256(data_path.read_bytes()).hexdigest()
+        )
         assert state["sft_schedule"]["data_rows"] == 1
         assert state["sft_schedule"]["reshuffle_each_epoch"] is False
         assert len(state["sft_schedule"]["epoch_zero_order_sha256"]) == 64
@@ -481,16 +484,14 @@ class TestSftRunner:
         assert manifest["sft"]["seed"] == -1
         assert manifest["sft"]["epoch_seed_rule"] == "fixed_seed"
         assert manifest["sft"]["schedule_hash_algorithm"] == "sha256"
-        assert manifest["sft"]["schedule_hash_encoding"] == (
-            "uint64_be_concatenation"
-        )
+        assert manifest["sft"]["schedule_hash_encoding"] == ("uint64_be_concatenation")
         assert manifest["sft"]["data_path_status"] == "scratch"
         assert any(
             "scratch/tmp" in warning for warning in manifest["sft"]["data_warnings"]
         )
-        assert manifest["reproducibility"]["artifacts"][
-            "resolved_config.json"
-        ] == str(log_dir / "resolved_config.json")
+        assert manifest["reproducibility"]["artifacts"]["resolved_config.json"] == str(
+            log_dir / "resolved_config.json"
+        )
         assert manifest["reproducibility"]["artifacts"][
             "sft_data.snapshot.jsonl"
         ] == str(log_dir / "sft_data.snapshot.jsonl")
@@ -504,7 +505,9 @@ class TestSftRunner:
         assert resolved_config["config"]["trainer"] == "sft"
         assert resolved_config["config"]["sft_data_path"] == str(data_path)
         assert (log_dir / "sft_data.snapshot.jsonl").read_bytes() == data_bytes
-        recoverability = json.loads((log_dir / "sft_data_recoverability.json").read_text())
+        recoverability = json.loads(
+            (log_dir / "sft_data_recoverability.json").read_text()
+        )
         assert recoverability["copied"] is True
         assert recoverability["recoverable"] is True
         assert recoverability["source_sha256"] == hashlib.sha256(data_bytes).hexdigest()
@@ -512,8 +515,12 @@ class TestSftRunner:
             (adapter_path / "final" / "retrain_sft_manifest.json").read_text()
         )
         assert adapter_manifest["resume"]["from"] == str(log_dir)
-        assert result.artifacts["sft_manifest.json"] == str(log_dir / "sft_manifest.json")
-        assert result.artifacts["resolved_config.json"] == str(log_dir / "resolved_config.json")
+        assert result.artifacts["sft_manifest.json"] == str(
+            log_dir / "sft_manifest.json"
+        )
+        assert result.artifacts["resolved_config.json"] == str(
+            log_dir / "resolved_config.json"
+        )
         assert result.artifacts["sft_data.snapshot.jsonl"] == str(
             log_dir / "sft_data.snapshot.jsonl"
         )
@@ -587,9 +594,7 @@ class TestSftRunner:
         assert sft_log["train/sft/logical_padding_fraction"] == pytest.approx(0.0)
         assert len(sft_log["train/sft/batch_indices_sha256"]) == 64
         assert len(sft_log["train/sft/epoch_start_order_sha256"]) == 64
-        assert sft_log["train/train_time_semantics"] == (
-            "synchronous_optimizer_update"
-        )
+        assert sft_log["train/train_time_semantics"] == ("synchronous_optimizer_update")
         assert len(wandb_run.artifacts) == 2
         checkpoint_artifact, checkpoint_aliases = wandb_run.artifacts[0]
         assert checkpoint_artifact.metadata["checkpoint_name"] == "checkpoint_step_1"
@@ -995,56 +1000,66 @@ class TestSftRunner:
 class TestTrainerRegistry:
     def test_retrain_resolves(self):
         from retrain.registry.builtin import get_registry
+
         reg = get_registry("trainer")
         assert "retrain" in reg.builtin_names
 
     def test_command_resolves(self):
         from retrain.registry.builtin import get_registry
+
         reg = get_registry("trainer")
         assert "command" in reg.builtin_names
 
     def test_ttt_discover_resolves(self):
         from retrain.registry.builtin import get_registry
+
         reg = get_registry("trainer")
         assert "ttt_discover" in reg.builtin_names
 
     def test_sft_resolves(self):
         from retrain.registry.builtin import get_registry
+
         reg = get_registry("trainer")
         assert "sft" in reg.builtin_names
 
     def test_create_retrain_runner(self):
         from retrain.registry.builtin import get_registry
+
         config = TrainConfig()
         runner = get_registry("trainer").create("retrain", config)
         assert isinstance(runner, RetainRunner)
 
     def test_create_command_runner(self):
         from retrain.registry.builtin import get_registry
+
         config = _bare_config(trainer_command="echo ok")
         runner = get_registry("trainer").create("command", config)
         assert isinstance(runner, CommandRunner)
 
     def test_create_ttt_discover_runner(self):
         from retrain.registry.builtin import get_registry
+
         config = _bare_config()
         runner = get_registry("trainer").create("ttt_discover", config)
         assert isinstance(runner, TTTDiscoverRunner)
 
     def test_create_sft_runner(self):
         from retrain.registry.builtin import get_registry
+
         config = _bare_config()
         runner = get_registry("trainer").create("sft", config)
         assert isinstance(runner, SftRunner)
 
     def test_command_without_trainer_command_raises(self):
         from retrain.registry.builtin import get_registry
+
         config = _bare_config(trainer_command="")
         with pytest.raises(ValueError, match="trainer_command"):
             get_registry("trainer").create("command", config)
 
     def test_unknown_trainer_raises(self):
         from retrain.registry.builtin import get_registry
+
         config = TrainConfig()
         with pytest.raises(ValueError, match="Unknown trainer"):
             get_registry("trainer").create("nonexistent", config)
@@ -1101,6 +1116,7 @@ trainer = "retrain"
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         explain_single(str(config_file), "json")
         output = capsys.readouterr().out
         data = json.loads(output)
@@ -1116,6 +1132,7 @@ model = "Qwen/Qwen3-4B-Instruct-2507"
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         explain_single(str(config_file), "text")
         output = capsys.readouterr().out
         assert "trainer" in output
@@ -1146,6 +1163,7 @@ sft_data_rows = 1
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         explain_single(str(config_file), "json")
         output = capsys.readouterr().out
         data = json.loads(output)
@@ -1179,6 +1197,7 @@ sft_data_rows = 1
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         explain_single(str(config_file), "text")
         output = capsys.readouterr().out
 
@@ -1204,6 +1223,7 @@ sft_data_path = "{missing_path}"
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         explain_single(str(config_file), "json")
         output = capsys.readouterr().out
         data = json.loads(output)
@@ -1218,11 +1238,12 @@ sft_data_path = "{missing_path}"
 [training]
 trainer = "sft"
 sft_data_path = "{data_path}"
-sft_data_sha256 = "{'0' * 64}"
+sft_data_sha256 = "{"0" * 64}"
 """
         config_file = tmp_path / "sft.toml"
         config_file.write_text(toml_content)
 
         from retrain.commands.explain.single import explain_single
+
         with pytest.raises(ValueError, match="sft_data_sha256 mismatch"):
             explain_single(str(config_file), "json")

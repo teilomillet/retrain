@@ -22,9 +22,7 @@ class TestInitPlugin:
 
     def test_scaffold_with_test(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        _run_init_plugin(
-            ["--kind", "advantage", "--name", "my_adv", "--with-test"]
-        )
+        _run_init_plugin(["--kind", "advantage", "--name", "my_adv", "--with-test"])
         assert (tmp_path / "plugins" / "my_adv.py").is_file()
         assert (tmp_path / "tests" / "test_my_adv_plugin.py").is_file()
 

@@ -102,7 +102,9 @@ class SftRunner:
         )
         examples = dataset.examples
         if not examples:
-            raise RuntimeError("SFT dataset is empty — cannot fine-tune with zero examples.")
+            raise RuntimeError(
+                "SFT dataset is empty — cannot fine-tune with zero examples."
+            )
         for warning in dataset.provenance.data_warnings:
             print(f"WARNING: {warning}")
 
@@ -152,10 +154,9 @@ class SftRunner:
                         f"max_steps {config.max_steps}."
                     )
                 resume_batch_size = resume_state["current_batch_size"]
-                resume_checkpoint_ref = (
-                    resume_state.get("checkpoint_path", "")
-                    or resume_state.get("checkpoint_name", "")
-                )
+                resume_checkpoint_ref = resume_state.get(
+                    "checkpoint_path", ""
+                ) or resume_state.get("checkpoint_name", "")
 
         helper = get_registry("backend").create(config.backend, config)
         if config.resume_from and not callable(getattr(helper, "load_state", None)):
@@ -191,11 +192,15 @@ class SftRunner:
             **sft_tokenizer_load_kwargs(config, dataset.provenance),
         )
 
-        batch_size = config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
+        batch_size = (
+            config.sft_batch_size if config.sft_batch_size > 0 else config.batch_size
+        )
         batch_size = min(max(1, batch_size), len(examples))
         if resume_batch_size is not None and resume_batch_size > 0:
             batch_size = min(resume_batch_size, len(examples))
-        max_tokens = config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens
+        max_tokens = (
+            config.sft_max_tokens if config.sft_max_tokens > 0 else config.max_tokens
+        )
         lr = config.sft_lr if config.sft_lr > 0 else config.lr
         print("Tokenizing SFT dataset ...")
         tokenized_examples = tokenize_sft_dataset(

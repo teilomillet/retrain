@@ -146,7 +146,10 @@ class TestComputeTlGrpoAdvantages:
 
         # With baseline=0.5: outcome = 0.85 - 0.5 = 0.35, turn_adv = 0 + 0.5*0.35 = 0.175
         _compute_tl_grpo_advantages(
-            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+            states,
+            branch_rewards,
+            turn_weight=0.5,
+            outcome_baseline=0.5,
         )
         assert abs(states[0]["turn_advantages"][0] - 0.175) < 1e-6
 
@@ -159,7 +162,10 @@ class TestComputeTlGrpoAdvantages:
             [[0.0, 0.0, 0.0, 0.0]],
         ]
         _compute_tl_grpo_advantages(
-            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+            states,
+            branch_rewards,
+            turn_weight=0.5,
+            outcome_baseline=0.5,
         )
         # outcome = 0.20 - 0.5 = -0.30, turn_adv = 0 + 0.5 * (-0.30) = -0.15
         assert abs(states[0]["turn_advantages"][0] - (-0.15)) < 1e-6
@@ -174,7 +180,10 @@ class TestComputeTlGrpoAdvantages:
             [[10.0, 0.0, 0.0, 0.0]],
         ]
         _compute_tl_grpo_advantages(
-            states, branch_rewards, turn_weight=0.5, outcome_baseline=0.5,
+            states,
+            branch_rewards,
+            turn_weight=0.5,
+            outcome_baseline=0.5,
         )
         adv = states[0]["turn_advantages"][0]
         # local > 0 (primary is best) + 0.5 * (0.80 - 0.5) = local + 0.15
@@ -302,8 +311,16 @@ class TestRunTlGrpoBranching:
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, env, helper, tokenizer,
-            branch_mode="llm", branch_size=4, max_tokens=100, temperature=0.7, top_p=0.95,
+            state,
+            turns,
+            env,
+            helper,
+            tokenizer,
+            branch_mode="llm",
+            branch_size=4,
+            max_tokens=100,
+            temperature=0.7,
+            top_p=0.95,
         )
         assert len(result) == 1
         assert len(result[0]) == 4  # primary + 3 alternatives
@@ -327,13 +344,21 @@ class TestRunTlGrpoBranching:
         tokenizer = _FakeTokenizer()
         turns = [
             VerifiersTurnSample(
-                prompt_ids=[1], completion_ids=[2],
-                completion_logprobs=[0.0], completion_text="bad",
+                prompt_ids=[1],
+                completion_ids=[2],
+                completion_logprobs=[0.0],
+                completion_text="bad",
             ),
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, env, helper, tokenizer, branch_mode="llm", branch_size=4,
+            state,
+            turns,
+            env,
+            helper,
+            tokenizer,
+            branch_mode="llm",
+            branch_size=4,
         )
         assert len(result) == 1
         assert result[0] == [0.0]
@@ -360,14 +385,24 @@ class TestRunTlGrpoBranching:
 
         turns = [
             VerifiersTurnSample(
-                prompt_ids=[1, 2], completion_ids=[3],
-                completion_logprobs=[0.0], completion_text='{"kind":"wait"}',
+                prompt_ids=[1, 2],
+                completion_ids=[3],
+                completion_logprobs=[0.0],
+                completion_text='{"kind":"wait"}',
             ),
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, env, helper, tokenizer,
-            branch_mode="llm", branch_size=3, max_tokens=100, temperature=0.7, top_p=0.95,
+            state,
+            turns,
+            env,
+            helper,
+            tokenizer,
+            branch_mode="llm",
+            branch_size=3,
+            max_tokens=100,
+            temperature=0.7,
+            top_p=0.95,
         )
         assert len(result) == 1
         assert result[0][0] == 2.0  # primary
@@ -378,11 +413,22 @@ class TestRunTlGrpoBranching:
         """If state has no env client, branching returns []."""
         state: dict[str, object] = {
             "env": None,
-            "turn_log": [{"turn": 1, "valid": True, "operation": {"kind": "wait"},
-                          "reward_delta": 1.0, "cumulative_reward": 1.0}],
+            "turn_log": [
+                {
+                    "turn": 1,
+                    "valid": True,
+                    "operation": {"kind": "wait"},
+                    "reward_delta": 1.0,
+                    "cumulative_reward": 1.0,
+                }
+            ],
         }
         result = _run_tl_grpo_branching(
-            state, [], _FakeEnv(), _FakeHelper([""]), _FakeTokenizer(),
+            state,
+            [],
+            _FakeEnv(),
+            _FakeHelper([""]),
+            _FakeTokenizer(),
         )
         assert result == []
 
@@ -390,12 +436,23 @@ class TestRunTlGrpoBranching:
         """Malformed fork providers are ignored instead of called."""
         state: dict[str, object] = {
             "env": type("E", (), {"fork_execute": 1})(),
-            "turn_log": [{"turn": 1, "valid": True, "operation": {"kind": "wait"},
-                          "reward_delta": 1.0, "cumulative_reward": 1.0}],
+            "turn_log": [
+                {
+                    "turn": 1,
+                    "valid": True,
+                    "operation": {"kind": "wait"},
+                    "reward_delta": 1.0,
+                    "cumulative_reward": 1.0,
+                }
+            ],
         }
 
         result = _run_tl_grpo_branching(
-            state, [], _FakeEnv(), _FakeHelper([""]), _FakeTokenizer(),
+            state,
+            [],
+            _FakeEnv(),
+            _FakeHelper([""]),
+            _FakeTokenizer(),
         )
 
         assert result == []
@@ -424,8 +481,13 @@ class TestRunTlGrpoBranching:
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, _FakeEnv(), _FakeHelper(['{"kind":"wait"}']),
-            _FakeTokenizer(), branch_mode="llm", branch_size=2,
+            state,
+            turns,
+            _FakeEnv(),
+            _FakeHelper(['{"kind":"wait"}']),
+            _FakeTokenizer(),
+            branch_mode="llm",
+            branch_size=2,
         )
 
         assert result == [[1.0, 0.25]]
@@ -458,18 +520,30 @@ class TestRunTlGrpoBranching:
         tokenizer = _FakeTokenizer()
         turns = [
             VerifiersTurnSample(
-                prompt_ids=[1], completion_ids=[2],
-                completion_logprobs=[0.0], completion_text='{"kind":"wait"}',
+                prompt_ids=[1],
+                completion_ids=[2],
+                completion_logprobs=[0.0],
+                completion_text='{"kind":"wait"}',
             ),
             VerifiersTurnSample(
-                prompt_ids=[1, 2, 3], completion_ids=[4],
-                completion_logprobs=[0.0], completion_text='{"kind":"wait"}',
+                prompt_ids=[1, 2, 3],
+                completion_ids=[4],
+                completion_logprobs=[0.0],
+                completion_text='{"kind":"wait"}',
             ),
         ]
 
         result = _run_tl_grpo_branching(
-            state, turns, env, helper, tokenizer,
-            branch_mode="llm", branch_size=2, max_tokens=100, temperature=0.7, top_p=0.95,
+            state,
+            turns,
+            env,
+            helper,
+            tokenizer,
+            branch_mode="llm",
+            branch_size=2,
+            max_tokens=100,
+            temperature=0.7,
+            top_p=0.95,
         )
         assert len(result) == 2
         # Turn 0: primary=1.0, alt=0.5 (cum[1] - pre_cum=0.0)
@@ -508,6 +582,7 @@ class TestActionSpaceBranching:
                 "valid": True,
             },
         ]
+
         # Accept=1op→cum 1.5, reject=1op→cum -0.2, restock=1op→cum 0, wait=1op→cum 0
         # But _FakeClient keys on len(ops). All alts have 1 op → same cum.
         # Use a smarter fake that varies by action content.
@@ -516,7 +591,11 @@ class TestActionSpaceBranching:
                 if not operations:
                     return {"run": {"cumulative_reward": 0.0}}
                 last = operations[-1]
-                action = last.get("action", {}).get("type", "") if isinstance(last, dict) else ""
+                action = (
+                    last.get("action", {}).get("type", "")
+                    if isinstance(last, dict)
+                    else ""
+                )
                 rewards = {
                     "accept_customer": 1.5,
                     "reject_customer": -0.2,
@@ -530,7 +609,11 @@ class TestActionSpaceBranching:
         state = {"env": env_obj, "turn_log": turn_log}
 
         result = _run_tl_grpo_branching(
-            state, [], _FakeEnv(), _FakeHelper([]), _FakeTokenizer(),
+            state,
+            [],
+            _FakeEnv(),
+            _FakeHelper([]),
+            _FakeTokenizer(),
             branch_mode="action_space",
         )
         assert len(result) == 1
@@ -540,8 +623,8 @@ class TestActionSpaceBranching:
         # Alternatives should include reject=-0.2, restock=0, wait=0
         alt_deltas = sorted(result[0][1:])
         assert alt_deltas[0] == pytest.approx(-0.2)  # reject
-        assert alt_deltas[1] == pytest.approx(0.0)    # restock or wait
-        assert alt_deltas[2] == pytest.approx(0.0)    # restock or wait
+        assert alt_deltas[1] == pytest.approx(0.0)  # restock or wait
+        assert alt_deltas[2] == pytest.approx(0.0)  # restock or wait
 
     def test_action_space_skips_primary_action(self):
         """Primary action is not duplicated in alternatives."""
@@ -562,7 +645,11 @@ class TestActionSpaceBranching:
             def execute(self, operations, **kw):
                 if operations:
                     last = operations[-1]
-                    action = last.get("action", {}).get("type", "") if isinstance(last, dict) and "action" in last else last.get("kind", "")
+                    action = (
+                        last.get("action", {}).get("type", "")
+                        if isinstance(last, dict) and "action" in last
+                        else last.get("kind", "")
+                    )
                     self.actions_tried.append(action)
                 return {"run": {"cumulative_reward": 0.0}}
 
@@ -571,7 +658,11 @@ class TestActionSpaceBranching:
         state = {"env": env_obj, "turn_log": turn_log}
 
         _run_tl_grpo_branching(
-            state, [], _FakeEnv(), _FakeHelper([]), _FakeTokenizer(),
+            state,
+            [],
+            _FakeEnv(),
+            _FakeHelper([]),
+            _FakeTokenizer(),
             branch_mode="action_space",
         )
         # "wait" is the primary action, so alternatives should be the other 3
@@ -599,7 +690,11 @@ class TestActionSpaceBranching:
 
         # Should NOT raise — LLM is never called
         result = _run_tl_grpo_branching(
-            state, [], _FakeEnv(), _FailHelper(), _FakeTokenizer(),
+            state,
+            [],
+            _FakeEnv(),
+            _FailHelper(),
+            _FakeTokenizer(),
             branch_mode="action_space",
         )
         assert len(result) == 1

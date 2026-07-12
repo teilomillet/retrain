@@ -182,9 +182,7 @@ class TestPipelineCreditInvariants:
             gtpo_beta=0.1,
         )
 
-        for i, (ep_adv, token_advs) in enumerate(
-            zip(grpo_advs, result.token_advs)
-        ):
+        for i, (ep_adv, token_advs) in enumerate(zip(grpo_advs, result.token_advs)):
             for j, ta in enumerate(token_advs):
                 if ep_adv > 0:
                     assert ta >= 0, (
@@ -211,9 +209,7 @@ class TestPipelineCreditInvariants:
             gtpo_beta=0.05,
         )
 
-        for i, (ep_adv, token_advs) in enumerate(
-            zip(grpo_advs, result.token_advs)
-        ):
+        for i, (ep_adv, token_advs) in enumerate(zip(grpo_advs, result.token_advs)):
             mean_ta = sum(token_advs) / len(token_advs)
             assert mean_ta == pytest.approx(ep_adv, abs=1e-6), (
                 f"ep {i}: mean(ta)={mean_ta:.6f} != ep_adv={ep_adv:.6f}"
@@ -234,9 +230,7 @@ class TestPipelineCreditInvariants:
             gtpo_beta=0.1,
         )
 
-        episode_means = [
-            sum(ta) / len(ta) for ta in result.token_advs
-        ]
+        episode_means = [sum(ta) / len(ta) for ta in result.token_advs]
         grand_mean = sum(episode_means) / len(episode_means)
         assert grand_mean == pytest.approx(0.0, abs=1e-6), (
             f"grand mean of episode means should be 0: {grand_mean:.8f}"
@@ -258,9 +252,7 @@ class TestPipelineCreditInvariants:
             hicra_alpha=0.2,
         )
 
-        for i, (ep_adv, token_advs) in enumerate(
-            zip(grpo_advs, result.token_advs)
-        ):
+        for i, (ep_adv, token_advs) in enumerate(zip(grpo_advs, result.token_advs)):
             for j, ta in enumerate(token_advs):
                 if ep_adv > 0:
                     assert ta >= 0, (

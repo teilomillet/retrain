@@ -36,12 +36,15 @@ from retrain.advantages import (
 # REINFORCE++ episode-level advantages (should be identical to GRPO)
 # ---------------------------------------------------------------------------
 
+
 class TestReinforcePPAdvantages:
     """Episode-level computation is identical to GRPO: A_i = r_i - mean(r)."""
 
     def test_identical_to_grpo(self):
         rewards = [1.0, 0.0, 0.5, 0.8, 0.2]
-        assert compute_reinforce_pp_advantages(rewards) == compute_grpo_advantages(rewards)
+        assert compute_reinforce_pp_advantages(rewards) == compute_grpo_advantages(
+            rewards
+        )
 
     def test_basic(self):
         advs = compute_reinforce_pp_advantages([1.0, 0.0, 0.0, 1.0])
@@ -89,16 +92,17 @@ class TestReinforcePPAdvantages:
 # Batch-level advantage normalization (the REINFORCE++ step 2)
 # ---------------------------------------------------------------------------
 
+
 class TestBatchAdvantageNormalization:
     """Core innovation: normalize advantages across the full batch."""
 
     def test_basic_normalization(self):
         """After normalization, non-zero advantages should have ~zero mean and ~unit std."""
         all_advs = [
-            [0.0, 0.0, 0.5, 0.5],      # prompt padding + response
-            [0.0, 0.0, -0.5, -0.5],     # prompt padding + response
-            [0.0, 0.3, 0.3],            # shorter
-            [0.0, -0.3, -0.3],          # shorter
+            [0.0, 0.0, 0.5, 0.5],  # prompt padding + response
+            [0.0, 0.0, -0.5, -0.5],  # prompt padding + response
+            [0.0, 0.3, 0.3],  # shorter
+            [0.0, -0.3, -0.3],  # shorter
         ]
         result, metrics = apply_batch_advantage_normalization(all_advs)
 
@@ -196,6 +200,7 @@ class TestBatchAdvantageNormalization:
     def test_large_batch_statistical_properties(self):
         """With a large batch, normalized advantages should be ~N(0,1)."""
         import random
+
         rng = random.Random(42)
         # Simulate 20 groups of 8 samples each, 10 tokens per sample
         all_advs = []
@@ -230,6 +235,7 @@ class TestBatchAdvantageNormalization:
 # Integration: REINFORCE++ through the composable advantage pipeline
 # ---------------------------------------------------------------------------
 
+
 class TestReinforcePPComposable:
     """Test reinforce_pp works through compute_composable_advantages."""
 
@@ -238,7 +244,9 @@ class TestReinforcePPComposable:
         logprobs = [[-0.5, -0.3], [-0.7, -0.2], [-0.4, -0.6]]
         planning_masks = [[0, 0], [0, 0], [0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="reinforce_pp",
             transform_mode="none",
         )
@@ -250,17 +258,27 @@ class TestReinforcePPComposable:
     def test_composable_matches_grpo(self):
         """reinforce_pp through composable should match grpo through composable."""
         rewards = [1.0, 0.0, 0.5, 0.8]
-        logprobs = [[-0.5, -0.3, -0.1], [-0.7, -0.2, -0.4],
-                    [-0.4, -0.6, -0.2], [-0.3, -0.5, -0.7]]
+        logprobs = [
+            [-0.5, -0.3, -0.1],
+            [-0.7, -0.2, -0.4],
+            [-0.4, -0.6, -0.2],
+            [-0.3, -0.5, -0.7],
+        ]
         planning_masks = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
 
         result_grpo = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
-            advantage_mode="grpo", transform_mode="none",
+            rewards,
+            logprobs,
+            planning_masks,
+            advantage_mode="grpo",
+            transform_mode="none",
         )
         result_rpp = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
-            advantage_mode="reinforce_pp", transform_mode="none",
+            rewards,
+            logprobs,
+            planning_masks,
+            advantage_mode="reinforce_pp",
+            transform_mode="none",
         )
         for i in range(4):
             for j in range(3):
@@ -274,7 +292,9 @@ class TestReinforcePPComposable:
         logprobs = [[-0.5, -1.0, -0.3], [-0.7, -0.2, -0.4]]
         planning_masks = [[0, 0, 0], [0, 0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="reinforce_pp",
             transform_mode="gtpo",
             gtpo_beta=0.1,
@@ -287,6 +307,7 @@ class TestReinforcePPComposable:
 # ---------------------------------------------------------------------------
 # End-to-end: batch normalization after group-level computation
 # ---------------------------------------------------------------------------
+
 
 class TestReinforcePPEndToEnd:
     """Simulate the full trainer flow: per-group advantages → batch normalization."""
@@ -390,8 +411,10 @@ class TestReinforcePPEndToEnd:
 
         # The key difference: magnitudes are now standardized
         non_zero = [a for seq in rpp_normalized for a in seq if a != 0.0]
-        std_val = math.sqrt(sum(v ** 2 for v in non_zero) / len(non_zero)
-                           - (sum(non_zero) / len(non_zero)) ** 2)
+        std_val = math.sqrt(
+            sum(v**2 for v in non_zero) / len(non_zero)
+            - (sum(non_zero) / len(non_zero)) ** 2
+        )
         assert std_val == pytest.approx(1.0, abs=0.01)
 
     def test_many_groups_reduces_estimator_bias(self):
@@ -401,6 +424,7 @@ class TestReinforcePPEndToEnd:
         This tests the theoretical claim: bias vanishes as N→∞.
         """
         import random
+
         rng = random.Random(123)
 
         n_groups = 50
@@ -426,12 +450,15 @@ class TestReinforcePPEndToEnd:
         assert math.sqrt(var_val) == pytest.approx(1.0, abs=0.001)
 
         # Metrics should report correct count
-        assert metrics["batch_adv_count"] == n_groups * group_size * 5  # response tokens
+        assert (
+            metrics["batch_adv_count"] == n_groups * group_size * 5
+        )  # response tokens
 
 
 # ---------------------------------------------------------------------------
 # Edge cases and robustness
 # ---------------------------------------------------------------------------
+
 
 class TestBatchNormEdgeCases:
     """Edge cases that could cause numerical issues or incorrect behavior."""
@@ -479,6 +506,7 @@ class TestBatchNormEdgeCases:
     def test_idempotent_for_already_normalized(self):
         """If advantages are already ~N(0,1), output should still be ~N(0,1)."""
         import random
+
         rng = random.Random(77)
         all_advs = []
         for _ in range(1000):
@@ -506,6 +534,7 @@ class TestBatchNormEdgeCases:
 # ---------------------------------------------------------------------------
 # Algorithm mode shortcuts (reinforce_pp_none, reinforce_pp_gtpo, etc.)
 # ---------------------------------------------------------------------------
+
 
 class TestReinforcePPAlgorithmModes:
     """Test pre-built algorithm mode shortcuts work end-to-end."""
@@ -540,7 +569,9 @@ class TestReinforcePPAlgorithmModes:
         logprobs = [[-0.5, -0.3], [-0.7, -0.2], [-0.4, -0.6]]
         planning_masks = [[0, 0], [0, 0], [0, 0]]
         result = compute_algorithm_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             algorithm_mode="reinforce_pp_none",
         )
         assert len(result.token_advs) == 3
@@ -550,16 +581,24 @@ class TestReinforcePPAlgorithmModes:
     def test_reinforce_pp_none_matches_composable(self):
         """algorithm_mode='reinforce_pp_none' should match composable equivalent."""
         rewards = [1.0, 0.0, 0.5, 0.8]
-        logprobs = [[-0.5, -0.3, -0.1], [-0.7, -0.2, -0.4],
-                    [-0.4, -0.6, -0.2], [-0.3, -0.5, -0.7]]
+        logprobs = [
+            [-0.5, -0.3, -0.1],
+            [-0.7, -0.2, -0.4],
+            [-0.4, -0.6, -0.2],
+            [-0.3, -0.5, -0.7],
+        ]
         planning_masks = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]]
 
         algo_result = compute_algorithm_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             algorithm_mode="reinforce_pp_none",
         )
         comp_result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="reinforce_pp",
             transform_mode="none",
         )
@@ -575,7 +614,9 @@ class TestReinforcePPAlgorithmModes:
         logprobs = [[-0.1, -2.0, -0.5], [-1.5, -0.3, -0.8]]
         planning_masks = [[0, 0, 0], [0, 0, 0]]
         result = compute_algorithm_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             algorithm_mode="reinforce_pp_gtpo",
             gtpo_beta=0.2,
         )
@@ -588,7 +629,9 @@ class TestReinforcePPAlgorithmModes:
         logprobs = [[-0.5, -0.3, -0.8, -0.2], [-0.7, -0.2, -0.4, -0.6]]
         planning_masks = [[0, 1, 0, 1], [1, 0, 1, 0]]
         result = compute_algorithm_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             algorithm_mode="reinforce_pp_gtpo_sepa",
             sepa_lambda=0.5,
         )
@@ -599,6 +642,7 @@ class TestReinforcePPAlgorithmModes:
 # ---------------------------------------------------------------------------
 # Flow validation compatibility
 # ---------------------------------------------------------------------------
+
 
 class TestReinforcePPFlow:
     """Test training/flow.py validation works with reinforce_pp modes."""
@@ -661,12 +705,14 @@ class TestReinforcePPFlow:
 # Config round-trip (TOML → TrainConfig → validation)
 # ---------------------------------------------------------------------------
 
+
 class TestReinforcePPConfigRoundTrip:
     """Verify TOML configs parse and validate correctly."""
 
     def test_full_reinforce_pp_config(self, tmp_path):
         """Full TOML config with all REINFORCE++ settings."""
         from retrain.config import load_config
+
         toml = tmp_path / "rpp.toml"
         toml.write_text("""
 [algorithm]
@@ -694,6 +740,7 @@ lr = 1e-5
     def test_algorithm_mode_reinforce_pp_none(self, tmp_path):
         """Algorithm mode shortcut via TOML."""
         from retrain.config import load_config
+
         toml = tmp_path / "rpp_algo.toml"
         toml.write_text("""
 [algorithm]
@@ -709,6 +756,7 @@ batch_advantage_norm = true
     def test_cli_override_advantage_mode(self, tmp_path):
         """CLI flags should override TOML."""
         from retrain.config import load_config, parse_cli_overrides
+
         toml = tmp_path / "base.toml"
         toml.write_text('[algorithm]\nadvantage_mode = "grpo"\n')
         _path, overrides = parse_cli_overrides(
@@ -723,6 +771,7 @@ batch_advantage_norm = true
 # Stress test: realistic multi-group batch simulation
 # ---------------------------------------------------------------------------
 
+
 class TestReinforcePPStress:
     """Simulate realistic training scenarios with many groups."""
 
@@ -733,6 +782,7 @@ class TestReinforcePPStress:
         warehouse scenarios with different difficulty levels).
         """
         import random
+
         rng = random.Random(42)
 
         n_prompts = 4
@@ -745,8 +795,10 @@ class TestReinforcePPStress:
         for prompt_idx in range(n_prompts):
             # Each prompt has different reward distribution
             base_difficulty = rng.uniform(0.2, 0.8)
-            rewards = [max(0, min(1, rng.gauss(base_difficulty, 0.2)))
-                       for _ in range(group_size)]
+            rewards = [
+                max(0, min(1, rng.gauss(base_difficulty, 0.2)))
+                for _ in range(group_size)
+            ]
 
             # Compute per-group advantages (REINFORCE++ step 1)
             advs = compute_reinforce_pp_advantages(rewards)
@@ -763,17 +815,15 @@ class TestReinforcePPStress:
         for g in range(n_prompts):
             start = g * group_size
             group_vals = [
-                all_datum_advantages[start + s][prompt_len]
-                for s in range(group_size)
+                all_datum_advantages[start + s][prompt_len] for s in range(group_size)
             ]
             group_maxes.append(max(abs(v) for v in group_vals))
-        assert max(group_maxes) / min(group_maxes) > 1.1, \
+        assert max(group_maxes) / min(group_maxes) > 1.1, (
             "Groups should have different scales before normalization"
+        )
 
         # Apply batch normalization (REINFORCE++ step 2)
-        normalized, metrics = apply_batch_advantage_normalization(
-            all_datum_advantages
-        )
+        normalized, metrics = apply_batch_advantage_normalization(all_datum_advantages)
 
         # Verify post-normalization properties
         assert len(normalized) == n_prompts * group_size
@@ -795,13 +845,9 @@ class TestReinforcePPStress:
         """One group has tiny rewards, another has huge — batch norm should
         standardize both to the same scale."""
         # Group 1: very small advantages (easy scenario, all ~0.9 reward)
-        small_advs = compute_reinforce_pp_advantages(
-            [0.91, 0.89, 0.92, 0.88]
-        )
+        small_advs = compute_reinforce_pp_advantages([0.91, 0.89, 0.92, 0.88])
         # Group 2: large advantages (hard scenario, mixed rewards)
-        large_advs = compute_reinforce_pp_advantages(
-            [1.0, 0.0, 1.0, 0.0]
-        )
+        large_advs = compute_reinforce_pp_advantages([1.0, 0.0, 1.0, 0.0])
 
         all_advs = []
         for adv in small_advs:
@@ -825,6 +871,7 @@ class TestReinforcePPStress:
     def test_batch_norm_preserves_within_group_ranking(self):
         """Within each group, relative ordering of samples must be preserved."""
         import random
+
         rng = random.Random(99)
 
         for _ in range(20):  # 20 random trials
@@ -843,8 +890,9 @@ class TestReinforcePPStress:
             for i in range(7):
                 orig_order = advs[i] < advs[i + 1]
                 norm_order = normalized[i][1] < normalized[i + 1][1]
-                assert orig_order == norm_order, \
-                    f"Ordering violated at index {i}: orig={advs[i]:.4f} vs {advs[i+1]:.4f}"
+                assert orig_order == norm_order, (
+                    f"Ordering violated at index {i}: orig={advs[i]:.4f} vs {advs[i + 1]:.4f}"
+                )
 
     def test_deterministic(self):
         """Same input should always produce same output."""
@@ -865,13 +913,13 @@ class TestReinforcePPStress:
     def test_all_finite_under_adversarial_inputs(self):
         """No NaN/Inf even with adversarial reward patterns."""
         adversarial_cases = [
-            [1.0, 1.0, 1.0, 1.0],         # all same (std=0)
-            [0.0, 0.0, 0.0, 0.0],         # all zero
-            [1e-15, -1e-15],               # near-zero
-            [1e6, -1e6],                   # huge
-            [1.0],                          # single
-            [0.0, 1.0],                    # binary
-            [0.999999, 1.000001],          # near-equal
+            [1.0, 1.0, 1.0, 1.0],  # all same (std=0)
+            [0.0, 0.0, 0.0, 0.0],  # all zero
+            [1e-15, -1e-15],  # near-zero
+            [1e6, -1e6],  # huge
+            [1.0],  # single
+            [0.0, 1.0],  # binary
+            [0.999999, 1.000001],  # near-equal
         ]
 
         all_advs = []
@@ -889,6 +937,7 @@ class TestReinforcePPStress:
 # ---------------------------------------------------------------------------
 # Delight gating (Osband 2026, arxiv:2603.14608)
 # ---------------------------------------------------------------------------
+
 
 class TestDelightGating:
     """Test delight-gated token advantages."""
@@ -968,7 +1017,9 @@ class TestDelightGating:
         logprobs = [[-0.5, -3.0, -0.1], [-0.7, -0.2, -5.0], [-0.4, -0.6, -1.0]]
         planning_masks = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="reinforce_pp",
             transform_mode="delight",
         )
@@ -1076,7 +1127,9 @@ class TestDelightSEPA:
         logprobs = [[-0.5, -3.0], [-0.7, -0.2], [-0.4, -1.0]]
         planning_masks = [[0, 0], [0, 0], [0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight_sepa",
             sepa_lambda=0.5,
@@ -1092,14 +1145,18 @@ class TestDelightSEPA:
         planning_masks = [[0, 0, 0], [0, 0, 0]]
 
         legacy = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight_sepa",
             sepa_lambda=1.0,
             transform_params={"delight_eta": 1.0, "delight_normalize": True},
         )
         explicit = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight_sepa",
             sepa_lambda=1.0,
@@ -1116,7 +1173,9 @@ class TestDelightSEPA:
 
         with pytest.raises(ValueError, match="Invalid delight norm_mode"):
             compute_composable_advantages(
-                rewards, logprobs, planning_masks,
+                rewards,
+                logprobs,
+                planning_masks,
                 advantage_mode="grpo",
                 transform_mode="delight_sepa",
                 sepa_lambda=1.0,
@@ -1130,7 +1189,9 @@ class TestDelightSEPA:
 
         with pytest.raises(ValueError, match="Invalid delight eta_mode"):
             compute_composable_advantages(
-                rewards, logprobs, planning_masks,
+                rewards,
+                logprobs,
+                planning_masks,
                 advantage_mode="grpo",
                 transform_mode="delight_sepa",
                 sepa_lambda=1.0,
@@ -1144,7 +1205,9 @@ class TestDelightSEPA:
 
         with pytest.raises(ValueError, match="delight_eta_ema_decay"):
             compute_composable_advantages(
-                rewards, logprobs, planning_masks,
+                rewards,
+                logprobs,
+                planning_masks,
                 advantage_mode="grpo",
                 transform_mode="delight_sepa",
                 sepa_lambda=1.0,
@@ -1185,7 +1248,9 @@ class TestDelightSEPA:
         for adv, surps, lam in cases:
             result = apply_delight_sepa_gating(adv, surps, lambda_t=lam, eta=1.0)
             for a in result:
-                assert math.isfinite(a), f"Non-finite: adv={adv}, surps={surps}, λ={lam}"
+                assert math.isfinite(a), (
+                    f"Non-finite: adv={adv}, surps={surps}, λ={lam}"
+                )
 
     def test_gate_metrics_in_extra(self):
         """delight_sepa should emit gate stats in extra_metrics."""
@@ -1193,7 +1258,9 @@ class TestDelightSEPA:
         logprobs = [[-0.5, -3.0], [-0.7, -0.2], [-0.4, -1.0]]
         planning_masks = [[0, 0], [0, 0], [0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight_sepa",
             sepa_lambda=0.5,
@@ -1225,7 +1292,9 @@ class TestDelightSEPA:
         logprobs = [[-0.1, -0.1, -0.1, -5.0], [-0.1, -0.1, -0.1, -5.0]]
         planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
             transform_params={"delight_eta": 1.0, "delight_normalize": True},
@@ -1249,13 +1318,17 @@ class TestDelightSEPA:
         planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
 
         fixed = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
             transform_params={"delight_eta": 10.0, "delight_norm_mode": "scale"},
         )
         adaptive = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
             transform_params={
@@ -1280,7 +1353,9 @@ class TestDelightSEPA:
         planning_masks = [[0, 0, 0, 0], [0, 0, 0, 0]]
 
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
             transform_params={
@@ -1311,7 +1386,9 @@ class TestDelightSEPA:
         logprobs = [[-0.3, -4.0, -0.1]] * 16
         planning_masks = [[0, 0, 0]] * 16
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
             transform_params={"delight_eta": 1.0},
@@ -1328,7 +1405,9 @@ class TestDelightSEPA:
         logprobs = [[-0.3, -4.0, -0.1]] * 16
         planning_masks = [[0, 0, 0]] * 16
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight_sepa",
             sepa_lambda=0.0,
@@ -1344,7 +1423,9 @@ class TestDelightSEPA:
         logprobs = [[-0.5, -3.0], [-0.7, -0.2]]
         planning_masks = [[0, 0], [0, 0]]
         result = compute_composable_advantages(
-            rewards, logprobs, planning_masks,
+            rewards,
+            logprobs,
+            planning_masks,
             advantage_mode="grpo",
             transform_mode="delight",
         )

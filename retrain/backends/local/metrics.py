@@ -76,9 +76,7 @@ def runtime_metrics(owner: object) -> dict[str, object]:
         "local_sample_kv_quantization_oscar": int(
             getattr(owner, "sample_kv_quantization", "off") == "oscar"
         ),
-        "local_train_microbatch_size": int(
-            getattr(owner, "train_microbatch_size", 0)
-        ),
+        "local_train_microbatch_size": int(getattr(owner, "train_microbatch_size", 0)),
         "local_train_sft_microbatch_token_budget": int(
             getattr(owner, "train_sft_microbatch_token_budget", 0)
         ),
@@ -230,9 +228,7 @@ def record_sample(
     wall_s = time.perf_counter() - start_s
     prompt_tokens = sum(len(prompt) for prompt in prompt_ids_list) * int(num_samples)
     generated_tokens = sum(
-        len(result.token_ids)
-        for group in engine_results
-        for result in group
+        len(result.token_ids) for group in engine_results for result in group
     )
     metrics: dict[str, float | int] = {
         "local_sample_wall_s": wall_s,

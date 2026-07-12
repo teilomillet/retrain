@@ -25,12 +25,16 @@ valid_number = no_nan & no_inf
 
 # ── Strategies ──
 
-sigma_st = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False)
-# kappa must avoid denormalized values (< 1e-300) which overflow sqrt(1/kappa)
-kappa_st = st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False).filter(
-    lambda k: k == 0.0 or k >= 1e-300
+sigma_st = st.floats(
+    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
 )
-p_st = st.floats(min_value=0.01, max_value=1000.0, allow_nan=False, allow_infinity=False)
+# kappa must avoid denormalized values (< 1e-300) which overflow sqrt(1/kappa)
+kappa_st = st.floats(
+    min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False
+).filter(lambda k: k == 0.0 or k >= 1e-300)
+p_st = st.floats(
+    min_value=0.01, max_value=1000.0, allow_nan=False, allow_infinity=False
+)
 
 
 # ═══════════════════════════════════════════
@@ -69,7 +73,12 @@ class TestUSLThroughput:
         t2 = usl_throughput(p + 0.1, sigma, kappa=0.0)
         assert t2 >= t1 - 1e-10
 
-    @given(sigma=sigma_st, kappa=st.floats(min_value=0.001, max_value=1.0, allow_nan=False, allow_infinity=False))
+    @given(
+        sigma=sigma_st,
+        kappa=st.floats(
+            min_value=0.001, max_value=1.0, allow_nan=False, allow_infinity=False
+        ),
+    )
     def test_retrograde_exists(self, sigma: float, kappa: float) -> None:
         """With kappa > 0, throughput eventually decreases (retrograde region)."""
         t_at_1 = usl_throughput(1.0, sigma, kappa)
@@ -107,7 +116,9 @@ class TestUSLOptimalP:
 
     @given(
         sigma=sigma_st,
-        kappa=st.floats(min_value=0.001, max_value=1.0, allow_nan=False, allow_infinity=False),
+        kappa=st.floats(
+            min_value=0.001, max_value=1.0, allow_nan=False, allow_infinity=False
+        ),
     )
     def test_optimal_is_peak(self, sigma: float, kappa: float) -> None:
         """Throughput at p* is >= throughput at p*-1 and p*+1."""
@@ -137,9 +148,7 @@ class TestNoOpBackPressure:
     def test_hold_after_many_observations(self, n: int) -> None:
         bp = NoOpBackPressure()
         for i in range(n):
-            bp.observe(
-                StepObservation(step_time_s=0.5, batch_size=8, group_size=16)
-            )
+            bp.observe(StepObservation(step_time_s=0.5, batch_size=8, group_size=16))
         assert bp.recommend().action == "hold"
 
     def test_reset_is_noop(self) -> None:

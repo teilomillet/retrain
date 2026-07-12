@@ -155,7 +155,9 @@ def test_capture_manifest_redacts_nested_and_opaque_credentials(
         }
     )
     source.trainer_command = "trainer --token command-secret"
-    source.base_url = "https://bob:model-secret@example.com/v1?api_key=model-query-secret"
+    source.base_url = (
+        "https://bob:model-secret@example.com/v1?api_key=model-query-secret"
+    )
 
     captured = save_optimizer_batch_capture(
         source.log_dir,
@@ -187,15 +189,12 @@ def test_capture_manifest_redacts_nested_and_opaque_credentials(
     assert snapshot["backend_options"]["nested"]["hf_token"] == "<redacted>"
     assert snapshot["trainer_command"] == "<redacted>"
     assert "environment-secret" not in snapshot["environment_args"]
-    assert manifest["config"]["optimizer_contract"]["backend"]["options"][
-        "api_key"
-    ] == "<redacted>"
-    assert manifest["config"]["snapshot"]["backend_options"]["token"] == (
-        "<redacted>"
+    assert (
+        manifest["config"]["optimizer_contract"]["backend"]["options"]["api_key"]
+        == "<redacted>"
     )
-    assert manifest["config"]["optimizer_contract"]["backend"]["options"][
-        "token"
-    ] == 17
+    assert manifest["config"]["snapshot"]["backend_options"]["token"] == ("<redacted>")
+    assert manifest["config"]["optimizer_contract"]["backend"]["options"]["token"] == 17
 
 
 def test_payload_tamper_fails_before_deserialization(tmp_path: Path) -> None:
@@ -328,9 +327,7 @@ def test_replay_contract_allows_only_declared_checkpointing_difference(
         _adapter_provenance(),
     )
 
-    assert contract.observed_differences == (
-        "backend.options.gradient_checkpointing",
-    )
+    assert contract.observed_differences == ("backend.options.gradient_checkpointing",)
     with pytest.raises(ValueError, match="contract mismatch"):
         validate_replay_contract(
             captured.manifest,

@@ -10,7 +10,7 @@ def render(kind: str, fn_name: str) -> tuple[str, str]:
             (
                 "from retrain import TransformOutput\n\n"
                 f"def {fn_name}(ctx):\n"
-                "    \"\"\"ctx contains episode_advantages/logprobs/planning masks/params.\"\"\"\n"
+                '    """ctx contains episode_advantages/logprobs/planning masks/params."""\n'
                 "    token_advs = []\n"
                 "    for i, logprobs in enumerate(ctx.logprobs_G):\n"
                 "        adv = ctx.episode_advantages[i]\n"
@@ -33,7 +33,7 @@ def render(kind: str, fn_name: str) -> tuple[str, str]:
         return (
             (
                 f"def {fn_name}(rewards, params=None):\n"
-                "    \"\"\"Return one advantage per reward.\"\"\"\n"
+                '    """Return one advantage per reward."""\n'
                 "    if not rewards:\n"
                 "        return []\n"
                 "    scale = float((params or {}).get('scale', 1.0))\n"
@@ -52,7 +52,7 @@ def render(kind: str, fn_name: str) -> tuple[str, str]:
             (
                 "from retrain import AlgorithmOutput\n\n"
                 f"def {fn_name}(ctx):\n"
-                "    \"\"\"Full algorithm hook: return token-level advantages directly.\"\"\"\n"
+                '    """Full algorithm hook: return token-level advantages directly."""\n'
                 "    token_advs = []\n"
                 "    for rewards_idx, logprobs in enumerate(ctx.logprobs_G):\n"
                 "        reward = ctx.rewards_G[rewards_idx]\n"
@@ -95,15 +95,12 @@ def render(kind: str, fn_name: str) -> tuple[str, str]:
                 '    """\n'
                 "    raise NotImplementedError\n"
             ),
-            (
-                "[training]\n"
-                f'trainer = "plugins.{fn_name}.{fn_name}"\n'
-            ),
+            (f'[training]\ntrainer = "plugins.{fn_name}.{fn_name}"\n'),
         )
 
     generic = (
         f"def {fn_name}(config):\n"
-        f"    raise NotImplementedError(\"Implement {kind} plugin contract here.\")\n"
+        f'    raise NotImplementedError("Implement {kind} plugin contract here.")\n'
     )
     return (
         generic,

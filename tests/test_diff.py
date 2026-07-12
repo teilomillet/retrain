@@ -64,9 +64,13 @@ class TestLoadMetrics:
         run_dir = tmp_path / "run_a"
         run_dir.mkdir()
         with open(run_dir / "metrics.jsonl", "w") as f:
-            f.write('{"step": 0, "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}\n')
+            f.write(
+                '{"step": 0, "loss": 1.0, "correct_rate": 0.0, "mean_reward": 0.0, "step_time_s": 1.0}\n'
+            )
             f.write("not json\n")
-            f.write('{"step": 1, "loss": 0.5, "correct_rate": 0.3, "mean_reward": 0.6, "step_time_s": 1.0}\n')
+            f.write(
+                '{"step": 1, "loss": 0.5, "correct_rate": 0.3, "mean_reward": 0.6, "step_time_s": 1.0}\n'
+            )
             f.write("\n")  # empty line
 
         loaded = load_metrics(run_dir)

@@ -10,6 +10,7 @@ from retrain.advantages.delight.scale import (
     _coerce_delight_norm_mode,
 )
 
+
 def _sigmoid(x: float) -> float:
     """Numerically stable sigmoid."""
     if x > 20:
@@ -47,8 +48,7 @@ def apply_hard_delight_gating(
     k = max(1, int(n * k_frac))
     # For correct rollouts: keep highest surprisal (fork-points)
     # For incorrect rollouts: keep lowest surprisal (routine tokens)
-    indexed = sorted(range(n), key=lambda i: surprisals[i],
-                     reverse=(advantage > 0))
+    indexed = sorted(range(n), key=lambda i: surprisals[i], reverse=(advantage > 0))
     keep = set(indexed[:k])
     return [advantage if i in keep else 0.0 for i in range(n)]
 
@@ -74,12 +74,10 @@ def apply_hard_delight_sepa_gating(
         return [advantage] * n
 
     k = max(1, int(n * k_frac))
-    indexed = sorted(range(n), key=lambda i: surprisals[i],
-                     reverse=(advantage > 0))
+    indexed = sorted(range(n), key=lambda i: surprisals[i], reverse=(advantage > 0))
     keep = set(indexed[:k])
     pg_w = 1.0 - lam
-    return [advantage * (pg_w + lam * (1.0 if i in keep else 0.0))
-            for i in range(n)]
+    return [advantage * (pg_w + lam * (1.0 if i in keep else 0.0)) for i in range(n)]
 
 
 def apply_delight_gating(

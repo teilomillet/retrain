@@ -90,9 +90,7 @@ def to_html(sections: list[ManualSection]) -> str:
     toc_items: list[str] = []
     for sec in sections:
         anchor = _make_anchor(sec.heading)
-        toc_items.append(
-            f'<a href="#{anchor}">{html_mod.escape(sec.heading)}</a>'
-        )
+        toc_items.append(f'<a href="#{anchor}">{html_mod.escape(sec.heading)}</a>')
 
     nav = "<nav>" + "\n".join(toc_items) + "</nav>"
 
@@ -100,9 +98,7 @@ def to_html(sections: list[ManualSection]) -> str:
     body_parts: list[str] = []
     for sec in sections:
         anchor = _make_anchor(sec.heading)
-        body_parts.append(
-            f'<h2 id="{anchor}">{html_mod.escape(sec.heading)}</h2>'
-        )
+        body_parts.append(f'<h2 id="{anchor}">{html_mod.escape(sec.heading)}</h2>')
 
         in_pre = False
         buf: list[str] = []

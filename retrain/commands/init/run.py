@@ -51,8 +51,7 @@ def run(args: list[str] | None = None, cli_name: str | None = None) -> None:
 
     if template_name not in INIT_TEMPLATES:
         print(
-            f"Unknown template '{template_name}'. "
-            f"Available: {sorted(INIT_TEMPLATES)}",
+            f"Unknown template '{template_name}'. Available: {sorted(INIT_TEMPLATES)}",
             file=sys.stderr,
         )
         sys.exit(1)

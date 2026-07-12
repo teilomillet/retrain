@@ -101,8 +101,10 @@ class TinkerTrainHelper:
         if clip_eps > 0:
             eps_hi = clip_eps_high or clip_eps
             dc = f", dual-clip c={clip_ratio_c}" if clip_ratio_c > 0 else ""
-            print(f"PPO dual-clip enabled via manual forward+backward pipeline "
-                  f"(eps_lo={clip_eps}, eps_hi={eps_hi}{dc})")
+            print(
+                f"PPO dual-clip enabled via manual forward+backward pipeline "
+                f"(eps_lo={clip_eps}, eps_hi={eps_hi}{dc})"
+            )
         if grad_clip_norm > 0:
             print(f"Gradient clipping enabled (max_norm={grad_clip_norm})")
         print("Training client ready.")
@@ -189,7 +191,9 @@ class TinkerTrainHelper:
             for prompt_idx, prompt_tokens, dispatch_started_at, future in futures:
                 wait_started_at = time.perf_counter()
                 try:
-                    sample_result = future.result(timeout=300)  # 5 min timeout per sample
+                    sample_result = future.result(
+                        timeout=300
+                    )  # 5 min timeout per sample
                     group: list[tuple[list[int], list[float]]] = []
                     completion_lengths: list[int] = []
                     for seq in sample_result.sequences:
@@ -218,6 +222,7 @@ class TinkerTrainHelper:
                     # Context overflow or timeout — return empty sequence
                     # instead of hanging forever.
                     import sys
+
                     print(
                         f"WARNING: Tinker sample {prompt_idx} failed: {type(exc).__name__}: {exc}",
                         file=sys.stderr,
@@ -256,12 +261,10 @@ class TinkerTrainHelper:
 
         Delegates to sample() and appends None for token_entropies.
         """
-        groups = self.sample(prompt_ids_list, num_samples, max_tokens,
-                             temperature, top_p)
-        return [
-            [(ids, lps, None) for ids, lps in group]
-            for group in groups
-        ]
+        groups = self.sample(
+            prompt_ids_list, num_samples, max_tokens, temperature, top_p
+        )
+        return [[(ids, lps, None) for ids, lps in group] for group in groups]
 
     def sft_train_step(
         self,
@@ -290,7 +293,11 @@ class TinkerTrainHelper:
         with self._throttle:
             datums = []
             for i, tokens in enumerate(all_tokens):
-                advs = all_advantages[i] if i < len(all_advantages) else [1.0] * len(tokens)
+                advs = (
+                    all_advantages[i]
+                    if i < len(all_advantages)
+                    else [1.0] * len(tokens)
+                )
                 model_input = types.ModelInput.from_ints(tokens)
 
                 if loss_fn == "cross_entropy":
@@ -317,10 +324,12 @@ class TinkerTrainHelper:
                         ),
                     }
 
-                datums.append(types.Datum(
-                    model_input=model_input,
-                    loss_fn_inputs=loss_fn_inputs,
-                ))
+                datums.append(
+                    types.Datum(
+                        model_input=model_input,
+                        loss_fn_inputs=loss_fn_inputs,
+                    )
+                )
 
             fwd_bwd_future = self.training_client.forward_backward(
                 datums, loss_fn=loss_fn
@@ -393,8 +402,12 @@ class TinkerTrainHelper:
         ratios_all = []
 
         for datum, new_lp in zip(data, new_logprobs_list):
-            old_lp = torch.tensor(datum.loss_fn_inputs["logprobs"].data, dtype=torch.float32)
-            adv = torch.tensor(datum.loss_fn_inputs["advantages"].data, dtype=torch.float32)
+            old_lp = torch.tensor(
+                datum.loss_fn_inputs["logprobs"].data, dtype=torch.float32
+            )
+            adv = torch.tensor(
+                datum.loss_fn_inputs["advantages"].data, dtype=torch.float32
+            )
 
             seq_len = min(len(new_lp), len(old_lp), len(adv))
             ratio = torch.exp(new_lp[:seq_len] - old_lp[:seq_len])
@@ -508,9 +521,7 @@ class TinkerTrainHelper:
                 for i, lp_tensor in enumerate(new_lp_list):
                     grad = lp_tensor.grad
                     if grad is None:
-                        raise RuntimeError(
-                            f"No gradient for logprob tensor {i}"
-                        )
+                        raise RuntimeError(f"No gradient for logprob tensor {i}")
                     new_lp_data = [float(x) for x in lp_tensor.detach()]
                     grad_data = [float(x) for x in grad]
                     grad_datums.append(

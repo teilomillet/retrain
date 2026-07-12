@@ -169,6 +169,4 @@ def _sanitize_url(value: str) -> str:
         ]
     )
     fragment = REDACTED_CONFIG_VALUE if parts.fragment else ""
-    return urlunsplit(
-        (parts.scheme, f"{userinfo}{host}", parts.path, query, fragment)
-    )
+    return urlunsplit((parts.scheme, f"{userinfo}{host}", parts.path, query, fragment))

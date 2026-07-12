@@ -51,13 +51,17 @@ class SEPAController:
         if not 0.0 <= sepa_ema_decay <= 1.0:
             raise ValueError(f"sepa_ema_decay must be in [0, 1], got {sepa_ema_decay}")
         if sepa_var_threshold <= 0.0:
-            raise ValueError(f"sepa_var_threshold must be > 0, got {sepa_var_threshold}")
+            raise ValueError(
+                f"sepa_var_threshold must be > 0, got {sepa_var_threshold}"
+            )
         if sepa_warmup < 1:
             raise ValueError(f"sepa_warmup must be >= 1, got {sepa_warmup}")
         if eps <= 0.0:
             raise ValueError(f"eps must be > 0, got {eps}")
         if sepa_schedule not in ("linear", "auto"):
-            raise ValueError(f"sepa_schedule must be 'linear' or 'auto', got {sepa_schedule}")
+            raise ValueError(
+                f"sepa_schedule must be 'linear' or 'auto', got {sepa_schedule}"
+            )
 
         self.sepa_steps = sepa_steps
         self.sepa_schedule = sepa_schedule

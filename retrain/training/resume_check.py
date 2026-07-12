@@ -105,7 +105,9 @@ def check_resume_dir(
         _read_resolved_config(path, result)
 
     if not path.exists():
-        _add_issue(result, "error", "resume_dir_missing", f"path does not exist: {path}")
+        _add_issue(
+            result, "error", "resume_dir_missing", f"path does not exist: {path}"
+        )
         _finalize(result)
         return result
     if not path.is_dir():
@@ -220,7 +222,10 @@ def _check_checkpoint_payload(result: ResumeCheckResult) -> None:
     if path.is_file():
         result.checkpoint_payload = "local_file"
         result.adapter_payload_files = [path.name]
-        result.adapter_payload_ok = path.name in {*ADAPTER_WEIGHT_FILES, _PRIME_STATE_FILE}
+        result.adapter_payload_ok = path.name in {
+            *ADAPTER_WEIGHT_FILES,
+            _PRIME_STATE_FILE,
+        }
         if not result.adapter_payload_ok:
             _add_issue(
                 result,
@@ -231,7 +236,11 @@ def _check_checkpoint_payload(result: ResumeCheckResult) -> None:
         return
 
     result.checkpoint_payload = "local_dir"
-    files = [name for name in (*ADAPTER_WEIGHT_FILES, _PRIME_STATE_FILE) if (path / name).is_file()]
+    files = [
+        name
+        for name in (*ADAPTER_WEIGHT_FILES, _PRIME_STATE_FILE)
+        if (path / name).is_file()
+    ]
     result.adapter_payload_files = files
     result.adapter_payload_ok = bool(files)
     if not files:
@@ -304,9 +313,7 @@ def _check_sft_data(
         )
 
     config_can_supply_sft_data = (
-        config is not None
-        and result.trainer == "sft"
-        and bool(config.sft_data_path)
+        config is not None and result.trainer == "sft" and bool(config.sft_data_path)
     )
     if sft_relevant and not recoverable and not config_can_supply_sft_data:
         severity: IssueSeverity = "error" if result.trainer == "sft" else "warning"
@@ -445,7 +452,9 @@ def _add_issue(
     code: str,
     message: str,
 ) -> None:
-    result.issues.append(ResumeCheckIssue(severity=severity, code=code, message=message))
+    result.issues.append(
+        ResumeCheckIssue(severity=severity, code=code, message=message)
+    )
 
 
 def _finalize(result: ResumeCheckResult) -> None:

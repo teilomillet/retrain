@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 
+
 def _normalize_surprisals(surprisals: list[float]) -> list[float]:
     """Scale surprisals to unit-std without centering.
 
@@ -23,7 +24,7 @@ def _normalize_surprisals(surprisals: list[float]) -> list[float]:
         return list(surprisals)
     mean_s = sum(surprisals) / n
     var_s = sum((s - mean_s) ** 2 for s in surprisals) / n
-    std_s = var_s ** 0.5
+    std_s = var_s**0.5
     if std_s < 1e-8:
         return list(surprisals)
     return [s / std_s for s in surprisals]
@@ -92,9 +93,7 @@ def _coerce_delight_norm_mode(
     return "scale" if normalize else "none"
 
 
-def _resolve_delight_norm_mode(
-    params: Mapping[str, object], *, default: str
-) -> str:
+def _resolve_delight_norm_mode(params: Mapping[str, object], *, default: str) -> str:
     """Resolve Delight normalization mode from transform params.
 
     `delight_norm_mode` is the primary API. `delight_normalize` remains as a
@@ -118,9 +117,7 @@ def _resolve_delight_norm_mode(
     return default
 
 
-def _apply_delight_norm_mode(
-    surprisals: list[float], norm_mode: str
-) -> list[float]:
+def _apply_delight_norm_mode(surprisals: list[float], norm_mode: str) -> list[float]:
     """Apply the configured Delight normalization mode."""
     if norm_mode == "none":
         return list(surprisals)

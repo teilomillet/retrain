@@ -86,6 +86,7 @@ def _resolve_adapter_path(adapter_path: str) -> str:
 # Adapter loading
 # ---------------------------------------------------------------------------
 
+
 def load_adapter_matrices(
     adapter_path: str, device: str = "cpu"
 ) -> list[tuple[str, torch.Tensor, torch.Tensor]]:

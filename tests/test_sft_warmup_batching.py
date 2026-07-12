@@ -92,11 +92,7 @@ def test_epoch_reshuffle_uses_absolute_sample_schedule_across_boundary() -> None
             reshuffle_each_epoch=True,
         )
     ]
-    assert flattened == (
-        order
-        + next_order
-        + build_sft_example_order(5, seed + 2)
-    )
+    assert flattened == (order + next_order + build_sft_example_order(5, seed + 2))
 
 
 def test_epoch_reshuffle_is_deterministic_when_resuming_at_later_step() -> None:

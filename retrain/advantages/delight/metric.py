@@ -9,6 +9,7 @@ from retrain.advantages.delight.eta import (
 from retrain.advantages.delight.gate import _sigmoid
 from retrain.advantages.types import TransformContext
 
+
 def _compute_delight_gate_metrics(
     ctx: TransformContext,
     token_advs: list[list[float]],
@@ -62,7 +63,7 @@ def _compute_delight_gate_metrics(
 
     metrics: dict[str, float] = {
         "dg_gate_mean": mean_g,
-        "dg_gate_std": var_g ** 0.5,
+        "dg_gate_std": var_g**0.5,
         "dg_gate_min": min(all_gates),
         "dg_gate_max": max(all_gates),
         "dg_breakthrough_frac": breakthrough_frac,
@@ -75,16 +76,14 @@ def _compute_delight_gate_metrics(
     if neg_gates:
         metrics["dg_gate_mean_neg"] = sum(neg_gates) / len(neg_gates)
     if ordering_gaps:
-        metrics["dg_gate_ordering_gap"] = (
-            sum(ordering_gaps) / len(ordering_gaps)
-        )
+        metrics["dg_gate_ordering_gap"] = sum(ordering_gaps) / len(ordering_gaps)
     if ordering_gaps_pos:
-        metrics["dg_gate_ordering_gap_pos"] = (
-            sum(ordering_gaps_pos) / len(ordering_gaps_pos)
+        metrics["dg_gate_ordering_gap_pos"] = sum(ordering_gaps_pos) / len(
+            ordering_gaps_pos
         )
     if ordering_gaps_neg:
-        metrics["dg_gate_ordering_gap_neg"] = (
-            sum(ordering_gaps_neg) / len(ordering_gaps_neg)
+        metrics["dg_gate_ordering_gap_neg"] = sum(ordering_gaps_neg) / len(
+            ordering_gaps_neg
         )
     if lambda_t is not None:
         metrics["dg_lambda"] = lambda_t
@@ -115,7 +114,7 @@ def _compute_delight_gate_metrics(
         metrics["dg_net_advantage_bias"] = dg_bias
         metrics["dg_net_advantage_bias_per_token"] = dg_bias / n_tok
         adv_var = sum((a - adv_mean) ** 2 for a in all_flat) / n_tok
-        metrics["dg_token_adv_std"] = adv_var ** 0.5
+        metrics["dg_token_adv_std"] = adv_var**0.5
 
         # Per-rollout advantage variance (mean across rollouts):
         # how much DG differentiates tokens within a single rollout.
@@ -128,8 +127,6 @@ def _compute_delight_gate_metrics(
             r_var = sum((a - r_mean) ** 2 for a in rollout) / len(rollout)
             rollout_vars.append(r_var)
         if rollout_vars:
-            metrics["dg_within_rollout_adv_var"] = (
-                sum(rollout_vars) / len(rollout_vars)
-            )
+            metrics["dg_within_rollout_adv_var"] = sum(rollout_vars) / len(rollout_vars)
 
     return metrics

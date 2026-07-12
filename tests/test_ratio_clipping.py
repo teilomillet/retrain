@@ -27,9 +27,7 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, -0.5, 0.3, -0.2])
         mask = torch.tensor([1.0, 1.0, 1.0, 1.0])
 
-        loss, frac = _loss_from_ratio(
-            ratio, adv, mask, clip_eps=0.0, clip_eps_high=0.0
-        )
+        loss, frac = _loss_from_ratio(ratio, adv, mask, clip_eps=0.0, clip_eps_high=0.0)
 
         expected = -(ratio * adv)
         expected_loss = expected.sum() / mask.sum()
@@ -43,9 +41,7 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0])  # positive advantage
         mask = torch.tensor([1.0, 1.0, 1.0])
 
-        loss, frac = _loss_from_ratio(
-            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
-        )
+        loss, frac = _loss_from_ratio(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
 
         # For positive advantage:
         # surr1 = [1.5, 0.5, 1.0], surr2 = [1.2, 0.8, 1.0]
@@ -81,9 +77,7 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
         mask = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
 
-        _, frac = _loss_from_ratio(
-            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
-        )
+        _, frac = _loss_from_ratio(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
 
         # Bounds [0.8, 1.2]: 0.7 and 1.3 are outside -> 2/5
         assert frac == pytest.approx(2.0 / 5.0, abs=1e-6)
@@ -94,9 +88,7 @@ class TestComputePolicyLoss:
         adv = torch.tensor([1.0, 1.0, 1.0, 1.0])
         mask = torch.tensor([1.0, 1.0, 0.0, 0.0])  # last 2 are padding
 
-        _, frac = _loss_from_ratio(
-            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
-        )
+        _, frac = _loss_from_ratio(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
 
         # Only 2 real tokens: 0.5 is clipped, 1.0 is not -> 1/2
         assert frac == pytest.approx(0.5, abs=1e-6)
@@ -107,9 +99,7 @@ class TestComputePolicyLoss:
         adv = torch.tensor([-1.0])  # negative advantage
         mask = torch.tensor([1.0])
 
-        loss, _ = _loss_from_ratio(
-            ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0
-        )
+        loss, _ = _loss_from_ratio(ratio, adv, mask, clip_eps=0.2, clip_eps_high=0.0)
 
         # surr1 = 1.5 * (-1) = -1.5, surr2 = 1.2 * (-1) = -1.2
         # min(-1.5, -1.2) = -1.5

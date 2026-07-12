@@ -203,7 +203,9 @@ def test_trtllm_reload_sets_per_request_lora_without_http_reload(monkeypatch):
 
     engine.reload_weights("/tmp/retrain_adapter/_live_adapter")
     engine.reload_weights("/tmp/retrain_adapter/_live_adapter")
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert calls == [
         (
@@ -251,8 +253,12 @@ def test_vllm_generate_uses_token_prompt_without_decode(monkeypatch):
 
     monkeypatch.setattr(engine, "_post", _fake_post)
 
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert [payload["prompt"] for _endpoint, payload in calls] == [[1, 2, 3], [1, 2, 3]]
     assert tokenizer.decode_calls == 0
@@ -282,10 +288,16 @@ def test_openai_generate_reuses_cached_prompt_decode(monkeypatch):
         engine_type="openai",
     )
 
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: {"choices": []})
+    monkeypatch.setattr(
+        engine, "_post", lambda endpoint, payload, max_retries=3: {"choices": []}
+    )
 
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert tokenizer.decode_calls == 1
     counters = engine.performance_counters()
@@ -319,7 +331,9 @@ def test_token_prompt_rejection_falls_back_to_text(monkeypatch):
 
     monkeypatch.setattr(engine, "_post", _fake_post)
 
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert calls[0][1]["prompt"] == [1, 2, 3]
     assert calls[1][1]["prompt"] == "prompt"
@@ -415,7 +429,9 @@ def test_vllm_generate_uses_loaded_lora_model_name_after_reload(monkeypatch):
     monkeypatch.setattr(engine, "_post", _fake_post)
 
     engine.reload_weights("/tmp/retrain_adapter/_live_adapter")
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert calls[-1][0] == "/v1/completions"
     assert calls[-1][1]["model"] == "default"
@@ -444,7 +460,9 @@ def test_sglang_generate_uses_model_adapter_suffix_after_reload(monkeypatch):
     monkeypatch.setattr(engine, "_post", _fake_post)
 
     engine.reload_weights("/tmp/retrain_adapter/_live_adapter")
-    engine.generate([[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95)
+    engine.generate(
+        [[1, 2, 3]], num_samples=1, max_tokens=8, temperature=0.7, top_p=0.95
+    )
 
     assert calls[-1][0] == "/v1/completions"
     assert calls[-1][1]["model"] == "Qwen/Qwen3-4B-Instruct-2507:default"
@@ -499,7 +517,9 @@ def test_direct_token_ids_payload_is_used(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
+    monkeypatch.setattr(
+        engine, "_post", lambda endpoint, payload, max_retries=3: response
+    )
 
     results = engine.generate(
         [[1, 2, 3]],
@@ -538,7 +558,9 @@ def test_null_choice_token_ids_with_unconvertible_tokens_reencodes_text(monkeypa
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
+    monkeypatch.setattr(
+        engine, "_post", lambda endpoint, payload, max_retries=3: response
+    )
 
     results = engine.generate(
         [[1, 2, 3]],
@@ -577,7 +599,9 @@ def test_content_logprobs_with_token_ids_use_content_path(monkeypatch):
             }
         ]
     }
-    monkeypatch.setattr(engine, "_post", lambda endpoint, payload, max_retries=3: response)
+    monkeypatch.setattr(
+        engine, "_post", lambda endpoint, payload, max_retries=3: response
+    )
 
     results = engine.generate(
         [[1, 2, 3]],

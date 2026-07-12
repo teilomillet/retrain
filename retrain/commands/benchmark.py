@@ -89,9 +89,13 @@ def run(args: list[str]) -> None:
 
     config = load_config(str(target), overrides=overrides)
     warn_missing(config)
-    suite_dir = Path(output_dir) if output_dir else default_benchmark_output_dir(
-        str(target),
-        config,
+    suite_dir = (
+        Path(output_dir)
+        if output_dir
+        else default_benchmark_output_dir(
+            str(target),
+            config,
+        )
     )
     suite_summary = run_benchmark_suite(
         config,

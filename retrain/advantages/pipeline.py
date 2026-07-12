@@ -14,8 +14,16 @@ from retrain.advantages.plugin import (
 )
 from retrain.advantages.stats import compute_surprisal_stats
 from retrain.advantages.transform import get_transform_spec
-from retrain.advantages.types import AdvantageResult, TransformContext, UncertaintyContext
-from retrain.advantages.uncertainty import _resolve_uncertainty_kind, get_uncertainty_spec
+from retrain.advantages.types import (
+    AdvantageResult,
+    TransformContext,
+    UncertaintyContext,
+)
+from retrain.advantages.uncertainty import (
+    _resolve_uncertainty_kind,
+    get_uncertainty_spec,
+)
+
 
 def _raise_missing_data(
     uncertainty_kind: str,
@@ -100,8 +108,7 @@ def compute_composable_advantages(
     # Step 2: Token-level expansion
     if not transform_spec.use_gtpo:
         all_token_advs = [
-            [advantages_G[i]] * len(logprobs_G[i])
-            for i in range(len(logprobs_G))
+            [advantages_G[i]] * len(logprobs_G[i]) for i in range(len(logprobs_G))
         ]
         _validate_token_advs(
             all_token_advs,
@@ -154,8 +161,12 @@ def compute_composable_advantages(
 
         ctx = UncertaintyContext(
             logprobs=logprobs,
-            token_distributions=token_distributions_G[idx] if token_distributions_G else None,
-            precomputed_entropy=precomputed_entropies_G[idx] if precomputed_entropies_G else None,
+            token_distributions=token_distributions_G[idx]
+            if token_distributions_G
+            else None,
+            precomputed_entropy=precomputed_entropies_G[idx]
+            if precomputed_entropies_G
+            else None,
             planning_mask=planning_mask,
             params=merged_transform_params,
         )
@@ -220,7 +231,9 @@ def compute_composable_advantages(
         mode_name=f"transform_mode '{transform_spec.name}'",
     )
     stats = compute_surprisal_stats(all_exec_surprisals, all_plan_surprisals)
-    post_stats = compute_surprisal_stats(all_post_exec_surprisals, all_post_plan_surprisals)
+    post_stats = compute_surprisal_stats(
+        all_post_exec_surprisals, all_post_plan_surprisals
+    )
     stats.post_exec_mean = post_stats.exec_mean
     stats.post_exec_var = post_stats.exec_var
     stats.post_exec_count = post_stats.exec_count

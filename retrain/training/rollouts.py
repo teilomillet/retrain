@@ -110,7 +110,10 @@ class TokenTextLookup:
                 self._counters.token_lookup_convert_calls += 1
                 self._counters.token_lookup_cache_misses += len(missing)
 
-        return [self._cache.get(token_id, "") if token_id >= 0 else "" for token_id in token_ids]
+        return [
+            self._cache.get(token_id, "") if token_id >= 0 else ""
+            for token_id in token_ids
+        ]
 
     def get(self, token_id: int) -> str:
         """Resolve a single token id to text."""
@@ -205,9 +208,7 @@ def decode_sequence_groups(
     detect_planning: _DetectPlanning | None = None
     if needs_planning:
         if token_lookup is None or detector is None:
-            raise ValueError(
-                "Planning decode requires both token_lookup and detector."
-            )
+            raise ValueError("Planning decode requires both token_lookup and detector.")
         detect_planning = _require_planning_detect(detector)
         all_token_ids = [token_id for seq in flat_token_ids for token_id in seq]
         all_token_texts = token_lookup.get_many(all_token_ids)
@@ -227,9 +228,7 @@ def decode_sequence_groups(
             if needs_planning:
                 assert detect_planning is not None
                 planning_mask = list(
-                    detect_planning(
-                        flat_token_texts[flat_offset + seq_idx]
-                    )
+                    detect_planning(flat_token_texts[flat_offset + seq_idx])
                 )
             else:
                 planning_mask = [0] * len(logprobs)

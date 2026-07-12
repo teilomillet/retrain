@@ -15,10 +15,7 @@ class RegexPlanningDetector:
         self._pattern = (
             re.compile(
                 "(?:"
-                + "|".join(
-                    r"\b" + re.escape(gram) + r"\b"
-                    for gram in strategic_grams
-                )
+                + "|".join(r"\b" + re.escape(gram) + r"\b" for gram in strategic_grams)
                 + ")",
                 re.IGNORECASE,
             )

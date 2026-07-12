@@ -173,10 +173,7 @@ class TestTrace:
         result = flow.trace()
         assert not result.ok
         errors = [i for i in result.issues if i.severity == "error"]
-        assert any(
-            "varentropy" in e.message and e.category == "probe"
-            for e in errors
-        )
+        assert any("varentropy" in e.message and e.category == "probe" for e in errors)
 
     def test_local_pytorch_shannon_entropy_passes_trace(self):
         """shannon_entropy + pytorch engine + local backend passes flow trace."""
@@ -432,18 +429,22 @@ class TestTraceCLI:
         path = self._write_config(tmp_path, backend="local")
         result = subprocess.run(
             [sys.executable, "-m", "retrain.cli", "trace", path],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
         assert "PASS" in result.stdout
 
     def test_incompatible_config_exit_1(self, tmp_path):
         path = self._write_config(
-            tmp_path, backend="prime_rl", transform_mode="gtpo",
+            tmp_path,
+            backend="prime_rl",
+            transform_mode="gtpo",
         )
         result = subprocess.run(
             [sys.executable, "-m", "retrain.cli", "trace", path],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 1
         assert "FAIL" in result.stdout
@@ -452,7 +453,8 @@ class TestTraceCLI:
         path = self._write_config(tmp_path, backend="local")
         result = subprocess.run(
             [sys.executable, "-m", "retrain.cli", "trace", "--json", path],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0
         payload = json.loads(result.stdout)

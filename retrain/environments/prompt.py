@@ -48,8 +48,7 @@ def _chat_template_kwargs(tokenizer: object) -> dict[str, object]:
     except (TypeError, ValueError):
         return {}
     if "enable_thinking" in sig.parameters or any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in sig.parameters.values()
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
     ):
         return {"enable_thinking": False}
     return {}

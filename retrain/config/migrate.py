@@ -41,11 +41,7 @@ def detect_legacy_prime_rl_backend_keys(
     backend = as_object_table(backend_sec)
     if backend is None:
         return {}
-    return {
-        key: backend[key]
-        for key in _LEGACY_PRIME_RL_KEYS
-        if key in backend
-    }
+    return {key: backend[key] for key in _LEGACY_PRIME_RL_KEYS if key in backend}
 
 
 def _toml_literal(value: object) -> str:
@@ -59,7 +55,9 @@ def _toml_literal(value: object) -> str:
     return json.dumps(value)
 
 
-def _migration_error_for_legacy_prime_rl_keys(backend_sec: dict[str, object]) -> ValueError:
+def _migration_error_for_legacy_prime_rl_keys(
+    backend_sec: dict[str, object],
+) -> ValueError:
     """Build a concrete rewrite message for legacy PRIME-RL backend keys."""
     lines = [
         "Legacy PRIME-RL keys are no longer supported in [backend].",
@@ -67,12 +65,12 @@ def _migration_error_for_legacy_prime_rl_keys(backend_sec: dict[str, object]) ->
         "",
         "Rewrite this section as:",
         "[backend]",
-        f'backend = {_toml_literal(backend_sec.get("backend", "prime_rl"))}',
+        f"backend = {_toml_literal(backend_sec.get('backend', 'prime_rl'))}",
     ]
     if "devices" in backend_sec:
-        lines.append(f'devices = {_toml_literal(backend_sec["devices"])}')
+        lines.append(f"devices = {_toml_literal(backend_sec['devices'])}")
     if "adapter_path" in backend_sec:
-        lines.append(f'adapter_path = {_toml_literal(backend_sec["adapter_path"])}')
+        lines.append(f"adapter_path = {_toml_literal(backend_sec['adapter_path'])}")
     lines.append("")
     lines.append("[backend.options]")
     for old_key, new_key in _LEGACY_PRIME_RL_KEYS.items():
@@ -122,7 +120,9 @@ def _ordered_backend_option_keys(options: dict[str, object]) -> list[str]:
     return ordered
 
 
-def migrate_legacy_backend_keys_toml_text(toml_text: str) -> BackendConfigMigrationResult:
+def migrate_legacy_backend_keys_toml_text(
+    toml_text: str,
+) -> BackendConfigMigrationResult:
     """Migrate legacy PRIME-RL [backend] keys to [backend.options] textually.
 
     Existing keys under [backend.options] win over migrated legacy values.
@@ -156,7 +156,7 @@ def migrate_legacy_backend_keys_toml_text(toml_text: str) -> BackendConfigMigrat
         if existing_options is None:
             raise ValueError(
                 "Invalid [backend].options value. "
-                "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
+                'Use a TOML table, e.g. [backend.options] transport = "filesystem".'
             )
         existing_options = dict(existing_options)
 
@@ -200,7 +200,11 @@ def migrate_legacy_backend_keys_toml_text(toml_text: str) -> BackendConfigMigrat
 
     if options_start is not None:
         existing_option_keys = set(existing_options)
-        to_add = [k for k in _ordered_backend_option_keys(migrated_options) if k not in existing_option_keys]
+        to_add = [
+            k
+            for k in _ordered_backend_option_keys(migrated_options)
+            if k not in existing_option_keys
+        ]
         if to_add:
             insertion = options_end
             for key in to_add:
@@ -248,6 +252,6 @@ def _extract_backend_options(backend_sec: object) -> dict[str, object] | None:
     if options is None:
         raise ValueError(
             "Invalid [backend].options value. "
-            "Use a TOML table, e.g. [backend.options] transport = \"filesystem\"."
+            'Use a TOML table, e.g. [backend.options] transport = "filesystem".'
         )
     return dict(options)

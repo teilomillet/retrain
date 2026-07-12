@@ -17,9 +17,7 @@ from retrain.inference_engine.openai_engine import OpenAIEngine
 @pytest.fixture
 def engine():
     """Create an OpenAIEngine with a mocked tokenizer."""
-    with patch(
-        "retrain.inference_engine.openai_engine.AutoTokenizer"
-    ) as mock_tok_cls:
+    with patch("retrain.inference_engine.openai_engine.AutoTokenizer") as mock_tok_cls:
         mock_tokenizer = MagicMock()
         mock_tokenizer.decode.return_value = "test prompt"
         mock_tokenizer.encode.return_value = [1, 2, 3]
@@ -46,9 +44,7 @@ class TestPostRetryLogic:
             engine._post("/v1/completions", {}, max_retries=2)
         assert engine.session.post.call_count == 2
 
-    def test_connection_error_recovers_on_retry(
-        self, engine: OpenAIEngine
-    ) -> None:
+    def test_connection_error_recovers_on_retry(self, engine: OpenAIEngine) -> None:
         """ConnectionError on first attempt, success on second."""
         ok_response = MagicMock()
         ok_response.json.return_value = {"choices": []}
@@ -66,9 +62,7 @@ class TestPostRetryLogic:
 
     def test_timeout_retries_then_fails(self, engine: OpenAIEngine) -> None:
         """Timeout retries max_retries times, then raises RuntimeError."""
-        engine.session.post = MagicMock(
-            side_effect=requests.exceptions.Timeout("120s")
-        )
+        engine.session.post = MagicMock(side_effect=requests.exceptions.Timeout("120s"))
         with pytest.raises(RuntimeError, match="timed out"):
             engine._post("/v1/completions", {}, max_retries=3)
         assert engine.session.post.call_count == 3
@@ -118,18 +112,18 @@ class TestPostRetryLogic:
 class TestGenerateResponseParsing:
     def test_empty_choices(self, engine: OpenAIEngine) -> None:
         """Response with empty choices list returns empty results."""
-        with patch.object(
-            engine, "_post", return_value={"choices": []}
-        ):
-            results = engine.generate([[1, 2, 3]], num_samples=1, max_tokens=10,
-                                      temperature=0.7, top_p=0.95)
+        with patch.object(engine, "_post", return_value={"choices": []}):
+            results = engine.generate(
+                [[1, 2, 3]], num_samples=1, max_tokens=10, temperature=0.7, top_p=0.95
+            )
         assert results == [[]]
 
     def test_missing_choices_key(self, engine: OpenAIEngine) -> None:
         """Response missing 'choices' returns empty results."""
         with patch.object(engine, "_post", return_value={"data": []}):
-            results = engine.generate([[1, 2, 3]], num_samples=1, max_tokens=10,
-                                      temperature=0.7, top_p=0.95)
+            results = engine.generate(
+                [[1, 2, 3]], num_samples=1, max_tokens=10, temperature=0.7, top_p=0.95
+            )
         assert results == [[]]
 
     def test_valid_response_with_logprobs(self, engine: OpenAIEngine) -> None:
@@ -146,8 +140,9 @@ class TestGenerateResponseParsing:
             ]
         }
         with patch.object(engine, "_post", return_value=response):
-            results = engine.generate([[1, 2, 3]], num_samples=1, max_tokens=10,
-                                      temperature=0.7, top_p=0.95)
+            results = engine.generate(
+                [[1, 2, 3]], num_samples=1, max_tokens=10, temperature=0.7, top_p=0.95
+            )
         assert len(results) == 1
         assert len(results[0]) == 1
         assert len(results[0][0].logprobs) == 2
@@ -156,8 +151,9 @@ class TestGenerateResponseParsing:
         """Response without logprobs falls back to re-encoding."""
         response = {"choices": [{"text": "hello world"}]}
         with patch.object(engine, "_post", return_value=response):
-            results = engine.generate([[1, 2, 3]], num_samples=1, max_tokens=10,
-                                      temperature=0.7, top_p=0.95)
+            results = engine.generate(
+                [[1, 2, 3]], num_samples=1, max_tokens=10, temperature=0.7, top_p=0.95
+            )
         assert len(results) == 1
         assert len(results[0]) == 1
         # Fallback uses tokenizer.encode which returns [1, 2, 3]
@@ -177,8 +173,9 @@ class TestGenerateResponseParsing:
             ]
         }
         with patch.object(engine, "_post", return_value=response):
-            results = engine.generate([[1]], num_samples=1, max_tokens=10,
-                                      temperature=0.7, top_p=0.95)
+            results = engine.generate(
+                [[1]], num_samples=1, max_tokens=10, temperature=0.7, top_p=0.95
+            )
         lps = results[0][0].logprobs
         assert lps[0] == 0.0
         assert lps[1] == -0.2
@@ -190,13 +187,9 @@ class TestGenerateResponseParsing:
 
 
 class TestReloadWeightsFaults:
-    def test_adapter_reload_failure_is_warning(
-        self, engine: OpenAIEngine
-    ) -> None:
+    def test_adapter_reload_failure_is_warning(self, engine: OpenAIEngine) -> None:
         """Failed adapter reload prints warning but doesn't crash."""
-        with patch.object(
-            engine, "_post", side_effect=RuntimeError("server down")
-        ):
+        with patch.object(engine, "_post", side_effect=RuntimeError("server down")):
             # Should NOT raise
             engine.reload_weights("/path/to/adapter")
         # Adapter path should NOT be updated on failure

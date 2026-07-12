@@ -52,11 +52,15 @@ def test_plugin_capabilities_use_conservative_defaults() -> None:
 
 
 def test_resume_contracts_warn_for_non_exact_modes() -> None:
-    local_contract = contract_for_capabilities(resolve_backend_capabilities("local", {}))
+    local_contract = contract_for_capabilities(
+        resolve_backend_capabilities("local", {})
+    )
     assert local_contract.mode == RESUME_ADAPTER_ONLY
     assert "optimizer/scaler/RNG" in local_contract.warning
 
-    tinker_contract = contract_for_capabilities(resolve_backend_capabilities("tinker", {}))
+    tinker_contract = contract_for_capabilities(
+        resolve_backend_capabilities("tinker", {})
+    )
     assert tinker_contract.mode == RESUME_EXACT
     assert "runtime-dependent" in tinker_contract.warning
 

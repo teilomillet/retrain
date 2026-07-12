@@ -277,9 +277,10 @@ def test_train_persists_sft_warmup_schedule(monkeypatch, tmp_path):
     assert len(saved_schedules) == 2
     for schedule in saved_schedules:
         assert isinstance(schedule, dict)
-        assert schedule["data_sha256"] == hashlib.sha256(
-            data_path.read_bytes()
-        ).hexdigest()
+        assert (
+            schedule["data_sha256"]
+            == hashlib.sha256(data_path.read_bytes()).hexdigest()
+        )
         assert schedule["seed"] == 19
         assert schedule["reshuffle_each_epoch"] is True
 
@@ -393,10 +394,10 @@ def test_train_forwards_effective_advantage_params(monkeypatch, tmp_path):
     assert captured_kwargs, "compute_composable_advantages should be called"
     assert captured_kwargs[0]["advantage_params"] == cfg.effective_advantage_params
     assert final_path == str(Path(cfg.adapter_path) / "final")
-    metrics = json.loads((Path(cfg.log_dir) / "metrics.jsonl").read_text().splitlines()[0])
-    assert metrics[
-        "optimizer/logical_batch_sha256"
-    ] == logical_optimizer_batch_sha256(
+    metrics = json.loads(
+        (Path(cfg.log_dir) / "metrics.jsonl").read_text().splitlines()[0]
+    )
+    assert metrics["optimizer/logical_batch_sha256"] == logical_optimizer_batch_sha256(
         [[101, 42], [101, 13]],
         [[0.0, -0.1], [0.0, -0.2]],
         [[0.0, 0.25], [0.0, 0.25]],

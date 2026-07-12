@@ -17,6 +17,7 @@ from retrain.squeeze.run import analyze_adapter, compress_adapter
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_lora_pair(m: int, n: int, r: int, seed: int = 0):
     """Create random A (m, r) and B (r, n) matrices."""
     gen = torch.Generator().manual_seed(seed)
@@ -25,7 +26,9 @@ def _make_lora_pair(m: int, n: int, r: int, seed: int = 0):
     return A, B
 
 
-def _make_peft_adapter(tmp_path: Path, m: int, n: int, r: int, modules: list[str] | None = None):
+def _make_peft_adapter(
+    tmp_path: Path, m: int, n: int, r: int, modules: list[str] | None = None
+):
     """Create a mock PEFT adapter directory with safetensors + config."""
     if modules is None:
         modules = ["model.layers.0.self_attn.q_proj"]
@@ -52,6 +55,7 @@ def _make_peft_adapter(tmp_path: Path, m: int, n: int, r: int, modules: list[str
 # ---------------------------------------------------------------------------
 # SVD correctness
 # ---------------------------------------------------------------------------
+
 
 class TestSVDCorrectness:
     def test_singular_values_match_direct_svd(self):
@@ -87,6 +91,7 @@ class TestSVDCorrectness:
 # Variance
 # ---------------------------------------------------------------------------
 
+
 class TestVariance:
     def test_full_rank_variance_is_one(self):
         A, B = _make_lora_pair(64, 64, 16)
@@ -98,7 +103,10 @@ class TestVariance:
         ranks = list(range(1, 17))
         result = squeeze_layer(A, B, ranks)
         for i in range(len(ranks) - 1):
-            assert result.variance_at_rank[ranks[i]] <= result.variance_at_rank[ranks[i + 1]] + 1e-9
+            assert (
+                result.variance_at_rank[ranks[i]]
+                <= result.variance_at_rank[ranks[i + 1]] + 1e-9
+            )
 
     def test_single_rank_positive(self):
         A, B = _make_lora_pair(32, 32, 8)
@@ -117,6 +125,7 @@ class TestVariance:
 # ---------------------------------------------------------------------------
 # Compression fidelity
 # ---------------------------------------------------------------------------
+
 
 class TestCompressionFidelity:
     def test_full_rank_exact(self):
@@ -160,6 +169,7 @@ class TestCompressionFidelity:
 # ---------------------------------------------------------------------------
 # PEFT format round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestPEFTFormat:
     def test_load_adapter_matrices(self, tmp_path):
@@ -222,6 +232,7 @@ class TestPEFTFormat:
 # Adapter-level analysis
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeAdapter:
     def test_analyze_basic(self, tmp_path):
         modules = [
@@ -255,6 +266,7 @@ class TestAnalyzeAdapter:
 # Config
 # ---------------------------------------------------------------------------
 
+
 class TestSqueezeConfig:
     def test_defaults(self):
         cfg = SqueezeConfig()
@@ -287,13 +299,13 @@ lora_rank = 128
 
     def test_missing_squeeze_section_raises(self, tmp_path):
         toml = tmp_path / "no_squeeze.toml"
-        toml.write_text('[model]\nlora_rank = 32\n')
+        toml.write_text("[model]\nlora_rank = 32\n")
         with pytest.raises(ValueError, match="No \\[squeeze\\] section"):
             load_squeeze_config(str(toml))
 
     def test_missing_adapter_path_raises(self, tmp_path):
         toml = tmp_path / "no_path.toml"
-        toml.write_text('[squeeze]\nmin_variance_retention = 0.9\n')
+        toml.write_text("[squeeze]\nmin_variance_retention = 0.9\n")
         with pytest.raises(ValueError, match="adapter_path is required"):
             load_squeeze_config(str(toml))
 
@@ -323,6 +335,7 @@ lora_rank = 128
 # ---------------------------------------------------------------------------
 # Campaign auto-squeeze integration
 # ---------------------------------------------------------------------------
+
 
 class TestCampaignAutoSqueeze:
     def test_auto_squeeze_with_local_adapter(self, tmp_path):

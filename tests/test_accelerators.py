@@ -18,9 +18,9 @@ def test_cudnn_causal_conv1d_shim_installs_and_matches_reference(monkeypatch):
     monkeypatch.setattr(
         accelerators,
         "module_available",
-        lambda name: False
-        if name == "causal_conv1d"
-        else original_module_available(name),
+        lambda name: (
+            False if name == "causal_conv1d" else original_module_available(name)
+        ),
     )
 
     class _Ops:

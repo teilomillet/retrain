@@ -62,9 +62,7 @@ def run(args: list[str]) -> None:
     else:
         print(f"Condition: {flow.condition_label}")
         print(f"Backend:   {config.backend} (source: {flow.backend_capability_source})")
-        print(
-            f"Probes:    {result.probe_cases_passed}/{result.probe_cases_run} passed"
-        )
+        print(f"Probes:    {result.probe_cases_passed}/{result.probe_cases_run} passed")
         if result.issues:
             print()
             for issue in result.issues:

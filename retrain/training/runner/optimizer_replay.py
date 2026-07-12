@@ -44,9 +44,7 @@ class OptimizerReplayRunner:
         _ensure_fresh_outputs(config, log_dir)
         capture = load_optimizer_batch_capture(
             config.optimizer_batch_replay_path,
-            expected_manifest_sha256=(
-                config.optimizer_batch_expected_manifest_sha256
-            ),
+            expected_manifest_sha256=(config.optimizer_batch_expected_manifest_sha256),
         )
         expected_logical_sha = (
             config.optimizer_batch_expected_logical_sha256.strip().lower()
@@ -83,9 +81,7 @@ class OptimizerReplayRunner:
                 echo_loss_fn=config.echo_loss_fn,
                 lr=config.lr,
                 weight_decay=config.weight_decay,
-                echo_rollout_denominator=(
-                    batch.echo_rollout_denominator or 0
-                ),
+                echo_rollout_denominator=(batch.echo_rollout_denominator or 0),
             )
             train_time = time.perf_counter() - train_started
             final_path = helper.save_adapter(config.adapter_path, "final")
@@ -107,9 +103,7 @@ class OptimizerReplayRunner:
 
         total_tokens = sum(len(row) for row in capture.batch.tokens)
         nonzero_advantages = sum(
-            value != 0.0
-            for row in capture.batch.advantages
-            for value in row
+            value != 0.0 for row in capture.batch.advantages for value in row
         )
         nonzero_echo = sum(
             value != 0.0
@@ -126,9 +120,7 @@ class OptimizerReplayRunner:
             "echo/joint_optimizer_step": int(echo_joint),
             "num_datums": len(capture.batch.tokens),
             "tokens_per_step": total_tokens,
-            "tokens_per_second": (
-                total_tokens / train_time if train_time > 0 else 0.0
-            ),
+            "tokens_per_second": (total_tokens / train_time if train_time > 0 else 0.0),
             "rl/optimizer_nonzero_advantage_action_tokens": nonzero_advantages,
             "echo/kept_tokens": nonzero_echo,
             "step_time_s": train_time,
@@ -144,18 +136,14 @@ class OptimizerReplayRunner:
             "optimizer_batch/payload_sha256": capture.payload_sha256,
             "optimizer_batch/manifest_sha256": capture.manifest_sha256,
             "optimizer_batch/source_config_sha256": source_config["sha256"],
-            "optimizer_batch/replay_config_sha256": (
-                contract.current_config_sha256
-            ),
+            "optimizer_batch/replay_config_sha256": (contract.current_config_sha256),
             "optimizer_batch/source_optimizer_contract_sha256": (
                 source_config["optimizer_contract_sha256"]
             ),
             "optimizer_batch/replay_optimizer_contract_sha256": (
                 contract.current_optimizer_contract_sha256
             ),
-            "optimizer_batch/initial_adapter_sha256": (
-                initial_adapter.weight_sha256
-            ),
+            "optimizer_batch/initial_adapter_sha256": (initial_adapter.weight_sha256),
             "optimizer_batch/final_adapter_sha256": final_adapter.weight_sha256,
             "optimizer_batch/allowed_config_differences": _json_list(
                 contract.allowed_differences
@@ -184,9 +172,7 @@ class OptimizerReplayRunner:
                 "payload_sha256": capture.payload_sha256,
                 "logical_batch_sha256": capture.logical_batch_sha256,
                 "config_sha256": source_config["sha256"],
-                "optimizer_contract_sha256": source_config[
-                    "optimizer_contract_sha256"
-                ],
+                "optimizer_contract_sha256": source_config["optimizer_contract_sha256"],
             },
             "replay": {
                 "config": config_snapshot(config),
@@ -194,12 +180,8 @@ class OptimizerReplayRunner:
                 "optimizer_contract_sha256": (
                     contract.current_optimizer_contract_sha256
                 ),
-                "allowed_config_differences": list(
-                    contract.allowed_differences
-                ),
-                "observed_config_differences": list(
-                    contract.observed_differences
-                ),
+                "allowed_config_differences": list(contract.allowed_differences),
+                "observed_config_differences": list(contract.observed_differences),
                 "initial_adapter": initial_adapter.to_dict(),
                 "final_adapter": final_adapter.to_dict(),
             },

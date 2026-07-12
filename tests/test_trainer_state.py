@@ -51,16 +51,24 @@ class TestSaveTrainerState:
     def test_atomic_overwrite(self, tmp_path):
         """Second save overwrites the first (always latest)."""
         save_trainer_state(
-            tmp_path, step=10, example_idx=80,
-            total_correct=20, total_completions=160,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=10,
+            example_idx=80,
+            total_correct=20,
+            total_completions=160,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_10",
             sepa_state={},
         )
         save_trainer_state(
-            tmp_path, step=20, example_idx=160,
-            total_correct=45, total_completions=320,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=20,
+            example_idx=160,
+            total_correct=45,
+            total_completions=320,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_20",
             sepa_state={},
         )
@@ -70,10 +78,15 @@ class TestSaveTrainerState:
 
     def test_no_tmp_file_left(self, tmp_path):
         save_trainer_state(
-            tmp_path, step=5, example_idx=40,
-            total_correct=10, total_completions=80,
-            current_batch_size=8, current_group_size=16,
-            checkpoint_name="ckpt", sepa_state={},
+            tmp_path,
+            step=5,
+            example_idx=40,
+            total_correct=10,
+            total_completions=80,
+            current_batch_size=8,
+            current_group_size=16,
+            checkpoint_name="ckpt",
+            sepa_state={},
         )
         tmp_file = tmp_path / f"{TRAINER_STATE_FILE}.tmp"
         assert not tmp_file.exists()
@@ -97,9 +110,13 @@ class TestSaveTrainerState:
 class TestLoadTrainerState:
     def test_roundtrip(self, tmp_path):
         save_trainer_state(
-            tmp_path, step=39, example_idx=320,
-            total_correct=95, total_completions=640,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=39,
+            example_idx=320,
+            total_correct=95,
+            total_completions=640,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_40",
             sepa_state={"var_ema": 1.2, "gate_open": False},
         )
@@ -112,9 +129,13 @@ class TestLoadTrainerState:
 
     def test_roundtrip_optional_ema_fields(self, tmp_path):
         save_trainer_state(
-            tmp_path, step=39, example_idx=320,
-            total_correct=95, total_completions=640,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=39,
+            example_idx=320,
+            total_correct=95,
+            total_completions=640,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_40",
             sepa_state={},
             tl_grpo_ema=0.4,
@@ -212,9 +233,13 @@ class TestLoadTrainerState:
     def test_resume_step_is_next(self, tmp_path):
         """Resume should start from saved step + 1."""
         save_trainer_state(
-            tmp_path, step=19, example_idx=160,
-            total_correct=40, total_completions=320,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=19,
+            example_idx=160,
+            total_correct=40,
+            total_completions=320,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_20",
             sepa_state={},
         )
@@ -457,7 +482,9 @@ class TestNonPreservingRuntimeGuard:
         )
 
     def test_rejects_non_uniform_completion_advantages(self):
-        with pytest.raises(RuntimeError, match="does not preserve token-level advantages"):
+        with pytest.raises(
+            RuntimeError, match="does not preserve token-level advantages"
+        ):
             assert_uniform_completion_advantages_for_non_preserving_backend(
                 all_logprobs=[[0.0, 0.0, -0.4, -0.2]],
                 all_advantages=[[0.0, 0.0, 1.0, 2.0]],
@@ -473,8 +500,10 @@ class TestSEPAStateRoundtripViaTrainer:
 
         # Original controller with accumulated state
         ctrl = SEPAController(
-            sepa_steps=500, sepa_schedule="auto",
-            sepa_warmup=2, sepa_ema_decay=0.5,
+            sepa_steps=500,
+            sepa_schedule="auto",
+            sepa_warmup=2,
+            sepa_ema_decay=0.5,
             sepa_correct_rate_gate=0.1,
         )
         ctrl.observe_correct_rate(0.15)
@@ -484,9 +513,13 @@ class TestSEPAStateRoundtripViaTrainer:
 
         # Save via trainer
         save_trainer_state(
-            tmp_path, step=99, example_idx=800,
-            total_correct=200, total_completions=1600,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=99,
+            example_idx=800,
+            total_correct=200,
+            total_completions=1600,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_100",
             sepa_state=ctrl.state_dict(),
         )
@@ -494,8 +527,10 @@ class TestSEPAStateRoundtripViaTrainer:
         # Load and restore
         saved = load_trainer_state(str(tmp_path))
         ctrl2 = SEPAController(
-            sepa_steps=500, sepa_schedule="auto",
-            sepa_warmup=2, sepa_ema_decay=0.5,
+            sepa_steps=500,
+            sepa_schedule="auto",
+            sepa_warmup=2,
+            sepa_ema_decay=0.5,
             sepa_correct_rate_gate=0.1,
         )
         ctrl2.load_state_dict(saved["sepa"])
@@ -533,8 +568,10 @@ class TestResumeIntegration:
         from retrain.training.sepa import SEPAController
 
         kwargs = dict(
-            sepa_steps=100, sepa_schedule="auto",
-            sepa_warmup=5, sepa_ema_decay=0.9,
+            sepa_steps=100,
+            sepa_schedule="auto",
+            sepa_warmup=5,
+            sepa_ema_decay=0.9,
             sepa_correct_rate_gate=0.1,
         )
 
@@ -547,9 +584,13 @@ class TestResumeIntegration:
         first_half = SEPAController(**kwargs)
         self._simulate_sepa_steps(first_half, 20)
         save_trainer_state(
-            tmp_path, step=19, example_idx=160,
-            total_correct=40, total_completions=320,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=19,
+            example_idx=160,
+            total_correct=40,
+            total_completions=320,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_20",
             sepa_state=first_half.state_dict(),
         )
@@ -580,9 +621,13 @@ class TestResumeIntegration:
             total_completions += batch_size * group_size
 
         save_trainer_state(
-            tmp_path, step=19, example_idx=example_idx,
-            total_correct=total_correct, total_completions=total_completions,
-            current_batch_size=batch_size, current_group_size=group_size,
+            tmp_path,
+            step=19,
+            example_idx=example_idx,
+            total_correct=total_correct,
+            total_completions=total_completions,
+            current_batch_size=batch_size,
+            current_group_size=group_size,
             checkpoint_name="checkpoint_step_20",
             sepa_state={},
         )
@@ -621,9 +666,13 @@ class TestResumeIntegration:
         for batch_idx in range(max_steps):
             if save_every > 0 and (batch_idx + 1) % save_every == 0:
                 save_trainer_state(
-                    tmp_path, step=batch_idx, example_idx=batch_idx * 8,
-                    total_correct=batch_idx, total_completions=batch_idx * 16,
-                    current_batch_size=8, current_group_size=16,
+                    tmp_path,
+                    step=batch_idx,
+                    example_idx=batch_idx * 8,
+                    total_correct=batch_idx,
+                    total_completions=batch_idx * 16,
+                    current_batch_size=8,
+                    current_group_size=16,
                     checkpoint_name=f"checkpoint_step_{batch_idx + 1}",
                     sepa_state={},
                 )
@@ -646,9 +695,13 @@ class TestResumeIntegration:
         max_steps = 100
         # Simulate crash at step 45 — last checkpoint was step 39
         save_trainer_state(
-            tmp_path, step=39, example_idx=320,
-            total_correct=80, total_completions=640,
-            current_batch_size=8, current_group_size=16,
+            tmp_path,
+            step=39,
+            example_idx=320,
+            total_correct=80,
+            total_completions=640,
+            current_batch_size=8,
+            current_group_size=16,
             checkpoint_name="checkpoint_step_40",
             sepa_state={},
         )
@@ -671,20 +724,30 @@ class TestResumeIntegration:
 
         # First recommendations should be "hold" (warmup)
         for i in range(5):
-            bp.observe(StepObservation(
-                step_time_s=1.0, sample_time_s=0.5,
-                batch_size=8, group_size=16,
-                total_tokens=1000, loss=0.5,
-            ))
+            bp.observe(
+                StepObservation(
+                    step_time_s=1.0,
+                    sample_time_s=0.5,
+                    batch_size=8,
+                    group_size=16,
+                    total_tokens=1000,
+                    loss=0.5,
+                )
+            )
             decision = bp.recommend()
             assert decision.action == "hold"
 
         # After warmup, it starts making real decisions
-        bp.observe(StepObservation(
-            step_time_s=1.0, sample_time_s=0.5,
-            batch_size=8, group_size=16,
-            total_tokens=1000, loss=0.5,
-        ))
+        bp.observe(
+            StepObservation(
+                step_time_s=1.0,
+                sample_time_s=0.5,
+                batch_size=8,
+                group_size=16,
+                total_tokens=1000,
+                loss=0.5,
+            )
+        )
         decision = bp.recommend()
         # Action could be hold/throttle/increase — point is it doesn't crash
         assert decision.action in ("hold", "throttle", "increase")
@@ -696,9 +759,13 @@ class TestResumeIntegration:
             if save_every > 0 and (batch_idx + 1) % save_every == 0:
                 ckpt_name = f"checkpoint_step_{batch_idx + 1}"
                 save_trainer_state(
-                    tmp_path, step=batch_idx, example_idx=batch_idx * 8,
-                    total_correct=0, total_completions=0,
-                    current_batch_size=8, current_group_size=16,
+                    tmp_path,
+                    step=batch_idx,
+                    example_idx=batch_idx * 8,
+                    total_correct=0,
+                    total_completions=0,
+                    current_batch_size=8,
+                    current_group_size=16,
                     checkpoint_name=ckpt_name,
                     sepa_state={},
                 )
@@ -710,7 +777,9 @@ class TestResumeIntegration:
         # Resume would call helper.load_state("checkpoint_step_60")
         assert saved["checkpoint_name"] == f"checkpoint_step_{saved['step'] + 1}"
 
-    def test_resume_uses_artifact_local_adapter_when_original_path_missing(self, tmp_path):
+    def test_resume_uses_artifact_local_adapter_when_original_path_missing(
+        self, tmp_path
+    ):
         """Downloaded W&B artifacts are resumable even if the original path died."""
         resume_dir = tmp_path / "downloaded_artifact"
         lost_checkpoint = tmp_path / "dead_machine" / "checkpoint_step_20"

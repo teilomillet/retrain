@@ -61,8 +61,12 @@ def _execute(operations: list[dict], seed: int = SEED) -> dict:
         "evaluator": EVALUATOR,
     }
     result = subprocess.run(
-        _KERNEL_CMD, cwd=str(_SOMA_ROOT),
-        input=json.dumps(payload), text=True, capture_output=True, check=False,
+        _KERNEL_CMD,
+        cwd=str(_SOMA_ROOT),
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if result.returncode != 0:
         pytest.fail(f"Kernel failed: {result.stderr}")
@@ -99,6 +103,7 @@ def _normalize_reward(resp: dict) -> float:
 # Kernel reward_delta verification
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _HAS_KERNEL, reason="Soma kernel not available")
 class TestKernelRewardDeltas:
     """Verify kernel reward_delta behavior that TL-GRPO depends on."""
@@ -116,7 +121,9 @@ class TestKernelRewardDeltas:
         """All set_price variants produce zero delta."""
         cums = []
         for price in [100, 150, 200, 250, 300]:
-            r = _execute([{"kind": "act", "action": {"type": "set_price", "cents": price}}])
+            r = _execute(
+                [{"kind": "act", "action": {"type": "set_price", "cents": price}}]
+            )
             cums.append(_cumulative(r))
         for c in cums:
             assert abs(c - cums[0]) < 1e-10
@@ -134,12 +141,16 @@ class TestKernelRewardDeltas:
         assert _customer_waiting(r_wait), "Expected customer waiting at seed=7 tick=1"
         cum_before = _cumulative(r_wait)
 
-        r_accept = _execute([
-            {"kind": "wait"},
-            {"kind": "act", "action": {"type": "accept_customer"}},
-        ])
+        r_accept = _execute(
+            [
+                {"kind": "wait"},
+                {"kind": "act", "action": {"type": "accept_customer"}},
+            ]
+        )
         delta = _cumulative(r_accept) - cum_before
-        assert abs(delta) > 0.01, f"accept_customer delta should be nonzero, got {delta}"
+        assert abs(delta) > 0.01, (
+            f"accept_customer delta should be nonzero, got {delta}"
+        )
         print(f"\naccept_customer delta = {delta} (price=175, revenue=1.75)")
 
 
@@ -147,18 +158,22 @@ class TestKernelRewardDeltas:
 # TL-GRPO branching against real kernel
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not _HAS_KERNEL, reason="Soma kernel not available")
 class TestTlGrpoBranchingIntegration:
-
     def test_branching_set_price_zero_variance(self):
         """Branching at set_price: all alternatives produce delta=0."""
         pre_cum = _cumulative(_execute([]))
         deltas = []
         for price in [100, 150, 200, 250]:
-            post = _execute([{"kind": "act", "action": {"type": "set_price", "cents": price}}])
+            post = _execute(
+                [{"kind": "act", "action": {"type": "set_price", "cents": price}}]
+            )
             deltas.append(_cumulative(post) - pre_cum)
 
-        variance = sum((d - sum(deltas)/len(deltas))**2 for d in deltas) / len(deltas)
+        variance = sum((d - sum(deltas) / len(deltas)) ** 2 for d in deltas) / len(
+            deltas
+        )
         print(f"\nset_price branch deltas: {deltas}, variance: {variance}")
         assert variance < 1e-10
 
@@ -180,7 +195,9 @@ class TestTlGrpoBranchingIntegration:
             post = _execute(ops_before + [alt])
             deltas.append(_cumulative(post) - pre_cum)
 
-        variance = sum((d - sum(deltas)/len(deltas))**2 for d in deltas) / len(deltas)
+        variance = sum((d - sum(deltas) / len(deltas)) ** 2 for d in deltas) / len(
+            deltas
+        )
         print(f"\naccept/reject/wait branch deltas: {deltas}, variance: {variance}")
         assert variance > 0.01, f"Expected nonzero variance, got {variance}"
 
@@ -206,11 +223,13 @@ class TestTlGrpoBranchingIntegration:
             r = _execute(turn_ops[: i + 1])
             cum = _cumulative(r)
             delta = cum - prev_cum
-            turn_log.append({
-                "op": turn_ops[i],
-                "delta": delta,
-                "cumulative": cum,
-            })
+            turn_log.append(
+                {
+                    "op": turn_ops[i],
+                    "delta": delta,
+                    "cumulative": cum,
+                }
+            )
             prev_cum = cum
 
         # Get normalized episode reward
@@ -242,19 +261,25 @@ class TestTlGrpoBranchingIntegration:
         }
         ema_baseline = 0.5
         _compute_tl_grpo_advantages(
-            [state_ema], [branch_rewards],
-            turn_weight=0.5, outcome_baseline=ema_baseline,
+            [state_ema],
+            [branch_rewards],
+            turn_weight=0.5,
+            outcome_baseline=ema_baseline,
         )
         advs_ema = cast(list[float], state_ema["turn_advantages"])
 
-        print(f"\nAdvantages per turn (episode_reward={episode_reward:.4f}, baseline={ema_baseline}):")
+        print(
+            f"\nAdvantages per turn (episode_reward={episode_reward:.4f}, baseline={ema_baseline}):"
+        )
         print(f"  {'Operation':<25} {'Delta':>8} {'No-EMA':>10} {'With-EMA':>10}")
         for i, entry in enumerate(turn_log):
             op = entry["op"]
             kind = op.get("kind", "")
             action = op.get("action", {}).get("type", "") if "action" in op else ""
             label = f"{kind}.{action}" if action else kind
-            print(f"  {label:<25} {entry['delta']:>8.4f} {advs_no_ema[i]:>10.4f} {advs_ema[i]:>10.4f}")
+            print(
+                f"  {label:<25} {entry['delta']:>8.4f} {advs_no_ema[i]:>10.4f} {advs_ema[i]:>10.4f}"
+            )
 
         # --- Assertions ---
         expected_outcome = 0.5 * (episode_reward - ema_baseline)
@@ -275,7 +300,9 @@ class TestTlGrpoBranchingIntegration:
         )
 
         # 3. accept_customer (turn 2): should have BOTH local + outcome signal
-        assert abs(turn_log[2]["delta"]) > 0.01, "accept_customer delta should be nonzero"
+        assert abs(turn_log[2]["delta"]) > 0.01, (
+            "accept_customer delta should be nonzero"
+        )
         assert abs(advs_ema[2]) > abs(advs_ema[0]), (
             "accept_customer advantage should be larger than set_price "
             "(local + outcome > outcome alone)"
@@ -289,8 +316,12 @@ class TestTlGrpoBranchingIntegration:
                 )
 
         print(f"\n  set_price no-EMA advantage: {advs_no_ema[0]:.6f} (expected: 0) ✓")
-        print(f"  set_price EMA advantage:    {advs_ema[0]:.6f} (expected: {expected_outcome:.6f}) ✓")
-        print(f"  accept advantage > set_price advantage: {abs(advs_ema[2]):.4f} > {abs(advs_ema[0]):.4f} ✓")
+        print(
+            f"  set_price EMA advantage:    {advs_ema[0]:.6f} (expected: {expected_outcome:.6f}) ✓"
+        )
+        print(
+            f"  accept advantage > set_price advantage: {abs(advs_ema[2]):.4f} > {abs(advs_ema[0]):.4f} ✓"
+        )
         print(f"  All turns have nonzero EMA advantage ✓")
 
     def test_ema_update_adapts_baseline(self):

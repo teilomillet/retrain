@@ -12,7 +12,11 @@ from retrain.advantages.plugin import (
     _resolve_registry_spec,
     _validate_short_registry_name,
 )
-from retrain.advantages.types import UncertaintyComputeFn, UncertaintyContext, UncertaintySpec
+from retrain.advantages.types import (
+    UncertaintyComputeFn,
+    UncertaintyContext,
+    UncertaintySpec,
+)
 from retrain.plugins.resolve import resolve_dotted_attribute
 
 _UNCERTAINTY_KIND_ALIASES = {
@@ -64,7 +68,7 @@ def _compute_shannon_entropy(ctx: UncertaintyContext) -> list[float]:
         "shannon_entropy requires either precomputed per-token entropy "
         "(from PyTorch engine with compute_entropy=True) or full "
         "per-position token distributions. Use inference_engine = "
-        "\"pytorch\" to enable GPU-side entropy computation."
+        '"pytorch" to enable GPU-side entropy computation.'
     )
 
 
@@ -219,8 +223,7 @@ def canonicalize_uncertainty_kind(raw_value: object) -> str:
         return stripped
     allowed = sorted(set(_UNCERTAINTY_KIND_ALIASES) | set(_BUILTIN_UNCERTAINTY_SPECS))
     raise ValueError(
-        f"Unknown uncertainty kind '{raw_value}'. "
-        f"Supported values: {allowed}."
+        f"Unknown uncertainty kind '{raw_value}'. Supported values: {allowed}."
     )
 
 

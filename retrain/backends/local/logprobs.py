@@ -278,7 +278,10 @@ def shifted_token_logprobs(
     if selective is not None:
         return selective
 
-    if getattr(state, "train_selective_suffix_logits", False) and target_mask is not None:
+    if (
+        getattr(state, "train_selective_suffix_logits", False)
+        and target_mask is not None
+    ):
         selective = state._selective_hidden_token_logprobs(
             input_ids,
             attention_mask,

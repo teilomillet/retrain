@@ -42,7 +42,9 @@ _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
         compute_context=_compute_hard_delight_transform,
     ),
     "gtpo": TransformSpec(name="gtpo"),
-    "entropy_mask": TransformSpec(name="entropy_mask", use_gtpo=True, post_process=surprisal_mask_post_process),
+    "entropy_mask": TransformSpec(
+        name="entropy_mask", use_gtpo=True, post_process=surprisal_mask_post_process
+    ),
     "gtpo_hicra": TransformSpec(
         name="gtpo_hicra", needs_planning=True, apply_hicra=True
     ),
@@ -69,7 +71,9 @@ _BUILTIN_TRANSFORM_SPECS: dict[str, TransformSpec] = {
 _TRANSFORM_SPEC_CACHE: dict[str, TransformSpec] = {}
 
 
-def register_transform_mode(name: str, spec_or_fn: TransformSpec | TransformContextFn) -> None:
+def register_transform_mode(
+    name: str, spec_or_fn: TransformSpec | TransformContextFn
+) -> None:
     """Register or replace a short-name transform mode at runtime."""
     _validate_short_registry_name(name, label="Transform mode")
     if isinstance(spec_or_fn, TransformSpec):
@@ -128,9 +132,7 @@ def _load_custom_transform_spec(dotted_path: str) -> TransformSpec:
         return TransformSpec(
             name=dotted_path,
             needs_planning=bool(getattr(obj, "needs_planning", False)),
-            uses_sepa_controller=bool(
-                getattr(obj, "uses_sepa_controller", False)
-            ),
+            uses_sepa_controller=bool(getattr(obj, "uses_sepa_controller", False)),
             compute_context=obj,  # type: ignore[invalid-argument-type]
         )
 

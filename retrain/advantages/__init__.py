@@ -50,7 +50,10 @@ from retrain.advantages.episode import (
     register_advantage_mode,
 )
 from retrain.advantages.pipeline import compute_composable_advantages
-from retrain.advantages.planning import DEFAULT_STRATEGIC_GRAMS, identify_planning_tokens
+from retrain.advantages.planning import (
+    DEFAULT_STRATEGIC_GRAMS,
+    identify_planning_tokens,
+)
 from retrain.advantages.stats import compute_entropy_stats, compute_surprisal_stats
 from retrain.advantages.transform import (
     _BUILTIN_TRANSFORM_SPECS,

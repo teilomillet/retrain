@@ -31,7 +31,7 @@ def build_discovery_prompt(
 
     blocks: list[str] = []
     if start_text:
-        blocks.append("Current candidate to improve:\n" f"{start_text}")
+        blocks.append(f"Current candidate to improve:\n{start_text}")
     if context_entries:
         rendered = []
         for idx, entry in enumerate(context_entries, start=1):

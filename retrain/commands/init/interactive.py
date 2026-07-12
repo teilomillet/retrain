@@ -57,7 +57,9 @@ def run(cli_name: str) -> None:
     wandb_project = input("Wandb project name (empty to skip): ").strip()
 
     content, filename = INIT_TEMPLATES[goal_name]
-    content = customize(content, max_steps=max_steps, seed=seed, wandb_project=wandb_project or None)
+    content = customize(
+        content, max_steps=max_steps, seed=seed, wandb_project=wandb_project or None
+    )
 
     dest = Path(filename)
     if dest.exists():

@@ -135,7 +135,9 @@ def _perf_metrics(entries: list[MetricsEntry]) -> dict[str, float]:
     optional_means = {
         "mean_sample_time_s": _mean_optional([e.sample_time_s for e in entries]),
         "mean_train_time_s": _mean_optional([e.train_time_s for e in entries]),
-        "mean_tokens_per_second": _mean_optional([e.tokens_per_second for e in entries]),
+        "mean_tokens_per_second": _mean_optional(
+            [e.tokens_per_second for e in entries]
+        ),
         "mean_sample_share": _mean_optional([e.sample_share for e in entries]),
         "mean_train_share": _mean_optional([e.train_share for e in entries]),
     }
@@ -169,9 +171,7 @@ def diff_runs(dir_a: Path, dir_b: Path) -> DiffResult:
     )
 
 
-def diff_conditions(
-    campaign_dir: Path, cond_a: str, cond_b: str
-) -> DiffResult:
+def diff_conditions(campaign_dir: Path, cond_a: str, cond_b: str) -> DiffResult:
     """Compare two conditions in a campaign, averaging across seeds."""
     manifest_path = campaign_dir / "manifest.json"
     if not manifest_path.is_file():

@@ -168,7 +168,9 @@ class PrimeRLTrainHelper:
             group: list[tuple[list[int], list[float]]] = []
             for choice in choices:
                 if not isinstance(choice, Mapping):
-                    raise RuntimeError("PRIME-RL inference returned non-object choice payload.")
+                    raise RuntimeError(
+                        "PRIME-RL inference returned non-object choice payload."
+                    )
                 token_ids, logprobs = self._extract_completion(
                     dict(cast(Mapping[str, object], choice)),
                     prompt_ids,
@@ -201,7 +203,9 @@ class PrimeRLTrainHelper:
         self._pending_checkpoint_step = None
 
         examples: list[object] = []
-        for tokens, logprobs, advantages in zip(all_tokens, all_logprobs, all_advantages):
+        for tokens, logprobs, advantages in zip(
+            all_tokens, all_logprobs, all_advantages
+        ):
             sample = self._to_training_sample(tokens, logprobs, advantages)
             if sample is not None:
                 examples.append(sample)
@@ -420,8 +424,7 @@ class PrimeRLTrainHelper:
             tokens = logprobs_payload.get("tokens")
             if isinstance(token_lps, list) and isinstance(tokens, list):
                 lps = [
-                    0.0 if lp is None else self._coerce_float(lp)
-                    for lp in token_lps
+                    0.0 if lp is None else self._coerce_float(lp) for lp in token_lps
                 ]
                 choice_ids = choice.get("token_ids")
                 if isinstance(choice_ids, list):
@@ -479,9 +482,7 @@ class PrimeRLTrainHelper:
         try:
             return float(cast(str | int | float, value))
         except (TypeError, ValueError) as exc:
-            raise RuntimeError(
-                f"Expected float-like logprob, got {value!r}."
-            ) from exc
+            raise RuntimeError(f"Expected float-like logprob, got {value!r}.") from exc
 
     def _post_json(self, url: str, payload: JSONPayload) -> JSONPayload:
         try:
@@ -489,7 +490,9 @@ class PrimeRLTrainHelper:
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, Mapping):
-                raise RuntimeError(f"Expected JSON object from {url}, got {type(data).__name__}")
+                raise RuntimeError(
+                    f"Expected JSON object from {url}, got {type(data).__name__}"
+                )
             return dict(data)
         except requests.exceptions.RequestException as exc:
             raise RuntimeError(f"PRIME-RL request failed at {url}: {exc}") from exc

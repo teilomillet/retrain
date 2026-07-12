@@ -7,7 +7,11 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from retrain.status.export import _render_runs_json, collect_run_snapshots, render_prometheus_text
+from retrain.status.export import (
+    _render_runs_json,
+    collect_run_snapshots,
+    render_prometheus_text,
+)
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -55,7 +59,12 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
         run_dir / "tinker_sample_diagnostics.jsonl",
         [
             {"event": "helper_initialized", "ts": now - 5},
-            {"event": "dispatch", "prompt_idx": 0, "prompt_tokens": 8123, "ts": now - 4},
+            {
+                "event": "dispatch",
+                "prompt_idx": 0,
+                "prompt_tokens": 8123,
+                "ts": now - 4,
+            },
             {
                 "event": "result",
                 "prompt_idx": 0,
@@ -65,7 +74,12 @@ def test_collect_run_snapshots_reads_metrics_and_diagnostics(tmp_path: Path) -> 
                 "status": "ok",
                 "ts": now - 3,
             },
-            {"event": "dispatch", "prompt_idx": 1, "prompt_tokens": 16600, "ts": now - 2},
+            {
+                "event": "dispatch",
+                "prompt_idx": 1,
+                "prompt_tokens": 16600,
+                "ts": now - 2,
+            },
             {
                 "event": "result",
                 "prompt_idx": 1,
@@ -156,7 +170,12 @@ def test_render_prometheus_text_includes_expected_metrics(tmp_path: Path) -> Non
         run_dir / "tinker_sample_diagnostics.jsonl",
         [
             {"event": "helper_initialized", "ts": time.time() - 1},
-            {"event": "dispatch", "prompt_idx": 0, "prompt_tokens": 4096, "ts": time.time() - 1},
+            {
+                "event": "dispatch",
+                "prompt_idx": 0,
+                "prompt_tokens": 4096,
+                "ts": time.time() - 1,
+            },
             {
                 "event": "result",
                 "prompt_idx": 0,
@@ -194,7 +213,9 @@ def test_collect_run_snapshots_keeps_last_valid_metrics_row(tmp_path: Path) -> N
     assert snapshot.latest_loss == 0.125
 
 
-def test_collect_run_snapshots_ignores_malformed_completion_tokens(tmp_path: Path) -> None:
+def test_collect_run_snapshots_ignores_malformed_completion_tokens(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "bad-tokens"
     run_dir.mkdir()
     _write_jsonl(

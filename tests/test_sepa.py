@@ -86,9 +86,7 @@ class TestCorrectnessGate:
 
 class TestAutoSchedule:
     def test_returns_zero_before_warmup(self):
-        ctrl = SEPAController(
-            sepa_steps=100, sepa_schedule="auto", sepa_warmup=5
-        )
+        ctrl = SEPAController(sepa_steps=100, sepa_schedule="auto", sepa_warmup=5)
         # No variance data yet
         assert ctrl.resolve_lambda(step=50.0) == pytest.approx(0.5)
         # Feed warmup data
@@ -118,7 +116,9 @@ class TestAutoSchedule:
 
     def test_auto_uses_max_of_linear_and_auto(self):
         ctrl = SEPAController(
-            sepa_steps=100, sepa_schedule="auto", sepa_warmup=1,
+            sepa_steps=100,
+            sepa_schedule="auto",
+            sepa_warmup=1,
             sepa_ema_decay=0.0,
         )
         ctrl.update_auto_state([5.0, 5.0])  # var=0, var_0 set
@@ -170,32 +170,38 @@ class TestStateDict:
 
     def test_roundtrip_auto(self):
         ctrl = SEPAController(
-            sepa_steps=100, sepa_schedule="auto",
-            sepa_warmup=2, sepa_ema_decay=0.0,
+            sepa_steps=100,
+            sepa_schedule="auto",
+            sepa_warmup=2,
+            sepa_ema_decay=0.0,
         )
         ctrl.update_auto_state([0.0, 10.0])
         ctrl.update_auto_state([0.0, 10.0])  # warmup done
-        ctrl.update_auto_state([4.0, 6.0])   # lower variance
+        ctrl.update_auto_state([4.0, 6.0])  # lower variance
         lam_before = ctrl.resolve_lambda(step=0.0)
 
         state = ctrl.state_dict()
         ctrl2 = SEPAController(
-            sepa_steps=100, sepa_schedule="auto",
-            sepa_warmup=2, sepa_ema_decay=0.0,
+            sepa_steps=100,
+            sepa_schedule="auto",
+            sepa_warmup=2,
+            sepa_ema_decay=0.0,
         )
         ctrl2.load_state_dict(state)
         assert ctrl2.resolve_lambda(step=0.0) == pytest.approx(lam_before)
 
     def test_roundtrip_preserves_gate(self):
         ctrl = SEPAController(
-            sepa_steps=100, sepa_schedule="linear",
+            sepa_steps=100,
+            sepa_schedule="linear",
             sepa_correct_rate_gate=0.2,
         )
         ctrl.observe_correct_rate(0.25)
         assert ctrl.gate_open()
 
         ctrl2 = SEPAController(
-            sepa_steps=100, sepa_schedule="linear",
+            sepa_steps=100,
+            sepa_schedule="linear",
             sepa_correct_rate_gate=0.2,
         )
         ctrl2.load_state_dict(ctrl.state_dict())

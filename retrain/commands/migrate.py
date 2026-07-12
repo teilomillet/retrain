@@ -69,13 +69,19 @@ def run(args: list[str]) -> None:
         )
         sys.exit(1)
     if stdin_mode and write_in_place:
-        print("Flag --write requires a file path input (cannot be used with --stdin).", file=sys.stderr)
+        print(
+            "Flag --write requires a file path input (cannot be used with --stdin).",
+            file=sys.stderr,
+        )
         sys.exit(1)
     if write_in_place and output_path:
         print("Use either --write or --output, not both.", file=sys.stderr)
         sys.exit(1)
     if stdout_mode and (write_in_place or output_path):
-        print("Flag --stdout cannot be combined with --write or --output.", file=sys.stderr)
+        print(
+            "Flag --stdout cannot be combined with --write or --output.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     if backup and not write_in_place:
         print("Flag --backup can only be used with --write.", file=sys.stderr)
@@ -176,7 +182,9 @@ def run(args: list[str]) -> None:
         if needs_migration:
             print(f"Migrated config written to {payload['output_path']}")
         else:
-            print(f"No migration required. Wrote unchanged config to {payload['output_path']}")
+            print(
+                f"No migration required. Wrote unchanged config to {payload['output_path']}"
+            )
         if payload["backup_path"]:
             print(f"Backup written to {payload['backup_path']}")
         return

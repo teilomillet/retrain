@@ -17,8 +17,7 @@ ADAPTER_ONLY_RESUME_WARNING = (
     "after resume."
 )
 UNSUPPORTED_RESUME_WARNING = (
-    "resume_mode=unsupported: this backend does not report checkpoint resume "
-    "support."
+    "resume_mode=unsupported: this backend does not report checkpoint resume support."
 )
 RUNTIME_DEPENDENT_EXACT_RESUME_WARNING = (
     "resume_mode=exact is runtime-dependent: verify this backend runtime and "

@@ -27,9 +27,7 @@ def evaluate_node(tree: Tree, node_id: str) -> str | None:
 
     campaign = scan_campaign(Path(ns.campaign_dir))
     if campaign is None:
-        raise ValueError(
-            f"Node {node_id!r}: cannot scan campaign at {ns.campaign_dir}"
-        )
+        raise ValueError(f"Node {node_id!r}: cannot scan campaign at {ns.campaign_dir}")
 
     metric = node.success_condition.metric
     values: list[float] = []
@@ -41,9 +39,7 @@ def evaluate_node(tree: Tree, node_id: str) -> str | None:
             values.append(float(val))
 
     if not values:
-        raise ValueError(
-            f"Node {node_id!r}: no completed runs with metric {metric!r}"
-        )
+        raise ValueError(f"Node {node_id!r}: no completed runs with metric {metric!r}")
 
     avg = sum(values) / len(values)
     ns.result[metric] = round(avg, 4)

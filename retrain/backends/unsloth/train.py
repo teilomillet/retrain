@@ -401,6 +401,7 @@ class UnslothTrainHelper(LocalTrainHelper):
                 setattr(torch_rule, "_retrain_qwen35_chunk_size", 0)
                 module.chunk_gated_delta_rule = torch_rule
             else:
+
                 @wraps(rule)
                 def chunked_rule(
                     *args,

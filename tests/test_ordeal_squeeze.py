@@ -24,9 +24,7 @@ rank_st = st.integers(min_value=1, max_value=16)
 outer_st = st.integers(min_value=4, max_value=64)
 
 
-def random_lora_pair(
-    m: int, n: int, r: int
-) -> tuple[torch.Tensor, torch.Tensor]:
+def random_lora_pair(m: int, n: int, r: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Generate a random LoRA pair A (m, r) and B (r, n)."""
     A = torch.randn(m, r)
     B = torch.randn(r, n)
@@ -50,9 +48,7 @@ class TestSVDInvariants:
 
     @given(m=outer_st, n=outer_st, r=rank_st)
     @settings(max_examples=30, deadline=None)
-    def test_singular_values_sorted_descending(
-        self, m: int, n: int, r: int
-    ) -> None:
+    def test_singular_values_sorted_descending(self, m: int, n: int, r: int) -> None:
         r = min(r, m, n)
         A, B = random_lora_pair(m, n, r)
         result = squeeze_layer(A, B, target_ranks=[r])
@@ -138,9 +134,7 @@ class TestVarianceInvariants:
 class TestCompressionInvariants:
     @given(m=outer_st, n=outer_st, r=st.integers(min_value=2, max_value=16))
     @settings(max_examples=20, deadline=None)
-    def test_full_rank_exact_reconstruction(
-        self, m: int, n: int, r: int
-    ) -> None:
+    def test_full_rank_exact_reconstruction(self, m: int, n: int, r: int) -> None:
         """Compressing at full rank reproduces A @ B exactly."""
         r = min(r, m, n)
         A, B = random_lora_pair(m, n, r)
@@ -185,9 +179,7 @@ class TestCompressionInvariants:
 
     @given(m=outer_st, n=outer_st, r=rank_st)
     @settings(max_examples=20, deadline=None)
-    def test_target_rank_clamped_to_source(
-        self, m: int, n: int, r: int
-    ) -> None:
+    def test_target_rank_clamped_to_source(self, m: int, n: int, r: int) -> None:
         """Target rank > source rank is clamped — same as full rank."""
         r = min(r, m, n)
         A, B = random_lora_pair(m, n, r)

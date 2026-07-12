@@ -64,7 +64,12 @@ class TestUrls:
 class TestRequests:
     def test_reset_sends_typed_message_and_parses_result(self):
         client, transport = _client(
-            [{"type": "reset", "data": {"observation": {"x": 1}, "reward": None, "done": False}}]
+            [
+                {
+                    "type": "reset",
+                    "data": {"observation": {"x": 1}, "reward": None, "done": False},
+                }
+            ]
         )
         result = asyncio.run(client.reset(seed=7))
         assert transport.sent == [{"type": "reset", "data": {"seed": 7}}]
@@ -72,7 +77,12 @@ class TestRequests:
 
     def test_step_sends_action_and_parses_reward(self):
         client, transport = _client(
-            [{"type": "step", "data": {"observation": "ok", "reward": 1.5, "done": True}}]
+            [
+                {
+                    "type": "step",
+                    "data": {"observation": "ok", "reward": 1.5, "done": True},
+                }
+            ]
         )
         result = asyncio.run(client.step({"tool": "run"}))
         assert transport.sent == [{"type": "step", "data": {"tool": "run"}}]
@@ -81,7 +91,12 @@ class TestRequests:
     def test_boolean_reward_is_not_a_reward(self):
         # JSON true would satisfy isinstance(x, int); guard against it.
         client, _ = _client(
-            [{"type": "step", "data": {"observation": {}, "reward": True, "done": False}}]
+            [
+                {
+                    "type": "step",
+                    "data": {"observation": {}, "reward": True, "done": False},
+                }
+            ]
         )
         assert asyncio.run(client.step({})).reward is None
 

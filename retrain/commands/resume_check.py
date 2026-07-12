@@ -65,8 +65,7 @@ def _format_text(result: ResumeCheckResult) -> str:
     lines.append(f"  path          : {result.path}")
     lines.append(f"  ok            : {'yes' if result.ok else 'no'}")
     lines.append(
-        "  trainer_state : "
-        f"{'ok' if result.trainer_state_valid else 'missing/invalid'}"
+        f"  trainer_state : {'ok' if result.trainer_state_valid else 'missing/invalid'}"
     )
     if result.trainer:
         lines.append(f"  trainer       : {result.trainer}")

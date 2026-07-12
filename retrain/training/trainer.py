@@ -156,9 +156,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         # -----------------------------------------------------------------------
         loaded_examples = load_training_examples(
             config,
-            data_source_factory=lambda source, cfg: get_registry(
-                "data_source"
-            ).create(source, cfg),
+            data_source_factory=lambda source, cfg: get_registry("data_source").create(
+                source, cfg
+            ),
             verifiers_environment_loader=load_verifiers_environment,
             verifiers_examples_loader=load_examples_from_environment,
         )
@@ -242,8 +242,8 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         reward_fn = None
         if verifiers_env is None:
             reward_fn = get_registry("reward").create(config.reward_type, config)
-        verifiers_multiturn = (
-            verifiers_env is not None and is_multiturn_environment(verifiers_env)
+        verifiers_multiturn = verifiers_env is not None and is_multiturn_environment(
+            verifiers_env
         )
         example_idx = 0
         total_correct = 0
@@ -315,7 +315,10 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             while bs <= config.bp_max_batch_size:
                 warmup_batch_sizes.append(bs)
                 bs *= 2
-            if warmup_batch_sizes and warmup_batch_sizes[-1] != config.bp_max_batch_size:
+            if (
+                warmup_batch_sizes
+                and warmup_batch_sizes[-1] != config.bp_max_batch_size
+            ):
                 warmup_batch_sizes.append(config.bp_max_batch_size)
 
         for batch_idx in range(start_step, config.max_steps):
@@ -364,9 +367,15 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             # Back pressure warmup sweep
             bp_warmup = False
-            if config.bp_enabled and warmup_batch_sizes and batch_idx < config.bp_warmup_steps:
+            if (
+                config.bp_enabled
+                and warmup_batch_sizes
+                and batch_idx < config.bp_warmup_steps
+            ):
                 bp_warmup = True
-                current_batch_size = warmup_batch_sizes[batch_idx % len(warmup_batch_sizes)]
+                current_batch_size = warmup_batch_sizes[
+                    batch_idx % len(warmup_batch_sizes)
+                ]
 
             # 10a. Checkpoint for sampling
             helper.checkpoint(f"step_{batch_idx}")
@@ -439,21 +448,20 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             # 10e. SEPA state updates
             total_completions += len(acc.rewards)
             total_correct += acc.correct
-            correct_rate = (
-                acc.correct / len(acc.rewards) if acc.rewards else 0.0
-            )
+            correct_rate = acc.correct / len(acc.rewards) if acc.rewards else 0.0
 
             if uses_sepa_controller:
                 sepa_controller.observe_correct_rate(correct_rate)
 
-                if sepa_controller.enabled() and sepa_controller.sepa_schedule == "auto":
+                if (
+                    sepa_controller.enabled()
+                    and sepa_controller.sepa_schedule == "auto"
+                ):
                     for t_idx in range(len(acc.logprobs_sepa)):
                         logprobs = acc.logprobs_sepa[t_idx]
                         pmask = acc.planning_masks_sepa[t_idx]
                         exec_ent = [
-                            -logprobs[j]
-                            for j in range(len(logprobs))
-                            if pmask[j] == 0
+                            -logprobs[j] for j in range(len(logprobs)) if pmask[j] == 0
                         ]
                         sepa_controller.update_auto_state(exec_ent)
 
@@ -499,9 +507,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
 
             rl_has_signal = has_nonzero_advantage(acc.datum_advantages)
             echo_has_datums = bool(
-                config.echo_enabled and has_nonzero_advantage(
-                    acc.datum_echo_advantages
-                )
+                config.echo_enabled and has_nonzero_advantage(acc.datum_echo_advantages)
             )
             if not rl_has_signal and not echo_has_datums:
                 print(f"Step {batch_idx}: no informative datums, skipping.")
@@ -523,9 +529,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                     acc.datum_echo_advantages if echo_has_datums else None
                 ),
                 echo_full_observation_counts=(
-                    acc.datum_echo_full_observation_counts
-                    if echo_has_datums
-                    else None
+                    acc.datum_echo_full_observation_counts if echo_has_datums else None
                 ),
                 echo_rollout_denominator=(
                     acc.echo_eligible_rollout_count if echo_has_datums else None
@@ -549,18 +553,13 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                             else None
                         ),
                         echo_rollout_denominator=(
-                            acc.echo_eligible_rollout_count
-                            if echo_has_datums
-                            else None
+                            acc.echo_eligible_rollout_count if echo_has_datums else None
                         ),
                     ),
                     config=config,
                     initial_adapter=capture_initial_adapter,
                 )
-                if (
-                    captured.logical_batch_sha256
-                    != acc.optimizer_logical_batch_sha256
-                ):
+                if captured.logical_batch_sha256 != acc.optimizer_logical_batch_sha256:
                     raise RuntimeError(
                         "optimizer-batch capture changed the logical batch digest."
                     )
@@ -570,9 +569,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
                 acc.optimizer_batch_payload_sha256 = captured.payload_sha256
                 acc.optimizer_batch_manifest_sha256 = captured.manifest_sha256
                 acc.optimizer_batch_config_sha256 = captured.config_sha256
-                acc.optimizer_batch_contract_sha256 = (
-                    captured.optimizer_contract_sha256
-                )
+                acc.optimizer_batch_contract_sha256 = captured.optimizer_contract_sha256
                 acc.optimizer_batch_initial_adapter_sha256 = (
                     captured.initial_adapter_sha256
                 )
@@ -598,7 +595,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             train_time = time.perf_counter() - train_start
             rl_train_time = train_time if num_datums > 0 else 0.0
             echo_train_time = train_time if echo_has_datums else 0.0
-            clip_fraction = getattr(helper, '_clip_fraction', 0.0)
+            clip_fraction = getattr(helper, "_clip_fraction", 0.0)
             policy_cov_fraction = getattr(helper, "_policy_cov_fraction", 0.0)
             policy_abs_kl = getattr(helper, "_policy_abs_kl", 0.0)
 
@@ -623,7 +620,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             if config.bp_enabled and not bp_warmup:
                 if bp_decision.action in ("throttle", "increase"):
                     new_bs = bp_decision.recommended_batch_size
-                    new_bs = max(config.bp_min_batch_size, min(config.bp_max_batch_size, new_bs))
+                    new_bs = max(
+                        config.bp_min_batch_size, min(config.bp_max_batch_size, new_bs)
+                    )
                     if new_bs > 0:
                         current_batch_size = new_bs
 
@@ -733,9 +732,7 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
             sepa_state=sepa_controller.state_dict(),
             tl_grpo_ema=tl_grpo_ema,
             delight_eta_ema=delight_eta_ema,
-            sft_schedule=(
-                sft_data.schedule_contract if sft_data is not None else None
-            ),
+            sft_schedule=(sft_data.schedule_contract if sft_data is not None else None),
         )
         upload_checkpoint_artifact(
             config,
@@ -755,7 +752,9 @@ def train(config: TrainConfig, flow: TrainingFlow | None = None) -> str | None:
         if metrics_path.is_file():
             print(f"Metrics saved to {metrics_path}")
         else:
-            print("No metrics file written (all steps skipped / no informative datums).")
+            print(
+                "No metrics file written (all steps skipped / no informative datums)."
+            )
 
         return final_path
     finally:

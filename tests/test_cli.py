@@ -291,9 +291,7 @@ class TestManCommand:
         captured = capsys.readouterr()
         assert "(out of date). Run: retrain man --sync" in captured.err
 
-    def test_man_sync_fails_when_markers_missing(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_man_sync_fails_when_markers_missing(self, tmp_path, monkeypatch, capsys):
         manual = tmp_path / "retrain.man"
         manual.write_text("RETRAIN(1)\n\nCOMMANDS\nno auto markers\n")
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
@@ -306,9 +304,7 @@ class TestManCommand:
         assert "Manual sync failed" in captured.err
         assert "Missing block markers for COMMANDS" in captured.err
 
-    def test_man_check_fails_when_markers_missing(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_man_check_fails_when_markers_missing(self, tmp_path, monkeypatch, capsys):
         manual = tmp_path / "retrain.man"
         manual.write_text("RETRAIN(1)\n\nCOMMANDS\nno auto markers\n")
         monkeypatch.setattr(cli, "_manual_path", lambda: manual)
@@ -468,7 +464,9 @@ class TestExplainCommand:
         assert payload["mode"] == "single"
         assert payload["backend"] == "local"
         assert payload["backend_capabilities"]["reports_sync_loss"] is True
-        assert payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        assert (
+            payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        )
         assert payload["resume_mode"] == "adapter_only"
         assert "optimizer/scaler/RNG" in payload["resume_warning"]
         assert payload["condition"] == "grpo+none"
@@ -493,7 +491,9 @@ class TestExplainCommand:
         assert payload["mode"] == "campaign"
         assert payload["backend"] == "local"
         assert payload["backend_capabilities"]["source"] == "builtin"
-        assert payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        assert (
+            payload["backend_capabilities"]["checkpoint_resume_mode"] == "adapter_only"
+        )
         assert payload["resume_mode"] == "adapter_only"
         assert payload["total_runs"] == 4
         assert len(payload["conditions"]) == 2
@@ -562,24 +562,28 @@ class TestBenchmarkCommand:
                 adapter_path=str(tmp_path / "base-adapter"),
             ),
         )
-        monkeypatch.setattr("retrain.commands.benchmark.warn_missing", lambda config: None)
+        monkeypatch.setattr(
+            "retrain.commands.benchmark.warn_missing", lambda config: None
+        )
         monkeypatch.setattr(
             "retrain.benchmark.run.run_benchmark_suite",
-            lambda config, *, repeats, output_dir, runner_factory, disable_wandb: recorded.update(
-                {
-                    "config": config,
-                    "repeats": repeats,
-                    "output_dir": output_dir,
-                    "disable_wandb": disable_wandb,
-                    "runner_factory": runner_factory,
-                }
-            )
-            or BenchmarkSuiteSummary(
-                path=str(output_dir),
-                repeats=repeats,
-                wandb_disabled=disable_wandb,
-                runs=[],
-                aggregates={},
+            lambda config, *, repeats, output_dir, runner_factory, disable_wandb: (
+                recorded.update(
+                    {
+                        "config": config,
+                        "repeats": repeats,
+                        "output_dir": output_dir,
+                        "disable_wandb": disable_wandb,
+                        "runner_factory": runner_factory,
+                    }
+                )
+                or BenchmarkSuiteSummary(
+                    path=str(output_dir),
+                    repeats=repeats,
+                    wandb_disabled=disable_wandb,
+                    runs=[],
+                    aggregates={},
+                )
             ),
         )
 

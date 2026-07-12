@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 
 def _load_helper():
-    path = Path(__file__).resolve().parents[1] / "scripts" / "one_gpu_backend_compare.py"
+    path = (
+        Path(__file__).resolve().parents[1] / "scripts" / "one_gpu_backend_compare.py"
+    )
     spec = importlib.util.spec_from_file_location("one_gpu_backend_compare", path)
     assert spec is not None
     assert spec.loader is not None

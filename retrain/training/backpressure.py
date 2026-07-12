@@ -68,6 +68,7 @@ def _nonnegative_float(value: object) -> float:
 @dataclass
 class StepObservation:
     """Metrics from one training step."""
+
     step_time_s: float = 0.0
     sample_time_s: float = 0.0
     train_time_s: float = 0.0
@@ -82,6 +83,7 @@ class StepObservation:
 @dataclass
 class BackPressureDecision:
     """Controller output: recommended action and diagnostics."""
+
     action: str = "hold"
     recommended_batch_size: int = 0
     recommended_group_size: int = 0
@@ -195,14 +197,14 @@ class USLBackPressure:
 
         # Incremental sums for O(1) Cramer's rule updates.
         # y_i = p_i / x_i  (linearized USL: p/X(p) = A + Bp + Cp²)
-        self._s0 = 0.0   # count of valid (x >= eps) observations
-        self._s1 = 0.0   # Σ p
-        self._s2 = 0.0   # Σ p²
-        self._s3 = 0.0   # Σ p³
-        self._s4 = 0.0   # Σ p⁴
-        self._sy = 0.0   # Σ y
+        self._s0 = 0.0  # count of valid (x >= eps) observations
+        self._s1 = 0.0  # Σ p
+        self._s2 = 0.0  # Σ p²
+        self._s3 = 0.0  # Σ p³
+        self._s4 = 0.0  # Σ p⁴
+        self._sy = 0.0  # Σ y
         self._spy = 0.0  # Σ p·y
-        self._sp2y = 0.0 # Σ p²·y
+        self._sp2y = 0.0  # Σ p²·y
 
         self.sigma = 0.0
         self.kappa = 0.0

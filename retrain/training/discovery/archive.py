@@ -123,12 +123,20 @@ class DiscoverArchive:
                 return
             victim = min(
                 candidates,
-                key=lambda e: (e.reward, e.expansions, e.created_step, e.depth, e.entry_id),
+                key=lambda e: (
+                    e.reward,
+                    e.expansions,
+                    e.created_step,
+                    e.depth,
+                    e.entry_id,
+                ),
             )
             parent_id = victim.parent_id
             if parent_id is not None:
                 parent = self.entries[parent_id]
-                parent.children = [cid for cid in parent.children if cid != victim.entry_id]
+                parent.children = [
+                    cid for cid in parent.children if cid != victim.entry_id
+                ]
             del self.entries[victim.entry_id]
             self._recompute_best_child_chain(parent_id)
 
@@ -158,7 +166,12 @@ class DiscoverArchive:
                 * math.sqrt(1.0 + float(self.total_expansions))
                 / (1.0 + float(entry.expansions))
             )
-            return (entry.q_value + bonus, entry.reward, -float(entry.depth), -entry.entry_id)
+            return (
+                entry.q_value + bonus,
+                entry.reward,
+                -float(entry.depth),
+                -entry.entry_id,
+            )
 
         ordered = sorted(self.entries.values(), key=_score, reverse=True)
         if not ordered:
@@ -172,7 +185,9 @@ class DiscoverArchive:
         if limit <= 0:
             return []
         others = [
-            entry for entry in self.entries.values() if entry.entry_id != start_id and entry.text
+            entry
+            for entry in self.entries.values()
+            if entry.entry_id != start_id and entry.text
         ]
         return sorted(
             others,

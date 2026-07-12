@@ -8,7 +8,9 @@ from pathlib import Path
 from retrain.status.export.types import RunSnapshot
 
 
-def _render_runs_json(root: Path, snapshots: list[RunSnapshot], *, generated_at: float) -> str:
+def _render_runs_json(
+    root: Path, snapshots: list[RunSnapshot], *, generated_at: float
+) -> str:
     return json.dumps(
         {
             "generated_at": generated_at,

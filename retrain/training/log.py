@@ -256,9 +256,7 @@ def record_training_step(
                 metrics=metrics,
             )
         )
-        wandb_metrics.update(
-            checkpoint_recoverability_wandb_metrics(config, wandb_run)
-        )
+        wandb_metrics.update(checkpoint_recoverability_wandb_metrics(config, wandb_run))
         wandb_run.log(
             wandb_metrics,
             step=context.step,

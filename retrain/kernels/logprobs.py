@@ -110,9 +110,9 @@ def packed_quantized_linear_target_logprobs(
         )
         if int_weight is None:
             return None
-        dequant_weight = int_weight.to(flat_hidden.dtype) * weight_scale[
-            start:stop
-        ].to(flat_hidden.dtype)
+        dequant_weight = int_weight.to(flat_hidden.dtype) * weight_scale[start:stop].to(
+            flat_hidden.dtype
+        )
         chunk_bias = None if bias is None else bias[start:stop].to(flat_hidden.dtype)
         logits = F.linear(flat_hidden, dequant_weight, chunk_bias)
         if output_scale is not None:
@@ -128,10 +128,14 @@ def packed_quantized_linear_target_logprobs(
         in_chunk = (flat_target_ids >= start) & (flat_target_ids < stop)
         if bool(in_chunk.any().item()):
             local_target_ids = flat_target_ids[in_chunk] - start
-            selected_logits = logits[in_chunk].gather(
-                1,
-                local_target_ids.unsqueeze(1),
-            ).squeeze(1)
+            selected_logits = (
+                logits[in_chunk]
+                .gather(
+                    1,
+                    local_target_ids.unsqueeze(1),
+                )
+                .squeeze(1)
+            )
             target_logits[in_chunk] = selected_logits
 
     assert log_denominator is not None

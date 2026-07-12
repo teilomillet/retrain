@@ -115,7 +115,9 @@ def test_strict_determinism_establishes_and_records_runtime_proof(monkeypatch) -
     assert proof["local_two_run_adapter_hash_canary_required"] == 1
 
 
-def test_default_mode_records_without_mutating_torch_or_environment(monkeypatch) -> None:
+def test_default_mode_records_without_mutating_torch_or_environment(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
     fake = _FakeTorch()
     _install_fake_torch(monkeypatch, fake)
@@ -163,7 +165,9 @@ def test_strict_mode_rejects_conflicting_cublas_environment(monkeypatch) -> None
         prepare_strict_determinism_environment(enabled=True)
 
 
-def test_strict_mode_fails_if_cuda_was_initialized_without_controls(monkeypatch) -> None:
+def test_strict_mode_fails_if_cuda_was_initialized_without_controls(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
     fake = _FakeTorch(cuda_initialized=True)
     _install_fake_torch(monkeypatch, fake)
@@ -273,7 +277,9 @@ def test_sft_manifest_preserves_runtime_determinism_proof(tmp_path) -> None:
     assert manifest["resource_metrics"] == runtime
 
 
-def test_sft_establishes_strict_mode_before_any_dataset_or_cuda_work(monkeypatch) -> None:
+def test_sft_establishes_strict_mode_before_any_dataset_or_cuda_work(
+    monkeypatch,
+) -> None:
     calls: list[bool] = []
     monkeypatch.setattr(
         "retrain.backends.determinism.establish_strict_determinism",

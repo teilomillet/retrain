@@ -252,33 +252,26 @@ def test_record_training_step_writes_all_step_outputs(capsys) -> None:
     assert metrics_logger.entries[0]["num_datums"] == 2
     assert metrics_logger.entries[0]["running_correct_rate"] == pytest.approx(0.5)
     assert metrics_logger.entries[0]["backend/tokens_s"] == pytest.approx(9.0)
-    assert (
-        metrics_logger.entries[0]["optimizer/logical_batch_sha256"] == "b" * 64
-    )
+    assert metrics_logger.entries[0]["optimizer/logical_batch_sha256"] == "b" * 64
     assert metrics_logger.entries[0]["optimizer/batch_sha256"] == "b" * 64
     assert steps_logger.entries[0]["correct_count"] == 1
     assert steps_logger.entries[0]["total_count"] == 2
     assert steps_logger.entries[0]["dg_eta"] == pytest.approx(0.6)
     assert wandb_run.entries[0][1] == 7
     assert wandb_run.entries[0][0]["train/dg_eta"] == pytest.approx(0.6)
+    assert wandb_run.entries[0][0]["train/optimizer/logical_batch_sha256"] == "b" * 64
+    assert wandb_run.entries[0][0]["train/optimizer/batch_sha256"] == "b" * 64
     assert (
-        wandb_run.entries[0][0]["train/optimizer/logical_batch_sha256"]
-        == "b" * 64
-    )
-    assert (
-        wandb_run.entries[0][0]["train/optimizer/batch_sha256"] == "b" * 64
-    )
-    assert (
-        wandb_run.entries[0][0][
-            "train/recoverability/checkpoint_artifacts_enabled"
-        ]
+        wandb_run.entries[0][0]["train/recoverability/checkpoint_artifacts_enabled"]
         == 1
     )
     assert wandb_run.entries[0][0]["train/recoverability/local_only"] == 0
     assert "Step 7 [grpo+none] | loss=0.2500" in capsys.readouterr().out
 
 
-def test_recoverability_metrics_show_preemption_not_ready_without_periodic_checkpoints() -> None:
+def test_recoverability_metrics_show_preemption_not_ready_without_periodic_checkpoints() -> (
+    None
+):
     with pytest.warns(UserWarning, match="save_every=0"):
         config = TrainConfig(wandb_project="proj", save_every=0)
 
@@ -339,14 +332,11 @@ def test_upload_checkpoint_artifact_adds_adapter_and_state(
     assert artifact.name == "retrain-test-run-checkpoints"
     assert artifact.metadata["checkpoint_name"] == "checkpoint_step_2"
     assert (str(checkpoint), "adapter") in artifact.dirs
-    assert ("trainer_state.json" in [name for _, name in artifact.files])
-    assert ("latest_sampler_path.txt" in [name for _, name in artifact.files])
+    assert "trainer_state.json" in [name for _, name in artifact.files]
+    assert "latest_sampler_path.txt" in [name for _, name in artifact.files]
     assert aliases == ["latest", "checkpoint_step_2"]
     assert (
-        wandb_run.entries[-1][0][
-            "train/recoverability/latest_checkpoint_uploaded"
-        ]
-        == 1
+        wandb_run.entries[-1][0]["train/recoverability/latest_checkpoint_uploaded"] == 1
     )
 
 
@@ -376,10 +366,7 @@ def test_upload_checkpoint_artifact_auto_warns_on_failure(
     assert result.reason == "RuntimeError"
     assert "WARNING: W&B checkpoint artifact upload failed" in capsys.readouterr().out
     assert (
-        wandb_run.entries[-1][0][
-            "train/recoverability/latest_checkpoint_uploaded"
-        ]
-        == 0
+        wandb_run.entries[-1][0]["train/recoverability/latest_checkpoint_uploaded"] == 0
     )
 
 
