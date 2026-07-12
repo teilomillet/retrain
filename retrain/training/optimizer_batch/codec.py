@@ -14,7 +14,7 @@ from retrain.training.optimizer_batch.types import OptimizerBatch, TorchRngState
 def batch_tensors(batch: OptimizerBatch) -> dict[str, np.ndarray]:
     """Flatten ragged rows without losing binary64 logical float values."""
 
-    offsets = _row_offsets(batch.tokens)
+    offsets = _cumulative_offsets(batch.tokens)
     tensors = {
         "row_offsets": np.asarray(offsets, dtype=np.int64),
         "tokens": np.asarray(_flatten(batch.tokens), dtype=np.int64),
@@ -22,7 +22,7 @@ def batch_tensors(batch: OptimizerBatch) -> dict[str, np.ndarray]:
         "advantages": np.asarray(_flatten(batch.advantages), dtype=np.float64),
         "torch_cpu_rng": np.frombuffer(batch.torch_rng.cpu, dtype=np.uint8).copy(),
         "torch_cuda_rng_offsets": np.asarray(
-            _byte_offsets(batch.torch_rng.cuda),
+            _cumulative_offsets(batch.torch_rng.cuda),
             dtype=np.int64,
         ),
         "torch_cuda_rng": np.frombuffer(
@@ -223,14 +223,7 @@ def _validate_echo(batch: OptimizerBatch, *, rows: int) -> None:
         raise ValueError("optimizer-batch ECHO denominator must be positive.")
 
 
-def _row_offsets(rows: Sequence[Sequence[object]]) -> list[int]:
-    offsets = [0]
-    for row in rows:
-        offsets.append(offsets[-1] + len(row))
-    return offsets
-
-
-def _byte_offsets(rows: tuple[bytes, ...]) -> list[int]:
+def _cumulative_offsets(rows: Sequence[Sequence[object]]) -> list[int]:
     offsets = [0]
     for row in rows:
         offsets.append(offsets[-1] + len(row))
